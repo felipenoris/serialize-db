@@ -269,7 +269,14 @@ sobre o script (6), todos com o marcador `local`.
 
 ## Decisões pendentes
 
-Nenhuma. As decisões do usuário de 2026-09-24 sobre a carga estão escritas nas seções acima: a
+- **O relatório de `serialize-db load --partitions`.** `load_report` confere a origem inteira:
+  com `--partitions` de parte da origem, cada partição fora do pedido sai como `Delta ausente`, e
+  o comando sai com 1 com as pedidas iguais nos dois lados (sonda da carga parada, 2026-09-30,
+  [`POC.md`](POC.md)). As saídas são conferir só as partições pedidas, por um argumento
+  `partitions` de `load_report`, ou manter o comportamento de hoje e descrevê-lo em
+  `docs/operacao.md` ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
+
+As decisões do usuário de 2026-09-24 sobre a carga estão escritas nas seções acima: a
 ordem pela `sort_key` e o registro do arquivo do `COPY`, com o `rewrite` fora das etapas 4 e 7,
 junto com a flag `export_mode` de `Execution`, de `serialize-db run` e de `SERIALIZE_DB_EXPORT_MODE`
 (o `publish_partition` fica para a troca da [etapa 5](PLAN-STAGE-5.md) na partição com `Double`

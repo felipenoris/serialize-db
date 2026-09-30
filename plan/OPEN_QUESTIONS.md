@@ -43,10 +43,15 @@ foi medido em [`POC.md`](POC.md).
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
+  `probes/operacao/probe_unload_parallel.py` mede o primeiro, o `UNLOAD` da exportação com
+  `PARALLEL OFF` e em paralelo de 1 a 20 milhões de linhas, e espera a rodada no alvo pelos
+  comandos de `SUITE.md`, seção "Sondas da operação".
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
   cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
+  `probes/operacao/probe_compact_memory.py` a mede na primeira partição da origem repartida em
+  cerca de 32 arquivos, e espera a rodada no alvo.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -89,7 +94,20 @@ foi medido em [`POC.md`](POC.md).
   carga parou em `cad_lancamentos` 2026-07-31 com o `RegistrationRefused` de uma origem que mudava
   durante a leitura, e em 2026-09-29, com a origem estável, passou inteira numa raiz recarregada
   ([`POC.md`](POC.md)): a continuação de uma carga parada, que `tests/test_load.py` cobre na pasta
-  local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo.
+  local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo. As sondas de
+  `probes/operacao/` rodam essas leituras sobre as primeiras partições de `cad_lancamentos` da
+  origem, a continuação do `archive` inclusive, e passaram na pasta local e no substituto em
+  2026-09-30 ([`POC.md`](POC.md)); esperam a rodada no alvo, pelos comandos de `SUITE.md`, seção
+  "Sondas da operação". O `COPY` da publicação de uma partição compactada, que o `compact`
+  regrava em ZSTD, também não rodou lá.
+- **O relatório de `serialize-db load --partitions`.** `serialize-db load` confere cada tabela
+  por `load_report`, que soma a origem inteira: com `--partitions` de parte da origem, cada
+  partição fora do pedido sai como `DIFERENÇA em <valor>: ..., Delta ausente`, o veredito como
+  `com diferenças` e o comando com 1, com as pedidas iguais nos dois lados, como a sonda da carga
+  parada leu em 2026-09-30 na pasta local e no substituto ([`POC.md`](POC.md)). As saídas são
+  conferir só as partições pedidas, por um argumento `partitions` de `load_report`, ou manter o
+  comportamento de hoje e descrevê-lo em `docs/operacao.md`; a escolha espera o usuário
+  ([etapa 7](PLAN-STAGE-7.md)).
 
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
   baterias de 2026-09-25, de 2026-09-26, de 2026-09-27 e de 2026-09-28 às 23:09
@@ -183,7 +201,7 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
-escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
-outras etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista
-acima.
+tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 7](PLAN-STAGE-7.md) espera a
+escolha do relatório de `serialize-db load --partitions`, e a [etapa 9](PLAN-STAGE-9.md) a da
+issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, os itens acima; as outras
+etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista acima.

@@ -5642,3 +5642,59 @@ alvo"), salvo:
 **Consequências**: o caso do runbook de refazer um snapshot, com a volta pelo canal, sai dos que
 esperam o alvo em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). A sobra de tabela do sandbox não se
 repetiu desde a rodada interrompida de 2026-09-29 às 00:29.
+
+## O que as sondas da operação mostraram na pasta local e no substituto
+
+Em 2026-09-30, neste contêiner (Linux x86_64, 4 vCPUs, 13,2 GiB disponíveis, Python 3.13.12,
+deltalake 1.6.6, DuckDB 1.5.5, PyArrow 25.0.1), as sondas de `probes/operacao/`, escritas a pedido
+do usuário para as leituras que [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) espera no alvo, rodaram
+sobre `cad_lancamentos` da base fictícia de `tests/source_db_projetado.py`, repetida com os ids
+deslocados: quatro partições de 3.008.000, 3.000.000, 3.000.000 e 60 linhas, as três primeiras num
+arquivo de cerca de 12 MB cada. As quatro que não pedem o Redshift rodaram na pasta local, e as
+cinco no substituto, com o moto no lugar do S3 e `tests/emulator.py` no lugar do Redshift; as da
+carga e do `archive` rodaram duas vezes em cada lugar. Todas as checagens passaram.
+
+- **A carga parada deixa na pasta o arquivo da partição interrompida.** Na pasta local, o arquivo
+  da segunda partição apareceu 0,2 s depois da linha da primeira no log, o `SIGKILL` que veio em
+  seguida chegou antes do commit dela, e o arquivo ficou fora do log nas duas rodadas. No moto, onde
+  o objeto só aparece quando o envio termina, 0,8 s e 0,9 s depois da linha, o commit da segunda
+  partição chegou ao log antes do sinal nas duas. A repetição do comando gravou só as partições
+  ausentes do log, numa execução nova, com um arquivo por partição no log. A pasta temporária do
+  motor DuckDB, `serialize_db_*` em `tempfile.gettempdir()` com o `<execution_id>.duckdb`, ficou
+  para trás em todas as rodadas, com 0,0 MB: o `cleanup` não roda depois do `SIGKILL`.
+- **`serialize-db load --partitions` confere a origem inteira.** A repetição de três das quatro
+  partições imprimiu `DIFERENÇA em 2026-06-30: origem 60 linhas {...}, Delta ausente` e o veredito
+  `com diferenças`, e saiu com 1, com as três pedidas iguais nos dois lados: `_load` chama
+  `load_report(db, table, args.source)`, que não recebe as partições pedidas.
+- **O `archive` copia as partições na ordem das ações do log, e a repetição continua a cópia.** A
+  primeira copiada foi a 2026-03-31, a última gravada, e depois a 2026-02-28 e a 2026-01-31. O
+  `SIGKILL` depois da linha da primeira deixou o snapshot em `snapshots`, e na pasta local a cópia
+  da seguinte já tinha começado: dois arquivos na pasta da cópia, contra um no moto. A repetição
+  imprimiu `partição 2026-03-31 já no destino`, copiou as outras duas, gravou a versão 3 no arquivo
+  e moveu o snapshot para `archived`, com os arquivos de cada partição iguais aos da versão e nenhum
+  órfão, em 0,2 s e com o pico de RSS de 242 MB e 243 MB na pasta local, e em 0,7 s e com 280 MB no
+  moto.
+- **O `vacuum --full` só lista o arquivo fora do log mais velho que a retenção.** Com a retenção
+  padrão de 9.600 horas, os 400 dias, os dois órfãos recém-gravados, um na pasta da partição e outro
+  num prefixo dentro dela, ficaram fora da lista; com `--retention-hours 0` os dois foram listados,
+  e só eles; com `--apply` os dois foram apagados, a tabela ganhou os commits `VACUUM START` e
+  `VACUUM END`, da versão 1 à 3, e as linhas e a soma de `id_lancamento` pelo `delta_scan` não
+  mudaram. Sem `--apply`, a versão não mudou.
+- **O `compact` juntou a partição repartida num arquivo em ZSTD.** A partição de 3.008.000 linhas,
+  14,5 MB no arquivo da carga, repartida pelo `COPY ... FILE_SIZE_BYTES` do DuckDB em 24 arquivos de
+  até 1,2 MB, virou um arquivo de 6,7 MB num commit `OPTIMIZE`, com as mesmas linhas e soma: em
+  0,6 s e com o pico de RSS de 295 MB na pasta local, e em 0,8 s e com 312 MB no moto, com 13,0 GiB
+  a 13,1 GiB disponíveis antes. O arquivo da carga, do `COPY` do DuckDB, sai em SNAPPY, e o do
+  `compact`, `part-00000-<uuid>-c000.zstd.parquet` com o `created_by` `delta-rs version py-1.6.6`,
+  em ZSTD, o padrão do `optimize.compact`, que `delta.compact` chama sem `writer_properties`. O
+  `COPY` da publicação de um arquivo ZSTD não rodou no alvo; a página dos arquivos do Redshift
+  Spectrum, que o `COPY` de Parquet usa, diz que o Redshift lê o zstd no Parquet.
+- **O `UNLOAD` do substituto grava um arquivo nos dois modos.** O substituto traduz o `UNLOAD` num
+  `COPY` do DuckDB, com um arquivo com `PARALLEL OFF` e sem ele: as checagens de linhas e de arquivo
+  único passaram, e os tempos, 0,4 s para 1.000.000 de linhas e de 1,3 s a 1,4 s para as 3.008.000
+  nos dois modos, não medem o Redshift.
+
+**Consequências**: as cinco sondas esperam a rodada no alvo, pelos comandos de `SUITE.md`, seção
+"Sondas da operação". O relatório de `serialize-db load --partitions` entra em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) e nas decisões pendentes da [etapa 7](PLAN-STAGE-7.md), à
+espera do usuário, e o `COPY` de uma partição compactada no item da operação no alvo.

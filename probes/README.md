@@ -4,8 +4,8 @@ Scripts só de leitura que fotografam o que o ambiente oferece à biblioteca: cr
 rede, o projeto do SageMaker Unified Studio, o bucket, o Redshift, os serviços de catálogo, a
 estrutura da base Parquet de origem, o `threads` do DuckDB na ingestão das tabelas Delta e os
 clientes da biblioteca depois que a credencial expira. Nenhum deles cria, altera ou apaga um
-recurso; as sondas de consistência de `consistencia/` são a exceção, e gravam só sob as raízes
-das suítes (a seção delas abaixo). Cada um roda com o interpretador da pasta preparada, imprime o relatório no terminal e o
+recurso; as sondas de `consistencia/` e de `operacao/` são a exceção, e gravam só sob as raízes
+das suítes (as seções delas abaixo). Cada um roda com o interpretador da pasta preparada, imprime o relatório no terminal e o
 grava em `output/<script>_<data-hora>.txt`, pasta fora do git, para ser colado na conversa com o
 assistente. O formato segue os scripts de leitura de
 [felipenoris/AWS-DataScience](https://github.com/felipenoris/AWS-DataScience), pasta `aws/`: seções
@@ -33,6 +33,11 @@ SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local .venv/bin/python probes/co
 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py
 SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m local -s probes/consistencia/probe_append_test.py
 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_append_test.py
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_load_resume.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_archive_resume.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_vacuum_orphans.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_compact_memory.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem
 ```
 
 ## Os scripts
@@ -193,10 +198,38 @@ variáveis do ambiente alvo em `SUITE.md`.
 comparação valor a valor (`compare`, com `NaN` igual a `NaN` e o zero com o seu sinal;
 `to_contract`, que anota os tipos crus dos leitores), `known_zero_sign`, `report` e `finish`.
 
+## As sondas da operação (`operacao/`)
+
+As sondas de `operacao/` rodam no ambiente alvo as rotinas de `serialize-db` que
+[`plan/OPEN_QUESTIONS.md`](../plan/OPEN_QUESTIONS.md) ainda espera ler lá, sobre as primeiras
+partições de `cad_lancamentos` da base de origem, que elas só leem. Cada uma grava sob
+`<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-operacao/<sonda>-<id>/` ou, sem a variável, sob
+`<SERIALIZE_DB_TEST_LOCAL_ROOT>/serialize-db-operacao/<sonda>-<id>/`, e apaga a pasta no fim, também
+quando para numa exceção (`SERIALIZE_DB_TEST_KEEP` a mantém); sem nenhuma das duas raízes, ou com a
+origem sem as partições, para com o código 2. As rotinas rodam como o operador as roda, pelo
+`serialize-db` do ambiente virtual num processo filho, e as interrompidas levam `SIGKILL`, como o
+kernel sem memória, que não deixa rodar nenhum `finally`. Cada leitura sai no terminal e em
+`output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime `OK` ou `PROBLEMAS`
+com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as variáveis do
+ambiente alvo estão em `SUITE.md`, seção "Sondas da operação".
+
+| Sonda | O que roda |
+| --- | --- |
+| `probe_load_resume.py` | `serialize-db load` de três partições encerrado quando o arquivo da segunda aparece na pasta dela, e o mesmo comando de novo: a repetição grava só o que o log não tinha; os arquivos fora do log e a pasta temporária do motor DuckDB que o processo encerrado deixou são leituras, e a sonda apaga a pasta. |
+| `probe_archive_resume.py` | `serialize-db archive` de um snapshot das três partições encerrado depois da primeira partição copiada, e o mesmo comando de novo: a repetição pula o que a cópia registrava, e a cópia fica com os arquivos da versão, uma versão por partição, sem órfão. |
+| `probe_vacuum_orphans.py` | `serialize-db vacuum --full` de dois órfãos, cópias do arquivo registrado na pasta da partição e num prefixo dentro dela, com a retenção padrão (nada listado), com `--retention-hours 0` (os dois) e com `--apply` (os dois apagados, a tabela intacta). |
+| `probe_compact_memory.py` | `serialize-db compact` da partição repartida em cerca de 32 arquivos pelo `COPY ... FILE_SIZE_BYTES` do DuckDB e registrada: os arquivos juntados, as mesmas linhas e o tempo e o pico de RSS do processo. |
+| `probe_unload_parallel.py` | O `UNLOAD` da exportação do motor Redshift com `PARALLEL OFF` e em paralelo, de 1, 5, 10 e 20 milhões de linhas e da partição inteira, três vezes cada: o menor tempo, os arquivos e o tempo dos rodapés por tamanho e modo, contra o limiar de 5.000.000 linhas de `_PARALLEL_OFF_ROWS`; pede a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, e o sandbox `exec_operacao_<id>_*` sai no `cleanup`. |
+
+`operation_lib.py` é a biblioteca comum: a raiz de trabalho (`work_database`), as partições da
+origem, a carga pela biblioteca, `serialize-db` num processo filho até o fim (`run_cli`) ou
+encerrado num ponto marcado (`run_cli_killed`), os arquivos do log e da pasta de uma tabela, os
+órfãos, as linhas e a soma pelo `delta_scan`, `check`, `finish` e `run`.
+
 ## Acrescentar um probe
 
-- O probe só lê: um script que altera algo pertence a `consistencia/`, e grava só sob as raízes
-  das suítes.
+- O probe só lê: um script que altera algo pertence a `consistencia/` ou a `operacao/`, e grava
+  só sob as raízes das suítes.
 - Construa sobre `probelib.py`: `Report` para o arquivo, as seções, as chamadas ecoadas, as
   checagens e o código de saída; `short_config` em todo cliente `boto3`, porque sem rede o padrão
   espera 60 s por tentativa; `run_python` para o que precisa de espera limitada (delta-rs, DuckDB).
