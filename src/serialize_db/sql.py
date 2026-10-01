@@ -92,7 +92,8 @@ _PARAMETER_NAME = re.compile(r"[a-z_][a-z0-9_]*")
 # Uma região citada ('...' ou "...", com a aspa dobrada como escape), ou :nome fora de ::cast. As
 # regiões vêm primeiro para um : dentro delas nunca ser lido como marcador.
 _QUOTED_OR_PLACEHOLDER = re.compile(
-    r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|(?<![:\w]):(?P<name>[a-z_][a-z0-9_]*)")
+    r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|(?<![:\w]):(?P<name>[a-z_][a-z0-9_]*)"
+)
 _SENTINEL_TABLE = re.compile(r"\{prefix\}(\w+)")
 
 
@@ -209,8 +210,10 @@ def bound_statement(
     values = dict(params or {})
     required = required_parameters(statement)
     if required != set(values):
-        raise SqlError(f"parâmetros do statement {sorted(required)} e do dicionário "
-                       f"{sorted(values)} não fecham")
+        raise SqlError(
+            f"parâmetros do statement {sorted(required)} e do dicionário "
+            f"{sorted(values)} não fecham"
+        )
     bound = statement
     if values:
         bound = statement.params(**values)
@@ -281,8 +284,9 @@ def render(
     """
     prefixed_statement = prefixed(statement, metadata, prefix)
     with_placeholders = _parameters_as_placeholders(prefixed_statement)
-    compiled = with_placeholders.compile(dialect=_DIALECTS[dialect],
-                                         compile_kwargs={"literal_binds": True})
+    compiled = with_placeholders.compile(
+        dialect=_DIALECTS[dialect], compile_kwargs={"literal_binds": True}
+    )
     # O compilador deixa um espaço antes de cada quebra de linha; sem ele o arquivo versionado
     # sobrevive a um editor que apara o fim das linhas.
     lines = []
@@ -331,18 +335,20 @@ def bind(
     """
     if SENTINEL in sql:
         raise SqlError(
-            f"o texto ainda traz o sentinela {SENTINEL}; leia-o por read_sql(..., prefix=...)")
+            f"o texto ainda traz o sentinela {SENTINEL}; leia-o por read_sql(..., prefix=...)"
+        )
     names = _placeholders(sql)
     if names != set(params):
         raise SqlError(
-            f"parâmetros do texto {sorted(names)} e do dicionário {sorted(params)} não fecham")
+            f"parâmetros do texto {sorted(names)} e do dicionário {sorted(params)} não fecham"
+        )
     marker = _MARKERS[dialect]
 
     def rewrite(
         match: re.Match,
     ) -> str:
         if match.group("name") is None:
-            return match.group(0)                # região citada, intacta
+            return match.group(0)  # região citada, intacta
         return marker + match.group("name")
 
     return _QUOTED_OR_PLACEHOLDER.sub(rewrite, sql), dict(params)

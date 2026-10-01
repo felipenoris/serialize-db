@@ -74,9 +74,15 @@ def table_format(
     descriptor = table.get("StorageDescriptor", {})
     if parameters.get("table_type", "").upper() == "ICEBERG":
         return "Iceberg"
-    if parameters.get("spark.sql.sources.provider", "").lower() == "delta" or "delta" in descriptor.get("Location", "").lower():
+    if (
+        parameters.get("spark.sql.sources.provider", "").lower() == "delta"
+        or "delta" in descriptor.get("Location", "").lower()
+    ):
         return "Delta"
-    if "parquet" in descriptor.get("InputFormat", "").lower() or parameters.get("classification", "").lower() == "parquet":
+    if (
+        "parquet" in descriptor.get("InputFormat", "").lower()
+        or parameters.get("classification", "").lower() == "parquet"
+    ):
         return "Parquet"
     return parameters.get("classification") or table.get("TableType") or "-"
 
@@ -101,7 +107,11 @@ def glue(
         render=lambda found: summary(found, ("Name", "LocationUri", "CatalogId", "CreateTime")),
     )
     if databases is None:
-        report.note("CT-1", "Glue", f"não lido: {report.last_reason}; sem catálogo Glue para o papel do projeto")
+        report.note(
+            "CT-1",
+            "Glue",
+            f"não lido: {report.last_reason}; sem catálogo Glue para o papel do projeto",
+        )
         report.note("CT-2", "tabelas Iceberg no Glue", "não lidas")
     else:
         report.ok("CT-1", "Glue", f"respondeu com {len(databases)} banco(s)")
@@ -114,15 +124,28 @@ def glue(
             name = database["Name"]
             tables = report.call(
                 f"glue.get_tables(DatabaseName={name!r}, MaxResults=50)",
-                lambda n=name: client.get_tables(DatabaseName=n, MaxResults=50).get("TableList", []),
+                lambda n=name: client.get_tables(DatabaseName=n, MaxResults=50).get(
+                    "TableList", []
+                ),
                 render=lambda found: f"{len(found)} tabela(s)",
             )
             for table in tables or []:
                 kind = table_format(table)
                 formats[kind] = formats.get(kind, 0) + 1
-                rows.append([name, table.get("Name"), kind, table.get("StorageDescriptor", {}).get("Location", "-")])
+                rows.append(
+                    [
+                        name,
+                        table.get("Name"),
+                        kind,
+                        table.get("StorageDescriptor", {}).get("Location", "-"),
+                    ]
+                )
         report.table(rows if len(rows) > 1 else [["(nenhuma tabela nos primeiros bancos)"]])
-        report.note("CT-2", "tabelas por formato no Glue", ", ".join(f"{kind}: {count}" for kind, count in sorted(formats.items())) or "nenhuma")
+        report.note(
+            "CT-2",
+            "tabelas por formato no Glue",
+            ", ".join(f"{kind}: {count}" for kind, count in sorted(formats.items())) or "nenhuma",
+        )
 
     # CT-6: um catálogo federado (Lakehouse) ligaria o Glue ao Redshift ou a outro catálogo.
     catalogs = report.call(
@@ -133,7 +156,12 @@ def glue(
     if catalogs is None:
         report.note("CT-6", "catálogos federados do Glue (Lakehouse)", "não lidos")
     else:
-        report.note("CT-6", "catálogos federados do Glue (Lakehouse)", ", ".join(f"{item.get('Name')} ({item.get('CatalogType')})" for item in catalogs) or "nenhum")
+        report.note(
+            "CT-6",
+            "catálogos federados do Glue (Lakehouse)",
+            ", ".join(f"{item.get('Name')} ({item.get('CatalogType')})" for item in catalogs)
+            or "nenhum",
+        )
 
 
 def athena(
@@ -168,7 +196,17 @@ def athena(
         ``BytesScannedCutoffPerQuery``.
         """
         configuration = found.get("Configuration", {})
-        return pretty({key: configuration.get(key) for key in ("ResultConfiguration", "EnforceWorkGroupConfiguration", "EngineVersion", "BytesScannedCutoffPerQuery")})
+        return pretty(
+            {
+                key: configuration.get(key)
+                for key in (
+                    "ResultConfiguration",
+                    "EnforceWorkGroupConfiguration",
+                    "EngineVersion",
+                    "BytesScannedCutoffPerQuery",
+                )
+            }
+        )
 
     for group in groups[:MAX_WORKGROUPS]:
         name = group.get("Name")
@@ -178,7 +216,11 @@ def athena(
             render=render_group,
         )
         if details is not None:
-            location = details.get("Configuration", {}).get("ResultConfiguration", {}).get("OutputLocation")
+            location = (
+                details.get("Configuration", {})
+                .get("ResultConfiguration", {})
+                .get("OutputLocation")
+            )
             report.value(f"ATHENA_RESULTS_{name}", location or "(sem local de resultados)")
 
 
@@ -194,7 +236,9 @@ def lake_formation(
     resources = report.call(
         "lakeformation.list_resources()",
         lambda: client.list_resources().get("ResourceInfoList", []),
-        render=lambda found: summary(found, ("ResourceArn", "RoleArn", "HybridAccessEnabled", "LastModified")),
+        render=lambda found: summary(
+            found, ("ResourceArn", "RoleArn", "HybridAccessEnabled", "LastModified")
+        ),
     )
     if resources is None:
         report.note("CT-4", "Lake Formation", f"não lido: {report.last_reason}")
@@ -215,7 +259,11 @@ def s3_tables(
     report.h1("S3 Tables")
     buckets = report.call(
         "s3tables.list_table_buckets()",
-        lambda: boto3.client("s3tables", region_name=resolved, config=short_config()).list_table_buckets().get("tableBuckets", []),
+        lambda: (
+            boto3.client("s3tables", region_name=resolved, config=short_config())
+            .list_table_buckets()
+            .get("tableBuckets", [])
+        ),
         render=lambda found: summary(found, ("name", "arn", "createdAt")),
     )
     if buckets is None:

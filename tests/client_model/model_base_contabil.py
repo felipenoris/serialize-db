@@ -45,9 +45,7 @@ class Conta(Base):
         BigInteger, primary_key=True, autoincrement=False, comment="Identificador da conta"
     )
     nome: Mapped[str] = mapped_column(String(100), comment="Nome da conta")
-    numero: Mapped[str] = mapped_column(
-        String(20), unique=True, comment="Número da conta no plano"
-    )
+    numero: Mapped[str] = mapped_column(String(20), unique=True, comment="Número da conta no plano")
     permite_lancamentos: Mapped[bool] = mapped_column(
         Boolean, default=True, comment="Se a conta recebe lançamentos"
     )

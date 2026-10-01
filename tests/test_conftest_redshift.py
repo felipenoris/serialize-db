@@ -74,8 +74,9 @@ def use_fake_driver(
     substituto local fica desligado, porque o teste confere o caminho do driver; a região fica
     definida, para ``connect_redshift`` não perguntar ao ``boto3``.
     """
-    monkeypatch.setitem(sys.modules, "redshift_connector",
-                        types.SimpleNamespace(connect=FakeConnection))
+    monkeypatch.setitem(
+        sys.modules, "redshift_connector", types.SimpleNamespace(connect=FakeConnection)
+    )
     monkeypatch.delenv("SERIALIZE_DB_TEST_EMULATOR", raising=False)
     for name in REDSHIFT_VARIABLES:
         monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
@@ -136,11 +137,14 @@ def test_failure_message_masks_the_credentials_before_the_cut() -> None:
     """A mensagem de um teste reprovado passa pela máscara antes do corte em 300 caracteres: um
     corte no meio do valor tiraria a aspa final que ``mask_credentials`` exige, e a impressão e o
     JSON do relatório levariam o começo do segredo."""
-    command = ("COPY t FROM 's3://b/m' ACCESS_KEY_ID 'AKIAEXEMPLO' "
-               f"SECRET_ACCESS_KEY 'segredo{'0' * 400}' FORMAT AS PARQUET")
+    command = (
+        "COPY t FROM 's3://b/m' ACCESS_KEY_ID 'AKIAEXEMPLO' "
+        f"SECRET_ACCESS_KEY 'segredo{'0' * 400}' FORMAT AS PARQUET"
+    )
     crash = types.SimpleNamespace(message=f"ProgrammingError: {command}")
-    report = types.SimpleNamespace(longrepr=types.SimpleNamespace(reprcrash=crash),
-                                   outcome="failed")
+    report = types.SimpleNamespace(
+        longrepr=types.SimpleNamespace(reprcrash=crash), outcome="failed"
+    )
 
     recorded = failure_message(report)
 

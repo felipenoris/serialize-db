@@ -25,6 +25,7 @@ Exemplo:
     export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
     .venv/bin/python probes/operacao/probe_load_resume.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import shutil
@@ -79,8 +80,10 @@ def report_leftovers(
     if not leftovers:
         print(f"pasta temporária do DuckDB deixada em {tempfile.gettempdir()}: nenhuma")
     for folder in leftovers:
-        print(f"pasta temporária do DuckDB deixada: {folder}, {folder_megabytes(folder):.1f} MB; "
-              "apagada pela sonda")
+        print(
+            f"pasta temporária do DuckDB deixada: {folder}, {folder_megabytes(folder):.1f} MB; "
+            "apagada pela sonda"
+        )
         shutil.rmtree(folder)
 
 
@@ -134,10 +137,10 @@ def main() -> None:
     storage = db.storage
     values = lib.source_partitions(source, 3)
     uri = lib.table_uri(db, lib.TABLE.name)
-    arguments = lib.cli_arguments(db, "load", "--source", source, "--tables", lib.TABLE.name,
-                                  "--partitions", *values)
-    second_folder = storage.join(db.environment, lib.TABLE.name,
-                                 f"{lib.PARTITION_BY}={values[1]}")
+    arguments = lib.cli_arguments(
+        db, "load", "--source", source, "--tables", lib.TABLE.name, "--partitions", *values
+    )
+    second_folder = storage.join(db.environment, lib.TABLE.name, f"{lib.PARTITION_BY}={values[1]}")
 
     # O sinal espera o arquivo da segunda partição, depois da linha da primeira no log.
     def wait_second_file(
@@ -152,8 +155,10 @@ def main() -> None:
     after_kill = lib.logged_files(uri, storage)
     written = lib.folder_files(uri, storage)
     killed_ids = {execution_of(path) for path in written}
-    print(f"depois do sinal: {sorted(after_kill)} no log; {len(written)} arquivo(s) na pasta, "
-          f"da execução {', '.join(sorted(killed_ids))}")
+    print(
+        f"depois do sinal: {sorted(after_kill)} no log; {len(written)} arquivo(s) na pasta, "
+        f"da execução {', '.join(sorted(killed_ids))}"
+    )
     arrived = "chegou ao log" if values[1] in after_kill else "ficou fora do log"
     print(f"a segunda partição, {values[1]}, {arrived} antes do sinal")
     check_killed(killed, after_kill, values)

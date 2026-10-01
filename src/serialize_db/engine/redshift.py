@@ -90,8 +90,13 @@ from serialize_db.schema import (
 )
 from serialize_db.storage import Storage
 
-__all__ = ["RedshiftConfig", "RedshiftEngine", "mask", "sandbox_prefix",
-           "schema_from_row_description"]
+__all__ = [
+    "RedshiftConfig",
+    "RedshiftEngine",
+    "mask",
+    "sandbox_prefix",
+    "schema_from_row_description",
+]
 
 log = logging.getLogger("serialize_db.engine.redshift")
 
@@ -218,8 +223,9 @@ class RedshiftConfig:
         try:
             port_number = int(port)
         except ValueError:
-            raise ContractError(f"SERIALIZE_DB_REDSHIFT_PORT={port!r}: a porta é um número "
-                                "inteiro, como 5439") from None
+            raise ContractError(
+                f"SERIALIZE_DB_REDSHIFT_PORT={port!r}: a porta é um número inteiro, como 5439"
+            ) from None
         return RedshiftConfig(
             workgroup=_variable(environ, "WORKGROUP"),
             database=_variable(environ, "DATABASE") or "dev",
@@ -242,7 +248,8 @@ def _workgroup_login(
     serverless = boto3.client("redshift-serverless", region_name=config.region)
     endpoint = serverless.get_workgroup(workgroupName=config.workgroup)["workgroup"]["endpoint"]
     credentials = serverless.get_credentials(
-        workgroupName=config.workgroup, dbName=config.database, durationSeconds=3600)
+        workgroupName=config.workgroup, dbName=config.database, durationSeconds=3600
+    )
     return {
         "host": config.host or endpoint["address"],
         "port": config.port if config.host else int(endpoint["port"]),
@@ -257,12 +264,18 @@ def login_of(
     """Os argumentos de conexão: o par informado, ou a credencial temporária do workgroup;
     protegida."""
     if config.host and config.user and config.password:
-        return {"host": config.host, "port": config.port, "user": config.user,
-                "password": config.password}
+        return {
+            "host": config.host,
+            "port": config.port,
+            "user": config.user,
+            "password": config.password,
+        }
     if config.workgroup:
         return _workgroup_login(config)
-    raise ContractError("RedshiftConfig sem conexão: informe workgroup, ou host, user e password "
-                        "(SERIALIZE_DB_REDSHIFT_WORKGROUP, ou _HOST, _USER e _PASSWORD)")
+    raise ContractError(
+        "RedshiftConfig sem conexão: informe workgroup, ou host, user e password "
+        "(SERIALIZE_DB_REDSHIFT_WORKGROUP, ou _HOST, _USER e _PASSWORD)"
+    )
 
 
 def driver_connect(
@@ -333,11 +346,14 @@ def credentials_clause(
         return f"IAM_ROLE {literal(config.iam_role)}"
     credentials = boto3.Session(region_name=config.region).get_credentials()
     if credentials is None:
-        raise SandboxError("sem credenciais da AWS para o COPY e o UNLOAD: o boto3 não achou "
-                           "papel, variáveis AWS_* nem perfil, e a configuração não tem iam_role")
+        raise SandboxError(
+            "sem credenciais da AWS para o COPY e o UNLOAD: o boto3 não achou "
+            "papel, variáveis AWS_* nem perfil, e a configuração não tem iam_role"
+        )
     frozen = credentials.get_frozen_credentials()
-    clause = (f"ACCESS_KEY_ID {literal(frozen.access_key)} "
-              f"SECRET_ACCESS_KEY {literal(frozen.secret_key)}")
+    clause = (
+        f"ACCESS_KEY_ID {literal(frozen.access_key)} SECRET_ACCESS_KEY {literal(frozen.secret_key)}"
+    )
     if frozen.token:
         clause += f" SESSION_TOKEN {literal(frozen.token)}"
     return clause
@@ -385,9 +401,11 @@ def sandbox_prefix(
     normalized = re.sub(r"[^a-z0-9_]", "_", execution_id.lower())
     prefix = f"exec_{normalized}_"
     if len(prefix.encode("utf-8")) + _TABLE_NAME_BYTES > _IDENTIFIER_BYTES:
-        raise ContractError(f"execution_id {execution_id!r}: o prefixo {prefix!r} não deixa "
-                            f"{_TABLE_NAME_BYTES} bytes ao nome da tabela dentro dos "
-                            f"{_IDENTIFIER_BYTES} de um identificador do Redshift")
+        raise ContractError(
+            f"execution_id {execution_id!r}: o prefixo {prefix!r} não deixa "
+            f"{_TABLE_NAME_BYTES} bytes ao nome da tabela dentro dos "
+            f"{_IDENTIFIER_BYTES} de um identificador do Redshift"
+        )
     return prefix
 
 
@@ -488,8 +506,7 @@ def insert_from_staging(
             selected.append(f"JSON_PARSE({quoted(column.name)})")
         else:
             selected.append(quoted(column.name))
-    return (f"INSERT INTO {target} ({', '.join(names)})\n"
-            f"SELECT {', '.join(selected)} FROM {staging}")
+    return f"INSERT INTO {target} ({', '.join(names)})\nSELECT {', '.join(selected)} FROM {staging}"
 
 
 def copy_text(
@@ -528,8 +545,10 @@ def unload_text(
     só assim (leituras de 2026-09-23). O texto carrega a cláusula de credenciais.
     """
     escaped = select.replace("\\", "\\\\").replace("'", "''")
-    text = (f"UNLOAD ('{escaped}')\nTO {literal(destination.rstrip('/') + '/')}\n{credentials}\n"
-            "FORMAT AS PARQUET MANIFEST VERBOSE")
+    text = (
+        f"UNLOAD ('{escaped}')\nTO {literal(destination.rstrip('/') + '/')}\n{credentials}\n"
+        "FORMAT AS PARQUET MANIFEST VERBOSE"
+    )
     if not parallel:
         text += " PARALLEL OFF"
     return text
@@ -682,8 +701,9 @@ def compiled_for_cursor(
     compilado pela cópia prefixada, com ``render_postcompile`` expandindo o ``IN`` de lista, ou o
     texto com o sentinela trocado pelo prefixo por ``sql.bind``; protegida."""
     if isinstance(statement_or_sql, str):
-        return sql.bind(statement_or_sql.replace(sql.SENTINEL, prefix), dict(params or {}),
-                        "redshift")
+        return sql.bind(
+            statement_or_sql.replace(sql.SENTINEL, prefix), dict(params or {}), "redshift"
+        )
     bound = sql.bound_statement(statement_or_sql, params, prefix)
     compiled = bound.compile(dialect=_NAMED, compile_kwargs={"render_postcompile": True})
     return str(compiled), dict(compiled.construct_params())
@@ -702,7 +722,8 @@ def literal_text(
     else:
         statement = sql.bound_statement(statement_or_sql, params, prefix)
     compiled = statement.compile(
-        dialect=_NAMED, compile_kwargs={"literal_binds": True, "render_postcompile": True})
+        dialect=_NAMED, compile_kwargs={"literal_binds": True, "render_postcompile": True}
+    )
     # O texto sai sem o espaço e o ponto e vírgula finais: ele entra numa subconsulta e no UNLOAD.
     return str(compiled).strip().rstrip(";")
 
@@ -785,13 +806,20 @@ class RedshiftStream:
         self._finished = False
         with engine.session():
             self.schema = engine.result_schema(text)
-            engine.execute(unload_text(text, engine.storage.uri_of(self._prefix),
-                                       credentials_clause(engine.config), parallel=False))
+            engine.execute(
+                unload_text(
+                    text,
+                    engine.storage.uri_of(self._prefix),
+                    credentials_clause(engine.config),
+                    parallel=False,
+                )
+            )
             paths = engine.unloaded_paths(self._prefix)
         self._thread = threading.Thread(
             target=_read_unloaded,
             args=(engine.storage, paths, self.schema, batch_size, self._queue, self._stop),
-            daemon=True)
+            daemon=True,
+        )
         self._thread.start()
 
     def read_next_batch(self) -> pa.RecordBatch:
@@ -972,7 +1000,8 @@ class RedshiftAppender:
         if not engine.name_in_use(self._name):
             raise SandboxError(
                 f"{table.name}: a tabela não existe no sandbox; crie-a por create_table ou pelo "
-                f"ingest")
+                f"ingest"
+            )
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -985,8 +1014,10 @@ class RedshiftAppender:
         self._queue: queue.Queue = queue.Queue(maxsize=queue_depth)
         self._outcome: dict[str, object] = {"rows": 0, "error": None}
         self._thread = threading.Thread(
-            target=_write_parquet, args=(self._sink, self._queue, self._closed, self._outcome),
-            daemon=True)
+            target=_write_parquet,
+            args=(self._sink, self._queue, self._closed, self._outcome),
+            daemon=True,
+        )
         self._thread.start()
 
     @property
@@ -1022,8 +1053,10 @@ class RedshiftAppender:
         if self._schema is None:
             self._schema = converted.schema
         elif not converted.schema.equals(self._schema):
-            raise ContractError(f"{self._table.name}: o lote traz {converted.schema.names}, e o "
-                                f"primeiro trouxe {self._schema.names}")
+            raise ContractError(
+                f"{self._table.name}: o lote traz {converted.schema.names}, e o "
+                f"primeiro trouxe {self._schema.names}"
+            )
         return converted
 
     def write(
@@ -1040,7 +1073,8 @@ class RedshiftAppender:
                 raise
             if not self._put(converted):
                 raise self.error or RuntimeError(
-                    "a thread do appender terminou antes do fim da fila")
+                    "a thread do appender terminou antes do fim da fila"
+                )
 
     def _copy_file(
         self,
@@ -1193,8 +1227,12 @@ class RedshiftEngine:
             self._loaded: set[str] = set()
             self._loaded_lock = threading.Lock()
         self._connection = connect(config)
-        log.info("sessão %s aberta no esquema %s com o prefixo %s", self.execution_id,
-                 config.schema, self.prefix)
+        log.info(
+            "sessão %s aberta no esquema %s com o prefixo %s",
+            self.execution_id,
+            config.schema,
+            self.prefix,
+        )
 
     # ------------------------------------------------------------ a sessão
 
@@ -1252,8 +1290,14 @@ class RedshiftEngine:
         :return: o motor da sessão a mais, gerenciador de contexto; o ``cleanup`` dele fecha só
             essa sessão, a conexão dela.
         """
-        return RedshiftEngine(self.config, self.execution_id, self.storage, self.staging_prefix,
-                              parent=self, prefix=self.prefix)
+        return RedshiftEngine(
+            self.config,
+            self.execution_id,
+            self.storage,
+            self.staging_prefix,
+            parent=self,
+            prefix=self.prefix,
+        )
 
     def _reconnect(self) -> None:
         """A conexão reaberta com credencial nova, no lugar da que o servidor derrubou."""
@@ -1312,9 +1356,12 @@ class RedshiftEngine:
             except redshift_connector.InterfaceError as error:
                 if self._in_transaction:
                     raise
-                log.warning("sandbox %s: conexão derrubada (%s); reaberta com credencial nova, e "
-                            "a tabela temporária da sessão, se havia, se perdeu",
-                            self.execution_id, error)
+                log.warning(
+                    "sandbox %s: conexão derrubada (%s); reaberta com credencial nova, e "
+                    "a tabela temporária da sessão, se havia, se perdeu",
+                    self.execution_id,
+                    error,
+                )
                 self._reconnect()
                 return self._run(text, params)
 
@@ -1437,17 +1484,26 @@ class RedshiftEngine:
         na staging vazia, com a lista das colunas dos arquivos dele, e o ``INSERT`` com o valor da
         partição."""
         partitions = [value] if value is not None else None
-        manifests = delta.copy_manifest(uri, version, partitions,
-                                        self._manifest_folder(table, value), self.storage)
+        manifests = delta.copy_manifest(
+            uri, version, partitions, self._manifest_folder(table, value), self.storage
+        )
         self.execute(f"DELETE FROM {self.qualified(staging)}")
         # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo à de mesmo nome, e
         # a coluna que o arquivo não tem fica nula.
         for manifest in manifests:
             credentials = credentials_clause(self.config)
-            self.execute(copy_text(self.qualified(staging), manifest.uri, credentials,
-                                   manifest=True, columns=manifest.columns))
-        self.execute(insert_from_staging(self.qualified(name), self.qualified(staging), table,
-                                         value))
+            self.execute(
+                copy_text(
+                    self.qualified(staging),
+                    manifest.uri,
+                    credentials,
+                    manifest=True,
+                    columns=manifest.columns,
+                )
+            )
+        self.execute(
+            insert_from_staging(self.qualified(name), self.qualified(staging), table, value)
+        )
 
     def _load_from_delta(
         self,
@@ -1485,9 +1541,11 @@ class RedshiftEngine:
         partition_by = table_options(table).partition_by
         if partition_by is None and partitions is not None:
             raise ContractError(
-                f"{table.name}: tabela sem partição recebeu partitions={partitions}")
-        available = delta.partition_values(delta.open_table(uri, self.storage, version),
-                                           partition_by)
+                f"{table.name}: tabela sem partição recebeu partitions={partitions}"
+            )
+        available = delta.partition_values(
+            delta.open_table(uri, self.storage, version), partition_by
+        )
         if partitions is None:
             return available
         wanted = sorted(check_partition_value(value) for value in partitions)
@@ -1556,7 +1614,8 @@ class RedshiftEngine:
                 return
             values = delta.partition_values(
                 delta.open_table(staging.uri, self.storage, staging.version),
-                table_options(staging.table).partition_by)
+                table_options(staging.table).partition_by,
+            )
             self._load_from_delta(staging.table, staging.name, staging.uri, staging.version, values)
             self._loaded.add(staging.name)
 
@@ -1678,8 +1737,10 @@ class RedshiftEngine:
             count = self.execute("SELECT pg_last_unload_count()").fetchone()[0]
             if count == 0:
                 return []
-            raise FileNotFoundError(f"{self.storage.uri_of(prefix)}/manifest ausente depois de um "
-                                    f"UNLOAD de {count} linha(s)") from None
+            raise FileNotFoundError(
+                f"{self.storage.uri_of(prefix)}/manifest ausente depois de um "
+                f"UNLOAD de {count} linha(s)"
+            ) from None
         return [self.storage.relative(entry["url"]) for entry in json.loads(text)["entries"]]
 
     def stream(
@@ -1718,8 +1779,10 @@ class RedshiftEngine:
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         if self.storage is None:
-            raise ContractError("stream precisa de um armazenamento para os arquivos do UNLOAD, "
-                                "e o motor abriu sem ele: o leitor Redshift o recebe em unload_to")
+            raise ContractError(
+                "stream precisa de um armazenamento para os arquivos do UNLOAD, "
+                "e o motor abriu sem ele: o leitor Redshift o recebe em unload_to"
+            )
         return RedshiftStream(self, literal_text(statement_or_sql, params, self.prefix), batch_size)
 
     def create_table(
@@ -1910,13 +1973,13 @@ class RedshiftEngine:
         if check.skip_when is not None:
             skipped = self.query(self._text(check.skip_when, table)).column(0)[0].as_py()
             if skipped is True:
-                reason = ("dispensada: o menor valor da execução passa do maior da versão "
-                          "fixada")
+                reason = "dispensada: o menor valor da execução passa do maior da versão fixada"
                 return CheckResult(check.name, text, 0, pa.table({}), True, reason)
         self._load_cited(text)
         found = self.query(text)
-        return CheckResult(check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS),
-                           found.num_rows == 0)
+        return CheckResult(
+            check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS), found.num_rows == 0
+        )
 
     def audit(
         self,
@@ -1965,8 +2028,9 @@ class RedshiftEngine:
             pinned = self._pending_source(table, uri, version)
             pinned_max_key = self._pinned_max_key(table, uri, version)
         sources = self._referenced_sources(table, foreign_keys, referenced)
-        found, not_run = audit.checks_and_not_run(table, partitions, foreign_keys, key_scope,
-                                                  pinned, sources, pinned_max_key)
+        found, not_run = audit.checks_and_not_run(
+            table, partitions, foreign_keys, key_scope, pinned, sources, pinned_max_key
+        )
         results = []
         totals: dict = {}
         nonfinite: dict = {}
@@ -2032,9 +2096,14 @@ class RedshiftEngine:
         arquivos gravados, relativos à raiz."""
         # O lock fica do UNLOAD à leitura do manifesto: o pg_last_unload_count() é o deste UNLOAD.
         with self.session():
-            self.execute(unload_text(self._partition_select(table, value),
-                                     self.storage.uri_of(prefix), credentials_clause(self.config),
-                                     parallel=count > _PARALLEL_OFF_ROWS))
+            self.execute(
+                unload_text(
+                    self._partition_select(table, value),
+                    self.storage.uri_of(prefix),
+                    credentials_clause(self.config),
+                    parallel=count > _PARALLEL_OFF_ROWS,
+                )
+            )
             return self.unloaded_paths(prefix)
 
     def _empty_file(
@@ -2045,8 +2114,11 @@ class RedshiftEngine:
         """Um arquivo Parquet sem linha no prefixo, com as colunas do contrato sem a de partição: o
         ``UNLOAD`` de um resultado vazio não grava arquivo, e a partição vazia entra no log por
         ele."""
-        fields = [field for field in arrow_schema(table)
-                  if field.name != table_options(table).partition_by]
+        fields = [
+            field
+            for field in arrow_schema(table)
+            if field.name != table_options(table).partition_by
+        ]
         path = self.storage.join(prefix, "vazio.parquet")
         with self.storage.open_output_stream(path) as sink:
             pq.write_table(pa.schema(fields).empty_table(), sink)
@@ -2066,9 +2138,15 @@ class RedshiftEngine:
         files = []
         for path in paths:
             footer = pq.ParquetFile(self.storage.open_input_file(path))
-            files.append(delta.file_from_footer(footer, path.removeprefix(table_path + "/"),
-                                                self.storage.size(path), footer.metadata.num_rows,
-                                                table))
+            files.append(
+                delta.file_from_footer(
+                    footer,
+                    path.removeprefix(table_path + "/"),
+                    self.storage.size(path),
+                    footer.metadata.num_rows,
+                    table,
+                )
+            )
         return files
 
     def _register(
@@ -2091,9 +2169,16 @@ class RedshiftEngine:
         paths = self._unload(table, value, prefix, count)
         files = self._registered_files(table, table_path, prefix, paths)
         expected = expected_rows if expected_rows is not None else count
-        return delta.register_files(uri, table, files, value, metadata, self.storage,
-                                    expected_rows=expected,
-                                    columns_without_min_max=columns_without_min_max)
+        return delta.register_files(
+            uri,
+            table,
+            files,
+            value,
+            metadata,
+            self.storage,
+            expected_rows=expected,
+            columns_without_min_max=columns_without_min_max,
+        )
 
     def _swap_reader(
         self,
@@ -2134,16 +2219,27 @@ class RedshiftEngine:
         partition_by = table_options(table).partition_by
         folder = f"{partition_by}={value}" if partition_by is not None else ""
         prefix = self.storage.join(self.staging_prefix, table.name, folder, uuid.uuid4().hex)
-        log.warning("%s %s: colunas Double com valor não finito %s; a partição sai por "
-                    "publish_partition, e os dados passam pela máquina local", table.name,
-                    delta.partition_label(value), sorted(columns_without_min_max))
+        log.warning(
+            "%s %s: colunas Double com valor não finito %s; a partição sai por "
+            "publish_partition, e os dados passam pela máquina local",
+            table.name,
+            delta.partition_label(value),
+            sorted(columns_without_min_max),
+        )
         paths = self._unload(table, value, prefix, count)
         # Uma conexão do DuckDB por partição, nos limites do ambiente: o close devolve a memória.
         connection = self.storage.duckdb_connect(config=environment_limits())
         try:
             reader = self._swap_reader(connection, table, value, paths)
-            version = delta.publish_partition(uri, table, value, reader, metadata, self.storage,
-                                              columns_without_min_max=columns_without_min_max)
+            version = delta.publish_partition(
+                uri,
+                table,
+                value,
+                reader,
+                metadata,
+                self.storage,
+                columns_without_min_max=columns_without_min_max,
+            )
         finally:
             connection.close()
         # O log e os dois leitores contam as linhas da partição; a diferença desfaz o commit.
@@ -2201,10 +2297,12 @@ class RedshiftEngine:
         value = delta.checked_value(table, value)
         count = self._count(table, value)
         if columns_without_min_max:
-            return self._swap(table, uri, value, metadata, expected_rows, columns_without_min_max,
-                              count)
-        return self._register(table, uri, value, metadata, expected_rows, columns_without_min_max,
-                              count)
+            return self._swap(
+                table, uri, value, metadata, expected_rows, columns_without_min_max, count
+            )
+        return self._register(
+            table, uri, value, metadata, expected_rows, columns_without_min_max, count
+        )
 
     # ------------------------------------------------------------ o encerramento
 
@@ -2253,5 +2351,3 @@ class RedshiftEngine:
         *exc: object,
     ) -> None:
         self.cleanup()
-
-

@@ -220,8 +220,11 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     # Depois de uma versão nova, a compactação num commit sem alteração de dados.
     publish(db, PROJECTED, MONTHS[0], entry_rows(MONTHS[0], 50, 10, PROJECTED), "exec-2")
     assert cli.main([*compact, "--partitions", MONTHS[1]]) == 0
-    assert re.search(r"1 arquivo\(s\) gravado\(s\), 3 removido\(s\), em \d+\.\d s; "
-                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
+    assert re.search(
+        r"1 arquivo\(s\) gravado\(s\), 3 removido\(s\), em \d+\.\d s; "
+        r"RSS máximo do processo \d+ MB",
+        capsys.readouterr().out,
+    )
     current = delta.open_table(uri, storage).version()
     assert current == 6
     assert delta.version_diff(uri, 5, 6, PROJECTED, storage) == set()
@@ -240,8 +243,11 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     assert "de cad_contas" in capsys.readouterr().err
     publish(db, ACCOUNTS, None, account_rows(["A", "B", "C", "D"]), "exec-5")
     assert cli.main(accounts_compact) == 0
-    assert re.search(r"cad_contas: nada a juntar em 1 arquivo\(s\), nenhum commit, em \d+\.\d s; "
-                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
+    assert re.search(
+        r"cad_contas: nada a juntar em 1 arquivo\(s\), nenhum commit, em \d+\.\d s; "
+        r"RSS máximo do processo \d+ MB",
+        capsys.readouterr().out,
+    )
     assert delta.open_table(db.uri(ACCOUNTS), storage).version() == 2
 
     # A tabela ausente.
@@ -268,8 +274,11 @@ def test_archive_copies_each_table_with_the_same_sums(
     # O arquivamento: a saída, as cópias e a entrada movida.
     assert cli.main(["archive", *common_arguments(db), "--name", "2026T3"]) == 0
     printed = capsys.readouterr().out
-    assert re.search(r"cad_lancamentos: versão 2 copiada para .*, versão 2 no arquivo, "
-                     r"em \d+\.\d s; RSS máximo do processo \d+ MB", printed)
+    assert re.search(
+        r"cad_lancamentos: versão 2 copiada para .*, versão 2 no arquivo, "
+        r"em \d+\.\d s; RSS máximo do processo \d+ MB",
+        printed,
+    )
     assert "cad_contas: versão 1 copiada para" in printed
     assert "versão 1 no arquivo" in printed
     assert "snapshot 2026T3 movido para archived" in printed
@@ -391,8 +400,11 @@ def test_export_by_copy_and_by_rewrite(
     export = ["export", *common_arguments(db), "--table", "cad_lancamentos", "--destination"]
     copy_uri = storage.uri_of("prd/exportacao/copia")
     assert cli.main([*export, copy_uri]) == 0
-    assert re.search(r"cad_lancamentos: 2 arquivo\(s\) em .*, em \d+\.\d s; "
-                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
+    assert re.search(
+        r"cad_lancamentos: 2 arquivo\(s\) em .*, em \d+\.\d s; "
+        r"RSS máximo do processo \d+ MB",
+        capsys.readouterr().out,
+    )
     rewrite_uri = storage.uri_of("prd/exportacao/reescrita")
     assert cli.main([*export, rewrite_uri, "--mode", "rewrite"]) == 0
     assert cli.main([*export, storage.uri_of("prd/exportacao/antiga"), "--version", "1"]) == 0
@@ -402,8 +414,10 @@ def test_export_by_copy_and_by_rewrite(
         assert len(files) == 2
         assert all("/data_base_str=2026-0" in path for path in files)
     with storage.duckdb_connect() as connection:
-        query = (f"SELECT count(*), sum(valor) FROM read_parquet('{copy_uri}/*/*.parquet', "
-                 "hive_partitioning = true, hive_types_autocast = false)")
+        query = (
+            f"SELECT count(*), sum(valor) FROM read_parquet('{copy_uri}/*/*.parquet', "
+            "hive_partitioning = true, hive_types_autocast = false)"
+        )
         assert connection.execute(query).fetchone() == count_and_sum(db, db.uri(ENTRIES))
 
     # O destino não vazio e o destino fora da raiz.
@@ -423,12 +437,16 @@ def test_channel_points_moves_and_lists(
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 0
     assert cli.main(["channel", *common_arguments(db)]) == 0
     assert capsys.readouterr().out.endswith("nenhum canal em prd\n")
-    assert cli.main(["channel", *common_arguments(db), "--name", "default",
-                     "--snapshot", "2026T3"]) == 0
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "default", "--snapshot", "2026T3"])
+        == 0
+    )
     assert capsys.readouterr().out == "default: (nenhum) -> 2026T3\n"
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T4"]) == 0
-    assert cli.main(["channel", *common_arguments(db), "--name", "default",
-                     "--snapshot", "2026T4"]) == 0
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "default", "--snapshot", "2026T4"])
+        == 0
+    )
     assert capsys.readouterr().out.endswith("default: 2026T3 -> 2026T4\n")
     assert cli.main(["channel", *common_arguments(db)]) == 0
     assert capsys.readouterr().out == "default: 2026T4\n"
@@ -436,11 +454,15 @@ def test_channel_points_moves_and_lists(
     assert control["channels"] == {"default": "2026T4"}
 
     # Os erros: o snapshot ausente, o canal current, um só argumento e o archive do canal.
-    assert cli.main(["channel", *common_arguments(db), "--name", "default",
-                     "--snapshot", "2026T9"]) == 2
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "default", "--snapshot", "2026T9"])
+        == 2
+    )
     assert "não está em snapshots" in capsys.readouterr().err
-    assert cli.main(["channel", *common_arguments(db), "--name", "current",
-                     "--snapshot", "2026T3"]) == 2
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "current", "--snapshot", "2026T3"])
+        == 2
+    )
     assert "reservado" in capsys.readouterr().err
     assert cli.main(["channel", *common_arguments(db), "--name", "default"]) == 2
     assert "juntos" in capsys.readouterr().err
@@ -474,13 +496,37 @@ def test_cli_operation_usage_errors(
     """Os erros de uso: o nome ausente, o modo desconhecido, a tabela fora do modelo e a tabela
     do modelo sem Delta, sem traceback."""
     assert exit_code(["snapshot", *common_arguments(db)]) == 2
-    assert exit_code(["export", *common_arguments(db), "--table", "cad_contas",
-                      "--destination", "x", "--mode", "outro"]) == 2
+    assert (
+        exit_code(
+            [
+                "export",
+                *common_arguments(db),
+                "--table",
+                "cad_contas",
+                "--destination",
+                "x",
+                "--mode",
+                "outro",
+            ]
+        )
+        == 2
+    )
     assert cli.main(["history", *common_arguments(db), "--table", "nada"]) == 2
     projected_history = ["history", *common_arguments(db), "--table", "cad_lancamentos_projetados"]
     assert cli.main(projected_history) == 2
-    assert cli.main(["export", *common_arguments(db), "--table", "cad_lancamentos_projetados",
-                     "--destination", db.storage.uri_of("prd/exportacao/x")]) == 2
+    assert (
+        cli.main(
+            [
+                "export",
+                *common_arguments(db),
+                "--table",
+                "cad_lancamentos_projetados",
+                "--destination",
+                db.storage.uri_of("prd/exportacao/x"),
+            ]
+        )
+        == 2
+    )
     printed_errors = capsys.readouterr().err
     assert "não existe" in printed_errors
     assert "Traceback" not in printed_errors
@@ -492,8 +538,10 @@ def test_status_and_load_lines_print_no_none(
     """A linha do estado da publicação diz ``nunca publicada`` e ``tabela inteira`` na tabela sem
     partição que nunca foi publicada; a diferença da carga diz ``ausente`` do lado sem a
     partição."""
-    statuses = [PublicationStatus("prd_cad_contas", None, 1, (None,)),
-                PublicationStatus("prd_cad_lancamentos", 2, 3, (MONTHS[1],))]
+    statuses = [
+        PublicationStatus("prd_cad_contas", None, 1, (None,)),
+        PublicationStatus("prd_cad_lancamentos", 2, 3, (MONTHS[1],)),
+    ]
     cli._print_statuses(statuses)
     assert capsys.readouterr().out.splitlines() == [
         "prd_cad_contas: nunca publicada, atual 1, pendentes ['tabela inteira']",
@@ -501,15 +549,21 @@ def test_status_and_load_lines_print_no_none(
     ]
 
     # A partição que falta no Delta e a que falta na origem.
-    missing_in_delta = PartitionReport(MONTHS[0], 38, None, {"valor": Decimal("1.5")}, {},
-                                       {"valor": 0}, {})
-    missing_in_source = PartitionReport(MONTHS[1], None, 5, {}, {"valor": Decimal("2.5")}, {},
-                                        {"valor": 0})
+    missing_in_delta = PartitionReport(
+        MONTHS[0], 38, None, {"valor": Decimal("1.5")}, {}, {"valor": 0}, {}
+    )
+    missing_in_source = PartitionReport(
+        MONTHS[1], None, 5, {}, {"valor": Decimal("2.5")}, {}, {"valor": 0}
+    )
     report = LoadReport("cad_lancamentos", (missing_in_delta, missing_in_source), (), ())
     cli._print_load_report(report, [])
     printed = capsys.readouterr().out
-    assert (f"DIFERENÇA em {MONTHS[0]}: origem 38 linhas {{'valor': Decimal('1.5')}} não finitos "
-            "{'valor': 0}, Delta ausente\n") in printed
-    assert (f"DIFERENÇA em {MONTHS[1]}: origem ausente, Delta 5 linhas "
-            "{'valor': Decimal('2.5')} não finitos {'valor': 0}\n") in printed
+    assert (
+        f"DIFERENÇA em {MONTHS[0]}: origem 38 linhas {{'valor': Decimal('1.5')}} não finitos "
+        "{'valor': 0}, Delta ausente\n"
+    ) in printed
+    assert (
+        f"DIFERENÇA em {MONTHS[1]}: origem ausente, Delta 5 linhas "
+        "{'valor': Decimal('2.5')} não finitos {'valor': 0}\n"
+    ) in printed
     assert "None" not in printed

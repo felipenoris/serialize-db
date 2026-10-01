@@ -28,6 +28,7 @@ Exemplo:
     export SERIALIZE_DB_REDSHIFT_WORKGROUP=workgroup SERIALIZE_DB_REDSHIFT_SCHEMA=esquema
     .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -74,8 +75,7 @@ def export_select(
     ``sort_key``."""
     columns = [quoted(column.name) for column in columns_without_partition(lib.TABLE)]
     order = [quoted(column) for column in table_options(lib.TABLE).sort_key]
-    return (f"SELECT {', '.join(columns)} FROM {engine.qualified(name)} "
-            f"ORDER BY {', '.join(order)}")
+    return f"SELECT {', '.join(columns)} FROM {engine.qualified(name)} ORDER BY {', '.join(order)}"
 
 
 def unload(
@@ -89,8 +89,9 @@ def unload(
     arquivos do manifesto."""
     storage = db.storage
     started = time.perf_counter()
-    engine.execute(unload_text(select, storage.uri_of(prefix), credentials_clause(engine.config),
-                               parallel))
+    engine.execute(
+        unload_text(select, storage.uri_of(prefix), credentials_clause(engine.config), parallel)
+    )
     seconds = time.perf_counter() - started
     paths = engine.unloaded_paths(prefix)
     sizes = [storage.size(path) for path in paths]
@@ -119,8 +120,10 @@ def sized_table(
     if rows == total:
         return ingested
     name = f"{engine.prefix}linhas_{rows}"
-    engine.execute(f"CREATE TABLE {engine.qualified(name)} AS SELECT * FROM "
-                   f"{engine.qualified(ingested)} LIMIT {rows}")
+    engine.execute(
+        f"CREATE TABLE {engine.qualified(name)} AS SELECT * FROM "
+        f"{engine.qualified(ingested)} LIMIT {rows}"
+    )
     engine.register_created(name)
     return name
 
@@ -143,10 +146,12 @@ def measure(
             prefix = db.storage.join(db.environment, "unload", f"{rows}-{label}-{repetition}")
             run = unload(engine, db, select, prefix, parallel)
             runs[parallel].append(run)
-            print(f"{rows} linhas, {mode_label(parallel)}, repetição {repetition + 1}: "
-                  f"{run.seconds:.1f} s, {len(run.sizes)} arquivo(s), "
-                  f"{sum(run.sizes) / 2**20:.1f} MB, maior {max(run.sizes) / 2**20:.1f} MB, "
-                  f"rodapés em {run.footer_seconds:.2f} s")
+            print(
+                f"{rows} linhas, {mode_label(parallel)}, repetição {repetition + 1}: "
+                f"{run.seconds:.1f} s, {len(run.sizes)} arquivo(s), "
+                f"{sum(run.sizes) / 2**20:.1f} MB, maior {max(run.sizes) / 2**20:.1f} MB, "
+                f"rodapés em {run.footer_seconds:.2f} s"
+            )
             if run.rows != rows:
                 problems.append(f"{rows} linhas, {mode_label(parallel)}: {run.rows} nos rodapés")
             if not parallel and len(run.sizes) != 1:
@@ -162,11 +167,13 @@ def print_summary(
     for rows, runs in results.items():
         serial = min(runs[False], key=lambda run: run.seconds)
         parallel = min(runs[True], key=lambda run: run.seconds)
-        print(f"  {rows} linhas: PARALLEL OFF {serial.seconds:.1f} s, 1 arquivo de "
-              f"{sum(serial.sizes) / 2**20:.1f} MB; paralelo {parallel.seconds:.1f} s, "
-              f"{len(parallel.sizes)} arquivo(s), maior {max(parallel.sizes) / 2**20:.1f} MB; "
-              f"razão {serial.seconds / parallel.seconds:.2f}; rodapés "
-              f"{serial.footer_seconds:.2f} s e {parallel.footer_seconds:.2f} s")
+        print(
+            f"  {rows} linhas: PARALLEL OFF {serial.seconds:.1f} s, 1 arquivo de "
+            f"{sum(serial.sizes) / 2**20:.1f} MB; paralelo {parallel.seconds:.1f} s, "
+            f"{len(parallel.sizes)} arquivo(s), maior {max(parallel.sizes) / 2**20:.1f} MB; "
+            f"razão {serial.seconds / parallel.seconds:.2f}; rodapés "
+            f"{serial.footer_seconds:.2f} s e {parallel.footer_seconds:.2f} s"
+        )
 
 
 def main() -> None:

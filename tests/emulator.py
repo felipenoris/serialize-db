@@ -176,7 +176,16 @@ NAME_OID = 19
 
 # Os comandos que não devolvem linhas; num INSERT, UPDATE ou DELETE, o DuckDB devolve a contagem.
 COMMANDS = {
-    "CREATE", "DROP", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "ALTER", "SET", "BEGIN", "COMMIT",
+    "CREATE",
+    "DROP",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "ALTER",
+    "SET",
+    "BEGIN",
+    "COMMIT",
     "ROLLBACK",
 }
 
@@ -224,8 +233,9 @@ def wait_until_listening(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(f"o moto saiu com o código {process.returncode} antes de abrir a "
-                               f"porta {port}")
+            raise RuntimeError(
+                f"o moto saiu com o código {process.returncode} antes de abrir a porta {port}"
+            )
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                 return
@@ -267,8 +277,10 @@ def start() -> subprocess.Popen:
     grupo ``emulator`` do ``pyproject.toml``, fora do ``dev``.
     """
     if importlib.util.find_spec("moto") is None:
-        raise RuntimeError("SERIALIZE_DB_TEST_EMULATOR precisa do moto, do grupo emulator: "
-                           "uv run --group emulator pytest ...")
+        raise RuntimeError(
+            "SERIALIZE_DB_TEST_EMULATOR precisa do moto, do grupo emulator: "
+            "uv run --group emulator pytest ..."
+        )
     port = free_port()
     process = subprocess.Popen(
         [sys.executable, "-m", "moto.server", "-H", "127.0.0.1", "-p", str(port)],
@@ -735,7 +747,7 @@ def outside_quotes(
     pieces = []
     position = 0
     for match in QUOTED.finditer(text):
-        pieces.append(rewrite(text[position:match.start()]))
+        pieces.append(rewrite(text[position : match.start()]))
         pieces.append(match.group(0))
         position = match.end()
     pieces.append(rewrite(text[position:]))
@@ -910,7 +922,7 @@ def redshift_data_type(
             break
     if name is None:
         name = re.match(r"[A-Z]+", upper).group(0)
-    rest = upper[len(name):].strip()
+    rest = upper[len(name) :].strip()
     match = re.match(r"\(([^)]*)\)", rest)
     inside_parentheses = match.group(1) if match else ""
     arguments = [part.strip() for part in inside_parentheses.split(",") if part.strip()]
@@ -950,8 +962,8 @@ def remember_ddl(
         data_type, length, precision, scale = redshift_data_type(kind)
         database.duckdb_connection.execute(
             "INSERT INTO main.emulador_colunas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [SHARE_DATABASE, schema, table, column, data_type, length, precision, scale,
-             position])
+            [SHARE_DATABASE, schema, table, column, data_type, length, precision, scale, position],
+        )
 
 
 def forget_ddl(
@@ -964,7 +976,8 @@ def forget_ddl(
         return
     connection.database.duckdb_connection.execute(
         "DELETE FROM main.emulador_colunas WHERE schema_name = ? AND table_name = ?",
-        [table_schema(connection, match.group(1)), table_key(match.group(1))])
+        [table_schema(connection, match.group(1)), table_key(match.group(1))],
+    )
 
 
 def remember_added_column(
@@ -972,8 +985,9 @@ def remember_added_column(
     text: str,
 ) -> None:
     """Põe em ``svv_all_columns`` a coluna de um ``ALTER TABLE ... ADD COLUMN``, no fim."""
-    match = re.match(r"ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)\s+(.+)", text,
-                     re.IGNORECASE | re.DOTALL)
+    match = re.match(
+        r"ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)\s+(.+)", text, re.IGNORECASE | re.DOTALL
+    )
     if match is None:
         return
     database = connection.database.duckdb_connection
@@ -981,12 +995,24 @@ def remember_added_column(
     table = table_key(match.group(1))
     position = database.execute(
         "SELECT coalesce(max(ordinal_position), 0) + 1 FROM main.emulador_colunas "
-        "WHERE schema_name = ? AND table_name = ?", [schema, table]).fetchone()[0]
+        "WHERE schema_name = ? AND table_name = ?",
+        [schema, table],
+    ).fetchone()[0]
     data_type, length, precision, scale = redshift_data_type(match.group(3))
     database.execute(
         "INSERT INTO main.emulador_colunas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [SHARE_DATABASE, schema, table, match.group(2).strip('"').lower(), data_type, length,
-         precision, scale, position])
+        [
+            SHARE_DATABASE,
+            schema,
+            table,
+            match.group(2).strip('"').lower(),
+            data_type,
+            length,
+            precision,
+            scale,
+            position,
+        ],
+    )
 
 
 def option_words(
@@ -1018,8 +1044,9 @@ def copy(
 
     # O Redshift recusa TRUNCATECOLUMNS num COPY de Parquet (2026-09-21, plan/POC.md).
     if "TRUNCATECOLUMNS" in options:
-        raise server_error("TRUNCATECOLUMNS argument is not supported for PARQUET based COPY",
-                           "0A000")
+        raise server_error(
+            "TRUNCATECOLUMNS argument is not supported for PARQUET based COPY", "0A000"
+        )
 
     # O caminho sem objeto que case não carrega nada e não dá erro (2026-09-28, plan/POC.md).
     files = copy_sources(source, options)
@@ -1038,7 +1065,7 @@ def copy(
     serialize_to_json = "SERIALIZETOJSON" in options
     check_copy(connection, table, names, data, serialize_to_json=serialize_to_json)
 
-    loaded = pa.table(data.columns[:len(names)], names=names)
+    loaded = pa.table(data.columns[: len(names)], names=names)
     insert_arrow(connection, table, loaded)
     return Result(rowcount=loaded.num_rows)
 
@@ -1092,8 +1119,10 @@ def copy_column_names(
     colunas que a tabela sem ``FILLRECORD``."""
     if listed is not None:
         if len(listed) != file_columns:
-            raise server_error("Spectrum Scan Error. Unmatched number of columns between the "
-                               "column list and the file")
+            raise server_error(
+                "Spectrum Scan Error. Unmatched number of columns between the "
+                "column list and the file"
+            )
         return listed
     fewer_with_fillrecord = fillrecord and file_columns < len(target)
     if file_columns == len(target) or fewer_with_fillrecord:
@@ -1101,7 +1130,8 @@ def copy_column_names(
     raise server_error(
         "Spectrum Scan Error. error: Spectrum Scan Error code: 15007 context: Unmatched number "
         f"of columns between table and file. Table columns: {len(target)}, Data columns: "
-        f"{file_columns}")
+        f"{file_columns}"
+    )
 
 
 def check_copy(
@@ -1127,8 +1157,9 @@ def check_copy(
             raise server_error("1224 String value exceeds the max size of 65535 bytes")
         if name in lengths and longest > lengths[name]:
             record_load_error(connection, "String length exceeds DDL length")
-            raise server_error("Load into table failed. Check 'stl_load_errors' system table for "
-                               "details.")
+            raise server_error(
+                "Load into table failed. Check 'stl_load_errors' system table for details."
+            )
 
 
 def record_load_error(
@@ -1177,7 +1208,8 @@ def copy_json_lines(
         quoted = ", ".join(f'"{name}"' for name in names)
         placeholders = ", ".join("?" for _ in names)
         connection.duckdb_connection.execute(
-            f"INSERT INTO {table} ({quoted}) VALUES ({placeholders})", values)
+            f"INSERT INTO {table} ({quoted}) VALUES ({placeholders})", values
+        )
         count += 1
     return Result(rowcount=count)
 
@@ -1212,13 +1244,15 @@ def unload(
     options = option_words(match.group("options"))
 
     if re.search(r"\blimit\s+\d+\s*$", select, re.IGNORECASE):
-        raise server_error("Limit clause is not supported in the outermost select of an UNLOAD "
-                           "statement", "0A000")
+        raise server_error(
+            "Limit clause is not supported in the outermost select of an UNLOAD statement", "0A000"
+        )
     if "ALLOWOVERWRITE" not in options and object_uris(target):
         raise server_error(
             "Specified unload destination on S3 is not empty. Consider using a different "
             "bucket / prefix, manually removing the target files in S3, or using the "
-            "ALLOWOVERWRITE option.")
+            "ALLOWOVERWRITE option."
+        )
 
     translated = to_duckdb(select, connection.database.all_super_columns())
     try:

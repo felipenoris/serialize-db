@@ -27,6 +27,7 @@ Exemplo:
     export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
     .venv/bin/python probes/operacao/probe_compact_memory.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import re
@@ -71,8 +72,10 @@ def describe_sizes(
     """Os arquivos, o total, o menor e o maior, em MB."""
     if not sizes:
         return "nenhum arquivo"
-    return (f"{len(sizes)} arquivo(s), {sum(sizes) / 2**20:.1f} MB, de {min(sizes) / 2**20:.1f} "
-            f"a {max(sizes) / 2**20:.1f} MB")
+    return (
+        f"{len(sizes)} arquivo(s), {sum(sizes) / 2**20:.1f} MB, de {min(sizes) / 2**20:.1f} "
+        f"a {max(sizes) / 2**20:.1f} MB"
+    )
 
 
 def split_partition(
@@ -89,10 +92,14 @@ def split_partition(
     for column in lib.TABLE.columns:
         if column.name != lib.PARTITION_BY:
             names.append(quoted(column.name))
-    select = (f"SELECT {', '.join(names)} FROM delta_scan({literal(uri)}) "
-              f"WHERE {quoted(lib.PARTITION_BY)} = {literal(value)}")
-    copy = (f"COPY ({select}) TO {literal(folder)} "
-            f"(FORMAT parquet, FILE_SIZE_BYTES {part_bytes}, RETURN_STATS)")
+    select = (
+        f"SELECT {', '.join(names)} FROM delta_scan({literal(uri)}) "
+        f"WHERE {quoted(lib.PARTITION_BY)} = {literal(value)}"
+    )
+    copy = (
+        f"COPY ({select}) TO {literal(folder)} "
+        f"(FORMAT parquet, FILE_SIZE_BYTES {part_bytes}, RETURN_STATS)"
+    )
     # Uma conexão com os limites do ambiente, fechada antes do compact: o close devolve a memória.
     connection = storage.duckdb_connect(config=environment_limits())
     try:
@@ -157,8 +164,9 @@ def main() -> None:
 
     # O compact num processo próprio, que imprime o tempo e o pico de RSS dele.
     print(f"memória disponível antes do compact: {available_memory() / 2**30:.1f} GiB")
-    compact = lib.run_cli(lib.cli_arguments(db, "compact", "--table", lib.TABLE.name,
-                                            "--partitions", value))
+    compact = lib.run_cli(
+        lib.cli_arguments(db, "compact", "--table", lib.TABLE.name, "--partitions", value)
+    )
     check_compact(compact)
 
     compacted_sizes = logged_sizes(uri, db, value)

@@ -25,6 +25,7 @@ Exemplo:
     export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
     .venv/bin/python probes/operacao/probe_archive_resume.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import sys
@@ -91,8 +92,9 @@ def check_copy(
     copied = lib.logged_files(archive_uri, storage)
     for value in values:
         if sorted(copied.get(value, [])) != sorted(expected.get(value, [])):
-            problems.append(f"{value}: {copied.get(value)} na cópia, {expected.get(value)} na "
-                            "origem")
+            problems.append(
+                f"{value}: {copied.get(value)} na cópia, {expected.get(value)} na origem"
+            )
     version = delta.open_table(archive_uri, storage).version()
     if version != len(values):
         problems.append(f"a cópia na versão {version}, esperada {len(values)}")
@@ -128,8 +130,10 @@ def main() -> None:
     killed = lib.run_cli_killed(arguments, " copiada, ", lib.no_wait)
     after_kill = lib.logged_files(archive_uri, storage)
     control, _ = delta.read_snapshots(storage, db.environment)
-    print(f"depois do sinal: {sorted(after_kill)} na cópia; "
-          f"{len(lib.folder_files(archive_uri, storage))} arquivo(s) na pasta dela")
+    print(
+        f"depois do sinal: {sorted(after_kill)} na cópia; "
+        f"{len(lib.folder_files(archive_uri, storage))} arquivo(s) na pasta dela"
+    )
     check_killed(killed, after_kill, values, name in control["snapshots"])
 
     # A repetição do mesmo comando continua a cópia.

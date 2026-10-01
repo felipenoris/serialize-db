@@ -133,8 +133,10 @@ def load_table(
         rows = partition_rows(db, table, value)
         item = PartitionLoad(value, rows, time.perf_counter() - started, peak_rss_mb())
         label = "tabela inteira" if value is None else value
-        print(f"  {label}: {rows} linhas em {item.seconds:.1f} s; "
-              f"RSS máximo do processo {item.peak_rss_mb:.0f} MB")
+        print(
+            f"  {label}: {rows} linhas em {item.seconds:.1f} s; "
+            f"RSS máximo do processo {item.peak_rss_mb:.0f} MB"
+        )
         loaded.append(item)
         if progress is not None:
             progress(loaded)
@@ -161,10 +163,12 @@ def print_report(
     for partition in report.partitions:
         if not partition.matches:
             where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
-            source = side_text("origem", partition.source_rows, partition.source_sums,
-                               partition.source_nonfinite)
-            in_delta = side_text("Delta", partition.delta_rows, partition.delta_sums,
-                                 partition.delta_nonfinite)
+            source = side_text(
+                "origem", partition.source_rows, partition.source_sums, partition.source_nonfinite
+            )
+            in_delta = side_text(
+                "Delta", partition.delta_rows, partition.delta_sums, partition.delta_nonfinite
+            )
             print(f"  DIFERENÇA {where}: {source}, {in_delta}")
     verdict = "contagens e somas iguais" if report.matches else "com diferenças"
     print(f"  relatório: {len(report.partitions)} partições conferidas, {verdict}")
@@ -267,24 +271,38 @@ def build_parser() -> argparse.ArgumentParser:
         description="Migra a base Parquet particionada de origem para tabelas Delta, uma "
         "partição por commit, e confere contagens e somas."
     )
-    parser.add_argument("--metadata", required=True, type=resolve_metadata,
-                        help="o MetaData do modelo, como client_model:Base.metadata")
-    parser.add_argument("--source", required=True,
-                        help="a raiz da origem, pasta local ou s3://bucket/prefixo")
-    parser.add_argument("--root", required=True,
-                        help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo")
+    parser.add_argument(
+        "--metadata",
+        required=True,
+        type=resolve_metadata,
+        help="o MetaData do modelo, como client_model:Base.metadata",
+    )
+    parser.add_argument(
+        "--source", required=True, help="a raiz da origem, pasta local ou s3://bucket/prefixo"
+    )
+    parser.add_argument(
+        "--root", required=True, help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo"
+    )
     # A variável vazia conta como ausente, como nos subcomandos de serialize-db.
     environment_default = os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv"
-    parser.add_argument("--environment", default=environment_default,
-                        help="o ambiente sob a raiz, a pasta das tabelas (padrão: "
-                             "SERIALIZE_DB_ENVIRONMENT, senão dsv; a variável vazia conta como "
-                             "ausente)")
+    parser.add_argument(
+        "--environment",
+        default=environment_default,
+        help="o ambiente sob a raiz, a pasta das tabelas (padrão: "
+        "SERIALIZE_DB_ENVIRONMENT, senão dsv; a variável vazia conta como "
+        "ausente)",
+    )
     parser.add_argument("--tables", nargs="+", metavar="TABELA", help="só estas tabelas do modelo")
-    parser.add_argument("--partitions", nargs="+", metavar="AAAA-MM-DD", default=None,
-                        help="só estas partições, gravadas e conferidas; as tabelas sem "
-                             "partição ficam de fora")
-    parser.add_argument("--report", metavar="ARQUIVO.json",
-                        help="grava o relatório da execução em JSON")
+    parser.add_argument(
+        "--partitions",
+        nargs="+",
+        metavar="AAAA-MM-DD",
+        default=None,
+        help="só estas partições, gravadas e conferidas; as tabelas sem partição ficam de fora",
+    )
+    parser.add_argument(
+        "--report", metavar="ARQUIVO.json", help="grava o relatório da execução em JSON"
+    )
     return parser
 
 
@@ -308,9 +326,11 @@ def main(
     # A máquina e os limites do DuckDB, impressos antes da carga e levados no relatório.
     environment = describe_environment(arguments)
     limits = environment["duckdb_limits"]
-    print(f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória, "
-          f"{environment['memory_available_mb']} MB disponíveis; DuckDB com "
-          f"{limits['threads']} threads e memory_limit {limits['memory_limit']}")
+    print(
+        f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória, "
+        f"{environment['memory_available_mb']} MB disponíveis; DuckDB com "
+        f"{limits['threads']} threads e memory_limit {limits['memory_limit']}"
+    )
     tables = list(metadata.tables.values())
     if arguments.tables:
         tables = [table for table in tables if table.name in arguments.tables]
@@ -322,8 +342,9 @@ def main(
             print(f"{table.name}:")
             progress = None
             if arguments.report:
-                progress = functools.partial(write_progress, arguments.report, reports,
-                                             environment, table.name)
+                progress = functools.partial(
+                    write_progress, arguments.report, reports, environment, table.name
+                )
                 progress([])
             loaded = load_table(db, table, arguments.source, arguments.partitions, progress)
             report = load.load_report(db, table, arguments.source, arguments.partitions)
@@ -342,8 +363,10 @@ def main(
     if arguments.report:
         write_report(arguments.report, reports, outside, environment)
     matches = all(item.report.matches for item in reports)
-    print(f"{len(reports)} tabelas conferidas, "
-          f"{'contagens e somas iguais' if matches else 'com diferenças'}")
+    print(
+        f"{len(reports)} tabelas conferidas, "
+        f"{'contagens e somas iguais' if matches else 'com diferenças'}"
+    )
     return 0 if matches else 1
 
 

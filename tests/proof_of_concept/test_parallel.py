@@ -73,8 +73,10 @@ def test_several_delta_tables_read_and_ingested_in_parallel(
         parallel = list(pool.map(read_all, uris))
     in_threads = time.perf_counter() - started
     assert sequential == parallel == [ROWS] * 4
-    record("parallel.timing.delta_read_4_tables",
-           f"sequencial {one_by_one:.3f} s, quatro threads {in_threads:.3f} s")
+    record(
+        "parallel.timing.delta_read_4_tables",
+        f"sequencial {one_by_one:.3f} s, quatro threads {in_threads:.3f} s",
+    )
 
     # A ingestão: cada tabela materializa um mês por delta_scan, em série na conexão raiz ou num
     # cursor por thread; a tabela confirmada pelo cursor é vista pela conexão raiz.
@@ -86,8 +88,10 @@ def test_several_delta_tables_read_and_ingested_in_parallel(
         prefix: str,
         k: int,
     ) -> None:
-        connection.execute(f"CREATE TABLE {prefix}_{k} AS SELECT * FROM delta_scan('{uris[k]}') "
-                           f"WHERE mes = '{MONTHS[0]}'")
+        connection.execute(
+            f"CREATE TABLE {prefix}_{k} AS SELECT * FROM delta_scan('{uris[k]}') "
+            f"WHERE mes = '{MONTHS[0]}'"
+        )
 
     def ingest_in_own_cursor(
         k: int,
@@ -107,8 +111,10 @@ def test_several_delta_tables_read_and_ingested_in_parallel(
     for k in range(4):
         counts.append(con.execute(f"SELECT count(*) FROM par_{k}").fetchone()[0])
     assert counts == [ROWS // 2] * 4
-    record("parallel.timing.duckdb_ingest_4_tables_by_delta_scan",
-           f"sequencial {one_by_one:.3f} s, quatro cursores {in_threads:.3f} s")
+    record(
+        "parallel.timing.duckdb_ingest_4_tables_by_delta_scan",
+        f"sequencial {one_by_one:.3f} s, quatro cursores {in_threads:.3f} s",
+    )
     con.close()
 
 
@@ -149,8 +155,9 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(
     table = DeltaTable(uri)
     assert table.version() == 4
     assert table.to_pyarrow_dataset().count_rows() == data.num_rows
-    record("parallel.timing.delta_overwrite_4_months_same_table",
-           f"{elapsed:.3f} s em quatro threads")
+    record(
+        "parallel.timing.delta_overwrite_4_months_same_table", f"{elapsed:.3f} s em quatro threads"
+    )
 
     # 3. Dois escritores carregados na mesma versão, o mesmo mês, duas threads: um commit entra, e o
     # outro é o conflito que a biblioteca converte em ExecutionConflict.
@@ -208,8 +215,10 @@ def test_duckdb_loads_and_exports_from_threads_on_one_connection(
     for k in range(4):
         loaded_rows += con.execute(f"SELECT count(*) FROM carga_{k}").fetchone()[0]
     assert loaded_rows == data.num_rows
-    record("parallel.timing.duckdb_load_4_tables",
-           f"{elapsed:.3f} s em quatro threads, em série na conexão")
+    record(
+        "parallel.timing.duckdb_load_4_tables",
+        f"{elapsed:.3f} s em quatro threads, em série na conexão",
+    )
 
     folder = local_location.path / "exportacao"
     folder.mkdir()
@@ -225,6 +234,8 @@ def test_duckdb_loads_and_exports_from_threads_on_one_connection(
     for k, month in enumerate(FOUR_MONTHS):
         exported = pq.read_metadata(folder / f"carga_{k}.parquet").num_rows
         assert exported == by_month[month].num_rows
-    record("parallel.timing.duckdb_copy_to_4_files",
-           f"{elapsed:.3f} s em quatro threads, em série na conexão")
+    record(
+        "parallel.timing.duckdb_copy_to_4_files",
+        f"{elapsed:.3f} s em quatro threads, em série na conexão",
+    )
     con.close()

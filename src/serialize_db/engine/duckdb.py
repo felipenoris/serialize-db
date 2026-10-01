@@ -326,8 +326,16 @@ class DuckDBStream:
         self._read_from_file = 0
         self._thread: threading.Thread | None = None
         spill = _SpillFile(self._path)
-        arguments_of_produce = (engine, text, arguments, batch_size, spill, budget, self._stop,
-                                self._spool)
+        arguments_of_produce = (
+            engine,
+            text,
+            arguments,
+            batch_size,
+            spill,
+            budget,
+            self._stop,
+            self._spool,
+        )
         # Uma thread auxiliar esperaria o lock, que o bloco de session() desta thread segura.
         if engine.holds_session():
             _produce(*arguments_of_produce)
@@ -499,11 +507,13 @@ class DuckDBAppender:
         if kind == "VIEW":
             raise SandboxError(
                 f"{table.name}: o nome é a view do ingest, que não recebe lotes; ingira a tabela "
-                f"com materialize=True")
+                f"com materialize=True"
+            )
         if kind is None:
             raise SandboxError(
                 f"{table.name}: a tabela não existe no sandbox; crie-a por create_table ou pelo "
-                f"ingest com materialize=True")
+                f"ingest com materialize=True"
+            )
         self._engine = engine
         self._table = table
         self._schema: pa.Schema | None = None
@@ -512,8 +522,10 @@ class DuckDBAppender:
         self._queue: queue.Queue = queue.Queue(maxsize=queue_depth)
         self._outcome: dict[str, object] = {"rows": 0, "error": None}
         self._thread = threading.Thread(
-            target=_write_spool, args=(self._spill, self._queue, self._closed, self._outcome),
-            daemon=True)
+            target=_write_spool,
+            args=(self._spill, self._queue, self._closed, self._outcome),
+            daemon=True,
+        )
         self._thread.start()
 
     @property
@@ -549,8 +561,10 @@ class DuckDBAppender:
         if self._schema is None:
             self._schema = converted.schema
         elif not converted.schema.equals(self._schema):
-            raise ContractError(f"{self._table.name}: o lote traz {converted.schema.names}, e o "
-                                f"primeiro trouxe {self._schema.names}")
+            raise ContractError(
+                f"{self._table.name}: o lote traz {converted.schema.names}, e o "
+                f"primeiro trouxe {self._schema.names}"
+            )
         return converted
 
     def write(
@@ -567,7 +581,8 @@ class DuckDBAppender:
                 raise
             if not self._put(converted):
                 raise self.error or RuntimeError(
-                    "a thread do appender terminou antes do fim da fila")
+                    "a thread do appender terminou antes do fim da fila"
+                )
 
     def _insert_file(self) -> None:
         """O ``INSERT ... BY NAME`` do arquivo inteiro, pelo leitor nativo do Arrow IPC, sob o
@@ -577,7 +592,8 @@ class DuckDBAppender:
             connection.register(name, pa.ipc.open_stream(source))
             try:
                 connection.execute(
-                    f"INSERT INTO {quoted(self._table.name)} BY NAME SELECT * FROM {quoted(name)}")
+                    f"INSERT INTO {quoted(self._table.name)} BY NAME SELECT * FROM {quoted(name)}"
+                )
             finally:
                 connection.unregister(name)
 
@@ -740,8 +756,9 @@ class DuckDBEngine:
         # Sem o motor construído, ninguém chama o cleanup: a abertura que falha apaga o que ele
         # criou.
         try:
-            self._connection = storage.duckdb_connect(self._database,
-                                                      _connection_settings(config, self._folder))
+            self._connection = storage.duckdb_connect(
+                self._database, _connection_settings(config, self._folder)
+            )
         except BaseException:
             self._remove_files()
             raise
@@ -750,10 +767,18 @@ class DuckDBEngine:
     def _log_opening(self) -> None:
         """O ``memory_limit`` e as ``threads`` aplicados e o espaço livre da pasta, para o log."""
         row = self._connection.execute(
-            "SELECT current_setting('memory_limit'), current_setting('threads')").fetchone()
+            "SELECT current_setting('memory_limit'), current_setting('threads')"
+        ).fetchone()
         free = shutil.disk_usage(self._folder).free / 2**30
-        log.info("sandbox %s aberto em %s: memory_limit %s, threads %s, %.1f GiB livres em %s",
-                 self.execution_id, self._database, row[0], row[1], free, self._folder)
+        log.info(
+            "sandbox %s aberto em %s: memory_limit %s, threads %s, %.1f GiB livres em %s",
+            self.execution_id,
+            self._database,
+            row[0],
+            row[1],
+            free,
+            self._folder,
+        )
 
     # ------------------------------------------------------------ a sessão
 
@@ -801,8 +826,9 @@ class DuckDBEngine:
         with self._secret_lock:
             renewed = renew_duckdb_secret(self._connection, self._credentials)
         if renewed:
-            log.info("sandbox %s: secret do S3 recriado com a chave nova do boto3",
-                     self.execution_id)
+            log.info(
+                "sandbox %s: secret do S3 recriado com a chave nova do boto3", self.execution_id
+            )
 
     def holds_session(self) -> bool:
         """Se a thread que chama está dentro de ``session()``.
@@ -889,7 +915,8 @@ class DuckDBEngine:
                 "SELECT 'TABLE' FROM duckdb_tables() WHERE table_name = $name AND NOT internal "
                 "UNION ALL SELECT 'VIEW' FROM duckdb_views() WHERE view_name = $name "
                 "AND NOT internal",
-                {"name": name}).fetchone()
+                {"name": name},
+            ).fetchone()
         finally:
             cursor.close()
         return None if row is None else row[0]
@@ -941,14 +968,17 @@ class DuckDBEngine:
         partition_by = table_options(table).partition_by
         if partition_by is None:
             raise ContractError(
-                f"{table.name}: tabela sem partição recebeu partitions={partitions}")
+                f"{table.name}: tabela sem partição recebeu partitions={partitions}"
+            )
         values = sorted(check_partition_value(value) for value in partitions)
         if not values:
             return " WHERE false"
         column = quoted(partition_by)
         listed = ", ".join(literal(value) for value in values)
-        return (f" WHERE {column} BETWEEN {literal(values[0])} AND {literal(values[-1])} "
-                f"AND {column} IN ({listed})")
+        return (
+            f" WHERE {column} BETWEEN {literal(values[0])} AND {literal(values[-1])} "
+            f"AND {column} IN ({listed})"
+        )
 
     def ingest(
         self,
@@ -1290,12 +1320,12 @@ class DuckDBEngine:
         if check.skip_when is not None:
             skipped = self.query(self._text(check.skip_when, table)).column(0)[0].as_py()
             if skipped is True:
-                reason = ("dispensada: o menor valor da execução passa do maior da versão "
-                          "fixada")
+                reason = "dispensada: o menor valor da execução passa do maior da versão fixada"
                 return CheckResult(check.name, text, 0, pa.table({}), True, reason)
         found = self.query(text)
-        return CheckResult(check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS),
-                           found.num_rows == 0)
+        return CheckResult(
+            check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS), found.num_rows == 0
+        )
 
     def audit(
         self,
@@ -1341,8 +1371,9 @@ class DuckDBEngine:
             pinned = self.pinned_delta(table, uri, version)
             pinned_max_key = self._pinned_max_key(table, uri, version)
         sources = self._referenced_sources(table, foreign_keys, referenced)
-        found, not_run = audit.checks_and_not_run(table, partitions, foreign_keys, key_scope,
-                                                  pinned, sources, pinned_max_key)
+        found, not_run = audit.checks_and_not_run(
+            table, partitions, foreign_keys, key_scope, pinned, sources, pinned_max_key
+        )
         results = []
         totals: dict = {}
         nonfinite: dict = {}
@@ -1453,14 +1484,22 @@ class DuckDBEngine:
         with self.session() as connection:
             count = connection.execute(self._count_text(table, value)).fetchone()[0]
             cursor = connection.execute(
-                f"COPY ({select}) TO {literal(target)} (FORMAT parquet, RETURN_STATS)")
+                f"COPY ({select}) TO {literal(target)} (FORMAT parquet, RETURN_STATS)"
+            )
             names = [column[0] for column in cursor.description]
             row = dict(zip(names, cursor.fetchone()))
         file = delta.file_from_return_stats(row, table, self._storage.uri_of(table_path))
         expected = expected_rows if expected_rows is not None else count
-        return delta.register_files(uri, table, [file], value, metadata, self._storage,
-                                    expected_rows=expected,
-                                    columns_without_min_max=columns_without_min_max)
+        return delta.register_files(
+            uri,
+            table,
+            [file],
+            value,
+            metadata,
+            self._storage,
+            expected_rows=expected,
+            columns_without_min_max=columns_without_min_max,
+        )
 
     # ------------------------------------------------------------ o encerramento
 

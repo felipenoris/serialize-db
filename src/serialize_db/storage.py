@@ -161,8 +161,9 @@ def _create_duckdb_secret(
         options.append("SESSION_TOKEN ?")
         parameters.append(credentials.token)
     options.extend(_duckdb_secret_options())
-    connection.execute(f"CREATE OR REPLACE SECRET {_DUCKDB_SECRET} ({', '.join(options)})",
-                       parameters)
+    connection.execute(
+        f"CREATE OR REPLACE SECRET {_DUCKDB_SECRET} ({', '.join(options)})", parameters
+    )
 
 
 def _secret_key_id(
@@ -170,8 +171,9 @@ def _secret_key_id(
 ) -> str | None:
     """A chave que o secret do S3 guarda, lida do ``secret_string`` de ``duckdb_secrets()``, que
     no DuckDB 1.5.5 mostra ``key_id`` sem redação; ``None`` sem o secret."""
-    rows = connection.execute("SELECT secret_string FROM duckdb_secrets() WHERE name = ?",
-                              [_DUCKDB_SECRET]).fetchall()
+    rows = connection.execute(
+        "SELECT secret_string FROM duckdb_secrets() WHERE name = ?", [_DUCKDB_SECRET]
+    ).fetchall()
     if not rows:
         return None
     found = re.search(r"(?:^|;)key_id=([^;]*)", rows[0][0])
@@ -287,8 +289,10 @@ class Storage:
         if uri.startswith("s3://"):
             return _s3_storage(uri)
         if "://" in uri and not uri.startswith("file://"):
-            raise ValueError(f"{uri}: esquema fora dos armazenamentos da biblioteca; "
-                             "use uma pasta local, file:// ou s3://")
+            raise ValueError(
+                f"{uri}: esquema fora dos armazenamentos da biblioteca; "
+                "use uma pasta local, file:// ou s3://"
+            )
         return _local_storage(uri)
 
     @property
@@ -726,7 +730,8 @@ class Storage:
         bucket, key = self._bucket_and_key(path)
         try:
             response = self._s3_client().put_object(
-                Bucket=bucket, Key=key, Body=text.encode("utf-8"), **condition)
+                Bucket=bucket, Key=key, Body=text.encode("utf-8"), **condition
+            )
         except botocore.exceptions.ClientError as error:
             # O 412 é a condição que falhou; o 409, outra operação no objeto durante a gravação,
             # depois da qual o modelo do S3 no botocore manda reler a etag e repetir.

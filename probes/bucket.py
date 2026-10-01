@@ -48,7 +48,16 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probelib  # noqa: E402
-from probelib import Report, describe_error, dns_rows, error_code, pretty, region, short_config, tabulate  # noqa: E402
+from probelib import (
+    Report,
+    describe_error,
+    dns_rows,
+    error_code,
+    pretty,
+    region,
+    short_config,
+    tabulate,
+)  # noqa: E402
 
 # Limites das listagens: uma raiz com o banco inteiro pode ter centenas de milhares de objetos.
 MAX_PAGES = 20  # As 20 páginas de 1.000 somam até 20.000 objetos.
@@ -65,7 +74,15 @@ KMS_ACTIONS = ("kms:GenerateDataKey", "kms:Decrypt")
 
 # Os cabeçalhos do HeadBucket e os campos do HeadObject que o relatório mostra.
 HEAD_BUCKET_HEADERS = ("x-amz-bucket-region", "x-amz-bucket-arn", "x-amz-access-point-alias")
-HEAD_OBJECT_FIELDS = ("ServerSideEncryption", "SSEKMSKeyId", "BucketKeyEnabled", "StorageClass", "ContentLength", "LastModified", "VersionId")
+HEAD_OBJECT_FIELDS = (
+    "ServerSideEncryption",
+    "SSEKMSKeyId",
+    "BucketKeyEnabled",
+    "StorageClass",
+    "ContentLength",
+    "LastModified",
+    "VersionId",
+)
 
 # Uma entrada da listagem: chave, tamanho e data de modificação.
 Entry = tuple[str, int, Any]
@@ -99,15 +116,25 @@ def bucket_settings(
     kms_key: str | None = None
 
     # BK-1 e BK-2: o bucket responde ao HeadBucket, e a região dele é a que o boto3 resolve.
-    head = report.call(f"s3.head_bucket(Bucket={bucket!r})", lambda: client.head_bucket(Bucket=bucket), render=render_head_bucket)
+    head = report.call(
+        f"s3.head_bucket(Bucket={bucket!r})",
+        lambda: client.head_bucket(Bucket=bucket),
+        render=render_head_bucket,
+    )
     if head is None:
-        report.fail("BK-1", "bucket acessível", f"{bucket}: {report.last_reason}; ver a seção final")
+        report.fail(
+            "BK-1", "bucket acessível", f"{bucket}: {report.last_reason}; ver a seção final"
+        )
     else:
         report.ok("BK-1", "bucket acessível", bucket)
-        bucket_region = head.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("x-amz-bucket-region")
+        bucket_region = (
+            head.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("x-amz-bucket-region")
+        )
         report.value("BUCKET_REGION", bucket_region)
         if bucket_region and resolved and bucket_region != resolved:
-            report.fail("BK-2", "região do bucket", f"{bucket_region}, e o boto3 resolve {resolved}")
+            report.fail(
+                "BK-2", "região do bucket", f"{bucket_region}, e o boto3 resolve {resolved}"
+            )
         elif bucket_region:
             report.ok("BK-2", "região do bucket", bucket_region)
         else:
@@ -121,17 +148,27 @@ def bucket_settings(
 
     # BK-4 sai depois do inventário: com a API negada, a amostra com VersionId prova o
     # versionamento.
-    versioning = report.call("s3.get_bucket_versioning()", lambda: client.get_bucket_versioning(Bucket=bucket))
+    versioning = report.call(
+        "s3.get_bucket_versioning()", lambda: client.get_bucket_versioning(Bucket=bucket)
+    )
     status = versioning.get("Status", "desligado") if versioning is not None else None
     versioning_reason = report.last_reason if versioning is None else "lido"
 
     # BK-5: a criptografia padrão diz se toda escrita passa pelo KMS, e por qual chave.
-    encryption = report.call("s3.get_bucket_encryption()", lambda: client.get_bucket_encryption(Bucket=bucket))
+    encryption = report.call(
+        "s3.get_bucket_encryption()", lambda: client.get_bucket_encryption(Bucket=bucket)
+    )
     if encryption is not None:
         rules = encryption.get("ServerSideEncryptionConfiguration", {}).get("Rules", [])
         default = rules[0].get("ApplyServerSideEncryptionByDefault", {}) if rules else {}
-        algorithm = f"{default.get('SSEAlgorithm', 'nenhuma')} {default.get('KMSMasterKeyID', '')}".strip()
-        report.note("BK-5", "criptografia padrão", f"{algorithm}; bucket key {rules[0].get('BucketKeyEnabled') if rules else '-'}")
+        algorithm = (
+            f"{default.get('SSEAlgorithm', 'nenhuma')} {default.get('KMSMasterKeyID', '')}".strip()
+        )
+        report.note(
+            "BK-5",
+            "criptografia padrão",
+            f"{algorithm}; bucket key {rules[0].get('BucketKeyEnabled') if rules else '-'}",
+        )
         kms_key = default.get("KMSMasterKeyID") or None
 
     # BK-12: sem Object Lock o serviço responde ObjectLockConfigurationNotFoundError; a ausência é
@@ -139,13 +176,19 @@ def bucket_settings(
     # deixa marcadores até o fim da retenção.
     def object_lock() -> dict:
         try:
-            return client.get_object_lock_configuration(Bucket=bucket).get("ObjectLockConfiguration", {})
+            return client.get_object_lock_configuration(Bucket=bucket).get(
+                "ObjectLockConfiguration", {}
+            )
         except Exception as error:
             if error_code(error) == "ObjectLockConfigurationNotFoundError":
                 return {}
             raise
 
-    lock = report.call("s3.get_object_lock_configuration()", object_lock, render=lambda found: pretty(found) if found else "(sem Object Lock)")
+    lock = report.call(
+        "s3.get_object_lock_configuration()",
+        object_lock,
+        render=lambda found: pretty(found) if found else "(sem Object Lock)",
+    )
     if lock is None:
         report.note("BK-12", "Object Lock", f"não lido: {report.last_reason}")
     elif lock.get("ObjectLockEnabled") != "Enabled":
@@ -154,13 +197,26 @@ def bucket_settings(
         retention = lock.get("Rule", {}).get("DefaultRetention", {})
         amount = retention.get("Days") or retention.get("Years")
         unit = ("dia" if retention.get("Days") else "ano") + ("" if amount == 1 else "s")
-        period = f"retenção padrão {retention.get('Mode')} por {amount} {unit}" if retention else "sem retenção padrão"
-        report.note("BK-12", "Object Lock", f"ativo, {period}; uma versão retida não pode ser apagada, e o vacuum só deixa marcadores de exclusão até o fim da retenção")
+        period = (
+            f"retenção padrão {retention.get('Mode')} por {amount} {unit}"
+            if retention
+            else "sem retenção padrão"
+        )
+        report.note(
+            "BK-12",
+            "Object Lock",
+            f"ativo, {period}; uma versão retida não pode ser apagada, e o vacuum só deixa marcadores de exclusão até o fim da retenção",
+        )
 
     # O bloqueio de acesso público e a propriedade de objetos são leituras sem checagem; a
     # biblioteca não depende deles.
-    report.call("s3.get_public_access_block()", lambda: client.get_public_access_block(Bucket=bucket))
-    report.call("s3.get_bucket_ownership_controls()", lambda: client.get_bucket_ownership_controls(Bucket=bucket))
+    report.call(
+        "s3.get_public_access_block()", lambda: client.get_public_access_block(Bucket=bucket)
+    )
+    report.call(
+        "s3.get_bucket_ownership_controls()",
+        lambda: client.get_bucket_ownership_controls(Bucket=bucket),
+    )
 
     return kms_key, status, versioning_reason
 
@@ -185,9 +241,15 @@ def versioning_check(
     elif version_id and version_id != "null":
         # Um bucket sem versionamento devolve VersionId "null" ou nenhum; qualquer outro valor prova
         # o versionamento.
-        report.note("BK-4", "versionamento", f"pela API, {why}; a amostra tem VersionId: ativo; {consequence}")
+        report.note(
+            "BK-4",
+            "versionamento",
+            f"pela API, {why}; a amostra tem VersionId: ativo; {consequence}",
+        )
     else:
-        report.note("BK-4", "versionamento", f"não lido: pela API, {why}, e nenhuma amostra com VersionId")
+        report.note(
+            "BK-4", "versionamento", f"não lido: pela API, {why}, e nenhuma amostra com VersionId"
+        )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -217,7 +279,11 @@ def lifecycle(
 
     found = report.call("s3.get_bucket_lifecycle_configuration()", rules)
     if found is None:
-        report.note("BK-3", "expiração sob a raiz", f"regras não lidas: {report.last_reason}; confirme com quem administra o bucket")
+        report.note(
+            "BK-3",
+            "expiração sob a raiz",
+            f"regras não lidas: {report.last_reason}; confirme com quem administra o bucket",
+        )
         return
 
     # BK-3: uma regra habilitada que expira objetos correntes (Expiration com Days ou Date) reprova
@@ -232,7 +298,12 @@ def lifecycle(
         if rule.get("Status") != "Enabled":
             continue
         filter_block = rule.get("Filter", {})
-        rule_prefix = rule.get("Prefix") or filter_block.get("Prefix") or filter_block.get("And", {}).get("Prefix") or ""
+        rule_prefix = (
+            rule.get("Prefix")
+            or filter_block.get("Prefix")
+            or filter_block.get("And", {}).get("Prefix")
+            or ""
+        )
         overlaps = root_prefix.startswith(rule_prefix) or rule_prefix.startswith(root_prefix)
         if not overlaps:
             continue
@@ -245,11 +316,25 @@ def lifecycle(
 
     where = prefix or "(raiz do bucket)"
     if reaching:
-        report.fail("BK-3", "expiração sob a raiz", "; ".join(reaching) + ": uma regra de expiração apagaria arquivos de tabelas Delta")
+        report.fail(
+            "BK-3",
+            "expiração sob a raiz",
+            "; ".join(reaching) + ": uma regra de expiração apagaria arquivos de tabelas Delta",
+        )
     elif noncurrent:
-        report.note("BK-3", "expiração sob a raiz", f"nenhuma das {len(found)} regras expira objetos correntes sob {where}; " + "; ".join(noncurrent) + ": só versões não correntes, que o Delta não lê")
+        report.note(
+            "BK-3",
+            "expiração sob a raiz",
+            f"nenhuma das {len(found)} regras expira objetos correntes sob {where}; "
+            + "; ".join(noncurrent)
+            + ": só versões não correntes, que o Delta não lê",
+        )
     else:
-        report.ok("BK-3", "expiração sob a raiz", f"nenhuma das {len(found)} regras expira objetos sob {where}")
+        report.ok(
+            "BK-3",
+            "expiração sob a raiz",
+            f"nenhuma das {len(found)} regras expira objetos sob {where}",
+        )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -267,7 +352,10 @@ def delta_table_rows(
     objeto.
     """
     known = set(roots)
-    details: dict[str, dict[str, Any]] = {root: {"files": 0, "bytes": 0, "commits": 0, "checkpoints": 0, "newest": None} for root in roots}
+    details: dict[str, dict[str, Any]] = {
+        root: {"files": 0, "bytes": 0, "commits": 0, "checkpoints": 0, "newest": None}
+        for root in roots
+    }
 
     for key, size, modified in entries:
         # A tabela de um objeto é a pasta mais funda, acima dele, que tem _delta_log.
@@ -278,7 +366,7 @@ def delta_table_rows(
             continue
 
         found = details[root]
-        relative = key[len(root) + 1:]
+        relative = key[len(root) + 1 :]
         if relative.startswith("_delta_log/"):
             # No log, NNNNNNNNNNNNNNNNNNNN.json é um commit e NNN.checkpoint.parquet um checkpoint;
             # _last_checkpoint não conta.
@@ -295,10 +383,28 @@ def delta_table_rows(
 
     # A tabela mostra as 50 primeiras em ordem de caminho, cada uma pelo caminho relativo ao
     # prefixo da listagem.
-    rows: list[list[object]] = [["tabela Delta sob a raiz", "arquivos de dados", "bytes", "commits no log", "checkpoints", "último objeto"]]
+    rows: list[list[object]] = [
+        [
+            "tabela Delta sob a raiz",
+            "arquivos de dados",
+            "bytes",
+            "commits no log",
+            "checkpoints",
+            "último objeto",
+        ]
+    ]
     for root in roots[:50]:
         found = details[root]
-        rows.append([root[len(listing_prefix):] or root, found["files"], found["bytes"], found["commits"], found["checkpoints"], str(found["newest"])])
+        rows.append(
+            [
+                root[len(listing_prefix) :] or root,
+                found["files"],
+                found["bytes"],
+                found["commits"],
+                found["checkpoints"],
+                str(found["newest"]),
+            ]
+        )
     return rows
 
 
@@ -313,7 +419,7 @@ def session_rows(
     sessions: dict[str, dict[str, Any]] = {}
     for key, size, modified in entries:
         # Só conta um objeto dentro de serialize-db-poc/<id>/, com o id de sessão da suíte.
-        parts = key[len(listing_prefix):].split("/")
+        parts = key[len(listing_prefix) :].split("/")
         if len(parts) < 3 or parts[0] != "serialize-db-poc" or not SESSION_ID.match(parts[1]):
             continue
 
@@ -324,7 +430,9 @@ def session_rows(
             found["newest"] = modified
 
     rows: list[list[object]] = [["sessão da suíte S3", "objetos", "bytes", "último objeto"]]
-    for session_id, found in sorted(sessions.items(), key=lambda item: item[1]["newest"], reverse=True)[:20]:
+    for session_id, found in sorted(
+        sessions.items(), key=lambda item: item[1]["newest"], reverse=True
+    )[:20]:
         rows.append([session_id, found["objects"], found["bytes"], str(found["newest"])])
     return rows
 
@@ -347,7 +455,9 @@ def object_versions(
         nonlocal truncated
         started = time.perf_counter()
         paginator = client.get_paginator("list_object_versions")
-        pages = paginator.paginate(Bucket=bucket, Prefix=listing_prefix, PaginationConfig={"PageSize": 1000})
+        pages = paginator.paginate(
+            Bucket=bucket, Prefix=listing_prefix, PaginationConfig={"PageSize": 1000}
+        )
         for page_number, page in enumerate(pages, start=1):
             # Cada página traz as versões (a corrente tem IsLatest) e, à parte, os marcadores de
             # exclusão.
@@ -369,11 +479,21 @@ def object_versions(
     listed = report.call("s3.list_object_versions(Prefix=raiz)", scan, render=str)
     limit = " (listagem interrompida no limite)" if truncated else ""
     if listed is None:
-        report.note("BK-14", "versões não correntes sob a raiz", f"não lidas: {report.last_reason}; num bucket versionado cada exclusão deixa uma versão não corrente, que só uma regra NoncurrentVersionExpiration remove")
+        report.note(
+            "BK-14",
+            "versões não correntes sob a raiz",
+            f"não lidas: {report.last_reason}; num bucket versionado cada exclusão deixa uma versão não corrente, que só uma regra NoncurrentVersionExpiration remove",
+        )
     elif counts["noncurrent"] or counts["markers"]:
-        report.note("BK-14", "versões não correntes sob a raiz", f"{counts['noncurrent']} ({counts['noncurrent_bytes']} bytes) e {counts['markers']} marcadores de exclusão, invisíveis à listagem comum e cobrados até uma regra NoncurrentVersionExpiration os remover{limit}")
+        report.note(
+            "BK-14",
+            "versões não correntes sob a raiz",
+            f"{counts['noncurrent']} ({counts['noncurrent_bytes']} bytes) e {counts['markers']} marcadores de exclusão, invisíveis à listagem comum e cobrados até uma regra NoncurrentVersionExpiration os remover{limit}",
+        )
     else:
-        report.note("BK-14", "versões não correntes sob a raiz", f"nenhuma, nem marcador de exclusão{limit}")
+        report.note(
+            "BK-14", "versões não correntes sob a raiz", f"nenhuma, nem marcador de exclusão{limit}"
+        )
 
 
 def render_head_object(
@@ -417,11 +537,13 @@ def inventory(
         nonlocal newest, first_key, objects, truncated
         started = time.perf_counter()
         paginator = client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=bucket, Prefix=listing_prefix, PaginationConfig={"PageSize": 1000})
+        pages = paginator.paginate(
+            Bucket=bucket, Prefix=listing_prefix, PaginationConfig={"PageSize": 1000}
+        )
         for page_number, page in enumerate(pages, start=1):
             for item in page.get("Contents", []):
                 key = item["Key"]
-                relative = key[len(listing_prefix):]
+                relative = key[len(listing_prefix) :]
                 # A chave igual ao prefixo, ou terminada em "/", é o marcador de pasta que o
                 # console e o s3fs criam.
                 if not relative or key.endswith("/"):
@@ -445,7 +567,12 @@ def inventory(
 
     # BK-6 reprova quando a listagem falha: sem ListBucket sob a raiz, nada na biblioteca funciona.
     proven: dict[str, Any] = {"listed": False, "sample": None}
-    if report.call(f"s3.list_objects_v2(Bucket={bucket!r}, Prefix={listing_prefix!r})", scan, render=str) is None:
+    if (
+        report.call(
+            f"s3.list_objects_v2(Bucket={bucket!r}, Prefix={listing_prefix!r})", scan, render=str
+        )
+        is None
+    ):
         report.fail("BK-6", "listagem sob a raiz", f"{report.last_reason}; ver a seção final")
         return proven
     proven["listed"] = True
@@ -456,14 +583,29 @@ def inventory(
         rows.append([folder, counts[folder], size, f"{size / 2**30:.3f}"])
     rows.append(["total", objects, sum(totals.values()), f"{sum(totals.values()) / 2**30:.3f}"])
     report.table(rows)
-    report.table([["classe de armazenamento", "objetos"], *[[name, count] for name, count in classes.most_common()]])
+    report.table(
+        [
+            ["classe de armazenamento", "objetos"],
+            *[[name, count] for name, count in classes.most_common()],
+        ]
+    )
     if newest:
         report.line(f"objeto mais recente: {newest[1]} em {newest[0]}\n")
 
     # BK-6: as tabelas Delta são as pastas com _delta_log; a tabela mostra o estado de cada uma.
-    roots = sorted({key.split("/_delta_log/", 1)[0] for key, _, _ in entries if "/_delta_log/" in key})
-    report.table(delta_table_rows(entries, roots, listing_prefix) if roots else [["(nenhuma pasta com _delta_log sob a raiz)"]])
-    report.note("BK-6", "tabelas Delta sob a raiz", f"{len(roots)}" + (" (listagem truncada)" if truncated else ""))
+    roots = sorted(
+        {key.split("/_delta_log/", 1)[0] for key, _, _ in entries if "/_delta_log/" in key}
+    )
+    report.table(
+        delta_table_rows(entries, roots, listing_prefix)
+        if roots
+        else [["(nenhuma pasta com _delta_log sob a raiz)"]]
+    )
+    report.note(
+        "BK-6",
+        "tabelas Delta sob a raiz",
+        f"{len(roots)}" + (" (listagem truncada)" if truncated else ""),
+    )
 
     # BK-13: a suíte apaga a pasta da sua sessão ao terminar; uma que fica é mantida, interrompida
     # ou em andamento.
@@ -471,18 +613,30 @@ def inventory(
     if len(sessions) > 1:
         report.table(sessions)
         total_bytes = sum(int(row[2]) for row in sessions[1:])
-        report.note("BK-13", "sessões da suíte S3 sob a raiz", f"{len(sessions) - 1}, {total_bytes} bytes, a mais recente com objeto de {sessions[1][3]}; a suíte apaga a sua ao terminar, salvo SERIALIZE_DB_TEST_KEEP: uma pasta que fica é de sessão mantida, interrompida ou ainda em andamento")
+        report.note(
+            "BK-13",
+            "sessões da suíte S3 sob a raiz",
+            f"{len(sessions) - 1}, {total_bytes} bytes, a mais recente com objeto de {sessions[1][3]}; a suíte apaga a sua ao terminar, salvo SERIALIZE_DB_TEST_KEEP: uma pasta que fica é de sessão mantida, interrompida ou ainda em andamento",
+        )
     else:
         report.note("BK-13", "sessões da suíte S3 sob a raiz", "nenhuma")
 
     # BK-7: o HeadObject de uma amostra diz a criptografia aplicada e, pelo VersionId, o
     # versionamento (BK-4).
     if first_key:
-        head = report.call(f"s3.head_object(Key={first_key!r})", lambda: client.head_object(Bucket=bucket, Key=first_key), render=render_head_object)
+        head = report.call(
+            f"s3.head_object(Key={first_key!r})",
+            lambda: client.head_object(Bucket=bucket, Key=first_key),
+            render=render_head_object,
+        )
         if head is not None:
             proven["sample"] = head
             algorithm = f"{head.get('ServerSideEncryption', 'nenhuma')} {head.get('SSEKMSKeyId', '')}".strip()
-            report.note("BK-7", "criptografia de uma amostra", f"{algorithm}; bucket key {head.get('BucketKeyEnabled', '-')}; versionado {'VersionId' in head}")
+            report.note(
+                "BK-7",
+                "criptografia de uma amostra",
+                f"{algorithm}; bucket key {head.get('BucketKeyEnabled', '-')}; versionado {'VersionId' in head}",
+            )
 
     object_versions(report, client, bucket, listing_prefix)
     return proven
@@ -496,7 +650,15 @@ def decisions(
     found: dict,
 ) -> str:
     """A tabela ação, decisão de uma simulação de política."""
-    return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
+    return tabulate(
+        [
+            ["ação", "decisão"],
+            *[
+                [item["EvalActionName"], item["EvalDecision"]]
+                for item in found.get("EvaluationResults", [])
+            ],
+        ]
+    )
 
 
 def permissions(
@@ -519,9 +681,18 @@ def permissions(
 
     # A simulação precisa do ARN do papel, obtido da identidade do STS.
     session = boto3.Session()
-    caller = report.call("sts.get_caller_identity()", lambda: session.client("sts", region_name=resolved, config=short_config(5, 10, 1)).get_caller_identity())
+    caller = report.call(
+        "sts.get_caller_identity()",
+        lambda: session.client(
+            "sts", region_name=resolved, config=short_config(5, 10, 1)
+        ).get_caller_identity(),
+    )
     if not caller:
-        report.note("BK-8", "permissões sob a raiz", "identidade não lida: sem o STS não há simulação; a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) é o teste")
+        report.note(
+            "BK-8",
+            "permissões sob a raiz",
+            "identidade não lida: sem o STS não há simulação; a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) é o teste",
+        )
         return
     principal = probelib.principal_arn(caller["Arn"])
     report.value("PRINCIPAL", principal)
@@ -534,47 +705,79 @@ def permissions(
         detail: str,
     ) -> None:
         """A nota no lugar da simulação: o que esta execução provou e o que só a suíte S3 prova."""
-        proofs = (("ListBucket sob a raiz", proven.get("listed")), ("HeadObject de uma amostra", proven.get("sample") is not None))
+        proofs = (
+            ("ListBucket sob a raiz", proven.get("listed")),
+            ("HeadObject de uma amostra", proven.get("sample") is not None),
+        )
         shown = [name for name, done in proofs if done]
-        report.note("BK-8", "permissões sob a raiz", f"{detail}; nesta execução passaram: {', '.join(shown) or 'nenhuma leitura'}; PutObject e DeleteObject só a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) prova")
+        report.note(
+            "BK-8",
+            "permissões sob a raiz",
+            f"{detail}; nesta execução passaram: {', '.join(shown) or 'nenhuma leitura'}; PutObject e DeleteObject só a suíte S3 (SERIALIZE_DB_TEST_S3_ROOT) prova",
+        )
 
     # O IAM não tem endpoint VPC em todo ambiente; sem o teste TCP, cada simulação esperaria o tempo
     # limite em cada endereço que o nome resolve.
     reachable, reading = probelib.endpoint_reachable(iam)
     report.line(f"alcance do IAM: {reading}\n")
     if not reachable:
-        without_simulation("iam:SimulatePrincipalPolicy sem chamada: o IAM não respondeu ao teste TCP")
+        without_simulation(
+            "iam:SimulatePrincipalPolicy sem chamada: o IAM não respondeu ao teste TCP"
+        )
         return
 
     results: dict[str, str] = {}
-    for actions, resources in ((BUCKET_ACTIONS, [f"arn:aws:s3:::{bucket}"]), (OBJECT_ACTIONS, [object_arn])):
+    for actions, resources in (
+        (BUCKET_ACTIONS, [f"arn:aws:s3:::{bucket}"]),
+        (OBJECT_ACTIONS, [object_arn]),
+    ):
         found = report.call(
             f"iam.simulate_principal_policy({', '.join(actions)} em {resources[0]})",
-            lambda a=actions, r=resources: iam.simulate_principal_policy(PolicySourceArn=principal, ActionNames=list(a), ResourceArns=r),
+            lambda a=actions, r=resources: iam.simulate_principal_policy(
+                PolicySourceArn=principal, ActionNames=list(a), ResourceArns=r
+            ),
             render=decisions,
         )
         if found is None:
             without_simulation(f"iam:SimulatePrincipalPolicy {report.last_reason}")
             return
-        results.update({item["EvalActionName"]: item["EvalDecision"] for item in found.get("EvaluationResults", [])})
+        results.update(
+            {
+                item["EvalActionName"]: item["EvalDecision"]
+                for item in found.get("EvaluationResults", [])
+            }
+        )
 
     # As ações do KMS sobre a chave padrão, quando o bucket usa SSE-KMS; a simulação exige o ARN da
     # chave.
     if kms_key and kms_key.startswith("arn:"):
         found = report.call(
             f"iam.simulate_principal_policy({', '.join(KMS_ACTIONS)} em {kms_key})",
-            lambda: iam.simulate_principal_policy(PolicySourceArn=principal, ActionNames=list(KMS_ACTIONS), ResourceArns=[kms_key]),
+            lambda: iam.simulate_principal_policy(
+                PolicySourceArn=principal, ActionNames=list(KMS_ACTIONS), ResourceArns=[kms_key]
+            ),
             render=decisions,
         )
         if found is not None:
-            results.update({item["EvalActionName"]: item["EvalDecision"] for item in found.get("EvaluationResults", [])})
+            results.update(
+                {
+                    item["EvalActionName"]: item["EvalDecision"]
+                    for item in found.get("EvaluationResults", [])
+                }
+            )
     elif kms_key:
-        report.line(f"chave KMS {kms_key} sem ARN: a simulação das ações do KMS precisa do ARN da chave\n")
+        report.line(
+            f"chave KMS {kms_key} sem ARN: a simulação das ações do KMS precisa do ARN da chave\n"
+        )
 
     # BK-8: toda ação simulada precisa sair allowed; a simulação não lê a política da chave KMS.
     denied = [action for action, decision in results.items() if decision != "allowed"]
     if denied:
-        report.fail("BK-8", "permissões sob a raiz", f"negadas pela simulação: {', '.join(denied)}; a política da chave KMS não entra na simulação")
+        report.fail(
+            "BK-8",
+            "permissões sob a raiz",
+            f"negadas pela simulação: {', '.join(denied)}; a política da chave KMS não entra na simulação",
+        )
     else:
         report.ok("BK-8", "permissões sob a raiz", f"permitidas: {', '.join(results)}")
 
@@ -590,7 +793,12 @@ def render_key(
 
     São o ARN, o estado, o gestor, a origem, o tipo e se ela está habilitada.
     """
-    return pretty({key: meta.get(key) for key in ("Arn", "KeyState", "KeyManager", "Origin", "KeySpec", "Enabled")})
+    return pretty(
+        {
+            key: meta.get(key)
+            for key in ("Arn", "KeyState", "KeyManager", "Origin", "KeySpec", "Enabled")
+        }
+    )
 
 
 def kms_key_section(
@@ -606,7 +814,11 @@ def kms_key_section(
 
     report.h1("Chave KMS padrão do bucket")
     if not kms_key:
-        report.note("BK-9", "chave KMS", "o bucket não usa SSE-KMS por padrão, ou a criptografia não foi lida")
+        report.note(
+            "BK-9",
+            "chave KMS",
+            "o bucket não usa SSE-KMS por padrão, ou a criptografia não foi lida",
+        )
         return
 
     # O KMS resolve para vários endereços; sem endpoint VPC, cada um consome o connect_timeout da
@@ -615,7 +827,11 @@ def kms_key_section(
     reachable, reading = probelib.endpoint_reachable(kms)
     report.line(f"alcance do KMS: {reading}\n")
     if not reachable:
-        report.note("BK-9", "chave KMS", f"describe_key sem chamada: o KMS não respondeu ao teste TCP ({reading}); a escrita da suíte S3 diz se a chave serve")
+        report.note(
+            "BK-9",
+            "chave KMS",
+            f"describe_key sem chamada: o KMS não respondeu ao teste TCP ({reading}); a escrita da suíte S3 diz se a chave serve",
+        )
         return
 
     # BK-9: a chave habilitada passa e a de outro estado reprova; a leitura negada deixa a prova
@@ -626,11 +842,23 @@ def kms_key_section(
         render=render_key,
     )
     if described is None:
-        report.note("BK-9", "chave KMS", f"describe_key {report.last_reason}: a escrita da suíte S3 diz se a chave serve")
+        report.note(
+            "BK-9",
+            "chave KMS",
+            f"describe_key {report.last_reason}: a escrita da suíte S3 diz se a chave serve",
+        )
     elif described.get("KeyState") == "Enabled":
-        report.ok("BK-9", "chave KMS", f"{described.get('Arn')} habilitada, gerida por {described.get('KeyManager')}")
+        report.ok(
+            "BK-9",
+            "chave KMS",
+            f"{described.get('Arn')} habilitada, gerida por {described.get('KeyManager')}",
+        )
     else:
-        report.fail("BK-9", "chave KMS", f"estado {described.get('KeyState')}: toda escrita com SSE-KMS falharia")
+        report.fail(
+            "BK-9",
+            "chave KMS",
+            f"estado {described.get('KeyState')}: toda escrita com SSE-KMS falharia",
+        )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -662,30 +890,64 @@ def policy_and_uploads(
 
     # BK-10: um Deny condicionado a cabeçalho de criptografia ou a TLS vale para o delta-rs e o
     # DuckDB também.
-    policy = report.call("s3.get_bucket_policy()", document, render=lambda found: pretty(found, limit=60) if found else "(o bucket não tem política)")
+    policy = report.call(
+        "s3.get_bucket_policy()",
+        document,
+        render=lambda found: pretty(found, limit=60) if found else "(o bucket não tem política)",
+    )
     if policy is None:
-        report.note("BK-10", "política do bucket", f"não lida: {report.last_reason}; um Deny condicionado a cabeçalho de criptografia ou a TLS valeria para o delta-rs e o DuckDB")
+        report.note(
+            "BK-10",
+            "política do bucket",
+            f"não lida: {report.last_reason}; um Deny condicionado a cabeçalho de criptografia ou a TLS valeria para o delta-rs e o DuckDB",
+        )
     elif not policy:
         report.note("BK-10", "política do bucket", "nenhuma")
     else:
         statements = policy.get("Statement", [])
         denies = [item for item in statements if item.get("Effect") == "Deny"]
-        conditions = sorted({key for item in denies for block in item.get("Condition", {}).values() for key in block})
-        detail = f"{len(statements)} declaração(ões), {len(denies)} Deny" + (f" com condições {', '.join(conditions)}" if conditions else "")
-        report.note("BK-10", "política do bucket", detail + "; um Deny condicionado a cabeçalho de criptografia ou a TLS vale para o delta-rs e o DuckDB também")
+        conditions = sorted(
+            {
+                key
+                for item in denies
+                for block in item.get("Condition", {}).values()
+                for key in block
+            }
+        )
+        detail = f"{len(statements)} declaração(ões), {len(denies)} Deny" + (
+            f" com condições {', '.join(conditions)}" if conditions else ""
+        )
+        report.note(
+            "BK-10",
+            "política do bucket",
+            detail
+            + "; um Deny condicionado a cabeçalho de criptografia ou a TLS vale para o delta-rs e o DuckDB também",
+        )
 
     # BK-11: as sobras de escritas interrompidas custam até uma regra
     # AbortIncompleteMultipartUpload limpá-las.
     uploads = report.call(
         "s3.list_multipart_uploads(Prefix=raiz)",
-        lambda: client.list_multipart_uploads(Bucket=bucket, Prefix=f"{prefix}/" if prefix else "", MaxUploads=100),
+        lambda: client.list_multipart_uploads(
+            Bucket=bucket, Prefix=f"{prefix}/" if prefix else "", MaxUploads=100
+        ),
         render=lambda found: f"{len(found.get('Uploads', []))} upload(s) em andamento",
     )
     if uploads is not None:
         count = len(uploads.get("Uploads", []))
-        report.note("BK-11", "uploads multipart incompletos sob a raiz", f"{count}: sobras de escritas interrompidas custam até uma regra AbortIncompleteMultipartUpload" if count else "nenhum")
+        report.note(
+            "BK-11",
+            "uploads multipart incompletos sob a raiz",
+            f"{count}: sobras de escritas interrompidas custam até uma regra AbortIncompleteMultipartUpload"
+            if count
+            else "nenhum",
+        )
     else:
-        report.note("BK-11", "uploads multipart incompletos sob a raiz", f"não lidos: {report.last_reason}; as sobras de escritas interrompidas só uma regra AbortIncompleteMultipartUpload limpa")
+        report.note(
+            "BK-11",
+            "uploads multipart incompletos sob a raiz",
+            f"não lidos: {report.last_reason}; as sobras de escritas interrompidas só uma regra AbortIncompleteMultipartUpload limpa",
+        )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -697,7 +959,10 @@ def main(
 ) -> int:
     root, source = probelib.s3_root(argv)
     if not root.startswith("s3://"):
-        print(f"uso: .venv/bin/python probes/bucket.py s3://bucket/prefixo\n{probelib.NO_ROOT}", file=sys.stderr)
+        print(
+            f"uso: .venv/bin/python probes/bucket.py s3://bucket/prefixo\n{probelib.NO_ROOT}",
+            file=sys.stderr,
+        )
         return 2
     import boto3
 
@@ -722,9 +987,16 @@ def main(
             report.failures.append((f"seção {section.__name__}", describe_error(error)))
             return None
 
-    kms_key, versioning, why = guarded(bucket_settings, client, bucket, resolved) or (None, None, "interrompida")
+    kms_key, versioning, why = guarded(bucket_settings, client, bucket, resolved) or (
+        None,
+        None,
+        "interrompida",
+    )
     guarded(lifecycle, client, bucket, prefix)
-    proven: dict[str, Any] = guarded(inventory, client, bucket, prefix) or {"listed": False, "sample": None}
+    proven: dict[str, Any] = guarded(inventory, client, bucket, prefix) or {
+        "listed": False,
+        "sample": None,
+    }
     guarded(versioning_check, versioning, why, proven.get("sample"))
     guarded(permissions, bucket, prefix, resolved, kms_key, proven)
     guarded(kms_key_section, resolved, kms_key)

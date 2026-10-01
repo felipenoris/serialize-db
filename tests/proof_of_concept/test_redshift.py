@@ -301,9 +301,7 @@ def test_cursor_fetchmany_feeds_record_batches(
     rows = cursor.fetchmany(2)
     while rows:
         batches.append(
-            pa.RecordBatch.from_pylist(
-                [dict(zip(names, row)) for row in rows], schema=arrow_schema
-            )
+            pa.RecordBatch.from_pylist([dict(zip(names, row)) for row in rows], schema=arrow_schema)
         )
         rows = cursor.fetchmany(2)
     assert [batch.num_rows for batch in batches] == [2, 2, 1]
@@ -378,7 +376,13 @@ def test_sqlalchemy_ddl_creates_table(
     cursor = session.connection.cursor()
     cursor.execute(f"select * from {session.qualified(name)} limit 0")
     assert [column[0] for column in cursor.description] == [
-        "id_operacao", "data_ref", "id_cliente", "valor", "descricao", "mes", "observacao",
+        "id_operacao",
+        "data_ref",
+        "id_cliente",
+        "valor",
+        "descricao",
+        "mes",
+        "observacao",
     ]
 
     # information_schema.columns respondeu vazio depois do USE no ambiente alvo (2026-09-21): ela
@@ -578,8 +582,10 @@ def test_copy_varchar_overflow(
     """Uma string acima do ``VARCHAR`` de destino: o ``COPY`` trunca ou aborta, e o motivo fica em
     ``stl_load_errors``."""
     session = redshift_session
-    long_text = sample_table().slice(0, 10).set_column(
-        5, "descricao", pa.array(["x" * 300] * 10, pa.string())
+    long_text = (
+        sample_table()
+        .slice(0, 10)
+        .set_column(5, "descricao", pa.array(["x" * 300] * 10, pa.string()))
     )
 
     uri = s3_location.child("redshift/texto_longo")
@@ -894,9 +900,10 @@ def test_unload_partition_by_and_register(
         DeltaTable(destination).to_pyarrow_table()
 
     record("redshift.unload.delta_rs_read", outcome(read_by_delta_rs))
-    assert duckdb_connection.execute(
-        f"SELECT count(*) FROM delta_scan('{destination}')"
-    ).fetchone()[0] == 6
+    assert (
+        duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{destination}')").fetchone()[0]
+        == 6
+    )
 
     # Onde o UNLOAD recusa gravar sem ALLOWOVERWRITE: o mesmo prefixo, um prefixo pai com arquivos
     # abaixo, e um subprefixo novo e vazio dentro de uma pasta com arquivos, que é o destino novo
@@ -1343,8 +1350,9 @@ def test_stream_by_unload_with_literal_values(
         ),
         (
             "carimbo_taxa",
-            base.where(table.c.carimbo > sa.bindparam("carimbo"))
-            .where(table.c.taxa < sa.bindparam("taxa")),
+            base.where(table.c.carimbo > sa.bindparam("carimbo")).where(
+                table.c.taxa < sa.bindparam("taxa")
+            ),
             {"carimbo": dt.datetime(2026, 8, 28, 12, 0, 0, 123456), "taxa": 0.25},
         ),
     ]
@@ -1457,7 +1465,8 @@ def test_unload_limit_empty_result_temp_table_and_super(
     manifest = read_manifest(s3_location, empty)
     record(
         "redshift.stream.empty.manifest",
-        None if manifest is None
+        None
+        if manifest is None
         else {"entries": len(manifest["entries"]), "schema": manifest.get("schema")},
     )
     listing = s3.list_objects_v2(
@@ -1594,7 +1603,8 @@ def test_row_description_oids_and_type_modifier(
             }
             if field["type_oid"] == 1700 and modifier != -1:
                 column["precisao_escala"] = [
-                    ((modifier - 4) >> 16) & 0xFFFF, (modifier - 4) & 0xFFFF
+                    ((modifier - 4) >> 16) & 0xFFFF,
+                    (modifier - 4) & 0xFFFF,
                 ]
             columns.append(column)
         record(f"redshift.row_desc.{label}", columns)
@@ -1872,9 +1882,15 @@ def test_audit_sql_under_search_path_and_nan_comparison(
         if not emulator_enabled():
             assert detail == [["False", "False", "False", "False", "NaN"]]
         expected = {
-            "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2",
-            "total_valor": "4.500000", "total_preco": "16.250000", "json_meta": "0",
-            "texto_meta": "0", "texto_nome": "0", "valor_data_str": "0",
+            "linhas": "4",
+            "particao_data_str": "1",
+            "naofinito_valor": "2",
+            "total_valor": "4.500000",
+            "total_preco": "16.250000",
+            "json_meta": "0",
+            "texto_meta": "0",
+            "texto_nome": "0",
+            "valor_data_str": "0",
         }
 
         # 4. O texto de cada verificação, como o motor o roda; a de linhas também medida a medida,

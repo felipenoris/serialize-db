@@ -34,21 +34,28 @@ PARTITION_PARAMS = {"data_base_str": "2026-08-31"}
 # O statement de plan/sqlalchemy.md: o parâmetro, o % e o : em literais, duas tabelas do contrato.
 DRAFT_METADATA = sa.MetaData()
 DRAFT_ENTRIES = sa.Table(
-    "cad_lancamentos", DRAFT_METADATA,
-    sa.Column("id_lancamento", sa.BigInteger), sa.Column("id_conta", sa.BigInteger),
-    sa.Column("valor", sa.Double), sa.Column("area", sa.String(50)),
+    "cad_lancamentos",
+    DRAFT_METADATA,
+    sa.Column("id_lancamento", sa.BigInteger),
+    sa.Column("id_conta", sa.BigInteger),
+    sa.Column("valor", sa.Double),
+    sa.Column("area", sa.String(50)),
     sa.Column("data_base_str", sa.String(10)),
 )
 DRAFT_ACCOUNTS = sa.Table(
-    "cad_contas", DRAFT_METADATA,
-    sa.Column("id_conta", sa.BigInteger), sa.Column("numero", sa.String(30)),
+    "cad_contas",
+    DRAFT_METADATA,
+    sa.Column("id_conta", sa.BigInteger),
+    sa.Column("numero", sa.String(30)),
 )
 TOTAL_BY_ACCOUNT = (
     sa.select(DRAFT_ACCOUNTS.c.numero, sa.func.sum(DRAFT_ENTRIES.c.valor).label("total"))
-    .join_from(DRAFT_ENTRIES, DRAFT_ACCOUNTS,
-               DRAFT_ENTRIES.c.id_conta == DRAFT_ACCOUNTS.c.id_conta)
-    .where(DRAFT_ENTRIES.c.data_base_str == sa.bindparam("data_base_str", type_=sa.String(10)),
-           DRAFT_ENTRIES.c.area.like("TI:%"), DRAFT_ACCOUNTS.c.numero != "1:2")
+    .join_from(DRAFT_ENTRIES, DRAFT_ACCOUNTS, DRAFT_ENTRIES.c.id_conta == DRAFT_ACCOUNTS.c.id_conta)
+    .where(
+        DRAFT_ENTRIES.c.data_base_str == sa.bindparam("data_base_str", type_=sa.String(10)),
+        DRAFT_ENTRIES.c.area.like("TI:%"),
+        DRAFT_ACCOUNTS.c.numero != "1:2",
+    )
     .group_by(DRAFT_ACCOUNTS.c.numero)
     .order_by(DRAFT_ACCOUNTS.c.numero)
 )
@@ -65,12 +72,21 @@ GROUP BY "{prefix}cad_contas"."numero" ORDER BY "{prefix}cad_contas"."numero"\
 
 # As linhas do rascunho de plan/PLAN-STAGE-2.md nas duas tabelas do statement de teste.
 DRAFT_ENTRY_ROWS = [
-    {"id_lancamento": 1, "id_conta": 7, "valor": 150, "area": "TI:infra",
-     "data_base_str": "2026-08-31"},
-    {"id_lancamento": 2, "id_conta": 7, "valor": 50, "area": "RH",
-     "data_base_str": "2026-08-31"},
-    {"id_lancamento": 3, "id_conta": 9, "valor": 200, "area": "TI:dados",
-     "data_base_str": "2026-07-31"},
+    {
+        "id_lancamento": 1,
+        "id_conta": 7,
+        "valor": 150,
+        "area": "TI:infra",
+        "data_base_str": "2026-08-31",
+    },
+    {"id_lancamento": 2, "id_conta": 7, "valor": 50, "area": "RH", "data_base_str": "2026-08-31"},
+    {
+        "id_lancamento": 3,
+        "id_conta": 9,
+        "valor": 200,
+        "area": "TI:dados",
+        "data_base_str": "2026-07-31",
+    },
 ]
 DRAFT_ACCOUNT_ROWS = [{"id_conta": 7, "numero": "1.1"}, {"id_conta": 9, "numero": "1:2"}]
 
@@ -78,7 +94,8 @@ DRAFT_ACCOUNT_ROWS = [{"id_conta": 7, "numero": "1.1"}, {"id_conta": 9, "numero"
 # coluna a mais; a linha de comando os importa como `test_sql:CHANGED_STATEMENTS`.
 CHANGED_STATEMENTS = dict(STATEMENTS)
 CHANGED_STATEMENTS["saldos_por_conta"] = STATEMENTS["saldos_por_conta"].add_columns(
-    sa.func.count().label("lancamentos"))
+    sa.func.count().label("lancamentos")
+)
 
 
 def draft_sandbox(
@@ -92,9 +109,11 @@ def draft_sandbox(
     connection.executemany(
         f'INSERT INTO "{prefix}cad_lancamentos" '
         "VALUES ($id_lancamento, $id_conta, $valor, $area, $data_base_str)",
-        DRAFT_ENTRY_ROWS)
-    connection.executemany(f'INSERT INTO "{prefix}cad_contas" VALUES ($id_conta, $numero)',
-                           DRAFT_ACCOUNT_ROWS)
+        DRAFT_ENTRY_ROWS,
+    )
+    connection.executemany(
+        f'INSERT INTO "{prefix}cad_contas" VALUES ($id_conta, $numero)', DRAFT_ACCOUNT_ROWS
+    )
     return connection
 
 
@@ -109,7 +128,8 @@ def client_sandbox(
         f'INSERT INTO "{prefix}cad_lancamentos" ("id_lancamento", "id_veiculo", "id_conta", '
         '"data", "valor", "timestamp", "id_mensuracao", "data_base", "data_base_str") VALUES '
         "(1, 5, 7, DATE '2026-09-30', 150, TIMESTAMP '2026-08-31 12:00:00', 1, "
-        "DATE '2026-08-31', '2026-08-31')")
+        "DATE '2026-08-31', '2026-08-31')"
+    )
     return connection
 
 
@@ -183,7 +203,8 @@ def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:
     """Um `bindparam` sem valor sai como `:nome`, num `text()` inclusive, e o statement original
     fica intacto; com valor, é constante; um nome fora de `[a-z_][a-z0-9_]*` é `SqlError`."""
     statement = sa.select(DRAFT_ENTRIES.c.id_conta).where(
-        DRAFT_ENTRIES.c.area == sa.bindparam("area"))
+        DRAFT_ENTRIES.c.area == sa.bindparam("area")
+    )
     assert sql.render(statement, "duckdb", DRAFT_METADATA, prefix="").endswith('"area" = :area')
     assert "area" in statement.compile().binds
 
@@ -193,10 +214,12 @@ def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:
 
     # Com valor, constante; com um nome inválido, SqlError.
     with_value = sa.select(DRAFT_ENTRIES.c.id_conta).where(
-        DRAFT_ENTRIES.c.area == sa.bindparam("area", value="RH"))
+        DRAFT_ENTRIES.c.area == sa.bindparam("area", value="RH")
+    )
     assert sql.render(with_value, "duckdb", DRAFT_METADATA).endswith("\"area\" = 'RH'")
     invalid = sa.select(DRAFT_ENTRIES.c.id_conta).where(
-        DRAFT_ENTRIES.c.area == sa.bindparam("Data Base"))
+        DRAFT_ENTRIES.c.area == sa.bindparam("Data Base")
+    )
     with pytest.raises(SqlError, match="nome de parâmetro inválido: 'Data Base'"):
         sql.render(invalid, "duckdb", DRAFT_METADATA)
 
@@ -234,13 +257,15 @@ def test_bind_leaves_quoted_identifiers_alone() -> None:
     `:nome` fora das aspas é o único trocado."""
     quoted_metadata = sa.MetaData()
     table = sa.Table(
-        "t", quoted_metadata,
-        sa.Column("taxa :base", sa.String(10)), sa.Column(":base", sa.String(10)),
-        sa.Column("preco d'agua", sa.Double), sa.Column("data_str", sa.String(10)),
+        "t",
+        quoted_metadata,
+        sa.Column("taxa :base", sa.String(10)),
+        sa.Column(":base", sa.String(10)),
+        sa.Column("preco d'agua", sa.Double),
+        sa.Column("data_str", sa.String(10)),
     )
-    query = (
-        sa.select(table.c["taxa :base"], table.c[":base"], table.c["preco d'agua"])
-        .where(table.c.data_str == sa.bindparam("data_str"))
+    query = sa.select(table.c["taxa :base"], table.c[":base"], table.c["preco d'agua"]).where(
+        table.c.data_str == sa.bindparam("data_str")
     )
     rendered = sql.render(query, "duckdb", quoted_metadata, prefix="")
     text, values = sql.bind(rendered, {"data_str": "2026-08-31"}, "duckdb")
@@ -280,7 +305,8 @@ def test_prefixed_replaces_every_contract_table() -> None:
     assert text == (
         'INSERT INTO "exec_42_cad_contas" ("id_conta", "numero") SELECT DISTINCT '
         '"exec_42_cad_lancamentos"."id_conta", "exec_42_cad_lancamentos"."area" '
-        'FROM "exec_42_cad_lancamentos"')
+        'FROM "exec_42_cad_lancamentos"'
+    )
     # O alvo do INSERT do pipeline fictício e a subconsulta do NOT EXISTS também são trocados.
     copy = sql.prefixed(STATEMENTS["veiculos_novos"], ClientBase.metadata, prefix="exec_42_")
     assert sql.referenced_tables(copy) == {"exec_42_cad_lancamentos", "exec_42_dom_veiculos"}
@@ -293,7 +319,8 @@ def test_prefixed_keeps_the_column_key() -> None:
     recusa o `values(to_=...)` com `Unconsumed column names: to_` (leitura de 2026-09-28)."""
     metadata = sa.MetaData()
     contracts = sa.Table(
-        "cad_contratos", metadata,
+        "cad_contratos",
+        metadata,
         sa.Column("id_contrato", sa.BigInteger),
         sa.Column("to", sa.String(2), key="to_"),
         sa.Column("data_str", sa.String(10)),
@@ -312,7 +339,8 @@ def test_prefixed_keeps_the_column_key() -> None:
     insert_text = sql.render(insert, "duckdb", metadata, prefix="exec_42_")
     assert " ".join(insert_text.split()) == (
         'INSERT INTO "exec_42_cad_contratos" ("id_contrato", "to", "data_str") '
-        "VALUES (1, 'RJ', '2026-08-31')")
+        "VALUES (1, 'RJ', '2026-08-31')"
+    )
     connection.execute(insert_text)
     update_text = sql.render(update, "duckdb", metadata, prefix="exec_42_")
     assert """SET "to"='SP'""" in update_text
@@ -407,8 +435,11 @@ def test_check_sql_files_reports_stale_files_and_the_final_newline(
     diff = sql.check_sql_files(STATEMENTS, ClientBase.metadata, directory)
     last_line = versioned.splitlines()[-1]
     assert diff[0] == f"--- {path}"
-    assert diff[-3:] == [f"-{last_line}", "\\ Sem quebra de linha no fim do arquivo",
-                         f"+{last_line}"]
+    assert diff[-3:] == [
+        f"-{last_line}",
+        "\\ Sem quebra de linha no fim do arquivo",
+        f"+{last_line}",
+    ]
     sql.write_sql_files(STATEMENTS, ClientBase.metadata, directory)
     assert sql.check_sql_files(STATEMENTS, ClientBase.metadata, directory) == []
 
@@ -419,7 +450,8 @@ def test_check_sql_files_reports_stale_files_and_the_final_newline(
     stale = ["veiculos_novos.duckdb.sql", "veiculos_novos.redshift.sql"]
     diff = sql.check_sql_files(remaining, ClientBase.metadata, directory)
     assert [line for line in diff if line.startswith("--- ")] == [
-        f"--- {directory}/{name}" for name in stale]
+        f"--- {directory}/{name}" for name in stale
+    ]
     added = [line for line in diff if line.startswith("+") and not line.startswith("+++ ")]
     assert added == []
     sql.write_sql_files(remaining, ClientBase.metadata, directory)
@@ -435,13 +467,37 @@ def test_cli_sql_check_reads_the_versioned_files(
     """`sql check` sai com 0 sem diff, 1 com o diff impresso e 2 sem `--statements` ou com um
     `--statements` que não é um dicionário."""
     directory = str(SQL_DIRECTORY)
-    assert main(["sql", "check", "--metadata", "client_model:Base.metadata",
-                 "--statements", "client_model.statements:STATEMENTS", directory]) == 0
+    assert (
+        main(
+            [
+                "sql",
+                "check",
+                "--metadata",
+                "client_model:Base.metadata",
+                "--statements",
+                "client_model.statements:STATEMENTS",
+                directory,
+            ]
+        )
+        == 0
+    )
     assert "atualizados" in capsys.readouterr().out
 
     # O statement mudado: saída 1 e o diff impresso.
-    assert main(["sql", "check", "--metadata", "client_model:Base.metadata",
-                 "--statements", "test_sql:CHANGED_STATEMENTS", directory]) == 1
+    assert (
+        main(
+            [
+                "sql",
+                "check",
+                "--metadata",
+                "client_model:Base.metadata",
+                "--statements",
+                "test_sql:CHANGED_STATEMENTS",
+                directory,
+            ]
+        )
+        == 1
+    )
     assert "count(*) AS lancamentos" in capsys.readouterr().out
 
     # Sem --statements, ou com um que não é dicionário: saída 2.
@@ -449,8 +505,17 @@ def test_cli_sql_check_reads_the_versioned_files(
         main(["sql", "check", "--metadata", "client_model:Base.metadata", directory])
     assert exit_info.value.code == 2
     with pytest.raises(SystemExit) as exit_info:
-        main(["sql", "check", "--metadata", "client_model:Base.metadata",
-              "--statements", "client_model:Base", directory])
+        main(
+            [
+                "sql",
+                "check",
+                "--metadata",
+                "client_model:Base.metadata",
+                "--statements",
+                "client_model:Base",
+                directory,
+            ]
+        )
     assert exit_info.value.code == 2
 
 

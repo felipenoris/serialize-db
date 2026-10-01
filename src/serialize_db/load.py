@@ -191,8 +191,9 @@ def _table_folder(
 ) -> str:
     """A pasta da tabela na origem, relativa à raiz dela; ausente é ``FileNotFoundError``."""
     if not storage.exists(table.name):
-        raise FileNotFoundError(f"{storage.uri_of(table.name)}: a pasta da tabela não existe na "
-                                "origem")
+        raise FileNotFoundError(
+            f"{storage.uri_of(table.name)}: a pasta da tabela não existe na origem"
+        )
     return table.name
 
 
@@ -332,8 +333,7 @@ def _ordered_select(
     """As colunas do arquivo sobre a consulta da partição, sem a coluna de partição, que o
     caminho leva, na ordem da ``sort_key`` quando há uma."""
     options = table_options(table)
-    names = [quoted(column.name) for column in table.columns
-             if column.name != options.partition_by]
+    names = [quoted(column.name) for column in table.columns if column.name != options.partition_by]
     text = f"SELECT {', '.join(names)} FROM ({query})"
     if options.sort_key:
         text += " ORDER BY " + ", ".join(quoted(name) for name in options.sort_key)
@@ -415,8 +415,8 @@ def _check_partition(
     # finitos.
     counts = connection.execute(f"SELECT {', '.join(measures)} FROM ({query})").fetchone()
     rows = counts[0]
-    contract_counts = counts[1:1 + len(labels)]
-    nonfinite_counts = counts[1 + len(labels):]
+    contract_counts = counts[1 : 1 + len(labels)]
+    nonfinite_counts = counts[1 + len(labels) :]
     problems = [f"{count} {label}" for count, label in zip(contract_counts, labels) if count]
     nonfinite = [name for name, count in zip(doubles, nonfinite_counts) if count]
     return _PartitionCheck(rows, tuple(problems), tuple(nonfinite))
@@ -445,7 +445,8 @@ def _copy_partition(
     target = storage.uri_of(storage.join(table_path, relative))
     select = _ordered_select(query, table)
     cursor = connection.execute(
-        f"COPY ({select}) TO {literal(target)} (FORMAT parquet, RETURN_STATS)")
+        f"COPY ({select}) TO {literal(target)} (FORMAT parquet, RETURN_STATS)"
+    )
     names = [column[0] for column in cursor.description]
     row = dict(zip(names, cursor.fetchone()))
     return delta.file_from_return_stats(row, table, uri)
@@ -494,13 +495,26 @@ def _load_partition(
         if check.problems:
             raise ContractError(f"{table.name} {label}: {'; '.join(check.problems)}")
         file = _copy_partition(connection, storage, table, uri, value, query, engine.execution_id)
-    delta.register_files(uri, table, [file], value, metadata, storage, expected_rows=check.rows,
-                         columns_without_min_max=check.nonfinite_columns)
-    log.info("%s %s: %d linhas em %.1f s", table.name, label, check.rows,
-             time.perf_counter() - started)
+    delta.register_files(
+        uri,
+        table,
+        [file],
+        value,
+        metadata,
+        storage,
+        expected_rows=check.rows,
+        columns_without_min_max=check.nonfinite_columns,
+    )
+    log.info(
+        "%s %s: %d linhas em %.1f s", table.name, label, check.rows, time.perf_counter() - started
+    )
     if check.nonfinite_columns:
-        log.info("%s %s: sem mínimo e máximo em %s", table.name, label,
-                 ", ".join(check.nonfinite_columns))
+        log.info(
+            "%s %s: sem mínimo e máximo em %s",
+            table.name,
+            label,
+            ", ".join(check.nonfinite_columns),
+        )
 
 
 def initial_load(
@@ -602,8 +616,8 @@ def _totals_from_row(
     doubles: list[str],
 ) -> _Totals:
     """As medidas de uma linha da agregação, na ordem de ``_total_measures``."""
-    sum_values = row[1:1 + len(sums)]
-    nonfinite_values = row[1 + len(sums):]
+    sum_values = row[1 : 1 + len(sums)]
+    nonfinite_values = row[1 + len(sums) :]
     return _Totals(row[0], dict(zip(sums, sum_values)), dict(zip(doubles, nonfinite_values)))
 
 
@@ -666,15 +680,17 @@ def _partition_reports(
     for value in sorted(set(in_source) | set(in_delta), key=str):
         source_totals = in_source.get(value, absent)
         delta_totals = in_delta.get(value, absent)
-        reports.append(PartitionReport(
-            value=value,
-            source_rows=source_totals.rows,
-            delta_rows=delta_totals.rows,
-            source_sums=source_totals.sums,
-            delta_sums=delta_totals.sums,
-            source_nonfinite=source_totals.nonfinite,
-            delta_nonfinite=delta_totals.nonfinite,
-        ))
+        reports.append(
+            PartitionReport(
+                value=value,
+                source_rows=source_totals.rows,
+                delta_rows=delta_totals.rows,
+                source_sums=source_totals.sums,
+                delta_sums=delta_totals.sums,
+                source_nonfinite=source_totals.nonfinite,
+                delta_nonfinite=delta_totals.nonfinite,
+            )
+        )
     return tuple(reports)
 
 

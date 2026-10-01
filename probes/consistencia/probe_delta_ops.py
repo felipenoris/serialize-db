@@ -10,6 +10,7 @@ threads, esta como leitura do achado conhecido.
     SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local \\
         .venv/bin/python probes/consistencia/probe_delta_ops.py
 """
+
 from __future__ import annotations
 
 import json
@@ -23,8 +24,18 @@ import pyarrow.parquet as pq
 import sqlalchemy as sa
 from deltalake import write_deltalake
 
-from consistency_lib import (TUDO, compare, edge_rows, finish, known_zero_sign, print_notes,
-                             probe_folder, report, same, to_contract)
+from consistency_lib import (
+    TUDO,
+    compare,
+    edge_rows,
+    finish,
+    known_zero_sign,
+    print_notes,
+    probe_folder,
+    report,
+    same,
+    to_contract,
+)
 from serialize_db import delta, schema
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import ConflictError, RegistrationRefused
@@ -84,8 +95,12 @@ def check_all(
         found = reader(storage, uri, version)
         for month, expected in expected_by_month.items():
             part = found.filter(pc.field("data_str") == month)
-            problems += compare(expected, to_contract(part, TUDO, NOTES), key="id",
-                                label=f"{label} {reader_name} {month}")
+            problems += compare(
+                expected,
+                to_contract(part, TUDO, NOTES),
+                key="id",
+                label=f"{label} {reader_name} {month}",
+            )
         total = sum(t.num_rows for t in expected_by_month.values())
         if found.num_rows != total:
             problems.append(f"{label} {reader_name}: {found.num_rows} linhas, esperadas {total}")
@@ -107,8 +122,9 @@ def three_writers(
     with DuckDBEngine(config, "exec-delta", storage) as engine:
         engine.create_table(TUDO)
         engine.append(TUDO, expected[MONTHS[1]])
-        engine.export_partition(TUDO, uri, MONTHS[1], {}, expected_rows=3000,
-                                columns_without_min_max=["valor"])
+        engine.export_partition(
+            TUDO, uri, MONTHS[1], {}, expected_rows=3000, columns_without_min_max=["valor"]
+        )
     first = edge_rows(MONTHS[2], 6001, 1500)
     second = edge_rows(MONTHS[2], 7501, 1500)
     write_deltalake(uri, first, mode="append")
@@ -119,10 +135,11 @@ def three_writers(
     files_by_month = {}
     for month in expected:
         files_by_month[month] = actions.filter(pc.field("partition.data_str") == month).num_rows
-    print(f"   três escritores: versão {table.version()}, arquivos por partição "
-          f"{files_by_month}")
-    report_known("W três escritores lidos iguais pelos dois leitores",
-                 check_all(storage, "escritores", uri, expected))
+    print(f"   três escritores: versão {table.version()}, arquivos por partição {files_by_month}")
+    report_known(
+        "W três escritores lidos iguais pelos dois leitores",
+        check_all(storage, "escritores", uri, expected),
+    )
     return expected
 
 
@@ -167,9 +184,11 @@ def check_compact(
             problems.append(f"compact: min.{name} {logged_low} acima dos dados {low}")
         if below(logged_high, high):
             problems.append(f"compact: max.{name} {logged_high} abaixo dos dados {high}")
-    print(f"   estatísticas de valor no arquivo compactado: mínimo {compacted.get('min.valor')}, "
-          f"máximo {compacted.get('max.valor')}, nulos {compacted.get('null_count.valor')} "
-          f"(os dados têm NaN, inf e -inf)")
+    print(
+        f"   estatísticas de valor no arquivo compactado: mínimo {compacted.get('min.valor')}, "
+        f"máximo {compacted.get('max.valor')}, nulos {compacted.get('null_count.valor')} "
+        f"(os dados têm NaN, inf e -inf)"
+    )
     report("K compact da partição de dois arquivos", problems)
     return after
 
@@ -243,8 +262,9 @@ def check_export_snapshot(
         found = read_export(folder / "delta" / "prd" / "exportacao" / mode)
         for month, expected_part in expected.items():
             part = found.filter(pc.field("data_str") == month)
-            problems += known_zero_sign(compare(expected_part, part, key="id",
-                                                label=f"export {mode} {month}"))[0]
+            problems += known_zero_sign(
+                compare(expected_part, part, key="id", label=f"export {mode} {month}")
+            )[0]
         print(f"   export {mode}: {len(files)} arquivos")
     report("E export_snapshot por cópia e por reescrita", problems)
 
@@ -256,8 +276,14 @@ def renamed_table() -> sa.Table:
         if column.name == "texto":
             columns.append(sa.Column("texto2", column.type, nullable=column.nullable))
         else:
-            columns.append(sa.Column(column.name, column.type, primary_key=column.primary_key,
-                                     nullable=column.nullable))
+            columns.append(
+                sa.Column(
+                    column.name,
+                    column.type,
+                    primary_key=column.primary_key,
+                    nullable=column.nullable,
+                )
+            )
     return sa.Table("cad_tudo", sa.MetaData(), *columns, info=dict(TUDO.info))
 
 
@@ -282,8 +308,9 @@ def check_rewrite(
         for month, expected_part in expected_renamed.items():
             part = found.filter(pc.field("data_str") == month).select(expected_part.column_names)
             part = schema.cast(part, renamed)
-            problems += known_zero_sign(compare(expected_part, part, key="id",
-                                                label=f"rewrite {reader_name} {month}"))[0]
+            problems += known_zero_sign(
+                compare(expected_part, part, key="id", label=f"rewrite {reader_name} {month}")
+            )[0]
     old = read_arrow(storage, uri, version_before)
     if "texto" not in old.column_names or old.num_rows != 9000:
         problems.append(f"rewrite: a versão antiga com {old.column_names}, {old.num_rows} linhas")
@@ -311,13 +338,16 @@ def check_vacuum(
     overlap = kept_paths & set(listed)
     if overlap:
         problems.append(f"o vacuum apagaria arquivos da versão do snapshot: {sorted(overlap)[:3]}")
-    deleted = delta.vacuum_keeping_snapshots(uri, control, TUDO.name, storage, retention_hours=0,
-                                             apply=True)
+    deleted = delta.vacuum_keeping_snapshots(
+        uri, control, TUDO.name, storage, retention_hours=0, apply=True
+    )
     print(f"   vacuum apagou {len(deleted)} arquivos (os dois da partição compactada)")
-    problems += known_zero_sign(check_all(storage, "depois do vacuum", uri, expected,
-                                          kept_version))[0]
-    without = delta.vacuum_keeping_snapshots(uri, {"snapshots": {}}, TUDO.name, storage,
-                                             retention_hours=0)
+    problems += known_zero_sign(
+        check_all(storage, "depois do vacuum", uri, expected, kept_version)
+    )[0]
+    without = delta.vacuum_keeping_snapshots(
+        uri, {"snapshots": {}}, TUDO.name, storage, retention_hours=0
+    )
     if not (set(without) & kept_paths):
         problems.append("sem o snapshot, o vacuum não lista nenhum arquivo da versão antiga")
     report("V vacuum prendendo a versão do snapshot", problems)
@@ -345,8 +375,10 @@ def check_read_back(
     restored = delta.open_table(copy_uri, storage)
     if restored.version() != before + 1:
         problems.append(f"versão restaurada {restored.version()}, esperada {before + 1}")
-    print(f"   a cópia depois da restauração: {restored.to_pyarrow_table().num_rows} linhas "
-          f"(o último commit de partição desfeito)")
+    print(
+        f"   a cópia depois da restauração: {restored.to_pyarrow_table().num_rows} linhas "
+        f"(o último commit de partição desfeito)"
+    )
     report("B read_back devolve None na contagem certa e restaura na errada", problems)
 
 

@@ -64,16 +64,26 @@ PREFIX = "exec_exec_2026_09_05_"
 METADATA = delta.commit_metadata(EXECUTION_ID, {"cad_contas": 1})
 # O iam_role evita a credencial do boto3 no COPY e no UNLOAD da conexão de mentira: o runner do
 # GitHub não tem nenhuma; só test_credentials_clause_and_mask exercita o caminho do boto3.
-CONFIG = RedshiftConfig(host="host", user="usuario", password="senha", database="dev",
-                        share_database="compartilhado", schema="esquema", region="sa-east-1",
-                        iam_role="default")
+CONFIG = RedshiftConfig(
+    host="host",
+    user="usuario",
+    password="senha",
+    database="dev",
+    share_database="compartilhado",
+    schema="esquema",
+    region="sa-east-1",
+    iam_role="default",
+)
 
 # Uma tabela sem coluna JSON com uma coluna anulável no meio, que o lote do appender pode não
 # trazer.
-MEASURES = sa.Table("cad_medidas", sa.MetaData(),
-                    sa.Column("id_medida", sa.BigInteger, primary_key=True, autoincrement=False),
-                    sa.Column("altura", sa.BigInteger),
-                    sa.Column("largura", sa.BigInteger))
+MEASURES = sa.Table(
+    "cad_medidas",
+    sa.MetaData(),
+    sa.Column("id_medida", sa.BigInteger, primary_key=True, autoincrement=False),
+    sa.Column("altura", sa.BigInteger),
+    sa.Column("largura", sa.BigInteger),
+)
 
 
 def text_columns_table(
@@ -85,8 +95,9 @@ def text_columns_table(
     for name in names:
         columns.append(sa.Column(name, sa.String(10)))
     columns.append(sa.Column("parte", sa.String(10), nullable=False))
-    return sa.Table("cad_colunas", sa.MetaData(), *columns,
-                    info={"serialize_db": {"partition_by": ["parte"]}})
+    return sa.Table(
+        "cad_colunas", sa.MetaData(), *columns, info={"serialize_db": {"partition_by": ["parte"]}}
+    )
 
 
 def text_columns_rows(
@@ -106,8 +117,15 @@ def text_columns_rows(
 
 # O OID e o type_modifier de cada tipo Arrow, como o row_desc do driver os traz.
 OID_OF = {
-    pa.bool_(): 16, pa.int16(): 21, pa.int32(): 23, pa.int64(): 20, pa.float32(): 700,
-    pa.float64(): 701, pa.string(): 1043, pa.date32(): 1082, pa.timestamp("us"): 1114,
+    pa.bool_(): 16,
+    pa.int16(): 21,
+    pa.int32(): 23,
+    pa.int64(): 20,
+    pa.float32(): 700,
+    pa.float64(): 701,
+    pa.string(): 1043,
+    pa.date32(): 1082,
+    pa.timestamp("us"): 1114,
     pa.timestamp("us", "UTC"): 1184,
 }
 
@@ -162,8 +180,10 @@ class FakeCursor:
         self.ps = {"row_desc": row_desc}
         self.description = None
         if row_desc:
-            self.description = [(field["label"].decode(), field["type_oid"], None, None, None,
-                                 None, None) for field in row_desc]
+            self.description = [
+                (field["label"].decode(), field["type_oid"], None, None, None, None, None)
+                for field in row_desc
+            ]
         self._rows = rows
         return self
 
@@ -278,11 +298,16 @@ class FakeConnection:
             sink.write(buffer.getvalue())
         if not self.write_manifest:
             return
-        entry = {"url": self.storage.uri_of(path),
-                 "meta": {"content_length": len(buffer.getvalue()),
-                          "record_count": self.unload_rows.num_rows}}
-        self.storage.write_text(self.storage.join(prefix, "manifest"),
-                                json.dumps({"entries": [entry]}))
+        entry = {
+            "url": self.storage.uri_of(path),
+            "meta": {
+                "content_length": len(buffer.getvalue()),
+                "record_count": self.unload_rows.num_rows,
+            },
+        }
+        self.storage.write_text(
+            self.storage.join(prefix, "manifest"), json.dumps({"entries": [entry]})
+        )
 
     def texts(self) -> list[str]:
         """Os comandos registrados, mascarados."""
@@ -309,18 +334,30 @@ def test_config_from_environment(
     """``SERIALIZE_DB_REDSHIFT_*`` para ``RedshiftConfig``; a variável vazia é ausente; o par
     informado e o workgroup são os caminhos de conexão, e sem os dois a conexão é recusada."""
     variables = {
-        "SERIALIZE_DB_REDSHIFT_WORKGROUP": "wg", "SERIALIZE_DB_REDSHIFT_DATABASE": "banco",
+        "SERIALIZE_DB_REDSHIFT_WORKGROUP": "wg",
+        "SERIALIZE_DB_REDSHIFT_DATABASE": "banco",
         "SERIALIZE_DB_REDSHIFT_SHARE_DATABASE": "compartilhado",
-        "SERIALIZE_DB_REDSHIFT_SCHEMA": "esquema", "SERIALIZE_DB_REDSHIFT_IAM_ROLE": "",
-        "SERIALIZE_DB_REDSHIFT_PORT": "5440", "AWS_DEFAULT_REGION": "sa-east-1",
+        "SERIALIZE_DB_REDSHIFT_SCHEMA": "esquema",
+        "SERIALIZE_DB_REDSHIFT_IAM_ROLE": "",
+        "SERIALIZE_DB_REDSHIFT_PORT": "5440",
+        "AWS_DEFAULT_REGION": "sa-east-1",
     }
     config = RedshiftConfig.from_environment(variables)
-    assert config == RedshiftConfig(workgroup="wg", database="banco",
-                                    share_database="compartilhado", schema="esquema", port=5440,
-                                    region="sa-east-1")
+    assert config == RedshiftConfig(
+        workgroup="wg",
+        database="banco",
+        share_database="compartilhado",
+        schema="esquema",
+        port=5440,
+        region="sa-east-1",
+    )
     assert RedshiftConfig.from_environment({}) == RedshiftConfig()
-    assert redshift.login_of(CONFIG) == {"host": "host", "port": 5439, "user": "usuario",
-                                         "password": "senha"}
+    assert redshift.login_of(CONFIG) == {
+        "host": "host",
+        "port": 5439,
+        "user": "usuario",
+        "password": "senha",
+    }
     with pytest.raises(ContractError, match="workgroup"):
         redshift.login_of(RedshiftConfig())
 
@@ -370,51 +407,67 @@ def test_copy_insert_unload_text() -> None:
     ``PARTITION BY``, ``PARALLEL OFF`` opcional e o ``select`` com a aspa e a contrabarra
     dobradas; nomes em duas partes."""
     credentials = "IAM_ROLE default"
-    copied = redshift.copy_text('"esquema"."t_staging"', "s3://b/prd/staging/e/t/m.manifest",
-                                credentials, manifest=True)
-    assert copied == ('COPY "esquema"."t_staging"\nFROM \'s3://b/prd/staging/e/t/m.manifest\'\n'
-                      "IAM_ROLE default\nFORMAT AS PARQUET MANIFEST FILLRECORD")
+    copied = redshift.copy_text(
+        '"esquema"."t_staging"', "s3://b/prd/staging/e/t/m.manifest", credentials, manifest=True
+    )
+    assert copied == (
+        'COPY "esquema"."t_staging"\nFROM \'s3://b/prd/staging/e/t/m.manifest\'\n'
+        "IAM_ROLE default\nFORMAT AS PARQUET MANIFEST FILLRECORD"
+    )
     assert redshift.copy_text("t", "s3://b/f.parquet", credentials, manifest=False).endswith(
-        "FORMAT AS PARQUET FILLRECORD")
+        "FORMAT AS PARQUET FILLRECORD"
+    )
     assert "COMPUPDATE" not in copied
 
     # A lista de colunas, na ordem do arquivo, entre a tabela e o FROM.
-    listed = redshift.copy_text('"esquema"."t"', "s3://b/f.parquet", credentials, manifest=False,
-                                columns=["id_lancamento", "to"])
-    assert listed == ('COPY "esquema"."t" ("id_lancamento", "to")\nFROM \'s3://b/f.parquet\'\n'
-                      "IAM_ROLE default\nFORMAT AS PARQUET FILLRECORD")
+    listed = redshift.copy_text(
+        '"esquema"."t"',
+        "s3://b/f.parquet",
+        credentials,
+        manifest=False,
+        columns=["id_lancamento", "to"],
+    )
+    assert listed == (
+        'COPY "esquema"."t" ("id_lancamento", "to")\nFROM \'s3://b/f.parquet\'\n'
+        "IAM_ROLE default\nFORMAT AS PARQUET FILLRECORD"
+    )
 
     # O INSERT da staging com a lista de colunas e o valor da partição.
-    inserted = redshift.insert_from_staging('"esquema"."t"', '"esquema"."t_staging"', ENTRIES,
-                                            "2026-08-31")
+    inserted = redshift.insert_from_staging(
+        '"esquema"."t"', '"esquema"."t_staging"', ENTRIES, "2026-08-31"
+    )
     columns = ", ".join(f'"{name}"' for name in ENTRIES.c.keys())
     assert inserted == (
         f'INSERT INTO "esquema"."t" ({columns})\n'
         'SELECT "id_lancamento", "id_conta", "data_base", "carimbo", "valor", "preco", "area", '
-        'JSON_PARSE("meta"), "to", "codigo", \'2026-08-31\' FROM "esquema"."t_staging"')
+        'JSON_PARSE("meta"), "to", "codigo", \'2026-08-31\' FROM "esquema"."t_staging"'
+    )
     # Sem o valor, a coluna de partição vem da staging: o appender.
-    assert '"codigo", "data_base_str" FROM' in redshift.insert_from_staging(
-        "t", "s", ENTRIES, None)
+    assert '"codigo", "data_base_str" FROM' in redshift.insert_from_staging("t", "s", ENTRIES, None)
 
     # O UNLOAD com as aspas e a barra do literal dobradas.
     select = "select \"texto\" from \"t\" where \"texto\" = 'd''agua' and x = 'barra \\\\ n'"
-    unloaded = redshift.unload_text(select, "s3://b/prd/t/data_base_str=2026-08-31/e_1",
-                                    credentials, parallel=False)
+    unloaded = redshift.unload_text(
+        select, "s3://b/prd/t/data_base_str=2026-08-31/e_1", credentials, parallel=False
+    )
     assert unloaded == (
         "UNLOAD ('select \"texto\" from \"t\" where \"texto\" = ''d''''agua'' "
         "and x = ''barra \\\\\\\\ n''')\n"
         "TO 's3://b/prd/t/data_base_str=2026-08-31/e_1/'\nIAM_ROLE default\n"
-        "FORMAT AS PARQUET MANIFEST VERBOSE PARALLEL OFF")
+        "FORMAT AS PARQUET MANIFEST VERBOSE PARALLEL OFF"
+    )
     assert "PARTITION BY" not in unloaded
     assert redshift.unload_text(select, "s3://b/x/", credentials, parallel=True).endswith(
-        "MANIFEST VERBOSE")
+        "MANIFEST VERBOSE"
+    )
 
 
 def test_staging_ddl_without_partition_column() -> None:
     """A staging sem a coluna de partição, anulável, com o JSON em ``VARCHAR(65535)`` e sem
     cláusula física; a tabela do sandbox com ela, pelo ``ddl`` do modelo."""
-    staging = redshift.staging_ddl(ENTRIES, '"esquema"."t_staging"',
-                                   redshift.columns_without_partition(ENTRIES))
+    staging = redshift.staging_ddl(
+        ENTRIES, '"esquema"."t_staging"', redshift.columns_without_partition(ENTRIES)
+    )
     assert staging.startswith('CREATE TABLE "esquema"."t_staging" (\n    "id_lancamento" BIGINT,')
     assert '"meta" VARCHAR(65535)' in staging
     assert '"carimbo" TIMESTAMP' in staging
@@ -433,13 +486,26 @@ def test_staging_ddl_without_partition_column() -> None:
 def test_table_from_cursor_by_columns() -> None:
     """Um cursor de mentira: a ``pa.Table`` com os tipos do ``row_desc``, igual ao caminho por
     dicionários; vazia com o esquema num resultado sem linha, e sem coluna num comando."""
-    arrow_schema = pa.schema([("id", pa.int64()), ("valor", pa.decimal128(18, 2)),
-                              ("dia", pa.date32()), ("area", pa.string()),
-                              ("carimbo", pa.timestamp("us"))])
+    arrow_schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("valor", pa.decimal128(18, 2)),
+            ("dia", pa.date32()),
+            ("area", pa.string()),
+            ("carimbo", pa.timestamp("us")),
+        ]
+    )
     rows = []
     for day in range(3):
-        rows.append([day, decimal.Decimal(day) / 4, datetime.date(2026, 8, 28 + day), f"area {day}",
-                     datetime.datetime(2026, 8, 28 + day, 12)])
+        rows.append(
+            [
+                day,
+                decimal.Decimal(day) / 4,
+                datetime.date(2026, 8, 28 + day),
+                f"area {day}",
+                datetime.datetime(2026, 8, 28 + day, 12),
+            ]
+        )
     connection = FakeConnection()
     cursor = connection.cursor()
     cursor.ps = {"row_desc": row_desc_of(arrow_schema)}
@@ -483,15 +549,27 @@ def test_schema_from_row_description() -> None:
         {"label": b"c_boolean", "type_oid": 16, "type_modifier": -1},
         {"label": b"c_super", "type_oid": 4000, "type_modifier": 16384000},
     ]
-    expected = pa.schema([
-        ("c_bigint", pa.int64()), ("c_integer", pa.int32()), ("c_smallint", pa.int16()),
-        ("c_double", pa.float64()), ("c_real", pa.float32()),
-        ("c_decimal", pa.decimal128(18, 2)), ("c_sum", pa.decimal128(38, 2)),
-        ("c_varchar", pa.string()), ("c_char", pa.string()), ("c_text", pa.string()),
-        ("c_unknown", pa.string()), ("c_name", pa.string()), ("c_date", pa.date32()),
-        ("c_timestamp", pa.timestamp("us")), ("c_timestamptz", pa.timestamp("us", "UTC")),
-        ("c_boolean", pa.bool_()), ("c_super", pa.string()),
-    ])
+    expected = pa.schema(
+        [
+            ("c_bigint", pa.int64()),
+            ("c_integer", pa.int32()),
+            ("c_smallint", pa.int16()),
+            ("c_double", pa.float64()),
+            ("c_real", pa.float32()),
+            ("c_decimal", pa.decimal128(18, 2)),
+            ("c_sum", pa.decimal128(38, 2)),
+            ("c_varchar", pa.string()),
+            ("c_char", pa.string()),
+            ("c_text", pa.string()),
+            ("c_unknown", pa.string()),
+            ("c_name", pa.string()),
+            ("c_date", pa.date32()),
+            ("c_timestamp", pa.timestamp("us")),
+            ("c_timestamptz", pa.timestamp("us", "UTC")),
+            ("c_boolean", pa.bool_()),
+            ("c_super", pa.string()),
+        ]
+    )
     assert schema_from_row_description(row_desc).equals(expected)
     with pytest.raises(SandboxError, match="c_geo.*OID 3000"):
         schema_from_row_description([{"label": b"c_geo", "type_oid": 3000, "type_modifier": -1}])
@@ -507,14 +585,20 @@ def test_stream_literal_values(
     ``bindparam`` sem valor, também num ``IN`` de lista, recusado antes de qualquer comando."""
     statement = (
         sa.select(ENTRIES.c.id_lancamento, ENTRIES.c.area)
-        .where(ENTRIES.c.area.like(sa.bindparam("padrao")),
-               ENTRIES.c.data_base >= sa.bindparam("dia"),
-               ENTRIES.c.preco > sa.bindparam("preco"),
-               ENTRIES.c.id_lancamento.in_(sa.bindparam("ids", expanding=True)))
+        .where(
+            ENTRIES.c.area.like(sa.bindparam("padrao")),
+            ENTRIES.c.data_base >= sa.bindparam("dia"),
+            ENTRIES.c.preco > sa.bindparam("preco"),
+            ENTRIES.c.id_lancamento.in_(sa.bindparam("ids", expanding=True)),
+        )
         .order_by(ENTRIES.c.id_lancamento)
     )
-    params = {"padrao": "50% d'agua \\ n", "dia": datetime.date(2026, 8, 29),
-              "preco": decimal.Decimal("1.00"), "ids": [1, 2, 3]}
+    params = {
+        "padrao": "50% d'agua \\ n",
+        "dia": datetime.date(2026, 8, 29),
+        "preco": decimal.Decimal("1.00"),
+        "ids": [1, 2, 3],
+    }
     literal = redshift.literal_text(statement, params, PREFIX)
     assert f'FROM "{PREFIX}cad_lancamentos"' in literal
     assert "LIKE '50% d''agua \\\\ n'" in literal
@@ -524,23 +608,33 @@ def test_stream_literal_values(
     assert ":" not in literal.split("FROM")[1]
 
     # O texto com o sentinela e os parâmetros nomeados.
-    text = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" WHERE "area" = :area '
-            'AND "id_lancamento" IN :ids AND "data_base" > :dia')
-    from_text = redshift.literal_text(text, {"area": "a'b", "ids": [4, 5],
-                                             "dia": datetime.date(2026, 1, 1)}, PREFIX)
-    assert from_text == (f'SELECT "id_lancamento" FROM "{PREFIX}cad_lancamentos" WHERE "area" = '
-                         "'a''b' AND \"id_lancamento\" IN (4, 5) AND \"data_base\" > '2026-01-01'")
+    text = (
+        'SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" WHERE "area" = :area '
+        'AND "id_lancamento" IN :ids AND "data_base" > :dia'
+    )
+    from_text = redshift.literal_text(
+        text, {"area": "a'b", "ids": [4, 5], "dia": datetime.date(2026, 1, 1)}, PREFIX
+    )
+    assert from_text == (
+        f'SELECT "id_lancamento" FROM "{PREFIX}cad_lancamentos" WHERE "area" = '
+        "'a''b' AND \"id_lancamento\" IN (4, 5) AND \"data_base\" > '2026-01-01'"
+    )
 
     # Os parâmetros sem valor são SqlError antes de qualquer comando.
     connection = FakeConnection()
     engine = fake_engine(monkeypatch, connection)
     before = len(connection.commands)
     with pytest.raises(SqlError, match="padrao"):
-        engine.stream(statement, {"dia": datetime.date(2026, 8, 29), "preco": decimal.Decimal("1"),
-                                  "ids": [1]})
+        engine.stream(
+            statement,
+            {"dia": datetime.date(2026, 8, 29), "preco": decimal.Decimal("1"), "ids": [1]},
+        )
     with pytest.raises(SqlError, match="ids"):
-        engine.stream(sa.select(ENTRIES).where(ENTRIES.c.id_lancamento.in_(
-            sa.bindparam("ids", expanding=True))))
+        engine.stream(
+            sa.select(ENTRIES).where(
+                ENTRIES.c.id_lancamento.in_(sa.bindparam("ids", expanding=True))
+            )
+        )
     with pytest.raises(SqlError, match="area"):
         engine.stream(text, {"ids": [1], "dia": datetime.date(2026, 1, 1)})
     assert len(connection.commands) == before
@@ -571,11 +665,14 @@ def test_literal_text_keeps_the_colons_of_quoted_regions() -> None:
         assert redshift.compiled_for_cursor(text, None, PREFIX) == (text, {})
 
     # O marcador fora das aspas vira o literal, e o de dentro fica.
-    text = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" '
-            "WHERE \"codigo\" = 'ref :x1' AND \"id_lancamento\" = :id")
+    text = (
+        'SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" '
+        'WHERE "codigo" = \'ref :x1\' AND "id_lancamento" = :id'
+    )
     assert redshift.literal_text(text, {"id": 5}, PREFIX) == (
         f'SELECT "id_lancamento" FROM "{PREFIX}cad_lancamentos" '
-        "WHERE \"codigo\" = 'ref :x1' AND \"id_lancamento\" = 5")
+        'WHERE "codigo" = \'ref :x1\' AND "id_lancamento" = 5'
+    )
     bound, values = redshift.compiled_for_cursor(text, {"id": 5}, PREFIX)
     assert "'ref :x1'" in bound
     assert values == {"id": 5}
@@ -594,10 +691,12 @@ def test_literal_text_keeps_the_backslash_before_a_colon_in_a_value() -> None:
     }
     for value, literal in literal_by_value.items():
         assert redshift.literal_text("SELECT :v AS x", {"v": value}, PREFIX) == (
-            f"SELECT {literal} AS x")
+            f"SELECT {literal} AS x"
+        )
     # Na lista do IN, cada item.
     assert redshift.literal_text("SELECT 1 WHERE 'x' IN :v", {"v": [r"a\:b", "c"]}, PREFIX) == (
-        r"SELECT 1 WHERE 'x' IN ('a\\\:b', 'c')")
+        r"SELECT 1 WHERE 'x' IN ('a\\\:b', 'c')"
+    )
 
 
 @pytest.mark.local
@@ -708,8 +807,7 @@ def test_statements_serialize_on_the_single_session(
         other.query("SELECT 2")
     assert len(connections) == 1
     assert connections[0].closed
-    assert connections[0].texts() == ["USE compartilhado", "SET search_path TO esquema",
-                                      "SELECT 2"]
+    assert connections[0].texts() == ["USE compartilhado", "SET search_path TO esquema", "SELECT 2"]
 
 
 def test_connection_dropped_by_the_server_is_reopened_once(
@@ -728,8 +826,11 @@ def test_connection_dropped_by_the_server_is_reopened_once(
         engine.query("SELECT 1")
     assert first.closed
     assert engine._connection is not first
-    assert engine._connection.texts() == ["USE compartilhado", "SET search_path TO esquema",
-                                          "SELECT 1"]
+    assert engine._connection.texts() == [
+        "USE compartilhado",
+        "SET search_path TO esquema",
+        "SELECT 1",
+    ]
     assert "derrubada" in caplog.text
 
     # Dentro de uma transação o erro sobe, com o ROLLBACK tentado.
@@ -803,9 +904,15 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     ) -> str:
         uri = original_write_file_manifest(sink, manifest_path)
         manifest_text, _ = storage.read_text(manifest_path)
-        manifests.append({"manifest": json.loads(manifest_text), "uri": uri,
-                          "manifest_path": manifest_path, "file_path": sink.path,
-                          "file_size": storage.size(sink.path)})
+        manifests.append(
+            {
+                "manifest": json.loads(manifest_text),
+                "uri": uri,
+                "manifest_path": manifest_path,
+                "file_path": sink.path,
+                "file_size": storage.size(sink.path),
+            }
+        )
         return uri
 
     monkeypatch.setattr(redshift, "_write_file_manifest", reading_manifest)
@@ -815,8 +922,11 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     assert appender.rows == 15
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
     [written] = manifests
-    entry = {"url": storage.uri_of(written["file_path"]), "mandatory": True,
-             "meta": {"content_length": written["file_size"]}}
+    entry = {
+        "url": storage.uri_of(written["file_path"]),
+        "mandatory": True,
+        "meta": {"content_length": written["file_size"]},
+    }
     assert written["manifest"] == {"entries": [entry]}
     assert written["file_size"] > 0
     assert written["uri"] == storage.uri_of(written["manifest_path"])
@@ -827,25 +937,28 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     carga = f"{PREFIX}cad_lancamentos_projetados_carga"
     columns = ", ".join(f'"{name}"' for name in PROJECTED.c.keys())
     assert texts[start + 1].startswith(f'CREATE TEMP TABLE "{carga}"')
-    assert texts[start + 2].startswith(f'COPY "{carga}" ({columns})\nFROM \'{written["uri"]}\'\n')
+    assert texts[start + 2].startswith(f"COPY \"{carga}\" ({columns})\nFROM '{written['uri']}'\n")
     assert "FORMAT AS PARQUET MANIFEST FILLRECORD" in texts[start + 2]
     assert texts[start + 3].startswith(
-        f'INSERT INTO "esquema"."{PREFIX}cad_lancamentos_projetados" (')
+        f'INSERT INTO "esquema"."{PREFIX}cad_lancamentos_projetados" ('
+    )
     assert 'JSON_PARSE("meta")' in texts[start + 3]
-    assert texts[start + 4:start + 6] == [f'DROP TABLE "{carga}"', "COMMIT"]
+    assert texts[start + 4 : start + 6] == [f'DROP TABLE "{carga}"', "COMMIT"]
 
     # A tabela sem coluna JSON recebe o COPY direto.
     engine.create_table(ACCOUNTS)
     engine.append(ACCOUNTS, account_rows(["A"]))
     assert connection.texts()[-2].startswith(
-        f'COPY "esquema"."{PREFIX}cad_contas" ("id_conta", "numero")\nFROM ')
+        f'COPY "esquema"."{PREFIX}cad_contas" ("id_conta", "numero")\nFROM '
+    )
 
     # O appender sem lote: só a conferência da tabela, sem BEGIN nem COPY.
     before = len(connection.commands)
     with engine.appender(PROJECTED):
         pass
     assert connection.texts()[before:] == [
-        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0']
+        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0'
+    ]
 
     # Uma exceção dentro do with: o arquivo sai e nada roda além da conferência da tabela.
     before = len(connection.commands)
@@ -854,14 +967,15 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
             appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
             raise RuntimeError("erro plantado")
     assert connection.texts()[before:] == [
-        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0']
+        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0'
+    ]
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
 
     # O lote recusado pelo cast.
     with pytest.raises(ContractError):
         with engine.appender(PROJECTED) as appender:
             appender.write(pa.table({"id_lancamento": ["x"]}))
-    assert "BEGIN" not in connection.texts()[before + 1:]
+    assert "BEGIN" not in connection.texts()[before + 1 :]
 
     # O DataFrame é recusado antes de qualquer gravação.
     with pytest.raises(ContractError, match="from_pandas"):
@@ -882,12 +996,14 @@ def test_appender_copy_lists_the_file_columns(
 
     # O COPY direto, sem a coluna altura.
     engine.create_table(MEASURES)
-    widths = pa.table({"id_medida": pa.array([1], pa.int64()),
-                       "largura": pa.array([10], pa.int64())})
+    widths = pa.table(
+        {"id_medida": pa.array([1], pa.int64()), "largura": pa.array([10], pa.int64())}
+    )
     engine.append(MEASURES, widths)
     copied = [text for text in connection.texts() if text.startswith("COPY")][-1]
     assert copied.startswith(
-        f'COPY "esquema"."{PREFIX}cad_medidas" ("id_medida", "largura")\nFROM ')
+        f'COPY "esquema"."{PREFIX}cad_medidas" ("id_medida", "largura")\nFROM '
+    )
     assert copied.endswith("FORMAT AS PARQUET MANIFEST FILLRECORD")
 
     # A staging _carga, sem a coluna area; o INSERT dela leva todas as colunas.
@@ -952,16 +1068,20 @@ def test_ingest_loads_each_partition_through_the_staging(
     staging_folder = storage.uri_of(f"prd/staging/{EXECUTION_ID}/cad_lancamentos/")
     assert manifest_uri.startswith(staging_folder)
     assert manifest_uri.endswith("/1.manifest")
-    file_columns = ", ".join(f'"{column.name}"'
-                             for column in redshift.columns_without_partition(ENTRIES))
+    file_columns = ", ".join(
+        f'"{column.name}"' for column in redshift.columns_without_partition(ENTRIES)
+    )
     assert copies[0].startswith(f'COPY "esquema"."{staging}" ({file_columns})\n')
     assert "FORMAT AS PARQUET MANIFEST FILLRECORD" in copies[0]
     manifest = json.loads(storage.read_text(storage.relative(manifest_uri))[0])
     assert len(manifest["entries"]) == 1
     assert f"data_base_str={MONTHS[1]}/" in manifest["entries"][0]["url"]
     inserts = [text for text in texts if text.startswith("INSERT")]
-    assert inserts == [redshift.insert_from_staging(
-        f'"esquema"."{name}"', f'"esquema"."{staging}"', ENTRIES, MONTHS[1])]
+    assert inserts == [
+        redshift.insert_from_staging(
+            f'"esquema"."{name}"', f'"esquema"."{staging}"', ENTRIES, MONTHS[1]
+        )
+    ]
     assert texts[-1] == f'DROP TABLE IF EXISTS "esquema"."{staging}"'
     with pytest.raises(SandboxError, match="ocupado"):
         engine.ingest(ENTRIES, uri, 2)
@@ -969,7 +1089,8 @@ def test_ingest_loads_each_partition_through_the_staging(
     # pinned_delta: a versão inteira, uma vez.
     source = engine.pinned_delta(ENTRIES, uri, 2)
     assert str(sa.select(source.c.id_lancamento)).startswith(
-        f'SELECT "{PREFIX}cad_lancamentos_versao_2"."id_lancamento"')
+        f'SELECT "{PREFIX}cad_lancamentos_versao_2"."id_lancamento"'
+    )
     copies = [text for text in connection.texts() if text.startswith("COPY")]
     assert len(copies) == 3
     engine.pinned_delta(ENTRIES, uri, 2)
@@ -980,15 +1101,18 @@ def test_ingest_loads_each_partition_through_the_staging(
     # Outra versão numa staging nova, com a partição única da versão 1.
     older = engine.pinned_delta(ENTRIES, uri, 1)
     assert str(sa.select(older.c.id_lancamento)).startswith(
-        f'SELECT "{PREFIX}cad_lancamentos_versao_1"."id_lancamento"')
+        f'SELECT "{PREFIX}cad_lancamentos_versao_1"."id_lancamento"'
+    )
     assert len([text for text in connection.texts() if text.startswith("COPY")]) == 4
 
     # O cleanup apaga as tabelas e o staging/.
     engine.cleanup()
     dropped = [text for text in connection.texts() if text.startswith("DROP TABLE IF EXISTS")]
-    assert dropped[-3:] == [f'DROP TABLE IF EXISTS "esquema"."{name}"',
-                            f'DROP TABLE IF EXISTS "esquema"."{name}_versao_2"',
-                            f'DROP TABLE IF EXISTS "esquema"."{name}_versao_1"']
+    assert dropped[-3:] == [
+        f'DROP TABLE IF EXISTS "esquema"."{name}"',
+        f'DROP TABLE IF EXISTS "esquema"."{name}_versao_2"',
+        f'DROP TABLE IF EXISTS "esquema"."{name}_versao_1"',
+    ]
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
     assert connection.closed
 
@@ -1020,10 +1144,12 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     assert version == 1
     unload = [text for text in connection.texts() if text.startswith("UNLOAD")][-1]
     select = re.search(r"UNLOAD \('(.+)'\)", unload, re.DOTALL).group(1)
-    assert select.startswith('SELECT "id_lancamento", "id_conta", "data_base", "carimbo", "valor", '
-                             '"preco", "area", JSON_SERIALIZE("meta") AS "meta", "to", "codigo" '
-                             f'FROM "esquema"."{PREFIX}cad_lancamentos_projetados" '
-                             f"WHERE \"data_base_str\" = ''{MONTHS[1]}''")
+    assert select.startswith(
+        'SELECT "id_lancamento", "id_conta", "data_base", "carimbo", "valor", '
+        '"preco", "area", JSON_SERIALIZE("meta") AS "meta", "to", "codigo" '
+        f'FROM "esquema"."{PREFIX}cad_lancamentos_projetados" '
+        f"WHERE \"data_base_str\" = ''{MONTHS[1]}''"
+    )
     assert select.endswith('ORDER BY "data_base", "id_lancamento"')
     assert "PARALLEL OFF" in unload
     destination = re.search(r"TO '([^']+)'", unload).group(1)
@@ -1032,7 +1158,8 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     files = storage.list_files(storage.relative(uri), ".parquet")
     assert len(files) == 1
     assert files[0].startswith(
-        f"prd/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/{EXECUTION_ID}_")
+        f"prd/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/{EXECUTION_ID}_"
+    )
     read = delta.open_table(uri, storage).to_pyarrow_table()
     assert read.num_rows == 1000
     assert read.schema.field("carimbo").type == pa.timestamp("us")
@@ -1053,15 +1180,24 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     with_nan = rows.set_column(rows.schema.get_field_index("valor"), "valor", pa.array(values))
     connection.unload_rows = with_nan.drop_columns(["data_base_str"])
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
-        version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000,
-                                          columns_without_min_max=["valor"])
+        version = engine.export_partition(
+            PROJECTED,
+            uri,
+            MONTHS[1],
+            METADATA,
+            expected_rows=1000,
+            columns_without_min_max=["valor"],
+        )
     assert version == 2
     assert "publish_partition" in caplog.text
     assert "['valor']" in caplog.text
     unload = [text for text in connection.texts() if text.startswith("UNLOAD")][-1]
     destination = re.search(r"TO '([^']+)'", unload).group(1)
-    assert destination.startswith(storage.uri_of(
-        f"prd/staging/{EXECUTION_ID}/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/"))
+    assert destination.startswith(
+        storage.uri_of(
+            f"prd/staging/{EXECUTION_ID}/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/"
+        )
+    )
     stats = pa.table(delta.open_table(uri, storage).get_add_actions(flatten=True))
     assert stats.column("max.valor").null_count == 1
     read = delta.open_table(uri, storage).to_pyarrow_table()
@@ -1078,8 +1214,14 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     # A troca relê a partição: a contagem diferente desfaz o commit.
     connection.unload_rows = with_nan.drop_columns(["data_base_str"])
     with pytest.raises(RegistrationRefused, match="releitura"):
-        engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=999,
-                                columns_without_min_max=["valor"])
+        engine.export_partition(
+            PROJECTED,
+            uri,
+            MONTHS[1],
+            METADATA,
+            expected_rows=999,
+            columns_without_min_max=["valor"],
+        )
     assert delta.open_table(uri, storage).to_pyarrow_table().num_rows == 0
 
     # O valor numa tabela sem partição recusa antes de qualquer comando.
@@ -1123,8 +1265,7 @@ def target(
     de ``tests/emulator.py`` no lugar do driver."""
     storage = Storage.for_uri(s3_location.child(f"engine/{uuid.uuid4().hex[:8]}"))
     execution_id = f"poc-{uuid.uuid4().hex[:8]}"
-    engine = RedshiftEngine(redshift_config(), execution_id, storage,
-                            f"prd/staging/{execution_id}")
+    engine = RedshiftEngine(redshift_config(), execution_id, storage, f"prd/staging/{execution_id}")
     yield Target(storage, engine, execution_id)
     engine.cleanup()
 
@@ -1160,8 +1301,10 @@ def totals_of(
     name: str,
 ) -> dict:
     """As linhas, os ids distintos e a soma de ``valor`` da tabela ``name`` do esquema."""
-    totals = engine.query(f'SELECT count(*) AS linhas, count(DISTINCT "id_lancamento") AS ids, '
-                          f'sum("valor") AS soma FROM {engine.qualified(name)}')
+    totals = engine.query(
+        f'SELECT count(*) AS linhas, count(DISTINCT "id_lancamento") AS ids, '
+        f'sum("valor") AS soma FROM {engine.qualified(name)}'
+    )
     return totals.to_pylist()[0]
 
 
@@ -1185,12 +1328,15 @@ def test_connect_uses_share_database(
     with pytest.raises(redshift_connector.Error) as missing:
         engine.execute(f"SELECT 1 FROM {engine.qualified(engine.prefix + 'nada')} LIMIT 0")
     fields = missing.value.args[0]
-    record("redshift.engine.relation_missing",
-           {"sqlstate": fields.get("C"), "message": str(fields.get("M"))})
-    record("redshift.engine.current_database",
-           engine.query("select current_database()").column(0)[0].as_py())
-    record("redshift.engine.control_table_present",
-           engine.name_in_use("serialize_db_publications"))
+    record(
+        "redshift.engine.relation_missing",
+        {"sqlstate": fields.get("C"), "message": str(fields.get("M"))},
+    )
+    record(
+        "redshift.engine.current_database",
+        engine.query("select current_database()").column(0)[0].as_py(),
+    )
+    record("redshift.engine.control_table_present", engine.name_in_use("serialize_db_publications"))
 
 
 @pytest.mark.redshift
@@ -1211,9 +1357,11 @@ def test_ingest_stream_appender_export(
     assert count_of(engine, f"{engine.prefix}cad_lancamentos") == 120
 
     # O mesmo resultado pelo query e pelo stream.
-    statement = (sa.select(ENTRIES).where(ENTRIES.c.data_base_str == sa.bindparam("particao"),
-                                          ENTRIES.c.to == "SP")
-                 .order_by(ENTRIES.c.id_lancamento))
+    statement = (
+        sa.select(ENTRIES)
+        .where(ENTRIES.c.data_base_str == sa.bindparam("particao"), ENTRIES.c.to == "SP")
+        .order_by(ENTRIES.c.id_lancamento)
+    )
     params = {"particao": MONTHS[1]}
     by_query = engine.query(statement, params)
     with engine.stream(statement, params, batch_size=50) as stream:
@@ -1228,8 +1376,10 @@ def test_ingest_stream_appender_export(
 
     # O appender grava a projeção na tabela de create_table; o nome ocupado é recusado.
     engine.create_table(PROJECTED)
-    with (engine.stream(statement, params, batch_size=40) as stream,
-          engine.appender(PROJECTED) as appender):
+    with (
+        engine.stream(statement, params, batch_size=40) as stream,
+        engine.appender(PROJECTED) as appender,
+    ):
         for batch in stream:
             appender.write(batch)
     assert appender.rows == 120
@@ -1243,20 +1393,31 @@ def test_ingest_stream_appender_export(
     accounts_uri = target.uri(ACCOUNTS)
     delta.create_table(accounts_uri, ACCOUNTS, storage)
     accounts = account_rows(["A", "B", "C"])
-    accounts_version = delta.publish_partition(accounts_uri, ACCOUNTS, None, accounts, METADATA,
-                                               storage)
+    accounts_version = delta.publish_partition(
+        accounts_uri, ACCOUNTS, None, accounts, METADATA, storage
+    )
     report = engine.audit(PROJECTED, [MONTHS[1]], projected_uri, 0)
     assert report.passed, report.results
     assert [result.name for result in report.results] == [
-        "linhas", "chave_id_lancamento", "chave_id_lancamento_tabela", "chave_codigo",
-        "chave_codigo_tabela"]
+        "linhas",
+        "chave_id_lancamento",
+        "chave_id_lancamento_tabela",
+        "chave_codigo",
+        "chave_codigo_tabela",
+    ]
     assert report.rows(MONTHS[1]) == 120
     assert report.nonfinite_columns[MONTHS[1]] == ()
     # A versão fixada vazia dispensa a junção da chave sequencial e carrega a staging só para
     # a chave codigo; a chave estrangeira de cad_lancamentos entra pela versão fixada de
     # cad_contas, carregada em _versao_<versão> quando o anti-join roda.
-    orphans = engine.audit(ENTRIES, [MONTHS[1]], uri, entries_version, foreign_keys=True,
-                           referenced={"cad_contas": (accounts_uri, accounts_version)})
+    orphans = engine.audit(
+        ENTRIES,
+        [MONTHS[1]],
+        uri,
+        entries_version,
+        foreign_keys=True,
+        referenced={"cad_contas": (accounts_uri, accounts_version)},
+    )
     assert orphans.passed, orphans.results
     assert [result.name for result in orphans.results][-1] == "orfao_id_conta"
     assert count_of(engine, f"{engine.prefix}cad_contas_versao_{accounts_version}") == 3
@@ -1264,13 +1425,15 @@ def test_ingest_stream_appender_export(
     assert count_of(engine, entries_staging) == 240
 
     # A exportação pelo registro: o arquivo do UNLOAD na pasta da partição, lido pelos leitores.
-    version = engine.export_partition(PROJECTED, projected_uri, MONTHS[1], METADATA,
-                                      expected_rows=120)
+    version = engine.export_partition(
+        PROJECTED, projected_uri, MONTHS[1], METADATA, expected_rows=120
+    )
     assert version == 1
     files = storage.list_files(storage.relative(projected_uri), ".parquet")
     assert len(files) >= 1
-    assert files[0].startswith(f"prd/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/"
-                               f"{target.execution_id}_")
+    assert files[0].startswith(
+        f"prd/cad_lancamentos_projetados/data_base_str={MONTHS[1]}/{target.execution_id}_"
+    )
     read = delta.open_table(projected_uri, storage).to_pyarrow_table().sort_by("id_lancamento")
     assert read.num_rows == 120
     assert read.column("id_lancamento").to_pylist() == list(range(121, 241))
@@ -1279,22 +1442,35 @@ def test_ingest_stream_appender_export(
     assert json.loads(read.column("meta").to_pylist()[0]) == {"k": 121}
     with storage.duckdb_connect() as connection:
         counted = connection.execute(
-            f"SELECT count(*), sum(valor) FROM delta_scan('{projected_uri}')").fetchone()
+            f"SELECT count(*), sum(valor) FROM delta_scan('{projected_uri}')"
+        ).fetchone()
         meta_scan = connection.execute(
             f"SELECT typeof(meta), meta FROM delta_scan('{projected_uri}') "
-            "WHERE id_lancamento = 121").fetchone()
+            "WHERE id_lancamento = 121"
+        ).fetchone()
     assert counted[0] == 120
     record("redshift.engine.delta_scan_meta", {"tipo": meta_scan[0], "valor": str(meta_scan[1])})
 
     # A troca: a partição com NaN pela máquina local, com as mesmas linhas e o aviso; o append
     # entra na tabela esvaziada.
-    with_nan = entry_rows(MONTHS[0], 1, 120, PROJECTED,
-                          valor=[float("nan")] + [number / 4 for number in range(2, 121)])
+    with_nan = entry_rows(
+        MONTHS[0],
+        1,
+        120,
+        PROJECTED,
+        valor=[float("nan")] + [number / 4 for number in range(2, 121)],
+    )
     engine.execute(f"DELETE FROM {target.qualified('cad_lancamentos_projetados')}")
     assert engine.append(PROJECTED, with_nan) == 120
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
-        version = engine.export_partition(PROJECTED, projected_uri, MONTHS[0], METADATA,
-                                          expected_rows=120, columns_without_min_max=["valor"])
+        version = engine.export_partition(
+            PROJECTED,
+            projected_uri,
+            MONTHS[0],
+            METADATA,
+            expected_rows=120,
+            columns_without_min_max=["valor"],
+        )
     assert version == 2
     assert "publish_partition" in caplog.text
     read = delta.open_table(projected_uri, storage).to_pyarrow_table()
@@ -1303,8 +1479,12 @@ def test_ingest_stream_appender_export(
     assert nan_rows.num_rows == 1
     assert nan_rows.column("data_base_str")[0].as_py() == MONTHS[0]
     stats = pa.table(delta.open_table(projected_uri, storage).get_add_actions(flatten=True))
-    by_partition = dict(zip(stats.column("partition.data_base_str").to_pylist(),
-                            stats.column("max.valor").to_pylist()))
+    by_partition = dict(
+        zip(
+            stats.column("partition.data_base_str").to_pylist(),
+            stats.column("max.valor").to_pylist(),
+        )
+    )
     assert by_partition[MONTHS[0]] is None
     assert by_partition[MONTHS[1]] == 60.0
 
@@ -1312,8 +1492,11 @@ def test_ingest_stream_appender_export(
     engine.cleanup()
     other = RedshiftEngine(redshift_config(), target.execution_id + "b", storage, "prd/staging/x")
     try:
-        for suffix in ("cad_lancamentos", "cad_lancamentos_projetados",
-                       f"cad_contas_versao_{accounts_version}"):
+        for suffix in (
+            "cad_lancamentos",
+            "cad_lancamentos_projetados",
+            f"cad_contas_versao_{accounts_version}",
+        ):
             assert not other.name_in_use(f"{engine.prefix}{suffix}")
     finally:
         other.cleanup()
@@ -1363,8 +1546,10 @@ def test_appender_copies_the_file_at_close(
     assert note.startswith("comando: COPY")
     assert f"FROM '{engine.storage.uri_of(manifests[0])}'" in note
     fields = missing.value.args[0]
-    record("redshift.engine.copy_missing_mandatory_file",
-           {"sqlstate": fields.get("C"), "message": str(fields.get("M"))})
+    record(
+        "redshift.engine.copy_missing_mandatory_file",
+        {"sqlstate": fields.get("C"), "message": str(fields.get("M"))},
+    )
     assert count_of(engine, name) == 10
 
     # O appender sem lote não muda a tabela; o seguinte acrescenta.
@@ -1390,12 +1575,15 @@ def test_appender_loads_a_batch_without_a_middle_column(
     nome, e a que falta fica nula, pelo ``COPY`` direto e pela staging da tabela com JSON."""
     engine = target.engine
     engine.create_table(MEASURES)
-    widths = pa.table({"id_medida": pa.array([1, 2], pa.int64()),
-                       "largura": pa.array([10, 20], pa.int64())})
+    widths = pa.table(
+        {"id_medida": pa.array([1, 2], pa.int64()), "largura": pa.array([10, 20], pa.int64())}
+    )
     assert engine.append(MEASURES, widths) == 2
     measured = engine.query(sa.select(MEASURES).order_by(MEASURES.c.id_medida))
-    assert measured.to_pylist() == [{"id_medida": 1, "altura": None, "largura": 10},
-                                    {"id_medida": 2, "altura": None, "largura": 20}]
+    assert measured.to_pylist() == [
+        {"id_medida": 1, "altura": None, "largura": 10},
+        {"id_medida": 2, "altura": None, "largura": 20},
+    ]
 
     # A tabela com coluna JSON, pela staging _carga: o lote sem a coluna area.
     engine.create_table(PROJECTED)
@@ -1423,11 +1611,13 @@ def test_ingest_and_pinned_delta_load_files_before_a_middle_column(
     after = text_columns_table("novo", "a", "b")
     uri = target.uri(before)
     delta.create_table(uri, before, storage)
-    delta.publish_partition(uri, before, "p1", text_columns_rows(before, "p1", [1, 2]), METADATA,
-                            storage)
+    delta.publish_partition(
+        uri, before, "p1", text_columns_rows(before, "p1", [1, 2]), METADATA, storage
+    )
     delta.reconcile(uri, after, storage)
-    version = delta.publish_partition(uri, after, "p2", text_columns_rows(after, "p2", [3]),
-                                      METADATA, storage)
+    version = delta.publish_partition(
+        uri, after, "p2", text_columns_rows(after, "p2", [3]), METADATA, storage
+    )
     expected = [
         {"id": 1, "novo": None, "a": "a1", "b": "b1", "parte": "p1"},
         {"id": 2, "novo": None, "a": "a2", "b": "b2", "parte": "p1"},
@@ -1460,13 +1650,16 @@ def test_ingest_and_pinned_delta_load_reordered_columns(
     reordered = text_columns_table("b", "a")
     uri = target.uri(written)
     delta.create_table(uri, written, storage)
-    version = delta.publish_partition(uri, written, "p1",
-                                      text_columns_rows(written, "p1", [1, 2]), METADATA, storage)
+    version = delta.publish_partition(
+        uri, written, "p1", text_columns_rows(written, "p1", [1, 2]), METADATA, storage
+    )
     diff = delta.schema_diff(reordered, delta.open_table(uri, storage))
     assert not diff.changes
     assert not diff.destructive
-    expected = [{"id": 1, "b": "b1", "a": "a1", "parte": "p1"},
-                {"id": 2, "b": "b2", "a": "a2", "parte": "p1"}]
+    expected = [
+        {"id": 1, "b": "b1", "a": "a1", "parte": "p1"},
+        {"id": 2, "b": "b2", "a": "a2", "parte": "p1"},
+    ]
     engine = target.engine
     engine.ingest(reordered, uri, version)
     assert engine.query(sa.select(reordered).order_by(reordered.c.id)).to_pylist() == expected
@@ -1486,8 +1679,9 @@ def test_new_session_sees_committed_tables(
     accounts_uri = target.uri(ACCOUNTS)
     delta.create_table(accounts_uri, ACCOUNTS, target.storage)
     accounts = account_rows(["A", "B", "C"])
-    accounts_version = delta.publish_partition(accounts_uri, ACCOUNTS, None, accounts, METADATA,
-                                               target.storage)
+    accounts_version = delta.publish_partition(
+        accounts_uri, ACCOUNTS, None, accounts, METADATA, target.storage
+    )
     temporary = f"{engine.prefix}temporaria"
     engine.query(f"CREATE TEMP TABLE {temporary} AS SELECT 1 AS x")
 
@@ -1499,8 +1693,10 @@ def test_new_session_sees_committed_tables(
         with engine.new_session() as session:
             session.ingest(table, uri, pinned)
 
-    threads = [threading.Thread(target=ingest, args=(ENTRIES, target.uri(ENTRIES), version)),
-               threading.Thread(target=ingest, args=(ACCOUNTS, accounts_uri, accounts_version))]
+    threads = [
+        threading.Thread(target=ingest, args=(ENTRIES, target.uri(ENTRIES), version)),
+        threading.Thread(target=ingest, args=(ACCOUNTS, accounts_uri, accounts_version)),
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -1553,8 +1749,9 @@ def test_two_writers_on_the_same_table_both_enter(
         table: sa.Table,
     ) -> None:
         barrier.wait(timeout=60)
-        engine.query(sa.update(table).where(table.c.id_lancamento <= 500)
-                     .values(valor=table.c.valor + 1))
+        engine.query(
+            sa.update(table).where(table.c.id_lancamento <= 500).values(valor=table.c.valor + 1)
+        )
 
     def run_together(
         *tasks: tuple,
@@ -1567,8 +1764,9 @@ def test_two_writers_on_the_same_table_both_enter(
     # Dois appenders, cada um numa sessão a mais.
     sessions = PROJECTED.to_metadata(sa.MetaData(), name="cad_escritores_sessoes")
     engine.create_table(sessions)
-    run_together((write_in_a_new_session, sessions, first),
-                 (write_in_a_new_session, sessions, second))
+    run_together(
+        (write_in_a_new_session, sessions, first), (write_in_a_new_session, sessions, second)
+    )
     assert totals_of(engine, engine.prefix + sessions.name) == both
 
     # Dois appenders na sessão principal.
@@ -1582,8 +1780,11 @@ def test_two_writers_on_the_same_table_both_enter(
     engine.create_table(updated)
     engine.append(updated, first)
     run_together((write_in_a_new_session, updated, second), (update_first_half, updated))
-    assert totals_of(engine, engine.prefix + updated.name) == {"linhas": 2_000, "ids": 2_000,
-                                                               "soma": both_sum + 500}
+    assert totals_of(engine, engine.prefix + updated.name) == {
+        "linhas": 2_000,
+        "ids": 2_000,
+        "soma": both_sum + 500,
+    }
 
 
 @pytest.mark.redshift
@@ -1603,7 +1804,8 @@ def test_stream_literal_values_on_the_target(
     engine.append(PROJECTED, rows)
     for text in texts:
         statement = sa.select(PROJECTED.c.id_lancamento, PROJECTED.c.codigo).where(
-            PROJECTED.c.codigo == sa.bindparam("texto"))
+            PROJECTED.c.codigo == sa.bindparam("texto")
+        )
         by_query = engine.query(statement, {"texto": text})
         with engine.stream(statement, {"texto": text}) as stream:
             by_stream = stream.read_all()
@@ -1630,7 +1832,8 @@ def test_stream_literal_values_on_the_target(
     described = engine.query(
         'select count(*) as c_count, sum("preco") as c_sum, sum("valor") as c_sum_double, '
         f"'literal' as c_text, 1.5 as c_numeric "
-        f"from {target.qualified('cad_lancamentos_projetados')}")
+        f"from {target.qualified('cad_lancamentos_projetados')}"
+    )
     types_by_column = {field.name: str(field.type) for field in described.schema}
     record("redshift.engine.row_desc", types_by_column)
     assert described.column("c_count").to_pylist() == [4]
@@ -1647,12 +1850,15 @@ def test_stream_and_query_agree_on_a_colon_inside_a_literal(
     ao ``UNLOAD``."""
     engine = target.engine
     rows = entry_rows(MONTHS[0], 1, 2, PROJECTED)
-    rows = rows.set_column(rows.schema.get_field_index("codigo"), "codigo",
-                           pa.array(["ref :x1", r"ref \:x2"]))
+    rows = rows.set_column(
+        rows.schema.get_field_index("codigo"), "codigo", pa.array(["ref :x1", r"ref \:x2"])
+    )
     engine.create_table(PROJECTED)
     engine.append(PROJECTED, rows)
-    text = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" '
-            "WHERE \"codigo\" = 'ref :x1'")
+    text = (
+        'SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" '
+        "WHERE \"codigo\" = 'ref :x1'"
+    )
     by_query = engine.query(text)
     with engine.stream(text) as stream:
         by_stream = stream.read_all()
@@ -1660,8 +1866,9 @@ def test_stream_and_query_agree_on_a_colon_inside_a_literal(
     assert by_stream.equals(by_query)
 
     # O valor do cliente passa pelo cursor no query e pelo literal no stream.
-    by_value = ('SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" '
-                'WHERE "codigo" = :codigo')
+    by_value = (
+        'SELECT "id_lancamento" FROM "{prefix}cad_lancamentos_projetados" WHERE "codigo" = :codigo'
+    )
     params = {"codigo": r"ref \:x2"}
     by_query = engine.query(by_value, params)
     with engine.stream(by_value, params) as stream:

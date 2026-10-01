@@ -115,7 +115,9 @@ def partition_of(
     matches = [HIVE_SEGMENT.match(segment) for segment in segments]
     if all(matches):
         return tuple((match.group(1), match.group(2)) for match in matches if match), "hive"
-    return tuple((f"nível {index}", segment) for index, segment in enumerate(segments, 1)), "pastas sem nome"
+    return tuple(
+        (f"nível {index}", segment) for index, segment in enumerate(segments, 1)
+    ), "pastas sem nome"
 
 
 def logical_label(
@@ -131,7 +133,9 @@ def logical_label(
     units = {"milliseconds": "ms", "microseconds": "us", "nanoseconds": "ns", "seconds": "s"}
     match = re.match(r"^(Timestamp|Time)\(isAdjustedToUTC=(\w+), timeUnit=(\w+)", text)
     if match:
-        return f"{match.group(1)}({units.get(match.group(3), match.group(3))}, utc={match.group(2)})"
+        return (
+            f"{match.group(1)}({units.get(match.group(3), match.group(3))}, utc={match.group(2)})"
+        )
     match = re.match(r"^Decimal\(precision=(\d+), scale=(\d+)\)", text)
     if match:
         return f"Decimal({match.group(1)},{match.group(2)})"
@@ -148,7 +152,10 @@ def schema_key(
 
     Cada coluna entra com o nome, o tipo Arrow, a nulidade, o tipo físico e o tipo lógico.
     """
-    return tuple((column.name, column.arrow_type, column.nullable, column.physical, column.logical) for column in columns)
+    return tuple(
+        (column.name, column.arrow_type, column.nullable, column.physical, column.logical)
+        for column in columns
+    )
 
 
 def schema_difference(
@@ -172,9 +179,23 @@ def schema_difference(
         if found.arrow_type != column.arrow_type:
             rows.append([name, "tipo", column.arrow_type, found.arrow_type])
         if found.nullable != column.nullable:
-            rows.append([name, "nulidade", "nulo" if column.nullable else "não nulo", "nulo" if found.nullable else "não nulo"])
+            rows.append(
+                [
+                    name,
+                    "nulidade",
+                    "nulo" if column.nullable else "não nulo",
+                    "nulo" if found.nullable else "não nulo",
+                ]
+            )
         if found.physical != column.physical or found.logical != column.logical:
-            rows.append([name, "tipo físico", f"{column.physical}/{column.logical}", f"{found.physical}/{found.logical}"])
+            rows.append(
+                [
+                    name,
+                    "tipo físico",
+                    f"{column.physical}/{column.logical}",
+                    f"{found.physical}/{found.logical}",
+                ]
+            )
 
     for name in other_by_name:
         if name not in by_name:
@@ -182,7 +203,14 @@ def schema_difference(
 
     # As mesmas colunas em outra ordem quebram toda leitura posicional, como o COPY do Redshift.
     if not rows and [column.name for column in reference] != [column.name for column in other]:
-        rows.append(["(todas)", "ordem", ", ".join(column.name for column in reference), ", ".join(column.name for column in other)])
+        rows.append(
+            [
+                "(todas)",
+                "ordem",
+                ", ".join(column.name for column in reference),
+                ", ".join(column.name for column in other),
+            ]
+        )
     return rows
 
 
@@ -200,7 +228,16 @@ def merge_statistics(
     for reading in readings:
         for name, statistic in reading.statistics.items():
             entry = merged.setdefault(
-                name, {"rows": 0, "nulls": 0, "nulls_known": False, "min": None, "max": None, "distinct": None, "without": 0}
+                name,
+                {
+                    "rows": 0,
+                    "nulls": 0,
+                    "nulls_known": False,
+                    "min": None,
+                    "max": None,
+                    "distinct": None,
+                    "without": 0,
+                },
             )
             entry["rows"] += statistic.get("rows", 0)
             if statistic.get("nulls") is not None:
@@ -381,7 +418,9 @@ def footer_columns(
 
     columns = []
     for field in parquet.schema_arrow:
-        physical, logical, converted = leaves.get(field.name, ("(aninhado)", "(aninhado)", "(aninhado)"))
+        physical, logical, converted = leaves.get(
+            field.name, ("(aninhado)", "(aninhado)", "(aninhado)")
+        )
         field_id = field.metadata.get(b"PARQUET:field_id", b"").decode() if field.metadata else ""
         columns.append(
             Column(
@@ -475,7 +514,11 @@ def sample_table(
                 lengths = pc.utf8_length(column)
                 edges = pc.min_max(lengths).as_py()
                 mean = pc.mean(lengths).as_py()
-                entry["length"] = (edges["min"], round(mean) if mean is not None else None, edges["max"])
+                entry["length"] = (
+                    edges["min"],
+                    round(mean) if mean is not None else None,
+                    edges["max"],
+                )
                 # O contrato mede o String(n) em bytes, como o VARCHAR(n) do Redshift.
                 entry["bytes"] = pc.max(pc.binary_length(column)).as_py()
             measured[name] = entry
@@ -583,7 +626,11 @@ def root_section(
             ["arquivos que não são Parquet", len(others)],
         ]
     )
-    report.ok("PQ-1", "raiz lida", f"{len(tables)} pasta(s) de tabela, {files} arquivo(s) Parquet, {total} bytes")
+    report.ok(
+        "PQ-1",
+        "raiz lida",
+        f"{len(tables)} pasta(s) de tabela, {files} arquivo(s) Parquet, {total} bytes",
+    )
 
     # PQ-2: toda pasta de tabela precisa de um Parquet; uma pasta sem nenhum reprova.
     empty = sorted(name for name, found in tables.items() if not found)
@@ -594,7 +641,9 @@ def root_section(
 
     if others:
         report.h2("Arquivos que não são Parquet")
-        report.line("Um arquivo solto na raiz, ou de outra extensão dentro de uma tabela; nenhum foi lido.")
+        report.line(
+            "Um arquivo solto na raiz, ou de outra extensão dentro de uma tabela; nenhum foi lido."
+        )
         report.table([["caminho"], *[[path] for path in sorted(others)[:40]]])
         if len(others) > 40:
             report.line(f"... ({len(others) - 40} omitidos)\n")
@@ -616,7 +665,9 @@ def tables_section(
 
     # Os arquivos de cada tabela agrupados pelo esquema, e a linha da tabela no resumo.
     groups: dict[str, list[list[FileReading]]] = {}
-    rows: list[list[Any]] = [["tabela", "arquivos", "bytes", "linhas", "colunas", "partição", "partições", "esquemas"]]
+    rows: list[list[Any]] = [
+        ["tabela", "arquivos", "bytes", "linhas", "colunas", "partição", "partições", "esquemas"]
+    ]
     for table, found in sorted(readings.items()):
         by_schema: dict[tuple, list[FileReading]] = {}
         for reading in found:
@@ -643,12 +694,20 @@ def tables_section(
     # PQ-3: todo arquivo de uma tabela tem o mesmo esquema; mais de um esquema reprova.
     divergent = sorted(table for table, ordered in groups.items() if len(ordered) > 1)
     if divergent:
-        report.fail("PQ-3", "esquema uniforme por tabela", f"{len(divergent)} tabela(s) com esquemas diferentes: {', '.join(divergent)}")
+        report.fail(
+            "PQ-3",
+            "esquema uniforme por tabela",
+            f"{len(divergent)} tabela(s) com esquemas diferentes: {', '.join(divergent)}",
+        )
     else:
-        report.ok("PQ-3", "esquema uniforme por tabela", "todo arquivo de cada tabela tem o mesmo esquema")
+        report.ok(
+            "PQ-3", "esquema uniforme por tabela", "todo arquivo de cada tabela tem o mesmo esquema"
+        )
 
     report.h2("Os arquivos de cada tabela")
-    report.line("`grupo` numera os esquemas distintos da tabela, 1 é o majoritário; arquivos de grupos diferentes estão na seção de divergências.\n")
+    report.line(
+        "`grupo` numera os esquemas distintos da tabela, 1 é o majoritário; arquivos de grupos diferentes estão na seção de divergências.\n"
+    )
     for table, ordered in sorted(groups.items()):
         number = {id(reading): index for index, group in enumerate(ordered, 1) for reading in group}
         found = sorted(readings[table], key=lambda reading: reading.path)
@@ -658,13 +717,21 @@ def tables_section(
             [
                 ["arquivo", "grupo", "linhas", "row groups", "bytes"],
                 *[
-                    [reading.path, number[id(reading)], reading.rows, reading.row_groups, f"{reading.size:,}".replace(",", ".")]
+                    [
+                        reading.path,
+                        number[id(reading)],
+                        reading.rows,
+                        reading.row_groups,
+                        f"{reading.size:,}".replace(",", "."),
+                    ]
                     for reading in listed
                 ],
             ]
         )
         if len(found) > len(listed):
-            report.line(f"... ({len(found) - len(listed)} arquivo(s) omitidos da listagem; todos foram lidos e contam nas seções seguintes)\n")
+            report.line(
+                f"... ({len(found) - len(listed)} arquivo(s) omitidos da listagem; todos foram lidos e contam nas seções seguintes)\n"
+            )
     return groups
 
 
@@ -677,7 +744,9 @@ def schema_section(
     Checagens: ``PQ-7`` (os tipos encontrados na base) e ``PQ-9`` (as tabelas vazias).
     """
     report.h1("O esquema de cada tabela")
-    report.line("O esquema do grupo majoritário: o tipo Arrow é o que um leitor devolve, o físico e o lógico são o que está gravado.\n")
+    report.line(
+        "O esquema do grupo majoritário: o tipo Arrow é o que um leitor devolve, o físico e o lógico são o que está gravado.\n"
+    )
 
     # Por tabela, o esquema do grupo majoritário, somando os tipos e anotando as tabelas sem linha.
     types: Counter[str] = Counter()
@@ -711,14 +780,25 @@ def schema_section(
 
     # PQ-7: os tipos distintos da base, contados por coluna, como leitura.
     report.h2("Os tipos encontrados na base")
-    report.table([["tipo Arrow (físico/lógico)", "colunas"], *[[name, count] for name, count in types.most_common()]])
-    report.note("PQ-7", "tipos da base", f"{len(types)} tipo(s) distinto(s) em {sum(types.values())} coluna(s)")
+    report.table(
+        [
+            ["tipo Arrow (físico/lógico)", "colunas"],
+            *[[name, count] for name, count in types.most_common()],
+        ]
+    )
+    report.note(
+        "PQ-7",
+        "tipos da base",
+        f"{len(types)} tipo(s) distinto(s) em {sum(types.values())} coluna(s)",
+    )
 
     # PQ-9: uma tabela com arquivo e sem linha é leitura.
     if empty:
         report.note("PQ-9", "tabela com arquivo e sem linha", f"{len(empty)}: {', '.join(empty)}")
     else:
-        report.ok("PQ-9", "tabela com arquivo e sem linha", "nenhuma: toda tabela com arquivo tem linha")
+        report.ok(
+            "PQ-9", "tabela com arquivo e sem linha", "nenhuma: toda tabela com arquivo tem linha"
+        )
 
 
 def divergence_section(
@@ -735,11 +815,15 @@ def divergence_section(
         report.line("Nenhuma. Em cada tabela, todo arquivo de toda partição tem o mesmo esquema.")
         return
 
-    report.line("Cada bloco compara um grupo com o majoritário da sua tabela e lista todos os arquivos do grupo.\n")
+    report.line(
+        "Cada bloco compara um grupo com o majoritário da sua tabela e lista todos os arquivos do grupo.\n"
+    )
     for table, ordered in divergent.items():
         reference = ordered[0][0].columns
         report.h2(f"{table}: {len(ordered)} esquemas")
-        report.line(f"grupo 1 (majoritário): {len(ordered[0])} arquivo(s), {len(reference)} coluna(s)\n")
+        report.line(
+            f"grupo 1 (majoritário): {len(ordered[0])} arquivo(s), {len(reference)} coluna(s)\n"
+        )
         for index, group in enumerate(ordered[1:], 2):
             report.line(f"grupo {index}: {len(group)} arquivo(s)")
             report.table(
@@ -748,7 +832,12 @@ def divergence_section(
                     *schema_difference(reference, group[0].columns),
                 ]
             )
-            report.table([["arquivo do grupo"], *[[reading.path] for reading in sorted(group, key=lambda item: item.path)]])
+            report.table(
+                [
+                    ["arquivo do grupo"],
+                    *[[reading.path] for reading in sorted(group, key=lambda item: item.path)],
+                ]
+            )
 
 
 def partition_section(
@@ -762,7 +851,9 @@ def partition_section(
     arquivo).
     """
     report.h1("As partições")
-    report.line("A coluna de partição vive no caminho; se ela também está dentro do arquivo, um leitor que junta os dois a vê duas vezes.\n")
+    report.line(
+        "A coluna de partição vive no caminho; se ela também está dentro do arquivo, um leitor que junta os dois a vê duas vezes.\n"
+    )
 
     # Por tabela, os estilos e as profundidades de partição e as colunas que o arquivo repete.
     mixed: list[str] = []
@@ -782,8 +873,12 @@ def partition_section(
         if not values:
             report.line(f"{table}: {style}, o arquivo está na raiz da tabela\n")
             continue
-        report.line(f"{table}: {style}, {len({reading.partition for reading in found})} partição(ões)")
-        rows: list[list[Any]] = [["coluna de partição", "valores", "dentro do arquivo", "amostra dos valores"]]
+        report.line(
+            f"{table}: {style}, {len({reading.partition for reading in found})} partição(ões)"
+        )
+        rows: list[list[Any]] = [
+            ["coluna de partição", "valores", "dentro do arquivo", "amostra dos valores"]
+        ]
         for name, found_values in values.items():
             in_file = name in columns
             if in_file:
@@ -796,15 +891,31 @@ def partition_section(
 
     # PQ-4: um estilo e uma profundidade de partição por tabela; a mistura reprova.
     if mixed:
-        report.fail("PQ-4", "layout de partição uniforme", f"{len(mixed)} tabela(s) misturam profundidade ou estilo: {', '.join(mixed)}")
+        report.fail(
+            "PQ-4",
+            "layout de partição uniforme",
+            f"{len(mixed)} tabela(s) misturam profundidade ou estilo: {', '.join(mixed)}",
+        )
     else:
-        report.ok("PQ-4", "layout de partição uniforme", "cada tabela usa um só estilo e uma só profundidade de partição")
+        report.ok(
+            "PQ-4",
+            "layout de partição uniforme",
+            "cada tabela usa um só estilo e uma só profundidade de partição",
+        )
 
     # PQ-5: a coluna de partição dentro do arquivo é leitura; o delta-rs a grava só no caminho.
     if inside:
-        report.note("PQ-5", "coluna de partição dentro do arquivo", f"{len(inside)}: {', '.join(inside[:10])}")
+        report.note(
+            "PQ-5",
+            "coluna de partição dentro do arquivo",
+            f"{len(inside)}: {', '.join(inside[:10])}",
+        )
     else:
-        report.note("PQ-5", "coluna de partição dentro do arquivo", "nenhuma: a coluna só existe no caminho, como o delta-rs grava")
+        report.note(
+            "PQ-5",
+            "coluna de partição dentro do arquivo",
+            "nenhuma: a coluna só existe no caminho, como o delta-rs grava",
+        )
 
 
 def statistics_section(
@@ -816,7 +927,9 @@ def statistics_section(
     Checagens: ``PQ-6`` (se o rodapé traz mínimo e máximo de toda coluna).
     """
     report.h1("Estatísticas por coluna")
-    report.line("Somadas do rodapé de todos os arquivos da tabela. `distintos` é o maior valor visto num arquivo, um piso da cardinalidade; `sem min/max` conta os arquivos sem a estatística naquela coluna.\n")
+    report.line(
+        "Somadas do rodapé de todos os arquivos da tabela. `distintos` é o maior valor visto num arquivo, um piso da cardinalidade; `sem min/max` conta os arquivos sem a estatística naquela coluna.\n"
+    )
 
     # Uma tabela de estatísticas por tabela; without e total contam as colunas da base para PQ-6.
     without = 0
@@ -826,12 +939,16 @@ def statistics_section(
             continue
         merged = merge_statistics(found)
         report.line(f"{table}")
-        rows: list[list[Any]] = [["coluna", "linhas", "nulos", "% nulos", "mínimo", "máximo", "distintos", "sem min/max"]]
+        rows: list[list[Any]] = [
+            ["coluna", "linhas", "nulos", "% nulos", "mínimo", "máximo", "distintos", "sem min/max"]
+        ]
         for name, entry in merged.items():
             total += 1
             without += 1 if entry["without"] else 0
             nulls = entry["nulls"] if entry["nulls_known"] else None
-            fraction = f"{100 * nulls / entry['rows']:.1f}" if nulls is not None and entry["rows"] else "-"
+            fraction = (
+                f"{100 * nulls / entry['rows']:.1f}" if nulls is not None and entry["rows"] else "-"
+            )
             rows.append(
                 [
                     name,
@@ -848,9 +965,17 @@ def statistics_section(
 
     # PQ-6: uma coluna com algum arquivo sem mínimo e máximo é leitura.
     if without:
-        report.note("PQ-6", "mínimo e máximo no rodapé", f"{without} de {total} coluna(s) da base têm arquivo sem a estatística")
+        report.note(
+            "PQ-6",
+            "mínimo e máximo no rodapé",
+            f"{without} de {total} coluna(s) da base têm arquivo sem a estatística",
+        )
     else:
-        report.ok("PQ-6", "mínimo e máximo no rodapé", f"as {total} coluna(s) da base trazem mínimo e máximo em todo arquivo")
+        report.ok(
+            "PQ-6",
+            "mínimo e máximo no rodapé",
+            f"as {total} coluna(s) da base trazem mínimo e máximo em todo arquivo",
+        )
 
 
 def layout_section(
@@ -863,7 +988,17 @@ def layout_section(
     """
     report.h1("Layout físico")
 
-    rows: list[list[Any]] = [["tabela", "row groups", "linhas por row group", "compressão", "codificação", "escritor", "versão"]]
+    rows: list[list[Any]] = [
+        [
+            "tabela",
+            "row groups",
+            "linhas por row group",
+            "compressão",
+            "codificação",
+            "escritor",
+            "versão",
+        ]
+    ]
     for table, found in sorted(readings.items()):
         groups_total = sum(reading.row_groups for reading in found)
         per_group = [reading.rows / reading.row_groups for reading in found if reading.row_groups]
@@ -871,7 +1006,9 @@ def layout_section(
             [
                 table,
                 groups_total,
-                f"{min(per_group):,.0f} a {max(per_group):,.0f}".replace(",", ".") if per_group else "-",
+                f"{min(per_group):,.0f} a {max(per_group):,.0f}".replace(",", ".")
+                if per_group
+                else "-",
                 ", ".join(sorted({value for reading in found for value in reading.compression})),
                 ", ".join(sorted({value for reading in found for value in reading.encodings})),
                 ", ".join(sorted({reading.created_by.split(" version ")[0] for reading in found})),
@@ -881,7 +1018,9 @@ def layout_section(
     report.table(rows)
 
     report.h2("Metadados do rodapé")
-    report.line("As chaves que o escritor gravou no rodapé; `pandas` indica origem pandas, `serialize_db_*` seria da biblioteca.\n")
+    report.line(
+        "As chaves que o escritor gravou no rodapé; `pandas` indica origem pandas, `serialize_db_*` seria da biblioteca.\n"
+    )
     footer_rows: list[list[Any]] = [["tabela", "chave", "arquivos", "valor de um arquivo"]]
     for table, found in sorted(readings.items()):
         keys: Counter[str] = Counter()
@@ -891,8 +1030,14 @@ def layout_section(
                 keys[key] += 1
                 example.setdefault(key, value)
         for key, count in keys.most_common():
-            footer_rows.append([table, key, f"{count}/{len(found)}", format_value(example[key], 60)])
-    report.table(footer_rows if len(footer_rows) > 1 else [["tabela", "chave"], ["(nenhuma)", "nenhum arquivo traz metadado no rodapé"]])
+            footer_rows.append(
+                [table, key, f"{count}/{len(found)}", format_value(example[key], 60)]
+            )
+    report.table(
+        footer_rows
+        if len(footer_rows) > 1
+        else [["tabela", "chave"], ["(nenhuma)", "nenhum arquivo traz metadado no rodapé"]]
+    )
 
 
 def sample_section(
@@ -907,22 +1052,36 @@ def sample_section(
     """
     report.h1("Amostra de valores")
     if not measured:
-        report.line("Não pedida. `--sample N` lê as N primeiras linhas de um arquivo por tabela para medir o que o rodapé não guarda.")
+        report.line(
+            "Não pedida. `--sample N` lê as N primeiras linhas de um arquivo por tabela para medir o que o rodapé não guarda."
+        )
         return
 
-    report.line(f"As {rows} primeiras linhas de um arquivo de cada tabela; `distintos` e os comprimentos são dessa amostra, não da tabela; `comprimento` conta caracteres e `máx bytes` conta bytes, a medida do `VARCHAR(n)` do Redshift.\n")
+    report.line(
+        f"As {rows} primeiras linhas de um arquivo de cada tabela; `distintos` e os comprimentos são dessa amostra, não da tabela; `comprimento` conta caracteres e `máx bytes` conta bytes, a medida do `VARCHAR(n)` do Redshift.\n"
+    )
     for table, columns in sorted(measured.items()):
         report.line(f"{table}")
         report.table(
             [
-                ["coluna", "linhas", "nulos", "distintos", "comprimento mín/méd/máx", "máx bytes", "valores quando poucos"],
+                [
+                    "coluna",
+                    "linhas",
+                    "nulos",
+                    "distintos",
+                    "comprimento mín/méd/máx",
+                    "máx bytes",
+                    "valores quando poucos",
+                ],
                 *[
                     [
                         name,
                         entry["rows"],
                         entry["nulls"],
                         entry["distinct"],
-                        "/".join(str(part) for part in entry["length"]) if "length" in entry else "-",
+                        "/".join(str(part) for part in entry["length"])
+                        if "length" in entry
+                        else "-",
                         entry.get("bytes", "-"),
                         ", ".join(entry.get("values", [])) or "-",
                     ]
@@ -942,10 +1101,14 @@ def text_length_section(
     """
     report.h1("Comprimento de texto")
     if not lengths:
-        report.line("Não pedido. `--text-bytes` lê as colunas de texto de todo arquivo e mede o maior valor de cada uma.")
+        report.line(
+            "Não pedido. `--text-bytes` lê as colunas de texto de todo arquivo e mede o maior valor de cada uma."
+        )
         return
 
-    report.line("Todas as linhas de todos os arquivos, só as colunas de texto; `máx bytes` é a medida do `VARCHAR(n)` do Redshift e do `String(n)` do contrato.\n")
+    report.line(
+        "Todas as linhas de todos os arquivos, só as colunas de texto; `máx bytes` é a medida do `VARCHAR(n)` do Redshift e do `String(n)` do contrato.\n"
+    )
     for table, columns in sorted(lengths.items()):
         report.line(f"{table}")
         report.table(
@@ -1001,16 +1164,27 @@ def main(
 ) -> int:
     parsed = parse(argv)
     if parsed is None:
-        print("uso: .venv/bin/python probes/parquet_source.py <raiz> [--sample N] [--files N] [--text-bytes]", file=sys.stderr)
+        print(
+            "uso: .venv/bin/python probes/parquet_source.py <raiz> [--sample N] [--files N] [--text-bytes]",
+            file=sys.stderr,
+        )
         return 2
     uri, sample, file_rows, text_bytes = parsed
 
     filesystem, root, filesystem_name = open_root(uri)
     report = Report("parquet_source", f"a estrutura da base Parquet em {root}")
-    report.line("Só leitura: cada arquivo é aberto por open_input_file, e nada sob a raiz é criado, alterado ou apagado.")
+    report.line(
+        "Só leitura: cada arquivo é aberto por open_input_file, e nada sob a raiz é criado, alterado ou apagado."
+    )
 
     # PQ-1: a raiz que não lista reprova e encerra o probe.
-    listing = report.call(f"listar {root} recursivamente", lambda: list_root(filesystem, root), render=lambda result: f"{len(result[0])} pasta(s) de tabela, {sum(len(found) for found in result[0].values())} arquivo(s) Parquet")
+    listing = report.call(
+        f"listar {root} recursivamente",
+        lambda: list_root(filesystem, root),
+        render=lambda result: (
+            f"{len(result[0])} pasta(s) de tabela, {sum(len(found) for found in result[0].values())} arquivo(s) Parquet"
+        ),
+    )
     if listing is None:
         report.fail("PQ-1", "raiz lida", f"não listada: {report.last_reason}")
         return report.finish()
@@ -1029,7 +1203,9 @@ def main(
                 unreadable.append(f"{table}/{relative}: {describe_error(error)}")
                 report.failures.append((f"rodapé de {table}/{relative}", describe_error(error)))
         readings[table] = collected
-    report.line(f"rodapés lidos: {sum(len(found) for found in readings.values())} arquivo(s), {len(unreadable)} ilegível(is)\n")
+    report.line(
+        f"rodapés lidos: {sum(len(found) for found in readings.values())} arquivo(s), {len(unreadable)} ilegível(is)\n"
+    )
 
     # A amostra, só com --sample: as primeiras linhas do primeiro arquivo lido de cada tabela.
     measured: dict[str, dict[str, dict[str, Any]]] = {}
@@ -1050,7 +1226,10 @@ def main(
             if not names:
                 continue
             # A varredura é longa: o andamento sai no terminal, fora do relatório.
-            print(f"medindo o texto de {table}: {len(collected)} arquivo(s), {len(names)} coluna(s)", file=sys.stderr)
+            print(
+                f"medindo o texto de {table}: {len(collected)} arquivo(s), {len(names)} coluna(s)",
+                file=sys.stderr,
+            )
             try:
                 lengths[table] = text_lengths(filesystem, root, table, collected, names)
             except Exception as error:  # noqa: BLE001

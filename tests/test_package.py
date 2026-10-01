@@ -19,8 +19,11 @@ def test_every_public_submodule_is_in_the_package_all(
     package: ModuleType,
 ) -> None:
     """Cada submódulo sem ``_`` no nome está no ``__all__`` do pacote que o contém."""
-    public = [module.name for module in pkgutil.iter_modules(package.__path__)
-              if not module.name.startswith("_")]
+    public = [
+        module.name
+        for module in pkgutil.iter_modules(package.__path__)
+        if not module.name.startswith("_")
+    ]
     assert public
     missing = [name for name in public if name not in package.__all__]
     assert missing == []

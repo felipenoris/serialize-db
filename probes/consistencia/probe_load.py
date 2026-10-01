@@ -9,6 +9,7 @@ passagem sem commit e ``load_report`` fechando.
     SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local \\
         .venv/bin/python probes/consistencia/probe_load.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -45,8 +46,10 @@ def read_source(
     if partition_by is None:
         text = f"SELECT * FROM read_parquet('{table_folder}/*.parquet', union_by_name=true)"
     else:
-        text = (f"SELECT * FROM read_parquet('{table_folder}/*/*.parquet', "
-                f"hive_partitioning=true, union_by_name=true)")
+        text = (
+            f"SELECT * FROM read_parquet('{table_folder}/*/*.parquet', "
+            f"hive_partitioning=true, union_by_name=true)"
+        )
     return to_contract(connection.execute(text).to_arrow_table(), table, NOTES)
 
 
@@ -119,8 +122,7 @@ def main() -> None:
     all_problems = []
     try:
         for table in tables:
-            problems = check_table(connection, db, str(base.root), config, folder / "origem",
-                                   table)
+            problems = check_table(connection, db, str(base.root), config, folder / "origem", table)
             report(f"L {table.name}", problems)
             all_problems += problems
     finally:

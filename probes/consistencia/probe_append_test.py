@@ -16,6 +16,7 @@ DuckDB na pasta local, o Redshift no substituto de ``tests/emulator.py`` ou no a
     SERIALIZE_DB_TEST_EMULATOR=1 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest \\
         -m redshift -s probes/consistencia/probe_append_test.py
 """
+
 from __future__ import annotations
 
 import threading
@@ -116,8 +117,9 @@ class DuckDBWriter:
         table: sa.Table,
         limit: int,
     ) -> None:
-        self.engine.query(sa.update(table).where(table.c.id_lancamento <= limit)
-                          .values(valor=table.c.valor + 1))
+        self.engine.query(
+            sa.update(table).where(table.c.id_lancamento <= limit).values(valor=table.c.valor + 1)
+        )
 
     def totals(
         self,
@@ -125,7 +127,8 @@ class DuckDBWriter:
     ) -> tuple[int, int, float]:
         found = self.engine.query(
             f'SELECT count(*) AS n, count(DISTINCT "id_lancamento") AS d, '
-            f'coalesce(sum("valor"), 0.0) AS s FROM {quoted(table.name)}')
+            f'coalesce(sum("valor"), 0.0) AS s FROM {quoted(table.name)}'
+        )
         row = found.to_pylist()[0]
         return row["n"], row["d"], float(row["s"])
 
@@ -133,8 +136,7 @@ class DuckDBWriter:
         self,
         table: sa.Table,
     ) -> str:
-        self.engine.query(
-            f"CREATE TABLE fonte AS SELECT range AS id FROM range({STREAM_ROWS})")
+        self.engine.query(f"CREATE TABLE fonte AS SELECT range AS id FROM range({STREAM_ROWS})")
         return "SELECT id, md5(id::VARCHAR) AS s FROM fonte"
 
     def describe(
@@ -176,8 +178,9 @@ class RedshiftWriter:
         table: sa.Table,
         limit: int,
     ) -> None:
-        self.engine.query(sa.update(table).where(table.c.id_lancamento <= limit)
-                          .values(valor=table.c.valor + 1))
+        self.engine.query(
+            sa.update(table).where(table.c.id_lancamento <= limit).values(valor=table.c.valor + 1)
+        )
 
     def totals(
         self,
@@ -186,7 +189,8 @@ class RedshiftWriter:
         qualified = self.engine.qualified(self.engine.prefix + table.name)
         found = self.engine.query(
             f'SELECT count(*) AS n, count(DISTINCT "id_lancamento") AS d, '
-            f'coalesce(sum("valor"), 0.0) AS s FROM {qualified}')
+            f'coalesce(sum("valor"), 0.0) AS s FROM {qualified}'
+        )
         row = found.to_pylist()[0]
         return row["n"], row["d"], float(row["s"])
 
@@ -261,6 +265,7 @@ def two_appends(
             with writer.engine.new_session() as session:
                 barrier.wait(timeout=60)
                 writer.append(session, table, rows)
+
         return outcome_of(writer, run)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -299,8 +304,10 @@ def append_beside_update(
         update_future = pool.submit(outcome_of, writer, do_update)
         append_ok, append_text, append_seconds = append_future.result()
         update_ok, update_text, update_seconds = update_future.result()
-    readings = [f"append: {append_text} em {append_seconds:.3f} s",
-                f"update: {update_text} em {update_seconds:.3f} s"]
+    readings = [
+        f"append: {append_text} em {append_seconds:.3f} s",
+        f"update: {update_text} em {update_seconds:.3f} s",
+    ]
     entered = [seeded]
     if append_ok:
         entered.append(appended)
@@ -347,10 +354,12 @@ def create_beside_stream(
         for batch in stream:
             streamed += batch.num_rows
     drained = time.perf_counter() - drain_started
-    readings = [f"CREATE na sessão a mais durante o stream: {other_text} em {other_seconds:.3f} s",
-                f"CREATE na sessão principal durante o stream: {main_text} em {main_seconds:.3f} s",
-                f"o stream devolveu o primeiro lote em {first_batch_seconds:.3f} s e esgotou "
-                f"{streamed} linhas em {drained:.3f} s depois dos CREATE"]
+    readings = [
+        f"CREATE na sessão a mais durante o stream: {other_text} em {other_seconds:.3f} s",
+        f"CREATE na sessão principal durante o stream: {main_text} em {main_seconds:.3f} s",
+        f"o stream devolveu o primeiro lote em {first_batch_seconds:.3f} s e esgotou "
+        f"{streamed} linhas em {drained:.3f} s depois dos CREATE",
+    ]
     problems = []
     if not other_ok:
         problems.append(f"CREATE na sessão a mais: {other_text}")
@@ -363,8 +372,9 @@ def create_beside_stream(
         writer.append(engine, other_table, rows)
 
     ok, text, seconds = outcome_of(writer, append_from_main_session)
-    readings.append(f"append da principal na tabela criada pela sessão a mais: {text} em "
-                    f"{seconds:.3f} s")
+    readings.append(
+        f"append da principal na tabela criada pela sessão a mais: {text} em {seconds:.3f} s"
+    )
     if not ok:
         problems.append(f"append na tabela da sessão a mais: {text}")
         return readings, problems
@@ -446,8 +456,7 @@ def test_redshift_concurrent_writers(
     substituto local, a conexão de ``tests/emulator.py``."""
     storage = Storage.for_uri(s3_location.child(f"consistencia/append-{uuid.uuid4().hex[:8]}"))
     execution_id = f"poc-{uuid.uuid4().hex[:8]}"
-    engine = RedshiftEngine(redshift_config(), execution_id, storage,
-                            f"prd/staging/{execution_id}")
+    engine = RedshiftEngine(redshift_config(), execution_id, storage, f"prd/staging/{execution_id}")
     try:
         run_probe(RedshiftWriter(engine), "redshift")
     finally:

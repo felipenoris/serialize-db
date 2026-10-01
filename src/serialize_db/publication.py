@@ -216,8 +216,10 @@ def control_ddl(
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
     :return: o texto do comando, com a tabela qualificada pelo esquema.
     """
-    return (f"CREATE TABLE {_qualified(schema, CONTROL_TABLE)} (table_name VARCHAR(127), "
-            "delta_version BIGINT, execution_id VARCHAR(127), published_at TIMESTAMP)")
+    return (
+        f"CREATE TABLE {_qualified(schema, CONTROL_TABLE)} (table_name VARCHAR(127), "
+        "delta_version BIGINT, execution_id VARCHAR(127), published_at TIMESTAMP)"
+    )
 
 
 def control_read(
@@ -242,8 +244,10 @@ def control_read(
     :return: o texto da consulta, que devolve ``delta_version`` numa linha, ou nenhuma linha
         antes da primeira publicação.
     """
-    return (f"SELECT delta_version FROM {_qualified(schema, CONTROL_TABLE)} "
-            f"WHERE table_name = {literal(_published_name(environment, table))}")
+    return (
+        f"SELECT delta_version FROM {_qualified(schema, CONTROL_TABLE)} "
+        f"WHERE table_name = {literal(_published_name(environment, table))}"
+    )
 
 
 def published_ddl(
@@ -280,8 +284,12 @@ def published_ddl(
     if key:
         lines.append(f"    PRIMARY KEY ({', '.join(key)})")
     name = _qualified(schema, _published_name(environment, table))
-    return (f"CREATE TABLE {name} (\n" + ",\n".join(lines) + "\n)"
-            + redshift_options(table_options(table)))
+    return (
+        f"CREATE TABLE {name} (\n"
+        + ",\n".join(lines)
+        + "\n)"
+        + redshift_options(table_options(table))
+    )
 
 
 def _partition_delete(
@@ -349,27 +357,33 @@ def publication_statements(
     statements = []
     if published_version is None:
         statements.append(published_ddl(schema, environment, table))
-    statements.append(staging_ddl(table, staging, columns_without_partition(table),
-                                  temporary=True))
+    statements.append(staging_ddl(table, staging, columns_without_partition(table), temporary=True))
     for value in partitions:
         statements.append(_partition_delete(published, table, value))
         if value not in manifests:
             continue
         statements.append(f"DELETE FROM {staging}")
         for manifest in manifests[value]:
-            statements.append(copy_text(staging, manifest.uri, credentials, manifest=True,
-                                        columns=manifest.columns))
+            statements.append(
+                copy_text(
+                    staging, manifest.uri, credentials, manifest=True, columns=manifest.columns
+                )
+            )
         statements.append(insert_from_staging(published, staging, table, value))
     statements.append(f"DROP TABLE {staging}")
     control = _qualified(schema, CONTROL_TABLE)
     if published_version is None:
-        statements.append(f"INSERT INTO {control} VALUES ({literal(name)}, {int(delta_version)}, "
-                          f"{literal(execution_id)}, getdate())")
+        statements.append(
+            f"INSERT INTO {control} VALUES ({literal(name)}, {int(delta_version)}, "
+            f"{literal(execution_id)}, getdate())"
+        )
     else:
-        statements.append(f"UPDATE {control} SET delta_version = {int(delta_version)}, "
-                          f"execution_id = {literal(execution_id)}, published_at = getdate() "
-                          f"WHERE table_name = {literal(name)} "
-                          f"AND delta_version = {int(published_version)}")
+        statements.append(
+            f"UPDATE {control} SET delta_version = {int(delta_version)}, "
+            f"execution_id = {literal(execution_id)}, published_at = getdate() "
+            f"WHERE table_name = {literal(name)} "
+            f"AND delta_version = {int(published_version)}"
+        )
     return statements
 
 
@@ -419,8 +433,9 @@ def _expected_column(
     if family in ("varchar", "char"):
         return PublishedColumn(column.name, family, _optional_int(first_number), None, None)
     if family == "decimal":
-        return PublishedColumn(column.name, family, None, _optional_int(first_number),
-                               _optional_int(second_number))
+        return PublishedColumn(
+            column.name, family, None, _optional_int(first_number), _optional_int(second_number)
+        )
     return PublishedColumn(column.name, family, None, None, None)
 
 
@@ -483,13 +498,15 @@ def reconcile_published(
         expected = _expected_column(column)
         is_new = column.name not in existing
         if is_new and column.nullable:
-            statements.append(f"ALTER TABLE {published} ADD COLUMN "
-                              f"{column_ddl(column, 'redshift')}")
+            statements.append(
+                f"ALTER TABLE {published} ADD COLUMN {column_ddl(column, 'redshift')}"
+            )
         elif is_new:
             destructive.append(f"{column.name}: coluna NOT NULL nova")
         elif existing[column.name] != expected:
-            destructive.append(f"{column.name}: {existing[column.name]} na tabela publicada, "
-                               f"{expected} no modelo")
+            destructive.append(
+                f"{column.name}: {existing[column.name]} na tabela publicada, {expected} no modelo"
+            )
     for name in existing:
         if name not in table.c:
             destructive.append(f"{name}: removida do modelo")
@@ -552,7 +569,8 @@ def _check_control_table(
     except redshift_connector.Error as error:
         if relation_missing(error):
             raise PublicationError(
-                f"a tabela de controle {schema}.{CONTROL_TABLE} não existe; {_INIT}") from None
+                f"a tabela de controle {schema}.{CONTROL_TABLE} não existe; {_INIT}"
+            ) from None
         raise
 
 
@@ -586,14 +604,24 @@ def _published_columns(
     rows = connection.rows(
         "SELECT column_name, data_type, character_maximum_length, numeric_precision, "
         f"numeric_scale FROM svv_all_columns WHERE schema_name = {literal(config.schema)} "
-        f"AND table_name = {literal(name)} ORDER BY ordinal_position")
+        f"AND table_name = {literal(name)} ORDER BY ordinal_position"
+    )
     columns = []
     for column_name, data_type, length, precision, scale in rows:
-        columns.append(PublishedColumn(str(column_name), str(data_type), _optional_int(length),
-                                       _optional_int(precision), _optional_int(scale)))
+        columns.append(
+            PublishedColumn(
+                str(column_name),
+                str(data_type),
+                _optional_int(length),
+                _optional_int(precision),
+                _optional_int(scale),
+            )
+        )
     if not columns:
-        log.warning("%s existe, e svv_all_columns não lista as colunas dela: a reconciliação "
-                    "não rodou", name)
+        log.warning(
+            "%s existe, e svv_all_columns não lista as colunas dela: a reconciliação não rodou",
+            name,
+        )
     return columns
 
 
@@ -607,11 +635,13 @@ def _conflict(
     """O ``ExecutionConflict`` de um erro do servidor que é conflito entre publicações: o
     ``1023`` e a tabela publicada que outra primeira publicação criou; ``None`` nos demais."""
     if serialization_failure(error):
-        return ExecutionConflict(f"{table.name}: outra publicação gravou a tabela ao mesmo tempo "
-                                 f"(1023): {error}")
+        return ExecutionConflict(
+            f"{table.name}: outra publicação gravou a tabela ao mesmo tempo (1023): {error}"
+        )
     if relation_exists(error):
-        return ExecutionConflict(f"{table.name}: outra primeira publicação criou a tabela "
-                                 f"publicada: {error}")
+        return ExecutionConflict(
+            f"{table.name}: outra primeira publicação criou a tabela publicada: {error}"
+        )
     return None
 
 
@@ -629,13 +659,15 @@ def _unpublish_table(
         if published is None:
             connection.rollback()
             return None
-        drop, delete_control = unpublication_statements(config.schema, environment, table,
-                                                        published)
+        drop, delete_control = unpublication_statements(
+            config.schema, environment, table, published
+        )
         connection.execute(drop)
         deleted = connection.execute(delete_control)
         if deleted.rowcount == 0:
-            raise ExecutionConflict(f"{table.name}: a linha de controle mudou desde a leitura "
-                                    f"(versão lida {published})")
+            raise ExecutionConflict(
+                f"{table.name}: a linha de controle mudou desde a leitura (versão lida {published})"
+            )
         connection.execute("COMMIT")
     except redshift_connector.Error as error:
         connection.rollback()
@@ -663,8 +695,12 @@ def _reconcile(
         return
     statements, destructive = reconcile_published(config.schema, environment, table, columns)
     if destructive:
-        log.warning("%s: diff destrutivo na tabela publicada (%s); a tabela é despublicada e "
-                    "recriada com todas as partições", table.name, "; ".join(destructive))
+        log.warning(
+            "%s: diff destrutivo na tabela publicada (%s); a tabela é despublicada e "
+            "recriada com todas as partições",
+            table.name,
+            "; ".join(destructive),
+        )
         _unpublish_table(connection, config, environment, table)
         return
     for statement in statements:
@@ -685,8 +721,10 @@ def _partitions_to_publish(
     available = delta.partition_values(delta.open_table(uri, storage, version), partition_by)
     if published is None:
         return list(available), list(available)
-    changed = sorted(delta.version_diff(uri, min(published, version), max(published, version),
-                                        table, storage), key=str)
+    changed = sorted(
+        delta.version_diff(uri, min(published, version), max(published, version), table, storage),
+        key=str,
+    )
     return changed, [value for value in changed if value in available]
 
 
@@ -706,8 +744,9 @@ def _write_manifests(
         tag = value if value is not None else "tabela"
         folder = storage.join(db.publication_prefix(execution_id), table.name, tag)
         partitions = [value] if value is not None else None
-        manifests[value] = delta.copy_manifest(uri, version, partitions, storage.uri_of(folder),
-                                               storage)
+        manifests[value] = delta.copy_manifest(
+            uri, version, partitions, storage.uri_of(folder), storage
+        )
     return manifests
 
 
@@ -731,8 +770,9 @@ def _run_publication(
         connection.execute(statement)
     control = connection.execute(control_statement)
     if published is not None and control.rowcount == 0:
-        raise ExecutionConflict(f"{table.name}: a linha de controle mudou desde a leitura "
-                                f"(versão lida {published})")
+        raise ExecutionConflict(
+            f"{table.name}: a linha de controle mudou desde a leitura (versão lida {published})"
+        )
 
 
 def _publication_transaction(
@@ -753,12 +793,21 @@ def _publication_transaction(
         if published == version:
             connection.rollback()
             return None
-        changed, with_files = _partitions_to_publish(db.uri(table), table, published, version,
-                                                     db.storage)
+        changed, with_files = _partitions_to_publish(
+            db.uri(table), table, published, version, db.storage
+        )
         manifests = _write_manifests(db, table, with_files, execution_id, version)
-        statements = publication_statements(config.schema, environment, table, changed,
-                                            manifests, version, published, execution_id,
-                                            _CREDENTIALS_MARKER)
+        statements = publication_statements(
+            config.schema,
+            environment,
+            table,
+            changed,
+            manifests,
+            version,
+            published,
+            execution_id,
+            _CREDENTIALS_MARKER,
+        )
         _run_publication(connection, config, table, statements, published)
         connection.execute("COMMIT")
     except redshift_connector.Error as error:
@@ -792,9 +841,14 @@ def _publish_table(
     if changed is None:
         log.info("%s: a versão %s já está publicada", table.name, version)
         return version
-    log.info("%s publicada na versão %s: partições %s, em %.1f s; RSS máximo do processo "
-             "%.0f MB", table.name, version, changed, time.perf_counter() - started,
-             peak_rss_mb())
+    log.info(
+        "%s publicada na versão %s: partições %s, em %.1f s; RSS máximo do processo %.0f MB",
+        table.name,
+        version,
+        changed,
+        time.perf_counter() - started,
+        peak_rss_mb(),
+    )
     return version
 
 
@@ -808,13 +862,16 @@ def _version_to_publish(
     if versions is not None:
         version = versions.get(table.name)
         if version is None:
-            raise PublicationError(f"{table.name}: a tabela está fora das versões pedidas, e não "
-                                   "há o que publicar")
+            raise PublicationError(
+                f"{table.name}: a tabela está fora das versões pedidas, e não há o que publicar"
+            )
         return version
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
-        raise PublicationError(f"{table.name}: a tabela não existe no ambiente {db.environment}, "
-                               "e não há o que publicar")
+        raise PublicationError(
+            f"{table.name}: a tabela não existe no ambiente {db.environment}, "
+            "e não há o que publicar"
+        )
     return delta.open_table(uri, db.storage).version()
 
 
@@ -979,5 +1036,6 @@ def _table_status(
     pending: list[str | None] = []
     if published is None or published < current:
         pending, _ = _partitions_to_publish(uri, table, published, current, db.storage)
-    return PublicationStatus(_published_name(db.environment, table), published, current,
-                             tuple(pending))
+    return PublicationStatus(
+        _published_name(db.environment, table), published, current, tuple(pending)
+    )

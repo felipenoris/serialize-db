@@ -81,8 +81,9 @@ def db(
         data = entry_rows(month, 1 + index * 10, 10)
         delta.publish_partition(database.uri(ENTRIES), ENTRIES, month, data, METADATA, storage)
     delta.create_table(database.uri(ACCOUNTS), ACCOUNTS, storage)
-    delta.publish_partition(database.uri(ACCOUNTS), ACCOUNTS, None, account_rows(["A", "B", "C"]),
-                            METADATA, storage)
+    delta.publish_partition(
+        database.uri(ACCOUNTS), ACCOUNTS, None, account_rows(["A", "B", "C"]), METADATA, storage
+    )
     delta.snapshot(storage, "prd", "2026T2", {ENTRIES.name: 2, ACCOUNTS.name: 1})
     delta.snapshot(storage, "prd", "2026T3", {ENTRIES.name: 3, ACCOUNTS.name: 1})
     return database
@@ -126,8 +127,9 @@ def add_entries(
     rows: int,
 ) -> None:
     """Substitui a partição ``month`` dos lançamentos por ``rows`` linhas a partir de ``start``."""
-    delta.publish_partition(db.uri(ENTRIES), ENTRIES, month, entry_rows(month, start, rows),
-                            METADATA, db.storage)
+    delta.publish_partition(
+        db.uri(ENTRIES), ENTRIES, month, entry_rows(month, start, rows), METADATA, db.storage
+    )
 
 
 # ---------------------------------------------------------------- o leitor Delta
@@ -181,7 +183,7 @@ def test_named_snapshot_live_and_archived(
         destination = storage.uri_of(storage.join(db.archive_prefix("2026T2"), name))
         copied[name] = delta.deep_copy(source, version, destination, storage)
     delta.archive_snapshot(storage, "prd", "2026T2")
-    add_entries(db, THREE_MONTHS[0], 100, 5)   # a versão 4 da tabela viva
+    add_entries(db, THREE_MONTHS[0], 100, 5)  # a versão 4 da tabela viva
 
     with db.open_delta(snapshot="2026T2") as reader:
         assert reader.snapshot == "2026T2"
@@ -203,7 +205,7 @@ def test_current_channel_reads_the_current_version_pinned_at_open(
     with db.open_delta(channel=delta.CURRENT_CHANNEL) as reader:
         assert reader.snapshot is None
         assert reader.versions == {ACCOUNTS.name: 1, ENTRIES.name: 3}
-        add_entries(db, THREE_MONTHS[0], 100, 5)   # a versão 4
+        add_entries(db, THREE_MONTHS[0], 100, 5)  # a versão 4
         assert count(reader, ENTRIES) == 30
     with db.open_delta(channel=delta.CURRENT_CHANNEL) as reader:
         assert reader.versions[ENTRIES.name] == 4
@@ -222,10 +224,17 @@ def test_table_created_after_the_snapshot_has_no_view(
     join, é ``ContractError`` com a origem, em ``query``, em ``stream`` e em ``materialize``; o
     texto pronto recebe o erro de catálogo do DuckDB; o canal ``current`` a vê."""
     delta.create_table(db.uri(PROJECTED), PROJECTED, db.storage)
-    delta.publish_partition(db.uri(PROJECTED), PROJECTED, THREE_MONTHS[2],
-                            entry_rows(THREE_MONTHS[2], 1, 10, PROJECTED), METADATA, db.storage)
+    delta.publish_partition(
+        db.uri(PROJECTED),
+        PROJECTED,
+        THREE_MONTHS[2],
+        entry_rows(THREE_MONTHS[2], 1, 10, PROJECTED),
+        METADATA,
+        db.storage,
+    )
     joined = sa.select(ENTRIES.c.id_lancamento).join(
-        PROJECTED, ENTRIES.c.id_lancamento == PROJECTED.c.id_lancamento)
+        PROJECTED, ENTRIES.c.id_lancamento == PROJECTED.c.id_lancamento
+    )
     with db.open_delta(snapshot="2026T3") as reader:
         assert PROJECTED.name not in reader.versions
         assert objects(reader, "views") == [ACCOUNTS.name, ENTRIES.name]
@@ -338,8 +347,11 @@ def test_reader_runs_only_queries_and_session_takes_commands(
     ``query`` e em ``stream``, sem tocar as views; ``union_all`` passa; a conexão de ``session()``
     recebe um comando, como a tabela temporária que a consulta seguinte lê."""
     with db.open_delta(snapshot="2026T3") as reader:
-        commands = [sa.delete(ENTRIES), sa.update(ENTRIES).values(area="x"),
-                    sa.insert(ACCOUNTS).values(id_conta=9, numero="Z")]
+        commands = [
+            sa.delete(ENTRIES),
+            sa.update(ENTRIES).values(area="x"),
+            sa.insert(ACCOUNTS).values(id_conta=9, numero="Z"),
+        ]
         for command in commands:
             with pytest.raises(ContractError, match="Select e CompoundSelect"):
                 reader.query(command)
@@ -355,11 +367,15 @@ def test_reader_runs_only_queries_and_session_takes_commands(
 
 
 @pytest.mark.local
-@pytest.mark.parametrize(("name", "wanted", "opened_months"), [
-    ("igualdade", THREE_MONTHS[1:2], THREE_MONTHS[1:2]),
-    ("intervalo", THREE_MONTHS[1:3], THREE_MONTHS[1:3]),
-    ("salteadas", [THREE_MONTHS[0], THREE_MONTHS[2]], THREE_MONTHS),
-], ids=["igualdade", "intervalo", "salteadas"])
+@pytest.mark.parametrize(
+    ("name", "wanted", "opened_months"),
+    [
+        ("igualdade", THREE_MONTHS[1:2], THREE_MONTHS[1:2]),
+        ("intervalo", THREE_MONTHS[1:3], THREE_MONTHS[1:3]),
+        ("salteadas", [THREE_MONTHS[0], THREE_MONTHS[2]], THREE_MONTHS),
+    ],
+    ids=["igualdade", "intervalo", "salteadas"],
+)
 def test_delta_scan_prunes_by_equality_and_range(
     db: Database,
     name: str,
@@ -512,8 +528,13 @@ def test_open_redshift_reads_the_configuration_from_the_environment(
         return connection
 
     monkeypatch.setattr(redshift, "driver_connect", recording_connect)
-    for name, value in (("HOST", "host"), ("USER", "usuario"), ("PASSWORD", "senha"),
-                        ("SCHEMA", "esquema"), ("SHARE_DATABASE", "compartilhado")):
+    for name, value in (
+        ("HOST", "host"),
+        ("USER", "usuario"),
+        ("PASSWORD", "senha"),
+        ("SCHEMA", "esquema"),
+        ("SHARE_DATABASE", "compartilhado"),
+    ):
         monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
     monkeypatch.delenv("SERIALIZE_DB_REDSHIFT_WORKGROUP", raising=False)
     with open_redshift(Base.metadata, "dsv") as reader:
@@ -538,8 +559,9 @@ def test_database_open_redshift_unloads_under_staging(
         with reader.stream(sa.select(ACCOUNTS)) as batches:
             assert batches.read_all().num_rows == 2
         reader_prefix = db.storage.join("prd", "staging", reader.reader_id)
-        unload = [command.text for command in connection.commands
-                  if command.text.startswith("UNLOAD")]
+        unload = [
+            command.text for command in connection.commands if command.text.startswith("UNLOAD")
+        ]
         assert len(unload) == 1
         assert f"TO '{db.storage.uri_of(reader_prefix)}/stream/" in unload[0]
         assert '"prd_cad_contas"' in unload[0]
@@ -564,8 +586,13 @@ def test_redshift_reader_matches_the_delta_reader(
     export_with_duckdb(target, ENTRIES, MONTHS)
     publication.publish_redshift(db, target.config, [ENTRIES], "exec-1")
     statement = (
-        sa.select(ENTRIES.c.id_lancamento, ENTRIES.c.preco, ENTRIES.c.carimbo, ENTRIES.c.codigo,
-                  ENTRIES.c.data_base_str)
+        sa.select(
+            ENTRIES.c.id_lancamento,
+            ENTRIES.c.preco,
+            ENTRIES.c.carimbo,
+            ENTRIES.c.codigo,
+            ENTRIES.c.data_base_str,
+        )
         .where(ENTRIES.c.data_base_str == MONTHS[1])
         .order_by(ENTRIES.c.id_lancamento)
     )

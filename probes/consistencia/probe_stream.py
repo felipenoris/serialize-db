@@ -9,6 +9,7 @@ de transbordo vazia no fim: as contagens, as somas, a ordem e o esquema dos lote
     SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local \\
         .venv/bin/python probes/consistencia/probe_stream.py
 """
+
 from __future__ import annotations
 
 import random
@@ -63,8 +64,10 @@ def consume(
             if sleep:
                 time.sleep(sleep)
             if not batch.schema.equals(first_schema):
-                problems.append(f"{label}: o esquema do lote difere do stream.schema: "
-                                f"{batch.schema} contra {first_schema}")
+                problems.append(
+                    f"{label}: o esquema do lote difere do stream.schema: "
+                    f"{batch.schema} contra {first_schema}"
+                )
             ids.append(batch.column("id"))
         # O contador de lotes transbordados é do transbordo do stream: uma leitura.
         spilled = stream._spool.spilled
@@ -119,12 +122,19 @@ def output_table(
     index: int,
 ) -> sa.Table:
     """A tabela de saída ``saida_<index>`` com as nove colunas de ``numeros``."""
-    return sa.Table(f"saida_{index}", sa.MetaData(),
-                    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-                    sa.Column("s", sa.String(32)), sa.Column("d", sa.Double),
-                    sa.Column("p", sa.Numeric(18, 2)), sa.Column("dt", sa.Date),
-                    sa.Column("ts", sa.DateTime), sa.Column("b", sa.Boolean),
-                    sa.Column("j", sa.JSON), sa.Column("n", sa.String(20)))
+    return sa.Table(
+        f"saida_{index}",
+        sa.MetaData(),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("s", sa.String(32)),
+        sa.Column("d", sa.Double),
+        sa.Column("p", sa.Numeric(18, 2)),
+        sa.Column("dt", sa.Date),
+        sa.Column("ts", sa.DateTime),
+        sa.Column("b", sa.Boolean),
+        sa.Column("j", sa.JSON),
+        sa.Column("n", sa.String(20)),
+    )
 
 
 def totals_differences(
@@ -145,10 +155,14 @@ def totals_differences(
             equal = a == b
         if not equal:
             problems.append(f"{label}: {column} {a}, esperado {b}")
-    differences = engine.query(
-        f'SELECT count(*) FROM (SELECT * FROM numeros EXCEPT SELECT * FROM "{name}") '
-        f'UNION ALL SELECT count(*) FROM (SELECT * FROM "{name}" EXCEPT SELECT * FROM numeros)'
-    ).column(0).to_pylist()
+    differences = (
+        engine.query(
+            f'SELECT count(*) FROM (SELECT * FROM numeros EXCEPT SELECT * FROM "{name}") '
+            f'UNION ALL SELECT count(*) FROM (SELECT * FROM "{name}" EXCEPT SELECT * FROM numeros)'
+        )
+        .column(0)
+        .to_pylist()
+    )
     if differences != [0, 0]:
         problems.append(f"{label}: diferenças pelo EXCEPT {differences}")
     return problems
@@ -165,8 +179,9 @@ def check_pipelines(
     ) -> list[str]:
         table = output_table(index)
         engine.create_table(table)
-        stream = DuckDBStream(engine, "SELECT * FROM numeros", [], batch_size=100_000,
-                              budget=2_000_000)
+        stream = DuckDBStream(
+            engine, "SELECT * FROM numeros", [], batch_size=100_000, budget=2_000_000
+        )
         with stream, engine.appender(table) as appender:
             for batch in stream:
                 appender.write(batch)
@@ -175,8 +190,10 @@ def check_pipelines(
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(pipeline, range(4)))
-    report("C quatro pipelines stream para appender em threads",
-           [p for result in results for p in result])
+    report(
+        "C quatro pipelines stream para appender em threads",
+        [p for result in results for p in result],
+    )
 
 
 def check_shared_appender(
@@ -191,8 +208,13 @@ def check_shared_appender(
         def writer(
             remainder: int,
         ) -> None:
-            stream = DuckDBStream(engine, f"SELECT * FROM numeros WHERE id % 4 = {remainder}", [],
-                                  batch_size=50_000, budget=1_000_000)
+            stream = DuckDBStream(
+                engine,
+                f"SELECT * FROM numeros WHERE id % 4 = {remainder}",
+                [],
+                batch_size=50_000,
+                budget=1_000_000,
+            )
             with stream:
                 for batch in stream:
                     appender.write(batch)
@@ -210,8 +232,9 @@ def check_stream_after_close(
 ) -> None:
     """Seção E: um stream fechado depois do primeiro lote não afeta a consulta e o stream
     seguintes."""
-    stream = DuckDBStream(engine, "SELECT * FROM numeros ORDER BY hash(id)", [], batch_size=1000,
-                          budget=1)
+    stream = DuckDBStream(
+        engine, "SELECT * FROM numeros ORDER BY hash(id)", [], batch_size=1000, budget=1
+    )
     with stream:
         stream.read_next_batch()
     count = engine.query("SELECT count(*) FROM numeros").column(0)[0].as_py()
@@ -225,8 +248,10 @@ def check_stream_beside_failure(
 ) -> None:
     """Seção F: um stream que falha no meio da consulta, numa thread, ao lado de outro que lê
     tudo; o tipo do erro é leitura."""
-    failing_text = ("SELECT CAST(CASE WHEN id = 1400000 THEN 'x' ELSE id::VARCHAR END AS INTEGER) "
-                    "AS id FROM numeros")
+    failing_text = (
+        "SELECT CAST(CASE WHEN id = 1400000 THEN 'x' ELSE id::VARCHAR END AS INTEGER) "
+        "AS id FROM numeros"
+    )
 
     def failing() -> str:
         try:
@@ -240,8 +265,9 @@ def check_stream_beside_failure(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         failing_future = pool.submit(failing)
-        healthy_future = pool.submit(consume, engine, "F ao lado da falha", ORDERED, 100_000,
-                                     64 * 2**20, 0, True)
+        healthy_future = pool.submit(
+            consume, engine, "F ao lado da falha", ORDERED, 100_000, 64 * 2**20, 0, True
+        )
         print("   o stream que falha:", failing_future.result())
         report("F um stream ao lado de outro que falha", healthy_future.result())
 
