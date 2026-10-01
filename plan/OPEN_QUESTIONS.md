@@ -211,11 +211,6 @@ A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões 
 suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; cada item abaixo espera
 o usuário.
 
-- **`run.audit` com `partitions` numa tabela sem partição.** `Execution.audit` aceita a lista e
-  audita a tabela inteira (`_scope` de `serialize_db.audit` devolve verdadeiro), e guarda a
-  aprovação sob a chave `(tabela, partições)`, que `publish_delta` nunca pede; `ingest`,
-  `publish_delta` e `serialize-db audit` recusam a lista com `ContractError`. Opções: recusar como
-  os outros, ou documentar que ignora.
 - **O piso de `memory_limit`.** `environment_limits` de `serialize_db.resources` dá ao DuckDB a
   metade da folga do cgroup sem piso: uma folga abaixo de 2 MiB dá `0MiB`, que o DuckDB recusa na
   abertura com `OutOfMemoryException`, e o uso acima do limite, que o kernel permite pelo cache a
@@ -235,7 +230,7 @@ texto, o que recusaria um destino com `\` no Windows, não lido lá.
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
-escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
-etapas [4](PLAN-STAGE-4.md) e [6](PLAN-STAGE-6.md) esperam as decisões dos achados da revisão de
-2026-10-01, a seção acima; as demais etapas não têm decisão pendente, e os demais itens que esperam
+escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; a
+etapa [4](PLAN-STAGE-4.md) espera a decisão sobre o piso do `memory_limit`, o achado da revisão de
+2026-10-01 na seção acima; as demais etapas não têm decisão pendente, e os demais itens que esperam
 o usuário estão na lista do início.

@@ -415,6 +415,28 @@ def test_execution_without_partition_publishes_a_table_without_partition(
     assert sorted(published.column("id_a").to_pylist()) == [1, 2, 3]
 
 
+def test_audit_with_partitions_on_a_table_without_partition_audits_it_whole(
+    db: Database,
+    folder: Path,
+) -> None:
+    """``run.audit`` com uma lista numa tabela sem partição audita a tabela inteira e guarda a
+    aprovação sob a lista, que ``publish_delta``, que só aceita ``None`` nessa tabela, não acha;
+    a auditoria com ``None`` libera a publicação."""
+    composite = Composta.__table__
+    pairs = pa.table({"id_a": pa.array([1, 2], pa.int64()), "id_b": pa.array([1, 1], pa.int64())})
+    with Execution(db, engine_for(db, folder, "dom-3"), execution_id="dom-3") as run:
+        create_and_append(run, composite, pairs)
+        report = run.audit(composite, ["2026-08-31"])
+        assert report.partitions == ("2026-08-31",)
+        assert list(report.totals) == [None]
+        with pytest.raises(ContractError, match="tabela sem partição recebeu partitions"):
+            run.publish_delta(composite, partitions=["2026-08-31"])
+        with pytest.raises(AuditFailed, match="exige a auditoria aprovada"):
+            run.publish_delta(composite)
+        run.audit(composite, None)
+        assert run.publish_delta(composite) == {composite.name: 1}
+
+
 def take_ids(
     run: Execution,
     ranges: list[range],

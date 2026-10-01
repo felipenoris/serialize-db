@@ -1547,6 +1547,21 @@ and the Redshift sentence stays unread in the target (`plan/OPEN_QUESTIONS.md`).
 `src/serialize_db/engine/redshift.py`, `src/serialize_db/reader.py`, `plan/PLAN-STAGE-4.md`,
 `plan/PLAN-STAGE-5.md`
 
+## The audit of an unpartitioned table with a list of partitions (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `Execution.audit(table,
+["2026-08-31"])` on an unpartitioned table audits the whole table (`_scope` of
+`serialize_db.audit` returns true) and stores the approval under `(table, ("2026-08-31",))`,
+while `publish_delta` of that table accepts only `partitions=None` (the list is `ContractError`,
+as in `ingest` and `serialize-db audit`) and looks the approval up under `(table, None)`, so it
+refuses with `AuditFailed` although the audit passed. Offered on a decision card the refusal with
+`ContractError` (recommended), accepting the list as `None`, or documenting, the user chose "Só
+documentar" (17:26 UTC): no code change; the `partitions` field of `run.audit` says the list does
+not filter an unpartitioned table, the approval sits under the list and `publish_delta` does not
+look there, so the unpartitioned table is audited with `None`;
+`test_audit_with_partitions_on_a_table_without_partition_audits_it_whole` asserts it.
+`src/serialize_db/execution.py`, `plan/PLAN-STAGE-6.md`
+
 ## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
 
 The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review
