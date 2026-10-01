@@ -1,9 +1,10 @@
-# Os testes do pacote serialize_db: tests/ sem tests/proof_of_concept/ e sem tests/test_probes.py,
-# sobre o DuckDB em memória e arquivos locais, sem S3 nem Redshift. As provas de conceito, os
-# exemplos e os probes ficam fora. Antes dos testes, o pacote é instalado sem o grupo dev e cada
-# módulo dele é importado, porque um projeto cliente recebe só as dependências de execução. As
-# extensões delta e httpfs do DuckDB, que os testes da migração leem pelo delta_scan e os do secret
-# do S3 carregam, são instaladas em .duckdb/ na raiz do repositório, a pasta que os testes procuram.
+# Os testes do pacote serialize_db no Ubuntu e no Windows: tests/ sem tests/proof_of_concept/ e
+# sem tests/test_probes.py, sobre o DuckDB em memória e arquivos locais, sem S3 nem Redshift. As
+# provas de conceito, os exemplos e os probes ficam fora. Antes dos testes, o pacote é instalado sem
+# o grupo dev e cada módulo dele é importado, porque um projeto cliente recebe só as dependências de
+# execução. As extensões delta e httpfs do DuckDB, que os testes da migração leem pelo delta_scan e
+# os do secret do S3 carregam, são instaladas em .duckdb/ na raiz do repositório, a pasta que os
+# testes procuram. Os passos rodam no bash nos dois sistemas; no Windows, o Git Bash do runner.
 name: Testes do pacote
 
 on:
@@ -68,4 +69,3 @@ jobs:
           --ignore=tests/proof_of_concept
           --ignore=tests/test_probes.py
           -p no:cacheprovider
-          -rfE

@@ -114,11 +114,12 @@ def test_discover_partitions_and_skipped_entries(base: source.SourceBase, folder
         assert skipped == (), name
         partition_by = table_options(table).partition_by
         if partition_by is None:
-            assert found == {None: f"{base.root}/{name}"}, name
+            assert found == {None: f"{base.root.as_posix()}/{name}"}, name
             continue
         partitioned.append(name)
         assert list(found) == PARTITION_VALUES, name
-        assert found["2026-02-28"] == f"{base.root}/{name}/{partition_by}=2026-02-28", name
+        partition_folder = f"{base.root.as_posix()}/{name}/{partition_by}=2026-02-28"
+        assert found["2026-02-28"] == partition_folder, name
     assert len(partitioned) == 4
     assert len(TABLES) == 12
 
