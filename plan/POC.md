@@ -5744,6 +5744,10 @@ passou nas três.
 - **A terceira rodada passou com 354 aprovados e 75 pulados, em 143,8 s.** Os pulados são os
   casos `s3` e `redshift`, sem as variáveis, o do modo dos arquivos e o da memória física sem
   `/proc`, que no Windows é a disponível.
+- **A rodada de 2026-10-01 sobre o PR #120 passou com 355 aprovados e 75 pulados no Windows,
+  em 148,5 s, e com 356 aprovados e 74 pulados no Ubuntu, em 133,0 s.** O caso a mais, nas
+  duas plataformas, é o de `test_storage.py` que prova a troca de `write_text` que falha sem
+  deixar o temporário; o pulado a mais do Windows é o do modo dos arquivos.
 
 **Consequências**: no Windows, `resources.py` lê a memória e o pico pela API do sistema, e
 `physical_memory`, protegida, dá a memória física ao script de migração; `available_memory` fica
