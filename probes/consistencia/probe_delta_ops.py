@@ -34,7 +34,10 @@ MONTHS = ["2026-06-30", "2026-07-31", "2026-08-31"]
 NOTES: set[str] = set()
 
 
-def report_known(title: str, problems: list[str]) -> None:
+def report_known(
+    title: str,
+    problems: list[str],
+) -> None:
     """A checagem sem a diferença conhecida do sinal do zero, impressa como leitura."""
     rest, known = known_zero_sign(problems)
     report(title, rest)
@@ -42,7 +45,11 @@ def report_known(title: str, problems: list[str]) -> None:
         print(f"   diferenças conhecidas do sinal do zero: {len(known)}; {known[0]}")
 
 
-def read_delta_scan(storage: Storage, uri: str, version: int | None = None) -> pa.Table:
+def read_delta_scan(
+    storage: Storage,
+    uri: str,
+    version: int | None = None,
+) -> pa.Table:
     """A tabela inteira pelo ``delta_scan`` do DuckDB, na versão dada ou na atual."""
     connection = storage.duckdb_connect()
     try:
@@ -54,13 +61,22 @@ def read_delta_scan(storage: Storage, uri: str, version: int | None = None) -> p
         connection.close()
 
 
-def read_arrow(storage: Storage, uri: str, version: int | None = None) -> pa.Table:
+def read_arrow(
+    storage: Storage,
+    uri: str,
+    version: int | None = None,
+) -> pa.Table:
     """A tabela inteira pelo dataset do delta-rs, na versão dada ou na atual."""
     return delta.open_table(uri, storage, version).to_pyarrow_table()
 
 
-def check_all(storage: Storage, label: str, uri: str, expected_by_month: dict[str, pa.Table],
-              version: int | None = None) -> list[str]:
+def check_all(
+    storage: Storage,
+    label: str,
+    uri: str,
+    expected_by_month: dict[str, pa.Table],
+    version: int | None = None,
+) -> list[str]:
     """Os dois leitores contra as partições esperadas."""
     problems = []
     readers = (("dataset", read_arrow), ("delta_scan", read_delta_scan))
@@ -76,7 +92,11 @@ def check_all(storage: Storage, label: str, uri: str, expected_by_month: dict[st
     return problems
 
 
-def three_writers(storage: Storage, uri: str, folder: Path) -> dict[str, pa.Table]:
+def three_writers(
+    storage: Storage,
+    uri: str,
+    folder: Path,
+) -> dict[str, pa.Table]:
     """Seção W: três escritores numa tabela, uma partição cada, lidos iguais pelos dois
     leitores; devolve as partições esperadas."""
     expected: dict[str, pa.Table] = {}
@@ -106,15 +126,22 @@ def three_writers(storage: Storage, uri: str, folder: Path) -> dict[str, pa.Tabl
     return expected
 
 
-def below(a: object, b: object) -> bool:
+def below(
+    a: object,
+    b: object,
+) -> bool:
     """Se ``a`` vem antes de ``b``, comparando textos como textos."""
     if isinstance(b, str):
         return str(a) < str(b)
     return a < b
 
 
-def check_compact(storage: Storage, uri: str, expected: dict[str, pa.Table],
-                  version_before: int) -> int:
+def check_compact(
+    storage: Storage,
+    uri: str,
+    expected: dict[str, pa.Table],
+    version_before: int,
+) -> int:
     """Seção K: ``compact`` da partição de dois arquivos: as métricas, ``version_diff`` sem a
     compactação, os dados iguais e as estatísticas do arquivo novo limitando os dados nas
     colunas exatas; devolve a versão depois."""
@@ -147,8 +174,13 @@ def check_compact(storage: Storage, uri: str, expected: dict[str, pa.Table],
     return after
 
 
-def check_deep_copy(storage: Storage, uri: str, copy_uri: str, version: int,
-                    expected: dict[str, pa.Table]) -> None:
+def check_deep_copy(
+    storage: Storage,
+    uri: str,
+    copy_uri: str,
+    version: int,
+    expected: dict[str, pa.Table],
+) -> None:
     """Seção D: ``deep_copy`` igual à origem pelos dois leitores, com as estatísticas do log
     iguais arquivo a arquivo, e a repetição sem commit novo."""
     copy_version = delta.deep_copy(uri, version, copy_uri, storage)
@@ -180,7 +212,9 @@ def check_deep_copy(storage: Storage, uri: str, copy_uri: str, version: int,
     report("D deep_copy igual à origem com as estatísticas; a repetição sem commit", problems)
 
 
-def read_export(folder: Path) -> pa.Table:
+def read_export(
+    folder: Path,
+) -> pa.Table:
     """Todo arquivo Parquet sob as pastas ``<coluna>=<valor>/`` da exportação, com a coluna de
     partição tomada do caminho quando o arquivo não a traz, cada um levado ao contrato porque
     guarda o esquema do seu escritor."""
@@ -195,8 +229,12 @@ def read_export(folder: Path) -> pa.Table:
     return pa.concat_tables(parts)
 
 
-def check_export_snapshot(storage: Storage, uri: str, folder: Path,
-                          expected: dict[str, pa.Table]) -> None:
+def check_export_snapshot(
+    storage: Storage,
+    uri: str,
+    folder: Path,
+    expected: dict[str, pa.Table],
+) -> None:
     """Seção E: ``export_snapshot`` por cópia e por reescrita, os arquivos lidos direto."""
     problems = []
     for mode in ("copy", "rewrite"):
@@ -223,7 +261,11 @@ def renamed_table() -> sa.Table:
     return sa.Table("cad_tudo", sa.MetaData(), *columns, info=dict(TUDO.info))
 
 
-def check_rewrite(storage: Storage, uri: str, expected: dict[str, pa.Table]) -> int:
+def check_rewrite(
+    storage: Storage,
+    uri: str,
+    expected: dict[str, pa.Table],
+) -> int:
     """Seção R: ``rewrite`` com a coluna renomeada, igual pelos dois leitores, e a versão
     anterior ainda legível com o esquema antigo; devolve a versão antes da reescrita."""
     renamed = renamed_table()
@@ -252,8 +294,12 @@ def check_rewrite(storage: Storage, uri: str, expected: dict[str, pa.Table]) -> 
     return version_before
 
 
-def check_vacuum(storage: Storage, uri: str, expected: dict[str, pa.Table],
-                 kept_version: int) -> None:
+def check_vacuum(
+    storage: Storage,
+    uri: str,
+    expected: dict[str, pa.Table],
+    kept_version: int,
+) -> None:
     """Seção V: ``vacuum_keeping_snapshots`` com retenção zero apaga só os arquivos fora do
     snapshot, e a versão presa segue legível."""
     problems = []
@@ -277,7 +323,10 @@ def check_vacuum(storage: Storage, uri: str, expected: dict[str, pa.Table],
     report("V vacuum prendendo a versão do snapshot", problems)
 
 
-def check_read_back(storage: Storage, copy_uri: str) -> None:
+def check_read_back(
+    storage: Storage,
+    copy_uri: str,
+) -> None:
     """Seção B: ``read_back`` devolve ``None`` na contagem certa e, na errada, recusa e restaura
     a versão anterior."""
     problems = []
@@ -301,7 +350,9 @@ def check_read_back(storage: Storage, copy_uri: str) -> None:
     report("B read_back devolve None na contagem certa e restaura na errada", problems)
 
 
-def check_conditional_writes(storage: Storage) -> None:
+def check_conditional_writes(
+    storage: Storage,
+) -> None:
     """Seção C: oito threads somando 50 cada no arquivo de controle por ``read_text`` e
     ``write_text(if_match=...)``, com nova tentativa no ``ConflictError``; as atualizações
     perdidas na pasta local são o achado conhecido de ``plan/OPEN_QUESTIONS.md``, leitura."""
@@ -310,7 +361,9 @@ def check_conditional_writes(storage: Storage) -> None:
     conflicts = 0
     lock = threading.Lock()
 
-    def increment(index: int) -> None:
+    def increment(
+        index: int,
+    ) -> None:
         nonlocal conflicts
         for _ in range(50):
             while True:

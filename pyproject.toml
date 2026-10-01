@@ -68,6 +68,31 @@ markers = [
     "redshift: cria tabelas no esquema SERIALIZE_DB_TEST_REDSHIFT_SCHEMA; pulado sem ela, falha sem conexão",
 ]
 
+# O Ruff roda por `uvx ruff check` e `uvx ruff format` sobre esta configuração, escrita contra o
+# Ruff 0.16.9; ele não está no grupo dev nem na esteira.
+[tool.ruff]
+line-length = 100
+# Só os arquivos Python: o padrão do Ruff 0.16 inclui `*.md`, e formataria os blocos de código de
+# plan/ e de docs/, que são registros.
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+# Os scripts que o usuário rodou no ambiente alvo ficam como rodaram, e o modelo de referência
+# fica como está (decisões do usuário de 2026-09-20 e de 2026-09-21).
+extend-exclude = ["examples", "tests/reference_model"]
+
+[tool.ruff.format]
+# A vírgula final depois do último parâmetro mantém um parâmetro por linha e o `) -> T:` em linha
+# própria, o padrão das assinaturas do repositório (decisão do usuário de 2026-10-01).
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint]
+# Os erros do pyflakes e do pycodestyle, e o limite de 100 caracteres por linha; o estilo continua
+# conferido pela leitura, pelas regras de CLAUDE.md.
+select = ["E4", "E7", "E9", "F", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Os probes usam linhas mais largas.
+"probes/**" = ["E501"]
+
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"

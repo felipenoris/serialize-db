@@ -92,21 +92,30 @@ METADATA = delta.commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
 
 @pytest.fixture(params=[pytest.param("local", marks=pytest.mark.local),
                         pytest.param("s3", marks=pytest.mark.s3)])
-def storage(request: pytest.FixtureRequest) -> Storage:
+def storage(
+    request: pytest.FixtureRequest,
+) -> Storage:
     """Uma raiz nova por teste, sob a pasta da sessão local ou sob o prefixo da sessão no bucket."""
     location = request.getfixturevalue(f"{request.param}_location")
     return Storage.for_uri(location.child(f"delta/{uuid.uuid4().hex[:8]}"))
 
 
 @pytest.fixture
-def uri(storage: Storage) -> str:
+def uri(
+    storage: Storage,
+) -> str:
     """A pasta de ``cad_operacoes`` no ambiente ``prd``, com a tabela criada."""
     table_uri = storage.uri_of("prd/cad_operacoes")
     delta.create_table(table_uri, OPERACOES, storage)
     return table_uri
 
 
-def rows(value: str, start: int, count: int, valor: list[float] | None = None) -> pa.Table:
+def rows(
+    value: str,
+    start: int,
+    count: int,
+    valor: list[float] | None = None,
+) -> pa.Table:
     """``count`` operações da partição ``value`` com ids a partir de ``start``, no contrato."""
     day = datetime.date.fromisoformat(value)
     ids = list(range(start, start + count))
@@ -126,30 +135,52 @@ def rows(value: str, start: int, count: int, valor: list[float] | None = None) -
     return schema.cast(data, OPERACOES)
 
 
-def publish(storage: Storage, uri: str, value: str, start: int, count: int) -> int:
+def publish(
+    storage: Storage,
+    uri: str,
+    value: str,
+    start: int,
+    count: int,
+) -> int:
     """Publica ``rows(value, start, count)`` na partição ``value`` e devolve a versão do commit."""
     data = rows(value, start, count)
     return delta.publish_partition(uri, OPERACOES, value, data, METADATA, storage)
 
 
-def current_values(storage: Storage, uri: str, column: str) -> list:
+def current_values(
+    storage: Storage,
+    uri: str,
+    column: str,
+) -> list:
     """Os valores de ``column`` na versão atual da tabela."""
     dataset = delta.open_table(uri, storage).to_pyarrow_dataset()
     return dataset.to_table(columns=[column]).column(column).to_pylist()
 
 
-def log_path(storage: Storage, uri: str, version: int) -> str:
+def log_path(
+    storage: Storage,
+    uri: str,
+    version: int,
+) -> str:
     """O arquivo do commit ``version`` no log, relativo à raiz."""
     return storage.join(storage.relative(uri), "_delta_log", f"{version:020d}.json")
 
 
-def log_actions(storage: Storage, uri: str, version: int) -> list[dict]:
+def log_actions(
+    storage: Storage,
+    uri: str,
+    version: int,
+) -> list[dict]:
     """As ações do commit ``version``, uma por linha do log."""
     text, _ = storage.read_text(log_path(storage, uri, version))
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
-def added_stats(storage: Storage, uri: str, version: int) -> list[dict]:
+def added_stats(
+    storage: Storage,
+    uri: str,
+    version: int,
+) -> list[dict]:
     """O JSON de estatísticas de cada ação ``add`` do commit."""
     stats = []
     for action in log_actions(storage, uri, version):
@@ -158,7 +189,11 @@ def added_stats(storage: Storage, uri: str, version: int) -> list[dict]:
     return stats
 
 
-def action_kinds(storage: Storage, uri: str, version: int) -> list[str]:
+def action_kinds(
+    storage: Storage,
+    uri: str,
+    version: int,
+) -> list[str]:
     """O tipo de cada ação do commit, a única chave da linha do log: ``add``, ``remove``,
     ``metaData``, ``commitInfo``."""
     kinds = []
@@ -167,8 +202,12 @@ def action_kinds(storage: Storage, uri: str, version: int) -> list[str]:
     return kinds
 
 
-def write_external_file(storage: Storage, uri: str, relative: str,
-                        data: pa.Table) -> RegisteredFile:
+def write_external_file(
+    storage: Storage,
+    uri: str,
+    relative: str,
+    data: pa.Table,
+) -> RegisteredFile:
     """Um arquivo gravado pelo PyArrow dentro da pasta da tabela, como o ``UNLOAD`` grava:
     timestamp em ``INT96`` e decimal em ``FIXED_LEN_BYTE_ARRAY``; devolve o ``RegisteredFile``
     com as estatísticas da chave."""
@@ -184,7 +223,10 @@ def write_external_file(storage: Storage, uri: str, relative: str,
     return RegisteredFile(relative, storage.size(path), data.num_rows, stats)
 
 
-def every_file(storage: Storage, prefix: str) -> list[str]:
+def every_file(
+    storage: Storage,
+    prefix: str,
+) -> list[str]:
     """Todos os arquivos sob ``prefix``, o log inclusive, relativos à raiz."""
     selector = pafs.FileSelector(f"{storage.path}/{prefix}", recursive=True)
     files = []
@@ -194,13 +236,19 @@ def every_file(storage: Storage, prefix: str) -> list[str]:
     return sorted(files)
 
 
-def scan(storage: Storage, text: str) -> list[tuple]:
+def scan(
+    storage: Storage,
+    text: str,
+) -> list[tuple]:
     """As linhas de uma consulta numa conexão DuckDB própria, configurada pelo armazenamento."""
     with storage.duckdb_connect() as connection:
         return connection.execute(text).fetchall()
 
 
-def channels(ids: list[int], names: list[str]) -> pa.Table:
+def channels(
+    ids: list[int],
+    names: list[str],
+) -> pa.Table:
     """Os canais pedidos, no contrato de ``dom_canais``."""
     data = pa.table({"id_canal": pa.array(ids, pa.int64()), "nome": names})
     return schema.cast(data, CANAIS)
@@ -209,7 +257,9 @@ def channels(ids: list[int], names: list[str]) -> pa.Table:
 # ---------------------------------------------------------------- criação e publicação
 
 
-def test_create_table_is_idempotent(storage: Storage) -> None:
+def test_create_table_is_idempotent(
+    storage: Storage,
+) -> None:
     """Versão 0 nas duas chamadas; o esquema do contrato, a partição, as retenções, o nome e o
     comentário da tabela em ``description`` lidos do log."""
     uri = storage.uri_of("prd/cad_operacoes")
@@ -234,7 +284,10 @@ def test_create_table_is_idempotent(storage: Storage) -> None:
     assert current_columns == contract_columns
 
 
-def test_publish_partition_replaces_only_its_partition(storage: Storage, uri: str) -> None:
+def test_publish_partition_replaces_only_its_partition(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Duas partições, a segunda republicada: a primeira intacta, uma versão por chamada, os
     metadados no ``history``; o valor fora da regra e os dados sem a coluna de partição são
     recusados antes de gravar."""
@@ -264,15 +317,24 @@ def test_publish_partition_replaces_only_its_partition(storage: Storage, uri: st
 class Stream:
     """Um fluxo que só expõe ``__arrow_c_stream__``, como o ``BatchStream`` de um motor."""
 
-    def __init__(self, table: pa.Table) -> None:
+    def __init__(
+        self,
+        table: pa.Table,
+    ) -> None:
         self._table = table
 
-    def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+    def __arrow_c_stream__(
+        self,
+        requested_schema: object = None,
+    ) -> object:
         return self._table.__arrow_c_stream__(requested_schema)
 
 
-def test_publish_partition_returns_its_own_version(storage: Storage, uri: str,
-                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+def test_publish_partition_returns_its_own_version(
+    storage: Storage,
+    uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Com o commit de outro escritor entre a abertura e a escrita, a versão devolvida é a do
     próprio commit, lida do objeto que escreveu; os dados chegam por ``__arrow_c_stream__``."""
     publish(storage, uri, "2026-07-31", 1, 10)
@@ -288,7 +350,9 @@ def test_publish_partition_returns_its_own_version(storage: Storage, uri: str,
     assert delta.open_table(uri, storage).version() == 3
 
 
-def test_publish_partition_without_partition_replaces_the_table(storage: Storage) -> None:
+def test_publish_partition_without_partition_replaces_the_table(
+    storage: Storage,
+) -> None:
     """``value=None`` numa tabela sem partição troca a tabela inteira; um valor nela é recusado."""
     uri = storage.uri_of("prd/dom_canais")
     delta.create_table(uri, CANAIS, storage)
@@ -302,8 +366,11 @@ def test_publish_partition_without_partition_replaces_the_table(storage: Storage
         delta.publish_partition(uri, CANAIS, "2026-08-31", replaced, METADATA, storage)
 
 
-def test_two_writers_on_the_same_partition_conflict(storage: Storage, uri: str,
-                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+def test_two_writers_on_the_same_partition_conflict(
+    storage: Storage,
+    uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Dois ``overwrite`` da mesma partição a partir da mesma versão, pelo delta-rs e pelo registro:
     o segundo é ``ExecutionConflict``; partições distintas passam."""
     publish(storage, uri, "2026-08-31", 1, 10)
@@ -326,7 +393,9 @@ def test_two_writers_on_the_same_partition_conflict(storage: Storage, uri: str,
 
 
 def test_messages_of_a_table_without_partition_name_the_whole_table(
-        storage: Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage: Storage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Numa tabela sem partição, o conflito pelo delta-rs e pelo registro e a releitura que desfaz
     o commit nomeiam a ``tabela inteira``, e não uma ``partição None``."""
     uri = storage.uri_of("prd/dom_canais")
@@ -358,7 +427,10 @@ def test_messages_of_a_table_without_partition_name_the_whole_table(
 # ---------------------------------------------------------------- o registro de arquivos
 
 
-def test_register_files_registers_an_unload_like_file(storage: Storage, uri: str) -> None:
+def test_register_files_registers_an_unload_like_file(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Um arquivo em ``INT96`` e ``FIXED_LEN_BYTE_ARRAY`` entra num commit ``overwrite`` da
     partição; os dois leitores devolvem as linhas e ``timestamp[us]``; a ação leva o mínimo e o
     máximo da chave e não os do decimal nem os do timestamp."""
@@ -395,8 +467,10 @@ def test_register_files_registers_an_unload_like_file(storage: Storage, uri: str
     assert table.history(limit=1)[0]["serialize_db_execution_id"] == "exec-2026-09-05"
 
 
-def test_file_from_footer_leaves_out_the_null_count_the_footer_lacks(storage: Storage,
-                                                                     uri: str) -> None:
+def test_file_from_footer_leaves_out_the_null_count_the_footer_lacks(
+    storage: Storage,
+    uri: str,
+) -> None:
     """A coluna sem estatística no rodapé, como o timestamp ``INT96`` do ``UNLOAD``, fica fora do
     ``null_count`` de ``file_from_footer`` e do ``nullCount`` do log, e o ``IS NULL`` pelo
     ``scan`` do delta-rs lê os nulos dela; a chave, com estatística, entra com o zero."""
@@ -447,7 +521,10 @@ DEFECT_MESSAGES = {
 }
 
 
-def defective_registration(good: RegisteredFile, name: str) -> Registration:
+def defective_registration(
+    good: RegisteredFile,
+    name: str,
+) -> Registration:
     """O registro do arquivo bom com o defeito ``name`` na descrição."""
     if name == "tamanho":
         return [dataclasses.replace(good, size=good.size + 1)], "2026-09-30", None
@@ -461,7 +538,10 @@ def defective_registration(good: RegisteredFile, name: str) -> Registration:
     return [dataclasses.replace(good, path=f"/{good.path}")], "2026-09-30", None
 
 
-def defective_data(data: pa.Table, name: str) -> pa.Table:
+def defective_data(
+    data: pa.Table,
+    name: str,
+) -> pa.Table:
     """Os dados do arquivo com o defeito ``name``."""
     if name == "coluna ausente":
         return data.drop_columns(["descricao"])
@@ -478,7 +558,11 @@ def defective_data(data: pa.Table, name: str) -> pa.Table:
     return data.set_column(index, "data", pa.array([None] * 20, pa.date32()))
 
 
-def defect(storage: Storage, uri: str, name: str) -> Registration:
+def defect(
+    storage: Storage,
+    uri: str,
+    name: str,
+) -> Registration:
     """Um registro com o defeito ``name``: o defeito da descrição registra um arquivo bom, e o do
     arquivo grava os dados com o defeito; um arquivo gravado por caso."""
     data = rows("2026-09-30", 1, 20).drop_columns(["data_str"])
@@ -491,7 +575,11 @@ def defect(storage: Storage, uri: str, name: str) -> Registration:
 
 
 @pytest.mark.parametrize("name", REGISTRATION_DEFECTS + FILE_DEFECTS)
-def test_register_files_refuses_each_defect(storage: Storage, uri: str, name: str) -> None:
+def test_register_files_refuses_each_defect(
+    storage: Storage,
+    uri: str,
+    name: str,
+) -> None:
     """Cada conferência recusa com ``RegistrationRefused`` e a mensagem dela: a versão não muda e o
     arquivo fica órfão na pasta."""
     files, value, expected = defect(storage, uri, name)
@@ -505,7 +593,10 @@ def test_register_files_refuses_each_defect(storage: Storage, uri: str, name: st
     assert storage.list_files(folder, ".parquet") == written
 
 
-def test_read_back_restores_on_a_difference(storage: Storage, uri: str) -> None:
+def test_read_back_restores_on_a_difference(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Um máximo falso da chave, abaixo do real, passa pelas conferências do rodapé e faz a
     releitura voltar a versão com ``restore``: a partição fica como estava."""
     publish(storage, uri, "2026-08-31", 1, 10)
@@ -522,7 +613,10 @@ def test_read_back_restores_on_a_difference(storage: Storage, uri: str) -> None:
     assert sorted(ids) == list(range(1, 11))
 
 
-def test_file_from_return_stats_and_registered_stats_prune(storage: Storage, uri: str) -> None:
+def test_file_from_return_stats_and_registered_stats_prune(
+    storage: Storage,
+    uri: str,
+) -> None:
     """O arquivo do ``COPY ... RETURN_STATS`` do DuckDB entra com o mínimo e o máximo dos tipos
     exatos, e o ``delta_scan`` pula o arquivo por eles (``Scanning Files: 0/n``); ``decimal`` e
     ``timestamp`` ficam sem mínimo e máximo."""
@@ -556,7 +650,10 @@ def test_file_from_return_stats_and_registered_stats_prune(storage: Storage, uri
         assert "Scanning Files: 0/2" in plan, condition
 
 
-def test_nonfinite_double_columns_leave_min_max_out(storage: Storage, uri: str) -> None:
+def test_nonfinite_double_columns_leave_min_max_out(
+    storage: Storage,
+    uri: str,
+) -> None:
     """A coluna em ``columns_without_min_max`` sai sem mínimo e máximo no rodapé e no log de
     ``publish_partition`` e no log de ``register_files``; a outra partição sai com eles, e o
     ``delta_scan`` devolve a linha do ``NaN`` num filtro por intervalo e não abre o arquivo da
@@ -605,7 +702,10 @@ def test_nonfinite_double_columns_leave_min_max_out(storage: Storage, uri: str) 
     assert opened == {"data_str=2026-07-31", "data_str=2026-09-30"}
 
 
-def test_max_key_reads_statistics_and_scans_without_them(storage: Storage, uri: str) -> None:
+def test_max_key_reads_statistics_and_scans_without_them(
+    storage: Storage,
+    uri: str,
+) -> None:
     """``max_key`` lê o máximo das estatísticas e varre a coluna quando um arquivo não as tem; 0 na
     tabela vazia."""
     assert delta.max_key(delta.open_table(uri, storage), "id_operacao") == 0
@@ -620,13 +720,19 @@ def test_max_key_reads_statistics_and_scans_without_them(storage: Storage, uri: 
     assert delta.max_key(delta.open_table(uri, storage), "id_operacao") == 504
 
 
-def refuse_scan(*args: object, **kwargs: object) -> None:
+def refuse_scan(
+    *args: object,
+    **kwargs: object,
+) -> None:
     """O ``to_pyarrow_dataset`` de uma tabela que ``max_key`` não pode varrer."""
     raise AssertionError("max_key varreu a coluna")
 
 
-def test_max_key_leaves_out_files_without_rows(storage: Storage, uri: str,
-                                               monkeypatch: pytest.MonkeyPatch) -> None:
+def test_max_key_leaves_out_files_without_rows(
+    storage: Storage,
+    uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """O arquivo de zero linhas, como o da partição vazia que o motor registra, entra no log sem
     máximo e fica fora de ``max_key``: sozinho dá 0, e ao lado de uma partição com dados deixa o
     máximo das estatísticas, sem varredura; o arquivo sem ``numRecords`` continua varrido."""
@@ -665,10 +771,16 @@ def test_max_key_leaves_out_files_without_rows(storage: Storage, uri: str,
 # ---------------------------------------------------------------- a evolução do esquema
 
 
-def evolved(*, drop: Collection[str] = (), nullable: Collection[str] = (),
-            not_null: Collection[str] = (), comments: Mapping[str, str] | None = None,
-            types: Mapping[str, sa.types.TypeEngine] | None = None,
-            add: Sequence[sa.Column] = (), comment: str | None = OPERACOES.comment) -> sa.Table:
+def evolved(
+    *,
+    drop: Collection[str] = (),
+    nullable: Collection[str] = (),
+    not_null: Collection[str] = (),
+    comments: Mapping[str, str] | None = None,
+    types: Mapping[str, sa.types.TypeEngine] | None = None,
+    add: Sequence[sa.Column] = (),
+    comment: str | None = OPERACOES.comment,
+) -> sa.Table:
     """Uma cópia do modelo de ``cad_operacoes`` com colunas trocadas, acrescentadas ou removidas."""
     comments = comments or {}
     types = types or {}
@@ -691,7 +803,10 @@ def evolved(*, drop: Collection[str] = (), nullable: Collection[str] = (),
                     info=OPERACOES.info)
 
 
-def test_reconcile_adds_nullable_column_and_relaxes_not_null(storage: Storage, uri: str) -> None:
+def test_reconcile_adds_nullable_column_and_relaxes_not_null(
+    storage: Storage,
+    uri: str,
+) -> None:
     """A coluna anulável entra no fim e as linhas antigas a leem nula; ``NOT NULL`` relaxado; a
     versão anterior lê o esquema antigo; a segunda chamada não commita."""
     publish(storage, uri, "2026-08-31", 1, 10)
@@ -714,7 +829,10 @@ def test_reconcile_adds_nullable_column_and_relaxes_not_null(storage: Storage, u
     assert delta.open_table(uri, storage).version() == version
 
 
-def test_reconcile_syncs_description_and_comments(storage: Storage, uri: str) -> None:
+def test_reconcile_syncs_description_and_comments(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Um comentário de tabela e um de coluna alterados no modelo entram por commits só de
     ``metaData``; a segunda chamada não commita."""
     new_comments = {"id_operacao": "Identificador da operação"}
@@ -732,7 +850,11 @@ def test_reconcile_syncs_description_and_comments(storage: Storage, uri: str) ->
 
 
 @pytest.mark.parametrize("change", ["tipo", "removida", "not null nova", "not null em anulável"])
-def test_reconcile_refuses_destructive_diff(storage: Storage, uri: str, change: str) -> None:
+def test_reconcile_refuses_destructive_diff(
+    storage: Storage,
+    uri: str,
+    change: str,
+) -> None:
     """Tipo trocado, coluna removida, coluna ``NOT NULL`` nova e ``NOT NULL`` numa coluna anulável,
     numa tabela com dados, são ``SchemaDiffRefused`` sem commit."""
     publish(storage, uri, "2026-08-31", 1, 10)
@@ -747,7 +869,10 @@ def test_reconcile_refuses_destructive_diff(storage: Storage, uri: str, change: 
     assert delta.open_table(uri, storage).version() == 1
 
 
-def test_rewrite_in_one_commit_keeps_previous_version_readable(storage: Storage, uri: str) -> None:
+def test_rewrite_in_one_commit_keeps_previous_version_readable(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Um commit com o esquema novo e as somas iguais, a versão anterior legível; a coluna renomeada
     por ``expressions`` lê os valores da antiga; o ``Double`` com ``NaN`` fica sem mínimo e máximo
     na partição dele; a coluna do contrato ausente e fora de ``expressions`` falha sem commit."""
@@ -792,7 +917,10 @@ def test_rewrite_in_one_commit_keeps_previous_version_readable(storage: Storage,
 # ---------------------------------------------------------------- o log, os snapshots e a operação
 
 
-def test_version_diff_counts_data_changes_only(storage: Storage, uri: str) -> None:
+def test_version_diff_counts_data_changes_only(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Substituição e remoção contam, compactação e reconciliação não, ``published == current``
     dá vazio; na tabela sem partição, ``{None}``."""
     publish(storage, uri, "2026-07-31", 1, 10)  # 1
@@ -816,7 +944,10 @@ def test_version_diff_counts_data_changes_only(storage: Storage, uri: str) -> No
     assert delta.version_diff(canais, 0, 1, CANAIS, storage) == {None}
 
 
-def test_version_diff_refuses_a_cleaned_log(storage: Storage, uri: str) -> None:
+def test_version_diff_refuses_a_cleaned_log(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Um arquivo do log apagado entre as duas versões dá ``LogUnavailable``, com a publicação
     completa na mensagem."""
     for value in ("2026-07-31", "2026-08-31"):
@@ -827,8 +958,10 @@ def test_version_diff_refuses_a_cleaned_log(storage: Storage, uri: str) -> None:
     assert delta.version_diff(uri, 1, 2, OPERACOES, storage) == {"2026-08-31"}
 
 
-def test_snapshot_control_file_is_written_conditionally(storage: Storage,
-                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+def test_snapshot_control_file_is_written_conditionally(
+    storage: Storage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """O primeiro snapshot cria o arquivo, o segundo o atualiza; o nome repetido, em ``snapshots``
     ou em ``archived``, e o nome fora da regra da partição são ``ContractError`` sem gravar, o
     repetido com o ``serialize-db channel`` na mensagem; a escrita concorrente é
@@ -869,8 +1002,10 @@ def test_snapshot_control_file_is_written_conditionally(storage: Storage,
     assert delta.read_snapshots(storage, "prd")[0] == archived
 
 
-def test_channel_points_to_a_snapshot_and_refuses(storage: Storage,
-                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+def test_channel_points_to_a_snapshot_and_refuses(
+    storage: Storage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``set_channel`` aponta e move o canal sob a chave ``channels``, ``channel_snapshot`` o lê e
     ``snapshot_versions`` dá uma cópia da entrada; são recusados o snapshot ausente ou arquivado,
     o nome fora da regra da partição, o canal ``current`` no ``set_channel`` e no
@@ -923,7 +1058,10 @@ def test_channel_points_to_a_snapshot_and_refuses(storage: Storage,
     assert list(current["snapshots"]) == ["2026T3", "2026T4"]
 
 
-def test_vacuum_keeps_snapshot_versions(storage: Storage, uri: str) -> None:
+def test_vacuum_keeps_snapshot_versions(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Com retenção zero, ``keep_versions`` das versões do snapshot preserva a versão marcada, e a
     intermediária perde o arquivo; dentro da retenção nada é listado."""
     for start in (1, 11, 21, 31):
@@ -942,7 +1080,10 @@ def test_vacuum_keeps_snapshot_versions(storage: Storage, uri: str) -> None:
         delta.open_table(uri, storage, version=3).to_pyarrow_dataset().to_table()
 
 
-def test_compact_before_snapshot(storage: Storage, uri: str) -> None:
+def test_compact_before_snapshot(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Os arquivos pequenos de uma partição viram um; a partição com um arquivo só não commita."""
     publish(storage, uri, "2026-07-31", 1, 10)
     for start in (100, 200, 300):
@@ -956,7 +1097,10 @@ def test_compact_before_snapshot(storage: Storage, uri: str) -> None:
     assert delta.open_table(uri, storage).to_pyarrow_dataset().count_rows() == 25
 
 
-def exported_measures(storage: Storage, folder: str) -> list[tuple]:
+def exported_measures(
+    storage: Storage,
+    folder: str,
+) -> list[tuple]:
     """Linhas e soma de ``id_operacao`` por partição dos arquivos exportados em ``folder``."""
     parquet_source = (f"read_parquet('{storage.uri_of(folder)}/*/*.parquet', "
                       "hive_partitioning = true, hive_types_autocast = false)")
@@ -965,7 +1109,10 @@ def exported_measures(storage: Storage, folder: str) -> list[tuple]:
     return scan(storage, query)
 
 
-def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
+def test_export_snapshot_copy_and_rewrite(
+    storage: Storage,
+    uri: str,
+) -> None:
     """Os dois modos produzem ``<coluna>=<valor>/`` com as mesmas linhas; ``copy`` copia só os
     arquivos que o log lista, uma versão antiga exporta o que ela tinha, e o destino fora da raiz
     recusa nos dois modos, sem gravar."""
@@ -1001,7 +1148,10 @@ def test_export_snapshot_copy_and_rewrite(storage: Storage, uri: str) -> None:
     assert Storage.for_uri(outside).list_files("") == []
 
 
-def test_export_by_rewrite_creates_the_folders_above(storage: Storage, uri: str) -> None:
+def test_export_by_rewrite_creates_the_folders_above(
+    storage: Storage,
+    uri: str,
+) -> None:
     """A exportação particionada por reescrita num destino com duas pastas novas acima dele grava
     um arquivo por partição: na pasta local, o ``COPY`` do DuckDB não cria essas pastas."""
     publish(storage, uri, "2026-07-31", 1, 10)
@@ -1013,7 +1163,9 @@ def test_export_by_rewrite_creates_the_folders_above(storage: Storage, uri: str)
     assert exported_measures(storage, folder) == [("2026-07-31", 10, 55), ("2026-08-31", 5, 65)]
 
 
-def test_rewrite_and_export_accept_a_trailing_slash(storage: Storage) -> None:
+def test_rewrite_and_export_accept_a_trailing_slash(
+    storage: Storage,
+) -> None:
     """A URI da tabela sem partição e o destino com barra final: a exportação por reescrita grava
     ``<destino>/data.parquet``, sem ``//`` na URI devolvida nem na chave, e ``rewrite`` registra
     o arquivo novo pelo caminho relativo à pasta da tabela."""
@@ -1036,13 +1188,19 @@ def test_rewrite_and_export_accept_a_trailing_slash(storage: Storage) -> None:
     assert sorted(current_values(storage, canais, "id_canal")) == [1, 2]
 
 
-def manifest_entries(storage: Storage, manifest: delta.CopyManifest) -> list[dict]:
+def manifest_entries(
+    storage: Storage,
+    manifest: delta.CopyManifest,
+) -> list[dict]:
     """As entradas de um manifesto do ``COPY``."""
     text, _ = storage.read_text(storage.relative(manifest.uri))
     return json.loads(text)["entries"]
 
 
-def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) -> None:
+def test_copy_manifest_lists_the_files_of_a_version(
+    storage: Storage,
+    uri: str,
+) -> None:
     """O manifesto do ``COPY`` leva a URL e o tamanho de cada arquivo da versão nas partições
     pedidas, com ``mandatory`` verdadeiro, e as colunas do rodapé, sem a de partição; os arquivos
     com as mesmas colunas ficam num manifesto só, e o destino fora da raiz é recusado."""
@@ -1068,8 +1226,11 @@ def test_copy_manifest_lists_the_files_of_a_version(storage: Storage, uri: str) 
         delta.copy_manifest(uri, 2, None, "/fora/da/raiz", storage)
 
 
-def test_copy_manifest_groups_the_files_by_their_columns(storage: Storage, uri: str,
-                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+def test_copy_manifest_groups_the_files_by_their_columns(
+    storage: Storage,
+    uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Depois de uma coluna anulável nova no meio do modelo, um manifesto por lista de colunas do
     rodapé, na ordem do arquivo: o arquivo anterior a ela, o que o delta-rs grava com ela no fim
     do esquema Delta e o registrado na ordem do modelo, com ela no meio; cada manifesto leva só
@@ -1094,7 +1255,11 @@ def test_copy_manifest_groups_the_files_by_their_columns(storage: Storage, uri: 
     opened = []
     original = Storage.open_input_file
 
-    def counting(self: Storage, path: str, **options: object) -> pa.NativeFile:
+    def counting(
+        self: Storage,
+        path: str,
+        **options: object,
+    ) -> pa.NativeFile:
         opened.append(path)
         return original(self, path, **options)
 
@@ -1123,7 +1288,10 @@ def test_copy_manifest_groups_the_files_by_their_columns(storage: Storage, uri: 
     assert [manifest.columns for manifest in manifests] == [before, in_the_model]
 
 
-def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
+def test_deep_copy_and_relocation(
+    storage: Storage,
+    uri: str,
+) -> None:
     """A cópia profunda copia os arquivos da versão e os registra, um commit por partição, com o
     esquema, a partição, o nome e as estatísticas da origem; a repetição não commita, a cópia de
     uma versão sobre a de uma anterior copia só a partição que falta, e o destino que registra um
@@ -1178,7 +1346,10 @@ def test_deep_copy_and_relocation(storage: Storage, uri: str) -> None:
     assert scan(storage, f"SELECT count(*) FROM delta_scan('{relocated}')") == [(20,)]
 
 
-def test_deep_copy_carries_the_schema_of_the_copied_version(storage: Storage, uri: str) -> None:
+def test_deep_copy_carries_the_schema_of_the_copied_version(
+    storage: Storage,
+    uri: str,
+) -> None:
     """A cópia de uma versão sobre a cópia de uma anterior com outro esquema: o commit da partição
     copiada leva o esquema da versão, e os dois leitores leem a coluna nova; sem partição a
     copiar, o destino com outro esquema é recusado sem commit."""
@@ -1206,7 +1377,10 @@ def test_deep_copy_carries_the_schema_of_the_copied_version(storage: Storage, ur
     assert scan(storage, f"SELECT count(canal) FROM delta_scan('{archive}')") == [(10,)]
 
 
-def test_deep_copy_and_rewrite_refuse_paths_outside_the_root(storage: Storage, uri: str) -> None:
+def test_deep_copy_and_rewrite_refuse_paths_outside_the_root(
+    storage: Storage,
+    uri: str,
+) -> None:
     """``deep_copy`` com o destino ou a origem fora da raiz e ``rewrite`` de uma tabela fora dela
     são ``ValueError`` antes de gravar: nada aparece fora da raiz nem no destino dentro dela."""
     publish(storage, uri, "2026-07-31", 1, 10)
@@ -1229,8 +1403,11 @@ def test_deep_copy_and_rewrite_refuse_paths_outside_the_root(storage: Storage, u
     assert every_file(outside, "prd") == written
 
 
-def test_duckdb_connections_take_the_environment_limits(storage: Storage, uri: str,
-                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+def test_duckdb_connections_take_the_environment_limits(
+    storage: Storage,
+    uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Cada conexão do DuckDB que a camada abre, na releitura, na reescrita, na exportação por
     reescrita e na contagem da cópia profunda, recebe o ``threads`` e o ``memory_limit`` lidos do
     ambiente, como a do motor: sem eles, o DuckDB toma 80% da memória da máquina."""
@@ -1238,7 +1415,11 @@ def test_duckdb_connections_take_the_environment_limits(storage: Storage, uri: s
     configs = []
     original = Storage.duckdb_connect
 
-    def recording(self: Storage, *args: object, **options: object) -> duckdb.DuckDBPyConnection:
+    def recording(
+        self: Storage,
+        *args: object,
+        **options: object,
+    ) -> duckdb.DuckDBPyConnection:
         configs.append(options.get("config"))
         return original(self, *args, **options)
 

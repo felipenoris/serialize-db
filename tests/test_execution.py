@@ -91,7 +91,12 @@ PROJECTED = Projetado.__table__
 MONTHS = ["2026-05-31", "2026-06-30", "2026-07-31", "2026-08-31", "2026-09-30"]
 
 
-def rows(table: sa.Table, value: str, ids: range, valor: list[float] | None = None) -> pa.Table:
+def rows(
+    table: sa.Table,
+    value: str,
+    ids: range,
+    valor: list[float] | None = None,
+) -> pa.Table:
     """Linhas da partição ``value`` com os ids pedidos, no contrato da tabela."""
     if valor is None:
         valor = [entry_id / 2 for entry_id in ids]
@@ -105,7 +110,9 @@ def rows(table: sa.Table, value: str, ids: range, valor: list[float] | None = No
 
 
 @pytest.fixture
-def folder(local_location: LocalLocation) -> Path:
+def folder(
+    local_location: LocalLocation,
+) -> Path:
     """Uma pasta nova por teste sob a raiz da sessão."""
     path = Path(local_location.child(f"execucao/{uuid.uuid4().hex[:8]}"))
     path.mkdir(parents=True)
@@ -113,7 +120,9 @@ def folder(local_location: LocalLocation) -> Path:
 
 
 @pytest.fixture
-def db(folder: Path) -> Database:
+def db(
+    folder: Path,
+) -> Database:
     """O banco do teste, com a tabela de entrada publicada em quatro meses, ids 1 a 40."""
     database = Database(str(folder / "delta"), "prd", Base.metadata)
     uri = database.uri(ENTRIES)
@@ -125,13 +134,20 @@ def db(folder: Path) -> Database:
     return database
 
 
-def engine_for(db: Database, folder: Path, execution_id: str) -> DuckDBEngine:
+def engine_for(
+    db: Database,
+    folder: Path,
+    execution_id: str,
+) -> DuckDBEngine:
     """O motor DuckDB com o banco e o transbordo na pasta do teste."""
     config = DuckDBConfig(temp_directory=str(folder / f"sandbox_{execution_id}"))
     return DuckDBEngine(config, execution_id, db.storage)
 
 
-def project(run: Execution, month: str) -> None:
+def project(
+    run: Execution,
+    month: str,
+) -> None:
     """O pipeline do teste: a partição da entrada, com ids novos, na tabela projetada do sandbox,
     criada por ``create_table``."""
     statement = sa.select(ENTRIES).where(ENTRIES.c.data_base_str == month)
@@ -142,7 +158,11 @@ def project(run: Execution, month: str) -> None:
             appender.write(batch.set_column(0, "id_lancamento", ids))
 
 
-def create_and_append(run: Execution, table: sa.Table, data: pa.Table) -> int:
+def create_and_append(
+    run: Execution,
+    table: sa.Table,
+    data: pa.Table,
+) -> int:
     """A tabela criada vazia no sandbox por ``create_table`` e as linhas acrescentadas por
     ``append``; devolve as linhas acrescentadas."""
     run.sandbox.create_table(table)
@@ -157,8 +177,11 @@ class FakeEngine:
     nas listas sem lock: ``list.append`` é atômico.
     """
 
-    def __init__(self, storage: Storage,
-                 nonfinite: dict[str, tuple[str, ...]] | None = None) -> None:
+    def __init__(
+        self,
+        storage: Storage,
+        nonfinite: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         self.execution_id = "exec-mentira"
         self.storage = storage
         self.nonfinite = nonfinite or {}
@@ -177,17 +200,33 @@ class FakeEngine:
     def __enter__(self) -> FakeEngine:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None:
         return None
 
-    def ingest(self, table: sa.Table, uri: str, version: int,
-               partitions: list[str] | None = None, materialize: bool = False) -> None:
+    def ingest(
+        self,
+        table: sa.Table,
+        uri: str,
+        version: int,
+        partitions: list[str] | None = None,
+        materialize: bool = False,
+    ) -> None:
         self.calls.append("ingest")
         self.ingests.append({"table": table.name, "thread": threading.get_ident()})
 
-    def audit(self, table: sa.Table, partitions: list[str] | None, uri: str | None = None,
-              version: int | None = None, foreign_keys: bool = False,
-              key_scope: str | None = None, referenced: dict | None = None) -> AuditReport:
+    def audit(
+        self,
+        table: sa.Table,
+        partitions: list[str] | None,
+        uri: str | None = None,
+        version: int | None = None,
+        foreign_keys: bool = False,
+        key_scope: str | None = None,
+        referenced: dict | None = None,
+    ) -> AuditReport:
         self.calls.append("audit")
         values = partitions or [None]
         totals = {value: {"linhas": 3} for value in values}
@@ -195,9 +234,15 @@ class FakeEngine:
         return AuditReport(table=table.name, partitions=tuple(partitions or ()), results=(),
                            not_run=(), nonfinite_columns=nonfinite, totals=totals)
 
-    def export_partition(self, table: sa.Table, uri: str, value: str | None, metadata: dict,
-                         expected_rows: int | None = None,
-                         columns_without_min_max: tuple = ()) -> int:
+    def export_partition(
+        self,
+        table: sa.Table,
+        uri: str,
+        value: str | None,
+        metadata: dict,
+        expected_rows: int | None = None,
+        columns_without_min_max: tuple = (),
+    ) -> int:
         self.calls.append("export")
         self.exports.append({"table": table.name, "value": value,
                              "expected_rows": expected_rows,
@@ -213,7 +258,12 @@ class FailingEngine(FakeEngine):
     """O motor de mentira cuja exportação de ``cad_lancamentos_projetados`` falha com
     ``ExecutionConflict``."""
 
-    def export_partition(self, table: sa.Table, *args: object, **kwargs: object) -> int:
+    def export_partition(
+        self,
+        table: sa.Table,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
         if table.name == PROJECTED.name:
             raise ExecutionConflict("conflito plantado")
         return super().export_partition(table, *args, **kwargs)
@@ -223,7 +273,8 @@ class FailingEngine(FakeEngine):
 
 
 def test_execution_opens_every_table_and_fixes_versions(
-    db: Database, caplog: pytest.LogCaptureFixture
+    db: Database,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """``versions`` com as tabelas existentes e ``None`` nas ausentes; o log com as versões e o
     resumo; sem ``execution_id``, o gerado ``exec-<AAAA-MM-DD>-<uuid8>``; a pasta da tabela sem
@@ -259,7 +310,10 @@ INVALID_PARTITIONS = ["", "2026/08/31", "a=b", "a b", "d'agua", "a:b", "a%b", "a
 
 
 @pytest.mark.parametrize("value", INVALID_PARTITIONS)
-def test_execution_refuses_an_invalid_partition(db: Database, value: str) -> None:
+def test_execution_refuses_an_invalid_partition(
+    db: Database,
+    value: str,
+) -> None:
     """O valor vazio, com ``/``, ``=``, espaço, ``'``, ``:``, ``%`` ou acento, começado por ``.``,
     ``_`` ou ``-``, ou acima do ``String(n)`` é recusado antes do sandbox, e o ``execution_id`` fora
     da regra também; ``2026-08-31`` e ``2026-Q1`` passam; o ambiente de ``Database`` fora da regra
@@ -275,7 +329,9 @@ def test_execution_refuses_an_invalid_partition(db: Database, value: str) -> Non
         Database(db.root, "pr od", Base.metadata)
 
 
-def test_previous_partitions_up_to_the_execution_partition(db: Database) -> None:
+def test_previous_partitions_up_to_the_execution_partition(
+    db: Database,
+) -> None:
     """Só valores até a partição da execução, os ``n`` últimos, na ordem de texto; a tabela
     ausente e a tabela sem arquivos dão a lista vazia; a tabela sem partição e a execução sem
     partição são ``ContractError``."""
@@ -298,7 +354,9 @@ def test_previous_partitions_up_to_the_execution_partition(db: Database) -> None
 
 
 def test_execution_without_partition_publishes_a_table_without_partition(
-    db: Database, folder: Path, caplog: pytest.LogCaptureFixture
+    db: Database,
+    folder: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Sem partição, a execução abre sem a conferência da partição e o log diz ``sem partição`` e
     a auditoria da tabela inteira; a tabela sem partição nasce na primeira publicação, e a
@@ -328,13 +386,18 @@ def test_execution_without_partition_publishes_a_table_without_partition(
     assert sorted(published.column("id_a").to_pylist()) == [1, 2, 3]
 
 
-def take_ids(run: Execution, ranges: list[range]) -> None:
+def take_ids(
+    run: Execution,
+    ranges: list[range],
+) -> None:
     """Pede 50 faixas de 3 ids de ``cad_lancamentos``, como uma thread do pipeline."""
     for _ in range(50):
         ranges.append(run.next_ids(ENTRIES, 3))
 
 
-def test_next_ids_are_disjoint_across_threads(db: Database) -> None:
+def test_next_ids_are_disjoint_across_threads(
+    db: Database,
+) -> None:
     """Duas threads têm faixas disjuntas, a primeira acima do máximo das estatísticas; a tabela nova
     começa em 1; a chave composta é ``ContractError``."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
@@ -356,7 +419,8 @@ def test_next_ids_are_disjoint_across_threads(db: Database) -> None:
 
 
 def test_previous_partitions_and_next_ids_read_the_version_publish_delta_advanced(
-    db: Database, folder: Path
+    db: Database,
+    folder: Path,
 ) -> None:
     """Depois de ``publish_delta``, ``previous_partitions`` e ``next_ids`` leem a versão fixada que
     ele avançou: a tabela ausente na abertura mostra a partição publicada e dá ids acima dos
@@ -378,7 +442,10 @@ def test_previous_partitions_and_next_ids_read_the_version_publish_delta_advance
         assert run.next_ids(ENTRIES, 1) == range(44, 45)
 
 
-def test_ingest_of_several_tables_uses_extra_sessions(db: Database, folder: Path) -> None:
+def test_ingest_of_several_tables_uses_extra_sessions(
+    db: Database,
+    folder: Path,
+) -> None:
     """``ingest`` de uma tabela usa a sessão principal; de várias, uma sessão a mais por tabela, em
     paralelo, e a principal lê todas; a falha de uma leva o resultado das outras numa nota."""
     uri = db.uri(PROJECTED)
@@ -416,7 +483,10 @@ def test_ingest_of_several_tables_uses_extra_sessions(db: Database, folder: Path
 # ---------------------------------------------------------------- a auditoria e a publicação
 
 
-def test_publish_delta_requires_the_audit(db: Database, caplog: pytest.LogCaptureFixture) -> None:
+def test_publish_delta_requires_the_audit(
+    db: Database,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """``publish_delta`` sem a auditoria aprovada é ``AuditFailed``; com ``audit=False`` passa e
     o log registra."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
@@ -430,8 +500,11 @@ def test_publish_delta_requires_the_audit(db: Database, caplog: pytest.LogCaptur
             run.publish_delta(PROJECTED, audit=False)
 
 
-def test_messages_of_the_whole_table_name_it(db: Database, folder: Path,
-                                             caplog: pytest.LogCaptureFixture) -> None:
+def test_messages_of_the_whole_table_name_it(
+    db: Database,
+    folder: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Sem partições, o log e as mensagens de ``audit`` e ``publish_delta`` dizem ``na tabela
     inteira``, e não ``None``: a auditoria reprovada, a publicação sem a auditoria aprovada e a
     publicação com ``audit=False``."""
@@ -451,7 +524,10 @@ def test_messages_of_the_whole_table_name_it(db: Database, folder: Path,
     assert "em None" not in caplog.text
 
 
-def test_failed_audit_leaves_the_delta_untouched(db: Database, folder: Path) -> None:
+def test_failed_audit_leaves_the_delta_untouched(
+    db: Database,
+    folder: Path,
+) -> None:
     """A auditoria reprovada levanta ``AuditFailed``, a versão da tabela não muda e o sandbox
     sai."""
     engine = engine_for(db, folder, "exec-1")
@@ -468,7 +544,8 @@ def test_failed_audit_leaves_the_delta_untouched(db: Database, folder: Path) -> 
 
 
 def test_rerun_with_the_same_execution_id_produces_the_same_rows(
-    db: Database, folder: Path
+    db: Database,
+    folder: Path,
 ) -> None:
     """A reexecução com o mesmo ``execution_id`` publica as mesmas linhas, com ids que podem
     diferir, numa versão a mais."""
@@ -489,7 +566,9 @@ def test_rerun_with_the_same_execution_id_produces_the_same_rows(
     assert second["version"] == first["version"] + 1
 
 
-def test_publish_delta_aborts_when_data_changed_since_open(db: Database) -> None:
+def test_publish_delta_aborts_when_data_changed_since_open(
+    db: Database,
+) -> None:
     """Um ``append`` de outra execução depois da abertura é ``ExecutionConflict`` sem commit; uma
     compactação não é, e a versão fixada avança."""
     uri = db.uri(ENTRIES)
@@ -512,7 +591,9 @@ def test_publish_delta_aborts_when_data_changed_since_open(db: Database) -> None
         assert versions == {ENTRIES.name: compacted + 1}
 
 
-def test_two_executions_on_the_same_partition_conflict(db: Database) -> None:
+def test_two_executions_on_the_same_partition_conflict(
+    db: Database,
+) -> None:
     """Duas execuções abertas na mesma versão publicam a mesma partição: a segunda aborta."""
     first = Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-a")
     second = Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-b")
@@ -524,7 +605,10 @@ def test_two_executions_on_the_same_partition_conflict(db: Database) -> None:
             second.publish_delta(ENTRIES, partitions=["2026-08-31"])
 
 
-def test_publish_delta_with_two_workers_matches_one(db: Database, folder: Path) -> None:
+def test_publish_delta_with_two_workers_matches_one(
+    db: Database,
+    folder: Path,
+) -> None:
     """O mesmo resultado com ``max_workers=1`` e ``2``; a falha de uma tabela deixa as outras
     terminarem e leva o resultado de cada uma numa nota."""
     results = {}
@@ -561,7 +645,8 @@ def test_publish_delta_with_two_workers_matches_one(db: Database, folder: Path) 
 
 
 def test_publish_delta_passes_the_nonfinite_columns_to_the_export(
-    db: Database, folder: Path
+    db: Database,
+    folder: Path,
 ) -> None:
     """O motor recebe, por partição, as colunas ``Double`` não finitas da auditoria e a contagem
     dela; a partição sem elas recebe a lista vazia; com ``audit=False``, todas as ``Double`` e
@@ -593,7 +678,9 @@ def test_publish_delta_passes_the_nonfinite_columns_to_the_export(
     assert june.column("max.id_lancamento").to_pylist() == [102]
 
 
-def test_commit_metadata_in_history(db: Database) -> None:
+def test_commit_metadata_in_history(
+    db: Database,
+) -> None:
     """``serialize_db_execution_id`` e ``serialize_db_input_versions`` no ``history``;
     ``serialize_db_snapshot`` só na execução marcada."""
     with Execution(db, FakeEngine(db.storage), "2026-08-31", "exec-comum") as run:
@@ -611,8 +698,10 @@ def test_commit_metadata_in_history(db: Database) -> None:
     assert marked["serialize_db_snapshot"] == "2026T3"
 
 
-def test_snapshot_writes_the_control_file_at_exit(db: Database,
-                                                  caplog: pytest.LogCaptureFixture) -> None:
+def test_snapshot_writes_the_control_file_at_exit(
+    db: Database,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """O snapshot marcado grava, no encerramento, a versão de toda tabela do ambiente, uma vez; a
     execução que falha não o grava; o nome que outro escritor grava depois da chamada é
     ``ContractError`` na saída, depois do commit da execução, e o resumo no log diz
@@ -647,7 +736,9 @@ def test_snapshot_writes_the_control_file_at_exit(db: Database,
     assert "execução exec-disputado concluída" not in caplog.text
 
 
-def test_snapshot_refuses_a_used_name_before_any_commit(db: Database) -> None:
+def test_snapshot_refuses_a_used_name_before_any_commit(
+    db: Database,
+) -> None:
     """O nome já presente em ``snapshots``, ou em ``archived`` depois do arquivamento, é
     ``ContractError`` na chamada de ``snapshot``, antes de qualquer commit, com o
     ``serialize-db channel`` na mensagem; o arquivo de controle não muda."""
@@ -667,7 +758,9 @@ def test_snapshot_refuses_a_used_name_before_any_commit(db: Database) -> None:
 # ---------------------------------------------------------------- a linha de comando
 
 
-def projected_pipeline(run: Execution) -> None:
+def projected_pipeline(
+    run: Execution,
+) -> None:
     """O pipeline que ``serialize-db run`` chama: projeta, audita e publica a partição da
     execução."""
     run.ingest(ENTRIES, partitions=[run.partition])
@@ -676,7 +769,9 @@ def projected_pipeline(run: Execution) -> None:
     run.publish_delta(PROJECTED, partitions=[run.partition])
 
 
-def repeated_key_pipeline(run: Execution) -> None:
+def repeated_key_pipeline(
+    run: Execution,
+) -> None:
     """Um pipeline que grava uma chave repetida e reprova na auditoria."""
     once = rows(PROJECTED, run.partition, range(1, 3))
     repeated = pa.concat_tables([once, once])
@@ -684,7 +779,9 @@ def repeated_key_pipeline(run: Execution) -> None:
     run.audit(PROJECTED, [run.partition])
 
 
-def conflicting_pipeline(run: Execution) -> None:
+def conflicting_pipeline(
+    run: Execution,
+) -> None:
     """Um pipeline que publica depois de outra execução gravar a mesma tabela."""
     uri = run.db.uri(ENTRIES)
     written = rows(ENTRIES, run.partition, range(900, 902))
@@ -692,7 +789,9 @@ def conflicting_pipeline(run: Execution) -> None:
     run.publish_delta(ENTRIES, partitions=[run.partition], audit=False)
 
 
-def composite_pipeline(run: Execution) -> None:
+def composite_pipeline(
+    run: Execution,
+) -> None:
     """O pipeline sem partição: grava, audita e publica ``rel_composta`` inteira."""
     data = pa.table({"id_a": pa.array([1, 2], pa.int64()), "id_b": pa.array([1, 1], pa.int64())})
     create_and_append(run, Composta.__table__, data)
@@ -700,30 +799,40 @@ def composite_pipeline(run: Execution) -> None:
     run.publish_delta(Composta.__table__)
 
 
-def previous_partitions_pipeline(run: Execution) -> None:
+def previous_partitions_pipeline(
+    run: Execution,
+) -> None:
     """Um pipeline que pede as partições anteriores."""
     run.previous_partitions(ENTRIES, 1)
 
 
-def snapshot_pipeline(run: Execution) -> None:
+def snapshot_pipeline(
+    run: Execution,
+) -> None:
     """Um pipeline que marca o snapshot ``2026T3``, gravado na saída da execução."""
     run.snapshot("2026T3")
 
 
-def marked_pipeline(run: Execution) -> None:
+def marked_pipeline(
+    run: Execution,
+) -> None:
     """Um pipeline que marca o snapshot ``2026T3`` e publica a partição da execução."""
     run.snapshot("2026T3")
     projected_pipeline(run)
 
 
-def raced_snapshot_pipeline(run: Execution) -> None:
+def raced_snapshot_pipeline(
+    run: Execution,
+) -> None:
     """Um pipeline que marca o snapshot ``2026T4``, que outro escritor grava antes da saída da
     execução."""
     run.snapshot("2026T4")
     delta.snapshot(run.db.storage, run.db.environment, "2026T4", {"cad_lancamentos": 4})
 
 
-def redshift_engine_pipeline(run: Execution) -> None:
+def redshift_engine_pipeline(
+    run: Execution,
+) -> None:
     """O pipeline de ``--engine redshift``: confere o motor Redshift e a configuração do ambiente
     que a execução recebeu."""
     from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
@@ -741,23 +850,32 @@ class IdleConnection:
     def cursor(self) -> IdleConnection:
         return self
 
-    def execute(self, text: str, params: object = None) -> None:
+    def execute(
+        self,
+        text: str,
+        params: object = None,
+    ) -> None:
         return None
 
     def close(self) -> None:
         return None
 
 
-def exit_code(arguments: list[str]) -> int | str | None:
+def exit_code(
+    arguments: list[str],
+) -> int | str | None:
     """O código do ``SystemExit`` com que ``serialize-db`` recusa os argumentos."""
     with pytest.raises(SystemExit) as exit_info:
         cli.main(arguments)
     return exit_info.value.code
 
 
-def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
-                                            monkeypatch: pytest.MonkeyPatch,
-                                            capsys: pytest.CaptureFixture) -> None:
+def test_cli_run_parses_and_exits_by_result(
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``serialize-db run`` sai com 0 no pipeline que publica, 1 na auditoria reprovada e 2 no
     conflito na tabela e no arquivo de controle, na partição e no ``execution_id`` fora da regra,
     sem ``--metadata`` e com o ``--export-mode`` que saiu da linha de comando, sem traceback."""
@@ -781,7 +899,10 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     original_read = delta.read_snapshots
     other_snapshots = []
 
-    def read_before_another_writer(storage: Storage, environment: str) -> tuple[dict, str | None]:
+    def read_before_another_writer(
+        storage: Storage,
+        environment: str,
+    ) -> tuple[dict, str | None]:
         read = original_read(storage, environment)
         other_snapshots.append(f"outro{len(other_snapshots) + 1}")
         text = json.dumps({"snapshots": {other_snapshots[-1]: {}}}) + "\n"
@@ -809,9 +930,12 @@ def test_cli_run_parses_and_exits_by_result(db: Database, folder: Path,
     assert "Traceback" not in printed_errors
 
 
-def test_cli_run_without_partition(db: Database, folder: Path,
-                                   monkeypatch: pytest.MonkeyPatch,
-                                   capsys: pytest.CaptureFixture) -> None:
+def test_cli_run_without_partition(
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``serialize-db run`` sem ``--partition`` abre a execução sem partição: sai com 0 no pipeline
     que publica a tabela sem partição e com 2 no que pede as partições anteriores, sem
     traceback."""
@@ -828,9 +952,12 @@ def test_cli_run_without_partition(db: Database, folder: Path,
     assert "Traceback" not in printed_errors
 
 
-def test_cli_run_exits_with_2_on_a_used_snapshot_name(db: Database, folder: Path,
-                                                      monkeypatch: pytest.MonkeyPatch,
-                                                      capsys: pytest.CaptureFixture) -> None:
+def test_cli_run_exits_with_2_on_a_used_snapshot_name(
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``serialize-db run`` sai com 2, sem traceback, no pipeline que marca um nome de snapshot já
     usado, em ``snapshots`` ou em ``archived``, antes de qualquer commit e com o
     ``serialize-db channel`` na mensagem; e também quando outro escritor grava o nome entre a
@@ -862,7 +989,9 @@ def test_cli_run_exits_with_2_on_a_used_snapshot_name(db: Database, folder: Path
 
 
 def test_cli_run_hands_the_redshift_config_to_the_execution(
-    db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``--engine redshift`` constrói o motor Redshift com as variáveis ``SERIALIZE_DB_REDSHIFT_*``
     e dá a configuração à execução; no motor DuckDB a execução não tem a configuração, e a
@@ -887,7 +1016,10 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
 
 
 def test_cli_exits_with_2_on_the_redshift_config_without_connection(
-    db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """``run`` e ``audit`` com ``--engine redshift`` e ``publish_redshift --init`` saem com 2,
     sem traceback, na configuração do Redshift sem conexão e na porta que não é número, com a
@@ -931,7 +1063,10 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
 
 
 def test_cli_audit_prints_the_sql_and_audits_the_current_version(
-    db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db audit --sql`` imprime o texto das verificações no dialeto, sem armazenamento;
     sem ``--sql``, audita a versão atual do Delta e sai com 0 na aprovação."""
@@ -956,7 +1091,10 @@ def test_cli_audit_prints_the_sql_and_audits_the_current_version(
 
 
 def test_cli_audit_of_a_table_without_partition(
-    db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db audit`` de uma tabela sem partição imprime os totais da ``tabela inteira``;
     com ``--partitions``, com ou sem ``--sql``, sai com 2 antes de abrir um motor, sem
@@ -984,7 +1122,9 @@ def test_cli_audit_of_a_table_without_partition(
     assert "Traceback" not in printed_errors
 
 
-def publish_defects(db: Database) -> int:
+def publish_defects(
+    db: Database,
+) -> int:
     """``cad_lancamentos_projetados`` de ``tests/lancamentos_model.py`` gravada por uma cópia do
     modelo com ``valor`` anulável: um nulo em ``valor``, ``NOT NULL`` no modelo, na primeira
     partição, e um JSON malformado em ``meta`` na segunda; devolve a versão atual."""
@@ -1001,7 +1141,9 @@ def publish_defects(db: Database) -> int:
     return delta.publish_partition(uri, loose, json_month, malformed, {}, db.storage)
 
 
-def defects_audit(db: Database) -> list[str]:
+def defects_audit(
+    db: Database,
+) -> list[str]:
     """Os argumentos de ``serialize-db audit`` da tabela de ``publish_defects``, a completar com
     as partições."""
     return ["audit", "--metadata", "lancamentos_model:Base.metadata",
@@ -1009,7 +1151,9 @@ def defects_audit(db: Database) -> list[str]:
 
 
 def test_cli_audit_prints_the_refused_ingest_as_a_failed_audit(
-    folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """A auditoria da partição com um nulo numa coluna ``NOT NULL`` e a da partição com JSON
     malformado, que o ``ingest`` pelo DDL do modelo recusa, saem com 1 e imprimem o erro do banco
@@ -1041,7 +1185,9 @@ def test_cli_audit_prints_the_refused_ingest_as_a_failed_audit(
 
 
 def test_cli_audit_lets_an_access_error_of_the_ingest_propagate(
-    folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """Um erro do banco que não é a recusa de um valor, como o acesso negado a um arquivo da
     tabela, sobe do ``ingest`` da auditoria e de ``cli.main`` sem a ingestão reprovada impressa, e
@@ -1050,7 +1196,11 @@ def test_cli_audit_lets_an_access_error_of_the_ingest_propagate(
     db = Database(str(folder / "delta"), "prd", lancamentos_model.Base.metadata)
     publish_defects(db)
 
-    def ingest_without_access(engine: DuckDBEngine, *args: object, **options: object) -> None:
+    def ingest_without_access(
+        engine: DuckDBEngine,
+        *args: object,
+        **options: object,
+    ) -> None:
         raise duckdb.IOException("HTTP 403: acesso negado ao arquivo da tabela")
 
     monkeypatch.setattr(DuckDBEngine, "ingest", ingest_without_access)
@@ -1063,8 +1213,11 @@ def test_cli_audit_lets_an_access_error_of_the_ingest_propagate(
 @pytest.mark.redshift
 @pytest.mark.s3
 def test_cli_audit_on_redshift_prints_the_refused_ingest(
-    s3_location: S3Location, redshift_driver: None, folder: Path,
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    s3_location: S3Location,
+    redshift_driver: None,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """Com ``--engine redshift``, o ``INSERT`` da staging na tabela do modelo recusa o nulo na
     coluna ``NOT NULL`` e o JSON malformado do ``JSON_PARSE``: cada auditoria sai com 1 e imprime o
@@ -1095,7 +1248,10 @@ def test_cli_audit_on_redshift_prints_the_refused_ingest(
 
 
 def test_cli_refuses_an_unknown_engine(
-    db: Database, folder: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """``SERIALIZE_DB_ENGINE`` fora de ``duckdb`` e ``redshift`` é erro de uso em ``run`` e em
     ``audit``, com e sem ``--sql``, como o mesmo valor em ``--engine``; o motor da auditoria

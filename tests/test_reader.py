@@ -56,7 +56,10 @@ METADATA = delta.commit_metadata("exec-0", {})
 
 
 @pytest.fixture
-def folder(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Path:
+def folder(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
     """Uma pasta nova por teste sob a raiz da sessão, que também recebe a pasta temporária do
     processo, onde ``DuckDBConfig()`` cria a pasta do motor."""
     path = Path(local_location.child(f"leitor/{uuid.uuid4().hex[:8]}"))
@@ -66,7 +69,9 @@ def folder(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Pa
 
 
 @pytest.fixture
-def db(folder: Path) -> Database:
+def db(
+    folder: Path,
+) -> Database:
     """O banco do teste: os lançamentos em três partições, versões 1 a 3, as contas, versão 1, e
     os snapshots ``2026T2`` (lançamentos na versão 2) e ``2026T3`` (na 3), sem canal."""
     database = Database(str(folder / "delta"), "prd", Base.metadata)
@@ -83,7 +88,11 @@ def db(folder: Path) -> Database:
     return database
 
 
-def count(reader: DeltaReader, table: sa.Table, month: str | None = None) -> int:
+def count(
+    reader: DeltaReader,
+    table: sa.Table,
+    month: str | None = None,
+) -> int:
     """As linhas da tabela pelo leitor, só as da partição ``month`` quando informada."""
     statement = sa.select(sa.func.count()).select_from(table)
     if month is not None:
@@ -91,13 +100,18 @@ def count(reader: DeltaReader, table: sa.Table, month: str | None = None) -> int
     return reader.query(statement).column(0)[0].as_py()
 
 
-def entry_ids(reader: DeltaReader) -> list[int]:
+def entry_ids(
+    reader: DeltaReader,
+) -> list[int]:
     """Os ids dos lançamentos pelo leitor, em ordem."""
     statement = sa.select(ENTRIES.c.id_lancamento).order_by(ENTRIES.c.id_lancamento)
     return reader.query(statement).column(0).to_pylist()
 
 
-def objects(reader: DeltaReader, kind: str) -> list[str]:
+def objects(
+    reader: DeltaReader,
+    kind: str,
+) -> list[str]:
     """As views ou as tabelas do banco do leitor, sem as internas do DuckDB; ``kind`` é ``views``
     ou ``tables``."""
     column = "view_name" if kind == "views" else "table_name"
@@ -105,7 +119,12 @@ def objects(reader: DeltaReader, kind: str) -> list[str]:
     return reader.query(text).column(0).to_pylist()
 
 
-def add_entries(db: Database, month: str, start: int, rows: int) -> None:
+def add_entries(
+    db: Database,
+    month: str,
+    start: int,
+    rows: int,
+) -> None:
     """Substitui a partição ``month`` dos lançamentos por ``rows`` linhas a partir de ``start``."""
     delta.publish_partition(db.uri(ENTRIES), ENTRIES, month, entry_rows(month, start, rows),
                             METADATA, db.storage)
@@ -115,7 +134,10 @@ def add_entries(db: Database, month: str, start: int, rows: int) -> None:
 
 
 @pytest.mark.local
-def test_default_channel_reads_the_snapshot_it_points_to(db: Database, folder: Path) -> None:
+def test_default_channel_reads_the_snapshot_it_points_to(
+    db: Database,
+    folder: Path,
+) -> None:
     """Sem o canal ``default`` no ambiente, ``open_delta()`` é ``ContractError`` com o comando que
     o cria e o canal ``current``, sem abrir o motor; com o canal, o leitor lê o snapshot apontado,
     com uma view por tabela dele; mover o canal muda o que o leitor seguinte lê, não o aberto."""
@@ -139,7 +161,9 @@ def test_default_channel_reads_the_snapshot_it_points_to(db: Database, folder: P
 
 
 @pytest.mark.local
-def test_named_snapshot_live_and_archived(db: Database) -> None:
+def test_named_snapshot_live_and_archived(
+    db: Database,
+) -> None:
     """``snapshot=`` lê o snapshot pelo nome; depois do ``archive``, o mesmo nome lê a cópia em
     ``arquivo/<nome>/``, na versão de cada cópia, com as mesmas linhas, enquanto a tabela viva
     avança; o nome ausente é ``ContractError``."""
@@ -170,7 +194,9 @@ def test_named_snapshot_live_and_archived(db: Database) -> None:
 
 
 @pytest.mark.local
-def test_current_channel_reads_the_current_version_pinned_at_open(db: Database) -> None:
+def test_current_channel_reads_the_current_version_pinned_at_open(
+    db: Database,
+) -> None:
     """``channel="current"`` lê a versão atual de cada tabela do modelo que existe no ambiente,
     sem snapshot; o commit depois da abertura não muda o que a view lê; ``snapshot`` e
     ``channel`` juntos e o canal desconhecido são ``ContractError``."""
@@ -189,7 +215,9 @@ def test_current_channel_reads_the_current_version_pinned_at_open(db: Database) 
 
 
 @pytest.mark.local
-def test_table_created_after_the_snapshot_has_no_view(db: Database) -> None:
+def test_table_created_after_the_snapshot_has_no_view(
+    db: Database,
+) -> None:
     """A tabela do modelo fora do snapshot não tem view: o statement Core que a cita, também num
     join, é ``ContractError`` com a origem, em ``query``, em ``stream`` e em ``materialize``; o
     texto pronto recebe o erro de catálogo do DuckDB; o canal ``current`` a vê."""
@@ -218,7 +246,9 @@ def test_table_created_after_the_snapshot_has_no_view(db: Database) -> None:
 
 
 @pytest.mark.local
-def test_materialize_swaps_the_view_for_a_table(db: Database) -> None:
+def test_materialize_swaps_the_view_for_a_table(
+    db: Database,
+) -> None:
     """``materialize`` troca a view da tabela por uma tabela do banco local, inteira ou só das
     partições pedidas, as tabelas em paralelo, e troca de novo na chamada seguinte;
     ``partitions`` numa tabela sem partição e o valor fora da regra são ``ContractError`` antes
@@ -255,7 +285,9 @@ def test_materialize_swaps_the_view_for_a_table(db: Database) -> None:
 
 
 @pytest.mark.local
-def test_failed_materialization_keeps_the_view(db: Database) -> None:
+def test_failed_materialization_keeps_the_view(
+    db: Database,
+) -> None:
     """A cópia que falha, com um arquivo da tabela apagado, sobe como ``duckdb.Error``, não entra
     em ``materialized``, e a view continua a responder pelas partições que ainda têm arquivo."""
     with db.open_delta(snapshot="2026T3") as reader:
@@ -270,7 +302,9 @@ def test_failed_materialization_keeps_the_view(db: Database) -> None:
 
 
 @pytest.mark.local
-def test_query_stream_and_pandas_types(db: Database) -> None:
+def test_query_stream_and_pandas_types(
+    db: Database,
+) -> None:
     """``query`` devolve as colunas do modelo nos tipos Arrow do contrato; ``stream`` entrega os
     lotes de até ``batch_size`` linhas, com as mesmas linhas; ``to_pandas`` com ``pd.ArrowDtype``
     mantém o decimal e a data; o texto pronto recebe os parâmetros por nome."""
@@ -297,7 +331,9 @@ def test_query_stream_and_pandas_types(db: Database) -> None:
 
 
 @pytest.mark.local
-def test_reader_runs_only_queries_and_session_takes_commands(db: Database) -> None:
+def test_reader_runs_only_queries_and_session_takes_commands(
+    db: Database,
+) -> None:
     """Um statement Core que não é ``Select`` nem ``CompoundSelect`` é ``ContractError`` em
     ``query`` e em ``stream``, sem tocar as views; ``union_all`` passa; a conexão de ``session()``
     recebe um comando, como a tabela temporária que a consulta seguinte lê."""
@@ -324,8 +360,12 @@ def test_reader_runs_only_queries_and_session_takes_commands(db: Database) -> No
     ("intervalo", THREE_MONTHS[1:3], THREE_MONTHS[1:3]),
     ("salteadas", [THREE_MONTHS[0], THREE_MONTHS[2]], THREE_MONTHS),
 ], ids=["igualdade", "intervalo", "salteadas"])
-def test_delta_scan_prunes_by_equality_and_range(db: Database, name: str, wanted: list[str],
-                                                 opened_months: list[str]) -> None:
+def test_delta_scan_prunes_by_equality_and_range(
+    db: Database,
+    name: str,
+    wanted: list[str],
+    opened_months: list[str],
+) -> None:
     """O ``=`` abre só a pasta da partição e o ``BETWEEN`` só as do intervalo, enquanto o ``IN``
     de dois valores salteados abre todas, pelo log ``FileSystem`` do DuckDB; as linhas são as
     pedidas."""
@@ -349,15 +389,20 @@ def test_delta_scan_prunes_by_equality_and_range(db: Database, name: str, wanted
 
 
 @pytest.mark.local
-def test_close_and_the_finalizer_remove_the_engine_folder(db: Database, folder: Path,
-                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+def test_close_and_the_finalizer_remove_the_engine_folder(
+    db: Database,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``close`` chama o ``cleanup`` do motor uma vez, apaga a pasta que ``DuckDBConfig()`` criou
     e não faz nada na segunda chamada nem na coleta; o leitor sem ``close`` tem a pasta apagada
     quando é coletado."""
     calls = []
     original_cleanup = DuckDBEngine.cleanup
 
-    def counting_cleanup(engine: DuckDBEngine) -> None:
+    def counting_cleanup(
+        engine: DuckDBEngine,
+    ) -> None:
         calls.append(engine)
         original_cleanup(engine)
 
@@ -385,7 +430,10 @@ def test_close_and_the_finalizer_remove_the_engine_folder(db: Database, folder: 
 
 
 @pytest.mark.local
-def test_stream_and_session_keep_an_unnamed_reader_alive(db: Database, folder: Path) -> None:
+def test_stream_and_session_keep_an_unnamed_reader_alive(
+    db: Database,
+    folder: Path,
+) -> None:
     """O leitor fora de uma variável vive até o ``close`` do stream e o fim do bloco de
     ``session()`` que ele deu, também no laço direto sobre o stream: a coleta no meio não fecha o
     motor debaixo da consulta nem da conexão, e a pasta do motor sai depois deles."""
@@ -415,7 +463,8 @@ def test_stream_and_session_keep_an_unnamed_reader_alive(db: Database, folder: P
 
 
 def test_redshift_reader_compiles_with_the_environment_prefix(
-        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """O leitor Redshift compila o statement com o prefixo ``<ambiente>_`` e passa os parâmetros
     ao driver, troca o sentinela ``{prefix}`` do texto, recusa o comando e o ``stream`` sem
     ``unload_to`` antes de qualquer comando no servidor e fecha a conexão no ``close``; o
@@ -449,13 +498,16 @@ def test_redshift_reader_compiles_with_the_environment_prefix(
 
 
 def test_open_redshift_reads_the_configuration_from_the_environment(
-        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Sem ``config``, o leitor lê ``SERIALIZE_DB_REDSHIFT_*``: a conexão recebe o endereço das
     variáveis, e o ambiente ``dsv`` prefixa as tabelas."""
     logins = []
     connection = FakeConnection()
 
-    def recording_connect(login: dict) -> FakeConnection:
+    def recording_connect(
+        login: dict,
+    ) -> FakeConnection:
         logins.append(login)
         return connection
 
@@ -473,8 +525,10 @@ def test_open_redshift_reads_the_configuration_from_the_environment(
 
 
 @pytest.mark.local
-def test_database_open_redshift_unloads_under_staging(db: Database,
-                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+def test_database_open_redshift_unloads_under_staging(
+    db: Database,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``db.open_redshift`` abre o leitor com o modelo do banco e o ``UNLOAD`` de ``stream`` em
     ``<raiz>/<ambiente>/staging/<id do leitor>/``, que o ``close`` esvazia."""
     rows = account_rows(["A", "B"])
@@ -499,8 +553,10 @@ def test_database_open_redshift_unloads_under_staging(db: Database,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_redshift_reader_matches_the_delta_reader(target: Target,
-                                                  s3_location: S3Location) -> None:
+def test_redshift_reader_matches_the_delta_reader(
+    target: Target,  # noqa: F811
+    s3_location: S3Location,
+) -> None:
     """A tabela publicada lida pelo leitor Redshift, por ``query`` e por ``stream``, dá as mesmas
     linhas que o leitor Delta na versão atual; o ``close`` apaga os arquivos do ``UNLOAD`` do
     leitor, sob ``unload_to`` e sob o ``staging/`` do banco."""

@@ -92,7 +92,10 @@ class Participant:
     participante é um gerenciador de contexto, que fecha a conexão na saída do bloco.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(
+        self,
+        name: str,
+    ) -> None:
         self.name = name
         _, self.connection = connect_redshift()
         self.steps: list[Step] = []
@@ -109,7 +112,10 @@ class Participant:
         record(f"redshift.transactions.pid.{name}", pid.describe())
         self.pid = pid.result[0][0] if pid.result else None
 
-    def execute(self, step: Step) -> Step:
+    def execute(
+        self,
+        step: Step,
+    ) -> Step:
         """Roda um comando e preenche o desfecho dele, sem levantar o erro do servidor."""
         started = time.perf_counter()
         cursor = self.connection.cursor()
@@ -123,7 +129,10 @@ class Participant:
         step.seconds = time.perf_counter() - started
         return step
 
-    def run(self, steps: list[Step]) -> None:
+    def run(
+        self,
+        steps: list[Step],
+    ) -> None:
         """Roda os comandos em ordem, até o fim ou até o primeiro erro."""
         for step in steps:
             if self.failed:
@@ -140,7 +149,10 @@ class Participant:
             return
         self.run([commit()])
 
-    def start(self, steps: list[Step]) -> threading.Thread:
+    def start(
+        self,
+        steps: list[Step],
+    ) -> threading.Thread:
         """Roda os comandos numa thread, para o cenário ver se eles esperam pela transação do
         outro."""
         thread = threading.Thread(target=self.run, args=(steps,), daemon=True)
@@ -157,7 +169,10 @@ class Participant:
         commits = [step for step in self.steps if step.label == "COMMIT"]
         return not self.failed and bool(commits) and commits[-1].error is None
 
-    def report(self, prefix: str) -> None:
+    def report(
+        self,
+        prefix: str,
+    ) -> None:
         """Registra no relatório cada comando do participante, em ordem."""
         record(f"{prefix}.{self.name}", " | ".join(step.describe() for step in self.steps))
 
@@ -168,7 +183,10 @@ class Participant:
     def __enter__(self) -> Participant:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None:
         self.close()
 
 
@@ -182,7 +200,10 @@ class Tables:
     dsv: str
 
 
-def create_tables(session: RedshiftSession, scenario: str) -> Tables:
+def create_tables(
+    session: RedshiftSession,
+    scenario: str,
+) -> Tables:
     """A tabela de controle de ``serialize_db_publications`` com prd e dsv na versão 1, e uma
     tabela de dados por ambiente com a partição publicada."""
     control = session.qualified(session.table(f"{scenario}_controle"))
@@ -218,7 +239,10 @@ def commit() -> Step:
     return Step("COMMIT", "COMMIT")
 
 
-def replace_partition(table: str, execution_id: str) -> list[Step]:
+def replace_partition(
+    table: str,
+    execution_id: str,
+) -> list[Step]:
     """A troca da partição da etapa 8, com ``INSERT`` no lugar do ``COPY`` na staging: o mesmo lock
     de escrita."""
     return [
@@ -231,7 +255,12 @@ def replace_partition(table: str, execution_id: str) -> list[Step]:
     ]
 
 
-def write_control_row(control: str, table_name: str, version: int, execution_id: str) -> list[Step]:
+def write_control_row(
+    control: str,
+    table_name: str,
+    version: int,
+    execution_id: str,
+) -> list[Step]:
     """A linha de controle como a etapa 8 a grava, no fim da transação: ``DELETE`` e ``INSERT``."""
     return [
         Step(
@@ -246,15 +275,21 @@ def write_control_row(control: str, table_name: str, version: int, execution_id:
     ]
 
 
-def waits(thread: threading.Thread) -> bool:
+def waits(
+    thread: threading.Thread,
+) -> bool:
     """Verdadeiro quando a thread ainda roda depois de ``BLOCKED_AFTER`` segundos: o comando dela
     espera pela outra transação."""
     thread.join(BLOCKED_AFTER)
     return thread.is_alive()
 
 
-def finish(thread: threading.Thread, participant: Participant, session: RedshiftSession,
-           prefix: str) -> None:
+def finish(
+    thread: threading.Thread,
+    participant: Participant,
+    session: RedshiftSession,
+    prefix: str,
+) -> None:
     """Espera a thread do participante; presa depois do prazo, a sessão dela é encerrada, e o fato
     vai ao relatório."""
     thread.join(FINISH_WITHIN)
@@ -272,13 +307,19 @@ def finish(thread: threading.Thread, participant: Participant, session: Redshift
     thread.join(FINISH_WITHIN)
 
 
-def control_rows(session: RedshiftSession, tables: Tables) -> dict[str, tuple[int, str]]:
+def control_rows(
+    session: RedshiftSession,
+    tables: Tables,
+) -> dict[str, tuple[int, str]]:
     """A versão e a execução de cada linha de controle."""
     rows = session.execute(f"SELECT table_name, delta_version, execution_id FROM {tables.control}")
     return {name: (version, execution_id) for name, version, execution_id in rows}
 
 
-def partition_origin(session: RedshiftSession, table: str) -> list[str]:
+def partition_origin(
+    session: RedshiftSession,
+    table: str,
+) -> list[str]:
     """As execuções que gravaram as linhas da partição; uma só quando a troca foi atômica."""
     rows = session.execute(
         f"SELECT DISTINCT execution_id FROM {table} WHERE data_str = '{PARTITION}'"
@@ -286,7 +327,10 @@ def partition_origin(session: RedshiftSession, table: str) -> list[str]:
     return sorted(row[0] for row in rows)
 
 
-def expected_control_row(a: Participant, b: Participant) -> tuple[int, str]:
+def expected_control_row(
+    a: Participant,
+    b: Participant,
+) -> tuple[int, str]:
     """A linha de controle da última transação confirmada: a versão 3 de B, a 2 de A, ou a 1 de
     ``exec-0`` quando nenhuma confirmou."""
     expected = (1, "exec-0")
@@ -298,7 +342,10 @@ def expected_control_row(a: Participant, b: Participant) -> tuple[int, str]:
 
 
 def run_scenario(
-    session: RedshiftSession, prefix: str, a_steps: list[Step], b_steps: list[Step],
+    session: RedshiftSession,
+    prefix: str,
+    a_steps: list[Step],
+    b_steps: list[Step],
     b_thread_steps: list[Step],
 ) -> tuple[Participant, Participant]:
     """Roda um cenário e devolve os dois participantes.
@@ -320,7 +367,9 @@ def run_scenario(
     return a, b
 
 
-def test_isolation_level_readings(redshift_session: RedshiftSession) -> None:
+def test_isolation_level_readings(
+    redshift_session: RedshiftSession,
+) -> None:
     """O nível de isolamento que o Redshift informa para os bancos que a sessão vê: leitura, nunca
     asserção."""
     session = redshift_session
@@ -342,7 +391,9 @@ def test_isolation_level_readings(redshift_session: RedshiftSession) -> None:
         record("redshift.transactions.isolation.stv_db_isolation_level", describe_error(error))
 
 
-def test_writes_to_distinct_tables(redshift_session: RedshiftSession) -> None:
+def test_writes_to_distinct_tables(
+    redshift_session: RedshiftSession,
+) -> None:
     """A e B escrevem, cada um numa transação, em tabelas distintas: a ingestão em paralelo e
     ``publish_redshift`` com uma conexão por tabela."""
     session = redshift_session
@@ -360,7 +411,9 @@ def test_writes_to_distinct_tables(redshift_session: RedshiftSession) -> None:
     assert partition_origin(session, tables.dsv) == (["exec-b"] if b.committed else ["exec-0"])
 
 
-def test_two_environments_write_distinct_control_rows(redshift_session: RedshiftSession) -> None:
+def test_two_environments_write_distinct_control_rows(
+    redshift_session: RedshiftSession,
+) -> None:
     """prd e dsv publicam ao mesmo tempo: tabelas de dados distintas e linhas distintas da tabela
     de controle.
 
@@ -394,7 +447,9 @@ def test_two_environments_write_distinct_control_rows(redshift_session: Redshift
     assert partition_origin(session, tables.dsv) == (["exec-b"] if b.committed else ["exec-0"])
 
 
-def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -> None:
+def test_two_publications_of_the_same_table(
+    redshift_session: RedshiftSession,
+) -> None:
     """Duas publicações de prd da mesma tabela e partição, com a staging de nome fixo da etapa 8.
 
     O ``CREATE TABLE`` da staging abre o snapshot de cada transação. B cria a mesma staging e troca
@@ -407,7 +462,10 @@ def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -
     staging = session.qualified(session.table("mesma_prod_x_staging"))
     prefix = "redshift.transactions.mesma_tabela"
 
-    def publication(execution_id: str, version: int) -> list[Step]:
+    def publication(
+        execution_id: str,
+        version: int,
+    ) -> list[Step]:
         return [
             Step(
                 "cria a staging",
@@ -435,7 +493,10 @@ def test_two_publications_of_the_same_table(redshift_session: RedshiftSession) -
     assert partition_origin(session, tables.prd) == [expected[1]]
 
 
-def fill_temporary_staging(staging: str, execution_id: str) -> list[Step]:
+def fill_temporary_staging(
+    staging: str,
+    execution_id: str,
+) -> list[Step]:
     """A staging temporária da sessão, sem a coluna de partição, cheia por ``INSERT`` no lugar do
     ``COPY``."""
     return [
@@ -450,7 +511,12 @@ def fill_temporary_staging(staging: str, execution_id: str) -> list[Step]:
     ]
 
 
-def swap_from_staging(tables: Tables, staging: str, execution_id: str, version: int) -> list[Step]:
+def swap_from_staging(
+    tables: Tables,
+    staging: str,
+    execution_id: str,
+    version: int,
+) -> list[Step]:
     """A troca da partição de prd a partir da staging e a linha de controle, como a etapa 8 as
     grava."""
     return [
@@ -463,8 +529,11 @@ def swap_from_staging(tables: Tables, staging: str, execution_id: str, version: 
     ]
 
 
-def assert_publication_matches(session: RedshiftSession, tables: Tables,
-                               publisher: Participant) -> None:
+def assert_publication_matches(
+    session: RedshiftSession,
+    tables: Tables,
+    publisher: Participant,
+) -> None:
     """O estado final bate com o desfecho: a partição e a linha de controle de ``exec-a`` quando a
     transação confirmou, as de ``exec-0`` quando não."""
     expected = (2, "exec-a") if publisher.committed else (1, "exec-0")
@@ -519,7 +588,9 @@ def test_temporary_staging_filled_before_the_transaction(
     assert_publication_matches(session, tables, a)
 
 
-def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:
+def test_lock_on_the_control_table(
+    redshift_session: RedshiftSession,
+) -> None:
     """O ``LOCK`` da tabela de controle no início das duas transações, a forma documentada de forçar
     a ordem.
 
@@ -568,7 +639,9 @@ def test_lock_on_the_control_table(redshift_session: RedshiftSession) -> None:
     assert rows["prd_x"] == expected
 
 
-def test_conditional_update_of_the_control_row(redshift_session: RedshiftSession) -> None:
+def test_conditional_update_of_the_control_row(
+    redshift_session: RedshiftSession,
+) -> None:
     """A linha de controle gravada primeiro, por um ``UPDATE`` condicionado à versão lida antes da
     transação.
 
@@ -581,7 +654,10 @@ def test_conditional_update_of_the_control_row(redshift_session: RedshiftSession
     tables = create_tables(session, "condicional")
     prefix = "redshift.transactions.condicional"
 
-    def update_if_unchanged(execution_id: str, version: int) -> Step:
+    def update_if_unchanged(
+        execution_id: str,
+        version: int,
+    ) -> Step:
         return Step(
             "atualiza a linha de controle se a versão é 1",
             f"UPDATE {tables.control} SET delta_version = {version}, "
@@ -603,7 +679,9 @@ def test_conditional_update_of_the_control_row(redshift_session: RedshiftSession
     assert rows["prd_x"] == ((2, "exec-a") if a.committed else (1, "exec-0"))
 
 
-def test_control_row_read_first_and_written_last(redshift_session: RedshiftSession) -> None:
+def test_control_row_read_first_and_written_last(
+    redshift_session: RedshiftSession,
+) -> None:
     """A publicação da etapa 8 como o usuário a decidiu em 2026-09-23: a linha de controle lida no
     início da transação, a partição trocada e a linha gravada no fim, pelo ``UPDATE`` condicionado à
     versão lida.
@@ -617,7 +695,10 @@ def test_control_row_read_first_and_written_last(redshift_session: RedshiftSessi
     tables = create_tables(session, "leitura")
     prefix = "redshift.transactions.leitura"
 
-    def publication(execution_id: str, version: int) -> list[Step]:
+    def publication(
+        execution_id: str,
+        version: int,
+    ) -> list[Step]:
         return [
             Step(
                 "lê a linha de controle",

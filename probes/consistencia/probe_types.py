@@ -34,7 +34,10 @@ METADATA = delta.commit_metadata("exec-tipos", {})
 NOTES: set[str] = set()
 
 
-def report_known(title: str, problems: list[str]) -> None:
+def report_known(
+    title: str,
+    problems: list[str],
+) -> None:
     """A checagem sem a diferença conhecida do sinal do zero, impressa como leitura."""
     rest, known = known_zero_sign(problems)
     report(title, rest)
@@ -42,7 +45,10 @@ def report_known(title: str, problems: list[str]) -> None:
         print(f"   diferenças conhecidas do sinal do zero: {len(known)}; {known[0]}")
 
 
-def check_append_and_query(engine: DuckDBEngine, data: pa.Table) -> None:
+def check_append_and_query(
+    engine: DuckDBEngine,
+    data: pa.Table,
+) -> None:
     """Seção 1: ``append`` na tabela de ``create_table`` e ``query`` por statement e por texto
     devolvem as linhas acrescentadas."""
     engine.create_table(TUDO)
@@ -56,13 +62,18 @@ def check_append_and_query(engine: DuckDBEngine, data: pa.Table) -> None:
            compare(data, to_contract(by_text, TUDO, NOTES), label="query-texto"))
 
 
-def short(value: object) -> str:
+def short(
+    value: object,
+) -> str:
     """O ``repr`` de um valor com no máximo 40 caracteres, para os textos longos do log."""
     text = repr(value)
     return text if len(text) <= 40 else text[:37] + "..."
 
 
-def log_bounds_data(actions: list[dict], data: pa.Table) -> list[str]:
+def log_bounds_data(
+    actions: list[dict],
+    data: pa.Table,
+) -> list[str]:
     """As estatísticas do log limitam os dados: o ``nullCount`` igual, e o mínimo e o máximo
     fora dos extremos dos dados finitos; a coluna sem estatística é impressa."""
     problems = []
@@ -95,8 +106,14 @@ def log_bounds_data(actions: list[dict], data: pa.Table) -> list[str]:
     return problems
 
 
-def check_export(engine: DuckDBEngine, config: DuckDBConfig, storage: Storage, uri: str,
-                 folder: Path, data: pa.Table) -> int:
+def check_export(
+    engine: DuckDBEngine,
+    config: DuckDBConfig,
+    storage: Storage,
+    uri: str,
+    folder: Path,
+    data: pa.Table,
+) -> int:
     """Seção 2: ``export_partition`` pelo ``COPY`` do DuckDB, lido pelo dataset do delta-rs, pelo
     ``delta_scan`` de outra sessão e pelo arquivo Parquet registrado; as estatísticas do log."""
     delta.create_table(uri, TUDO, storage)
@@ -124,7 +141,12 @@ def check_export(engine: DuckDBEngine, config: DuckDBConfig, storage: Storage, u
     return version
 
 
-def check_publish(config: DuckDBConfig, storage: Storage, uri: str, data: pa.Table) -> None:
+def check_publish(
+    config: DuckDBConfig,
+    storage: Storage,
+    uri: str,
+    data: pa.Table,
+) -> None:
     """Seção 3: ``publish_partition`` pelo escritor do delta-rs, noutra partição, lido pelo
     dataset e pelo ``delta_scan``."""
     version = delta.publish_partition(uri, TUDO, SECOND_PARTITION, data, METADATA, storage,
@@ -140,8 +162,12 @@ def check_publish(config: DuckDBConfig, storage: Storage, uri: str, data: pa.Tab
                compare(data, to_contract(by_scan, TUDO, NOTES), label="delta_scan"))
 
 
-def check_spilled_stream(engine: DuckDBEngine, config: DuckDBConfig, storage: Storage,
-                         data: pa.Table) -> None:
+def check_spilled_stream(
+    engine: DuckDBEngine,
+    config: DuckDBConfig,
+    storage: Storage,
+    data: pa.Table,
+) -> None:
     """Seção 4: um ``stream`` de 300 linhas por lote com 10.000 bytes de orçamento, o transbordo
     forçado, num ``appender`` de outra sessão."""
     with DuckDBEngine(config, "exec-tipos-segunda", storage) as second:
@@ -160,7 +186,11 @@ def check_spilled_stream(engine: DuckDBEngine, config: DuckDBConfig, storage: St
                compare(data, to_contract(by_second, TUDO, NOTES), label="segunda"))
 
 
-def check_whole_table(storage: Storage, uri: str, expected: pa.Table) -> None:
+def check_whole_table(
+    storage: Storage,
+    uri: str,
+    expected: pa.Table,
+) -> None:
     """Seção 5: as duas partições, de escritores diferentes, lidas juntas pelo dataset."""
     found = delta.open_table(uri, storage).to_pyarrow_table()
     report_known("5 a tabela inteira pelo dataset do delta-rs",
@@ -181,7 +211,11 @@ def simple_rows() -> pa.Table:
     return schema.cast(table, SIMPLES)
 
 
-def print_pruning(storage: Storage, uri: str, simple: pa.Table) -> None:
+def print_pruning(
+    storage: Storage,
+    uri: str,
+    simple: pa.Table,
+) -> None:
     """A poda nos extremos como leitura: as contagens do ``delta_scan`` e do dataset com filtros
     iguais ao mínimo e ao máximo, contra as contagens nos dados."""
     extremes = pc.min_max(simple.column("valor"))
@@ -206,7 +240,10 @@ def print_pruning(storage: Storage, uri: str, simple: pa.Table) -> None:
           f"nome = '': {pc.sum(pc.equal(simple.column('nome'), '')).as_py()}")
 
 
-def check_exact_stats(engine: DuckDBEngine, storage: Storage) -> None:
+def check_exact_stats(
+    engine: DuckDBEngine,
+    storage: Storage,
+) -> None:
     """Seção 6: numa tabela só de valores finitos, o mínimo e o máximo do log gravado pelo
     ``COPY`` são exatamente os extremos dos dados, e a tabela volta igual pelo dataset."""
     simple = simple_rows()

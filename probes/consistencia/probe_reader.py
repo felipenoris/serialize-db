@@ -38,11 +38,16 @@ NOTES: set[str] = set()
 READ_ERRORS = (duckdb.Error, SandboxError, ContractError)
 
 
-def reader_config(folder: Path, name: str) -> DuckDBConfig:
+def reader_config(
+    folder: Path,
+    name: str,
+) -> DuckDBConfig:
     return DuckDBConfig(temp_directory=str(folder / f"leitor_{name}"))
 
 
-def seed(db: Database) -> dict[str, object]:
+def seed(
+    db: Database,
+) -> dict[str, object]:
     """As quatro partições publicadas, o snapshot ``s1`` e o canal ``default`` nele."""
     uri = db.uri(TUDO)
     delta.create_table(uri, TUDO, db.storage)
@@ -66,7 +71,11 @@ class Readings:
         self.stop = threading.Event()
 
 
-def query_loop(reader: DeltaReader, readings: Readings, index: int) -> None:
+def query_loop(
+    reader: DeltaReader,
+    readings: Readings,
+    index: int,
+) -> None:
     """Conta e soma os ids por ``query`` até o sinal de parada."""
     while not readings.stop.is_set():
         try:
@@ -79,7 +88,11 @@ def query_loop(reader: DeltaReader, readings: Readings, index: int) -> None:
             time.sleep(0.01)
 
 
-def stream_loop(reader: DeltaReader, readings: Readings, index: int) -> None:
+def stream_loop(
+    reader: DeltaReader,
+    readings: Readings,
+    index: int,
+) -> None:
     """Conta as linhas por ``stream`` até o sinal de parada."""
     while not readings.stop.is_set():
         try:
@@ -94,7 +107,11 @@ def stream_loop(reader: DeltaReader, readings: Readings, index: int) -> None:
             time.sleep(0.01)
 
 
-def text_loop(reader: DeltaReader, readings: Readings, index: int) -> None:
+def text_loop(
+    reader: DeltaReader,
+    readings: Readings,
+    index: int,
+) -> None:
     """Conta as duas últimas partições por texto com parâmetro até o sinal de parada."""
     text = 'SELECT count(*) AS n FROM "cad_tudo" WHERE "data_str" >= :m'
     while not readings.stop.is_set():
@@ -107,7 +124,10 @@ def text_loop(reader: DeltaReader, readings: Readings, index: int) -> None:
             time.sleep(0.01)
 
 
-def swap_while_reading(reader: DeltaReader, readings: Readings) -> list[tuple[str, float]]:
+def swap_while_reading(
+    reader: DeltaReader,
+    readings: Readings,
+) -> list[tuple[str, float]]:
     """Três rodadas de ``materialize`` inteiro e parcial com as quatro threads lendo; devolve o
     tempo de cada troca."""
     threads = [threading.Thread(target=query_loop, args=(reader, readings, 0)),
@@ -135,8 +155,11 @@ def swap_while_reading(reader: DeltaReader, readings: Readings) -> list[tuple[st
     return swaps
 
 
-def check_materialize_under_reads(db: Database, folder: Path,
-                                  expected: dict[str, object]) -> None:
+def check_materialize_under_reads(
+    db: Database,
+    folder: Path,
+    expected: dict[str, object],
+) -> None:
     """Seção M: as leituras durante as trocas são a tabela inteira ou a parcial, com a soma dos
     ids certa e sem erro, e a materialização parcial é igual às sementes."""
     reader = db.open_delta(config=reader_config(folder, "principal"))
@@ -176,7 +199,10 @@ def check_materialize_under_reads(db: Database, folder: Path,
     report("M o leitor Delta com queries e streams durante o materialize", problems)
 
 
-def check_refused_materialize(db: Database, folder: Path) -> None:
+def check_refused_materialize(
+    db: Database,
+    folder: Path,
+) -> None:
     """Seção F: um valor fora da regra de partição é recusado antes da troca, e a tabela
     materializada antes fica intacta."""
     reader = db.open_delta(config=reader_config(folder, "recusa"))

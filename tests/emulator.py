@@ -215,7 +215,11 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def wait_until_listening(process: subprocess.Popen, port: int, timeout: float = 30.0) -> None:
+def wait_until_listening(
+    process: subprocess.Popen,
+    port: int,
+    timeout: float = 30.0,
+) -> None:
     """Espera o moto abrir a porta; o processo que sai antes, ou o prazo esgotado, é erro."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -231,7 +235,9 @@ def wait_until_listening(process: subprocess.Popen, port: int, timeout: float = 
     raise RuntimeError(f"o moto não abriu a porta {port} em {timeout:.0f} s")
 
 
-def emulator_environment(endpoint: str) -> dict[str, str]:
+def emulator_environment(
+    endpoint: str,
+) -> dict[str, str]:
     """As variáveis que apontam a sessão para o substituto.
 
     O boto3, o PyArrow e o delta-rs leem ``AWS_ENDPOINT_URL``, e ``Storage.duckdb_setup`` o leva
@@ -279,7 +285,9 @@ def start() -> subprocess.Popen:
     return process
 
 
-def stop(process: subprocess.Popen) -> None:
+def stop(
+    process: subprocess.Popen,
+) -> None:
     """Encerra o moto; os objetos que ele guardava em memória somem com ele."""
     process.terminate()
     try:
@@ -292,25 +300,34 @@ def stop(process: subprocess.Popen) -> None:
 # ------------------------------------------------------------ os objetos no moto
 
 
-def bucket_and_key(uri: str) -> tuple[str, str]:
+def bucket_and_key(
+    uri: str,
+) -> tuple[str, str]:
     """O bucket e a chave de ``s3://bucket/chave``."""
     bucket, _, key = uri.removeprefix("s3://").partition("/")
     return bucket, key
 
 
-def read_object(uri: str) -> bytes:
+def read_object(
+    uri: str,
+) -> bytes:
     """O conteúdo de um objeto."""
     bucket, key = bucket_and_key(uri)
     return boto3.client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
 
 
-def write_object(uri: str, body: bytes) -> None:
+def write_object(
+    uri: str,
+    body: bytes,
+) -> None:
     """Grava um objeto."""
     bucket, key = bucket_and_key(uri)
     boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=body)
 
 
-def object_uris(prefix_uri: str) -> list[str]:
+def object_uris(
+    prefix_uri: str,
+) -> list[str]:
     """As URIs dos objetos sob um prefixo."""
     bucket, prefix = bucket_and_key(prefix_uri)
     paginator = boto3.client("s3").get_paginator("list_objects_v2")
@@ -348,14 +365,20 @@ class RedshiftDatabase:
     super_columns: dict[str, set[str]] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def register(self, connection: Connection) -> int:
+    def register(
+        self,
+        connection: Connection,
+    ) -> int:
         """Dá à conexão o próximo pid, o que ``pg_terminate_backend`` recebe."""
         with self.lock:
             self.last_pid += 1
             self.connections[self.last_pid] = connection
             return self.last_pid
 
-    def unregister(self, pid: int) -> None:
+    def unregister(
+        self,
+        pid: int,
+    ) -> None:
         """Esquece a conexão fechada."""
         with self.lock:
             self.connections.pop(pid, None)
@@ -377,7 +400,10 @@ class Cursor:
     linhas dessa fila.
     """
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(
+        self,
+        connection: Connection,
+    ) -> None:
         self.connection = connection
         self.paramstyle = "format"
         self.description: list[tuple] | None = None
@@ -385,7 +411,11 @@ class Cursor:
         self.ps: dict[str, list[dict]] = {"row_desc": []}
         self._cached_rows: collections.deque = collections.deque()
 
-    def execute(self, operation: str, args: object = None) -> Cursor:
+    def execute(
+        self,
+        operation: str,
+        args: object = None,
+    ) -> Cursor:
         """Roda o comando e guarda o resultado."""
         result = run_command(self.connection, operation, args, self.paramstyle)
         self.description = result.description
@@ -400,7 +430,10 @@ class Cursor:
             return None
         return self._cached_rows.popleft()
 
-    def fetchmany(self, num: int | None = None) -> tuple:
+    def fetchmany(
+        self,
+        num: int | None = None,
+    ) -> tuple:
         """Até ``num`` linhas, uma só sem ``num``, como o ``arraysize`` padrão do driver."""
         size = num or 1
         rows = []
@@ -422,7 +455,10 @@ class Connection:
     """A conexão do ``redshift_connector`` nas partes que as suítes usam: uma conexão do DuckDB ao
     banco do substituto, com um pid e com as macros e as tabelas de sistema dela."""
 
-    def __init__(self, database: RedshiftDatabase) -> None:
+    def __init__(
+        self,
+        database: RedshiftDatabase,
+    ) -> None:
         self.database = database
         self.duckdb_connection = database.duckdb_connection.cursor()
         for statement in (*MACROS, *SYSTEM_TABLES):
@@ -447,7 +483,10 @@ class Connection:
         """Desfaz a transação aberta."""
         self.end_transaction("ROLLBACK")
 
-    def end_transaction(self, command: str) -> None:
+    def end_transaction(
+        self,
+        command: str,
+    ) -> None:
         """Confirma ou desfaz a transação aberta por ``BEGIN``; sem ela, nada a fazer."""
         if not self.in_transaction:
             return
@@ -480,19 +519,26 @@ def connect() -> Connection:
 # ------------------------------------------------------------ a execução de um comando
 
 
-def server_error(message: str, code: str = "XX000") -> redshift_connector.ProgrammingError:
+def server_error(
+    message: str,
+    code: str = "XX000",
+) -> redshift_connector.ProgrammingError:
     """O erro do driver com o dicionário de campos que o servidor manda: severidade, SQLSTATE e
     mensagem."""
     return redshift_connector.ProgrammingError({"S": "ERROR", "C": code, "M": message})
 
 
-def first_line(error: Exception) -> str:
+def first_line(
+    error: Exception,
+) -> str:
     """A primeira linha da mensagem de um erro do DuckDB."""
     lines = str(error).splitlines()
     return lines[0] if lines else type(error).__name__
 
 
-def duckdb_error(error: Exception) -> redshift_connector.ProgrammingError:
+def duckdb_error(
+    error: Exception,
+) -> redshift_connector.ProgrammingError:
     """O erro do DuckDB como erro do servidor: a relação inexistente com o ``XX000`` e a mensagem
     ``Relation <nome> does not exist in the database.`` do Redshift, a que já existe com o
     ``42P07`` do PostgreSQL; o conflito entre duas transações com a mensagem do ``1023`` do
@@ -511,7 +557,12 @@ def duckdb_error(error: Exception) -> redshift_connector.ProgrammingError:
     return server_error(message)
 
 
-def run_command(connection: Connection, operation: str, args: object, paramstyle: str) -> Result:
+def run_command(
+    connection: Connection,
+    operation: str,
+    args: object,
+    paramstyle: str,
+) -> Result:
     """Roda um comando do Redshift: a falha provocada, os comandos de sessão, o ``COPY``, o
     ``UNLOAD`` e, no resto, o SQL traduzido para o DuckDB."""
     text = operation.strip().rstrip(";").strip()
@@ -539,14 +590,19 @@ def run_command(connection: Connection, operation: str, args: object, paramstyle
     return result
 
 
-def raise_provoked_failure(text: str) -> None:
+def raise_provoked_failure(
+    text: str,
+) -> None:
     """O erro do servidor para o comando que casa com ``SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL``."""
     pattern = os.environ.get("SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL")
     if pattern and re.search(pattern, text, re.IGNORECASE | re.DOTALL):
         raise server_error(f"falha provocada pelo substituto: {pattern}")
 
 
-def session_command(connection: Connection, text: str) -> Result | None:
+def session_command(
+    connection: Connection,
+    text: str,
+) -> Result | None:
     """Os comandos de sessão, que o substituto responde sem o SQL traduzido; outro comando dá
     ``None``.
 
@@ -586,15 +642,24 @@ def session_command(connection: Connection, text: str) -> Result | None:
     return None
 
 
-def single_value(name: str, oid: int, value: object) -> Result:
+def single_value(
+    name: str,
+    oid: int,
+    value: object,
+) -> Result:
     """O resultado de uma linha e uma coluna."""
     description = [(name, oid, None, None, None, None, None)]
     row_desc = [{"label": name.encode(), "type_oid": oid, "type_modifier": -1}]
     return Result(description, row_desc, [[value]], 1)
 
 
-def run_in_duckdb(connection: Connection, text: str, args: object, paramstyle: str,
-                  first_word: str) -> Result:
+def run_in_duckdb(
+    connection: Connection,
+    text: str,
+    args: object,
+    paramstyle: str,
+    first_word: str,
+) -> Result:
     """O comando traduzido, rodado na conexão do DuckDB; o erro do DuckDB volta como erro do
     servidor."""
     translated = to_duckdb(text, connection.database.all_super_columns())
@@ -616,7 +681,9 @@ def run_in_duckdb(connection: Connection, text: str, args: object, paramstyle: s
     return result
 
 
-def command_result(cursor: duckdb.DuckDBPyConnection) -> Result:
+def command_result(
+    cursor: duckdb.DuckDBPyConnection,
+) -> Result:
     """A contagem de linhas de um ``INSERT``, ``UPDATE`` ou ``DELETE``, a única linha que o
     DuckDB devolve; -1 nos outros comandos, como o driver."""
     rows = cursor.fetchall() if cursor.description else []
@@ -625,7 +692,9 @@ def command_result(cursor: duckdb.DuckDBPyConnection) -> Result:
     return Result()
 
 
-def query_result(cursor: duckdb.DuckDBPyConnection) -> Result:
+def query_result(
+    cursor: duckdb.DuckDBPyConnection,
+) -> Result:
     """As linhas e a descrição das colunas de uma consulta, como o driver as guarda."""
     description = []
     row_desc = []
@@ -640,7 +709,9 @@ def query_result(cursor: duckdb.DuckDBPyConnection) -> Result:
     return Result(description, row_desc, rows, len(rows))
 
 
-def oid_and_modifier(type_name: str) -> tuple[int, int]:
+def oid_and_modifier(
+    type_name: str,
+) -> tuple[int, int]:
     """O OID e o ``type_modifier`` do tipo de uma coluna do DuckDB, como o ``row_desc`` do driver
     os traz: ``DECIMAL(p, s)`` é ``NUMERIC``, com ``((p << 16) | s) + 4``, e os outros não têm
     modificador, -1."""
@@ -656,7 +727,10 @@ def oid_and_modifier(type_name: str) -> tuple[int, int]:
 # ------------------------------------------------------------ a tradução do SQL
 
 
-def outside_quotes(text: str, rewrite: Callable[[str], str]) -> str:
+def outside_quotes(
+    text: str,
+    rewrite: Callable[[str], str],
+) -> str:
     """Aplica ``rewrite`` a cada trecho de ``text`` fora das regiões citadas."""
     pieces = []
     position = 0
@@ -668,7 +742,9 @@ def outside_quotes(text: str, rewrite: Callable[[str], str]) -> str:
     return "".join(pieces)
 
 
-def without_physical_clauses(text: str) -> str:
+def without_physical_clauses(
+    text: str,
+) -> str:
     """O DDL sem ``DISTSTYLE``, ``DISTKEY``, ``SORTKEY`` e ``ENCODE``, que o DuckDB não tem.
 
     As cláusulas citam colunas entre aspas, e a troca vale para o texto inteiro.
@@ -679,7 +755,9 @@ def without_physical_clauses(text: str) -> str:
     return re.sub(r"\bENCODE\s+\w+", "", text, flags=re.IGNORECASE)
 
 
-def literal_value(body: str) -> str:
+def literal_value(
+    body: str,
+) -> str:
     """O valor de um literal de texto do Redshift, dado o que fica entre as aspas: a aspa dobrada é
     uma aspa, e a contrabarra dá o caractere seguinte. As sequências ``\\n``, ``\\t`` e a octal,
     que as suítes não escrevem, ficam de fora."""
@@ -696,7 +774,9 @@ def literal_value(body: str) -> str:
     return "".join(characters)
 
 
-def duckdb_region(match: re.Match) -> str:
+def duckdb_region(
+    match: re.Match,
+) -> str:
     """Uma região citada do Redshift no DuckDB: o literal de texto com o mesmo valor, sem escape de
     contrabarra, e o nome entre aspas duplas como está."""
     region = match.group(0)
@@ -707,12 +787,17 @@ def duckdb_region(match: re.Match) -> str:
     return f"'{escaped}'"
 
 
-def to_duckdb(text: str, super_columns: set[str]) -> str:
+def to_duckdb(
+    text: str,
+    super_columns: set[str],
+) -> str:
     """O SQL do Redshift no dialeto do DuckDB: sem as cláusulas físicas do DDL, cada literal de
     texto com o valor que o Redshift lê nele e, fora das regiões citadas, ``SUPER`` como ``JSON`` e
     o caminho por ponto numa coluna ``SUPER`` (``meta.sistema``) como ``json_extract``."""
 
-    def rewrite(part: str) -> str:
+    def rewrite(
+        part: str,
+    ) -> str:
         part = re.sub(r"\bSUPER\b", "JSON", part, flags=re.IGNORECASE)
         for column in sorted(super_columns):
             path = rf"\b{re.escape(column)}\.(\w+)"
@@ -723,17 +808,25 @@ def to_duckdb(text: str, super_columns: set[str]) -> str:
     return outside_quotes(duckdb_text, rewrite)
 
 
-def named_to_dollar(part: str) -> str:
+def named_to_dollar(
+    part: str,
+) -> str:
     """Os marcadores ``:nome`` do estilo ``named`` como ``$nome``, o estilo do DuckDB."""
     return re.sub(r"(?<![:\w]):(\w+)", r"$\1", part)
 
 
-def format_to_question_mark(part: str) -> str:
+def format_to_question_mark(
+    part: str,
+) -> str:
     """Os marcadores ``%s`` do estilo ``format`` como ``?``, e o ``%%`` como ``%``."""
     return part.replace("%s", "?").replace("%%", "%")
 
 
-def duckdb_parameters(text: str, args: object, paramstyle: str) -> tuple[str, object]:
+def duckdb_parameters(
+    text: str,
+    args: object,
+    paramstyle: str,
+) -> tuple[str, object]:
     """O texto com os marcadores do driver no estilo do DuckDB, e os valores.
 
     Sem valores, o texto vai como está, e um ``%%`` chega ao DuckDB como o driver o manda ao
@@ -746,7 +839,9 @@ def duckdb_parameters(text: str, args: object, paramstyle: str) -> tuple[str, ob
     return outside_quotes(text, format_to_question_mark), list(args)
 
 
-def split_top_level(body: str) -> list[str]:
+def split_top_level(
+    body: str,
+) -> list[str]:
     """As definições de coluna de um ``CREATE TABLE``, separadas pelas vírgulas de fora dos
     parênteses."""
     parts = []
@@ -766,13 +861,18 @@ def split_top_level(body: str) -> list[str]:
     return parts
 
 
-def table_key(name: str) -> str:
+def table_key(
+    name: str,
+) -> str:
     """O nome da tabela sem o esquema e sem aspas, em minúsculas: a chave do que o substituto
     guarda do DDL."""
     return name.split(".")[-1].strip('"').lower()
 
 
-def table_schema(connection: Connection, name: str) -> str:
+def table_schema(
+    connection: Connection,
+    name: str,
+) -> str:
     """O esquema de um nome de tabela: o qualificado, ou o da conexão."""
     parts = name.split(".")
     if len(parts) > 1:
@@ -780,7 +880,9 @@ def table_schema(connection: Connection, name: str) -> str:
     return connection.schema.strip('"').lower()
 
 
-def column_definitions(body: str) -> list[tuple[str, str]]:
+def column_definitions(
+    body: str,
+) -> list[tuple[str, str]]:
     """O nome e o texto do tipo de cada coluna de um ``CREATE TABLE``; uma restrição de tabela
     fica de fora."""
     definitions = []
@@ -792,7 +894,9 @@ def column_definitions(body: str) -> list[tuple[str, str]]:
     return definitions
 
 
-def redshift_data_type(kind: str) -> tuple[str, int | None, int | None, int | None]:
+def redshift_data_type(
+    kind: str,
+) -> tuple[str, int | None, int | None, int | None]:
     """O tipo de uma coluna do DDL como ``svv_all_columns`` o lista: o nome na grafia do Redshift,
     a largura do texto e a precisão e a escala do ``NUMERIC``; um tipo fora da lista sai como
     está."""
@@ -818,7 +922,10 @@ def redshift_data_type(kind: str) -> tuple[str, int | None, int | None, int | No
     return data_type, None, None, None
 
 
-def remember_ddl(connection: Connection, text: str) -> None:
+def remember_ddl(
+    connection: Connection,
+    text: str,
+) -> None:
     """Guarda de um ``CREATE TABLE`` o ``n`` de cada ``VARCHAR(n)`` e as colunas ``SUPER``, que o
     ``COPY`` confere, e as colunas em ``svv_all_columns``; a tabela temporária fica fora da
     visão."""
@@ -847,7 +954,10 @@ def remember_ddl(connection: Connection, text: str) -> None:
              position])
 
 
-def forget_ddl(connection: Connection, text: str) -> None:
+def forget_ddl(
+    connection: Connection,
+    text: str,
+) -> None:
     """Tira de ``svv_all_columns`` as colunas de um ``DROP TABLE``."""
     match = re.match(r"DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\S+)", text, re.IGNORECASE)
     if match is None:
@@ -857,7 +967,10 @@ def forget_ddl(connection: Connection, text: str) -> None:
         [table_schema(connection, match.group(1)), table_key(match.group(1))])
 
 
-def remember_added_column(connection: Connection, text: str) -> None:
+def remember_added_column(
+    connection: Connection,
+    text: str,
+) -> None:
     """Põe em ``svv_all_columns`` a coluna de um ``ALTER TABLE ... ADD COLUMN``, no fim."""
     match = re.match(r"ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)\s+(.+)", text,
                      re.IGNORECASE | re.DOTALL)
@@ -876,7 +989,9 @@ def remember_added_column(connection: Connection, text: str) -> None:
          precision, scale, position])
 
 
-def option_words(options: str) -> str:
+def option_words(
+    options: str,
+) -> str:
     """As opções de um ``COPY`` ou ``UNLOAD`` em maiúsculas, com os valores citados esvaziados."""
     return QUOTED.sub("''", options).upper()
 
@@ -884,7 +999,10 @@ def option_words(options: str) -> str:
 # ------------------------------------------------------------ o COPY
 
 
-def copy(connection: Connection, text: str) -> Result:
+def copy(
+    connection: Connection,
+    text: str,
+) -> Result:
     """O ``COPY`` de um Parquet, dos arquivos de um manifesto ou de um arquivo JSON com um objeto
     por linha, com as recusas que o ambiente alvo mostrou."""
     match = COPY_PATTERN.match(text)
@@ -925,7 +1043,10 @@ def copy(connection: Connection, text: str) -> Result:
     return Result(rowcount=loaded.num_rows)
 
 
-def copy_sources(source: str, options: str) -> list[str]:
+def copy_sources(
+    source: str,
+    options: str,
+) -> list[str]:
     """Os arquivos que o ``COPY`` lê: sem ``MANIFEST``, os objetos cuja chave começa pelo caminho,
     que o Redshift lê como prefixo; com ele, as entradas do manifesto que existem.
 
@@ -950,14 +1071,22 @@ def copy_sources(source: str, options: str) -> list[str]:
     return files
 
 
-def table_columns(connection: Connection, table: str) -> list[str]:
+def table_columns(
+    connection: Connection,
+    table: str,
+) -> list[str]:
     """As colunas da tabela, em ordem e em minúsculas."""
     cursor = connection.duckdb_connection.execute(f"SELECT * FROM {table} LIMIT 0")
     return [column[0].lower() for column in cursor.description]
 
 
-def copy_column_names(target: list[str], listed: list[str] | None, file_columns: int, *,
-                      fillrecord: bool) -> list[str]:
+def copy_column_names(
+    target: list[str],
+    listed: list[str] | None,
+    file_columns: int,
+    *,
+    fillrecord: bool,
+) -> list[str]:
     """As colunas da tabela que recebem as do arquivo, por posição, com as recusas do Redshift
     (2026-09-21, ``plan/POC.md``): a lista de colunas com outra contagem, e o arquivo com menos
     colunas que a tabela sem ``FILLRECORD``."""
@@ -975,8 +1104,14 @@ def copy_column_names(target: list[str], listed: list[str] | None, file_columns:
         f"{file_columns}")
 
 
-def check_copy(connection: Connection, table: str, names: list[str], data: pa.Table, *,
-               serialize_to_json: bool) -> None:
+def check_copy(
+    connection: Connection,
+    table: str,
+    names: list[str],
+    data: pa.Table,
+    *,
+    serialize_to_json: bool,
+) -> None:
     """As recusas do ``COPY`` que o ambiente alvo mostrou (2026-09-21, ``plan/POC.md``): o texto
     acima do ``VARCHAR(n)``, com o motivo nas tabelas de erro de carga, a coluna ``SUPER`` sem
     ``SERIALIZETOJSON`` e o texto acima de 65.535 bytes numa coluna ``SUPER``."""
@@ -996,14 +1131,21 @@ def check_copy(connection: Connection, table: str, names: list[str], data: pa.Ta
                                "details.")
 
 
-def record_load_error(connection: Connection, reason: str) -> None:
+def record_load_error(
+    connection: Connection,
+    reason: str,
+) -> None:
     """Grava o motivo de uma carga recusada nas duas tabelas de erro que a suíte lê."""
     database = connection.duckdb_connection
     database.execute("INSERT INTO stl_load_errors VALUES (?, now())", [reason])
     database.execute("INSERT INTO sys_load_error_detail VALUES (?, now())", [reason])
 
 
-def insert_arrow(connection: Connection, table: str, data: pa.Table) -> None:
+def insert_arrow(
+    connection: Connection,
+    table: str,
+    data: pa.Table,
+) -> None:
     """Insere as colunas de ``data`` nas colunas de mesmo nome da tabela."""
     database = connection.duckdb_connection
     names = ", ".join(f'"{name}"' for name in data.column_names)
@@ -1016,8 +1158,12 @@ def insert_arrow(connection: Connection, table: str, data: pa.Table) -> None:
         database.unregister("substituto_copia")
 
 
-def copy_json_lines(connection: Connection, table: str, target: list[str],
-                    source: str) -> Result:
+def copy_json_lines(
+    connection: Connection,
+    table: str,
+    target: list[str],
+    source: str,
+) -> Result:
     """O ``COPY ... FORMAT JSON 'auto'``: cada linha um objeto, cada chave na coluna de mesmo
     nome, e a coluna ``SUPER`` com o valor serializado."""
     supers = connection.database.super_columns.get(table_key(table), set())
@@ -1036,7 +1182,11 @@ def copy_json_lines(connection: Connection, table: str, target: list[str],
     return Result(rowcount=count)
 
 
-def document_value(document: dict, name: str, supers: set[str]) -> object:
+def document_value(
+    document: dict,
+    name: str,
+    supers: set[str],
+) -> object:
     """O valor de uma chave do documento para o ``INSERT``; numa coluna ``SUPER``, serializado."""
     if name in supers:
         return json.dumps(document[name])
@@ -1046,7 +1196,10 @@ def document_value(document: dict, name: str, supers: set[str]) -> object:
 # ------------------------------------------------------------ o UNLOAD
 
 
-def unload(connection: Connection, text: str) -> Result:
+def unload(
+    connection: Connection,
+    text: str,
+) -> Result:
     """O ``UNLOAD`` para Parquet, com ou sem ``PARTITION BY``, e o manifesto, com as recusas que o
     ambiente alvo mostrou (2026-09-21, ``plan/POC.md``): o ``LIMIT`` externo, e o destino com
     arquivos sem ``ALLOWOVERWRITE``. O ``select`` é o valor do literal, com a contrabarra como
@@ -1088,7 +1241,9 @@ def unload(connection: Connection, text: str) -> Result:
     return Result()
 
 
-def as_unloaded(data: pa.Table) -> pa.Table:
+def as_unloaded(
+    data: pa.Table,
+) -> pa.Table:
     """A tabela como o ``UNLOAD`` a grava: toda coluna anulável, inclusive as ``NOT NULL`` da
     origem, e o texto em ``string``."""
     fields = []
@@ -1100,7 +1255,11 @@ def as_unloaded(data: pa.Table) -> pa.Table:
     return data.cast(pa.schema(fields))
 
 
-def unload_files(data: pa.Table, target: str, options: str) -> list[tuple[str, pa.Table]]:
+def unload_files(
+    data: pa.Table,
+    target: str,
+    options: str,
+) -> list[tuple[str, pa.Table]]:
     """Os arquivos do ``UNLOAD`` e as linhas de cada um: um por valor da coluna de
     ``PARTITION BY``, em ``<coluna>=<valor>/`` e sem a coluna, ou um só, ``000.parquet`` com
     ``PARALLEL OFF``."""
@@ -1117,7 +1276,9 @@ def unload_files(data: pa.Table, target: str, options: str) -> list[tuple[str, p
     return files
 
 
-def write_unloaded_files(files: list[tuple[str, pa.Table]]) -> list[dict]:
+def write_unloaded_files(
+    files: list[tuple[str, pa.Table]],
+) -> list[dict]:
     """Grava cada arquivo com o ``TIMESTAMP`` em ``INT96``, como o ``UNLOAD`` do ambiente alvo, e
     devolve as entradas do manifesto."""
     entries = []
@@ -1131,7 +1292,12 @@ def write_unloaded_files(files: list[tuple[str, pa.Table]]) -> list[dict]:
     return entries
 
 
-def unload_manifest(entries: list[dict], schema: pa.Schema, *, verbose: bool) -> bytes:
+def unload_manifest(
+    entries: list[dict],
+    schema: pa.Schema,
+    *,
+    verbose: bool,
+) -> bytes:
     """O manifesto do ``UNLOAD``: as entradas e, com ``VERBOSE``, o esquema e os totais."""
     manifest: dict[str, object] = {"entries": entries}
     if verbose:

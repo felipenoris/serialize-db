@@ -76,18 +76,24 @@ FUNCTION_TEXTS = {
 }
 
 
-def pinned_source(table: sa.Table) -> sa.FromClause:
+def pinned_source(
+    table: sa.Table,
+) -> sa.FromClause:
     """Uma origem com as colunas da tabela, no papel da versão fixada."""
     columns = [sa.column(column.name, column.type) for column in table.columns]
     return sa.table("fixada", *columns).alias("versao")
 
 
-def partitions_of(table: sa.Table) -> list[str] | None:
+def partitions_of(
+    table: sa.Table,
+) -> list[str] | None:
     """Uma partição para a tabela particionada, nenhuma para a sem partição."""
     return PARTITIONS if schema.table_options(table).partition_by else None
 
 
-def names_of(found: list[audit.Check]) -> list[str]:
+def names_of(
+    found: list[audit.Check],
+) -> list[str]:
     """Os nomes das verificações, na ordem."""
     return [check.name for check in found]
 

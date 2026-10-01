@@ -191,6 +191,18 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
   com uma execução por ambiente de cada vez.
 
 ## Decisões de API pendentes por etapa
+- **O `ruff format` sobre o resto do código.** As assinaturas das funções seguem o padrão de um
+  parâmetro por linha desde 2026-10-01, e `uvx ruff format --check` ainda reformataria 74 dos 89
+  arquivos Python que o Ruff lê (8.995 linhas trocadas, retiradas e acrescentadas somadas, em
+  2026-10-01: 3.777 em `probes/`, 3.618 em `tests/`, 1.521 em `src/` e 79 em `scripts/`): chamadas
+  e expressões longas reabertas um argumento por linha com vírgula final, condições longas entre
+  parênteses, listas recolhidas numa linha, aspas simples trocadas por duplas e alinhamentos por
+  espaços desfeitos. Formatar tudo de uma vez, ou deixar o formatador só para as assinaturas, é
+  decisão do usuário; [`CURRENT_STATE.md`](CURRENT_STATE.md) registra o estado.
+- **O Ruff no grupo `dev` e na esteira.** O usuário recusou os dois em 2026-09-21, e a configuração
+  entrou em `pyproject.toml` em 2026-10-01 para rodar por `uvx ruff`; se `ruff check` e
+  `ruff format --check` entram em `tests.yml`, com o `ruff` fixado no grupo `dev`, e se os comandos
+  entram em `README.md`, é pergunta para o usuário.
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a

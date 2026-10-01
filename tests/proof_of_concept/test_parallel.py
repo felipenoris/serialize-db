@@ -33,7 +33,9 @@ FOUR_MONTHS = ("2026-01", "2026-02", "2026-03", "2026-04")
 FOUR_MONTH_ROWS = 400_000
 
 
-def four_month_table(con: duckdb.DuckDBPyConnection) -> pa.Table:
+def four_month_table(
+    con: duckdb.DuckDBPyConnection,
+) -> pa.Table:
     """``FOUR_MONTH_ROWS`` linhas com ``mes`` em quatro valores, o inteiro, um decimal e um texto,
     geradas pelo DuckDB."""
     sql = (
@@ -48,7 +50,9 @@ def four_month_table(con: duckdb.DuckDBPyConnection) -> pa.Table:
 
 
 @pytest.mark.local
-def test_several_delta_tables_read_and_ingested_in_parallel(local_location: LocalLocation) -> None:
+def test_several_delta_tables_read_and_ingested_in_parallel(
+    local_location: LocalLocation,
+) -> None:
     """Quatro tabelas Delta lidas pelo delta-rs e ingeridas no DuckDB por ``delta_scan``, em
     sequência na conexão raiz e em quatro threads, um cursor por tabela."""
     sample = sample_table()
@@ -56,7 +60,9 @@ def test_several_delta_tables_read_and_ingested_in_parallel(local_location: Loca
     for uri in uris:
         write_deltalake(uri, sample, mode="overwrite", partition_by=["mes"])
 
-    def read_all(uri: str) -> int:
+    def read_all(
+        uri: str,
+    ) -> int:
         return DeltaTable(uri).to_pyarrow_table().num_rows
 
     started = time.perf_counter()
@@ -75,11 +81,17 @@ def test_several_delta_tables_read_and_ingested_in_parallel(local_location: Loca
     con = connect_duckdb(["delta"])
     con.execute("SET threads = 2")
 
-    def ingest(connection: duckdb.DuckDBPyConnection, prefix: str, k: int) -> None:
+    def ingest(
+        connection: duckdb.DuckDBPyConnection,
+        prefix: str,
+        k: int,
+    ) -> None:
         connection.execute(f"CREATE TABLE {prefix}_{k} AS SELECT * FROM delta_scan('{uris[k]}') "
                            f"WHERE mes = '{MONTHS[0]}'")
 
-    def ingest_in_own_cursor(k: int) -> None:
+    def ingest_in_own_cursor(
+        k: int,
+    ) -> None:
         cursor = con.cursor()
         try:
             ingest(cursor, "par", k)
@@ -102,7 +114,8 @@ def test_several_delta_tables_read_and_ingested_in_parallel(local_location: Loca
 
 @pytest.mark.local
 def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(
-        local_location: LocalLocation) -> None:
+    local_location: LocalLocation,
+) -> None:
     """Escritas em paralelo entram em tabelas distintas e em meses distintos da mesma tabela; no
     mesmo mês, um dos dois escritores falha com ``CommitFailedError``."""
     con = duckdb.connect(config={"threads": 2})
@@ -112,7 +125,9 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(
     # 1. Quatro tabelas em quatro threads: quatro commits independentes, cada log na sua pasta.
     uris = [local_location.child(f"escrita/tabela_{k}") for k in range(4)]
 
-    def write_table(uri: str) -> None:
+    def write_table(
+        uri: str,
+    ) -> None:
         write_deltalake(uri, data, mode="overwrite", partition_by=["mes"])
 
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -124,7 +139,9 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(
     # quatro entram.
     uri = uris[0]
 
-    def replace_month(month: str) -> None:
+    def replace_month(
+        month: str,
+    ) -> None:
         month_rows = data.filter(pc.equal(data.column("mes"), month))
         write_deltalake(uri, month_rows, mode="overwrite", predicate=f"mes = '{month}'")
 
@@ -143,7 +160,9 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(
     predicate = f"mes = '{FOUR_MONTHS[0]}'"
     outcomes: list[str] = []
 
-    def overwrite(writer: DeltaTable) -> None:
+    def overwrite(
+        writer: DeltaTable,
+    ) -> None:
         try:
             write_deltalake(writer, month_rows, mode="overwrite", predicate=predicate)
             outcomes.append("commit")
@@ -160,7 +179,8 @@ def test_delta_writes_in_parallel_by_table_and_by_month_and_the_conflict(
 
 @pytest.mark.local
 def test_duckdb_loads_and_exports_from_threads_on_one_connection(
-        local_location: LocalLocation) -> None:
+    local_location: LocalLocation,
+) -> None:
     """Quatro cargas Arrow em tabelas distintas e quatro ``COPY ... TO`` pedidos por quatro
     threads a uma conexão só, em série sob um lock: o ``threadsafety`` 1 do ``duckdb`` não deixa
     duas threads usarem a conexão ao mesmo tempo."""
@@ -171,7 +191,9 @@ def test_duckdb_loads_and_exports_from_threads_on_one_connection(
     for month in FOUR_MONTHS:
         by_month[month] = data.filter(pc.equal(data.column("mes"), month))
 
-    def load(k: int) -> None:
+    def load(
+        k: int,
+    ) -> None:
         # O registro da tabela Arrow e o CREATE correm sob o mesmo lock: outra thread nunca vê o
         # nome registrado.
         with lock:
@@ -192,7 +214,9 @@ def test_duckdb_loads_and_exports_from_threads_on_one_connection(
     folder = local_location.path / "exportacao"
     folder.mkdir()
 
-    def export(k: int) -> None:
+    def export(
+        k: int,
+    ) -> None:
         target = folder / f"carga_{k}.parquet"
         with lock:
             con.execute(f"COPY carga_{k} TO '{target}' (FORMAT parquet)")

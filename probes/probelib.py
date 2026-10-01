@@ -81,11 +81,17 @@ GATEWAY_SERVICES = ("s3", "dynamodb")
 class Tee:
     """Escreve ao mesmo tempo no terminal e no arquivo de saída, linha a linha."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+    ) -> None:
         self.file = path.open("w", encoding="utf-8")
         self.terminal = sys.stdout
 
-    def write(self, text: str) -> int:
+    def write(
+        self,
+        text: str,
+    ) -> int:
         self.terminal.write(text)
         self.file.write(text)
         self.file.flush()
@@ -103,7 +109,11 @@ class Tee:
 # Erros do boto3: o serviço respondeu, não respondeu, ou o erro é local
 
 
-def short_config(connect: float = 5, read: float = 15, attempts: int = 2) -> Any:
+def short_config(
+    connect: float = 5,
+    read: float = 15,
+    attempts: int = 2,
+) -> Any:
     """Um ``botocore.config.Config`` com esperas curtas.
 
     Sem rede, o padrão do boto3 espera 60 s por tentativa.
@@ -117,7 +127,9 @@ def short_config(connect: float = 5, read: float = 15, attempts: int = 2) -> Any
     )
 
 
-def answered(error: BaseException) -> bool:
+def answered(
+    error: BaseException,
+) -> bool:
     """Se o serviço respondeu (erro de credencial ou de permissão) em vez de não haver resposta."""
     try:
         import botocore.exceptions
@@ -127,7 +139,9 @@ def answered(error: BaseException) -> bool:
     return isinstance(error, botocore.exceptions.ClientError)
 
 
-def unanswered(error: BaseException) -> bool:
+def unanswered(
+    error: BaseException,
+) -> bool:
     """Se o boto3 não obteve resposta (rede, proxy, tempo esgotado).
 
     Um erro local, como a credencial ausente, não conta.
@@ -145,14 +159,18 @@ def unanswered(error: BaseException) -> bool:
     return any(word in name for word in ("Timeout", "Connection", "Endpoint", "SSL", "Proxy"))
 
 
-def error_code(error: BaseException) -> str | None:
+def error_code(
+    error: BaseException,
+) -> str | None:
     """Código de erro do serviço numa ``ClientError`` do botocore; ``None`` para os demais erros."""
     response = getattr(error, "response", None)
     code = response.get("Error", {}).get("Code") if isinstance(response, dict) else None
     return str(code) if code else None
 
 
-def describe_error(error: BaseException) -> str:
+def describe_error(
+    error: BaseException,
+) -> str:
     """O erro numa linha, com o prefixo que diz se o serviço respondeu com erro ou não respondeu.
 
     Um erro local, ou de outra biblioteca que não o boto3, sai sem prefixo.
@@ -167,7 +185,9 @@ def describe_error(error: BaseException) -> str:
     return f"{type(error).__name__}: {text}"
 
 
-def reason(error: BaseException) -> str:
+def reason(
+    error: BaseException,
+) -> str:
     """O motivo curto de uma falha, para a checagem que a interpreta.
 
     O motivo é ``negado``, outro erro do serviço, ``sem resposta`` ou ``erro local``.
@@ -183,7 +203,9 @@ def reason(error: BaseException) -> str:
     return f"erro local ({type(error).__name__})"
 
 
-def principal_arn(caller_arn: str) -> str:
+def principal_arn(
+    caller_arn: str,
+) -> str:
     """O ARN que a simulação de política aceita.
 
     Um assumed-role vira o ARN do papel por trás dele; qualquer outro ARN volta como veio.
@@ -195,7 +217,9 @@ def principal_arn(caller_arn: str) -> str:
     return caller_arn
 
 
-def credential_expiry(credentials: Any) -> datetime.datetime | None:
+def credential_expiry(
+    credentials: Any,
+) -> datetime.datetime | None:
     """A expiração de uma credencial do botocore, ou ``None`` quando ela não expira.
 
     O botocore não expõe a expiração: a ``RefreshableCredentials``, a credencial temporária do
@@ -211,7 +235,9 @@ def credential_expiry(credentials: Any) -> datetime.datetime | None:
     return credentials._expiry_time
 
 
-def s3_root(argv: list[str]) -> tuple[str, str]:
+def s3_root(
+    argv: list[str],
+) -> tuple[str, str]:
     """A raiz ``s3://bucket/prefixo`` que um probe fotografa, e de onde ela veio.
 
     A ordem é o argumento da linha de comando, ``SERIALIZE_DB_ROOT`` (a raiz da biblioteca, onde ela
@@ -256,7 +282,9 @@ class DuckDBProxy(NamedTuple):
     reading: str
 
 
-def split_proxy(url: str) -> tuple[str, str, str]:
+def split_proxy(
+    url: str,
+) -> tuple[str, str, str]:
     """Divide o ``url`` do proxy em endereço sem credenciais, usuário e senha, com URL-decode.
 
     O endereço volta vazio quando não há host ou a porta não é um número; o esquema é opcional.
@@ -273,7 +301,9 @@ def split_proxy(url: str) -> tuple[str, str, str]:
     return address, urllib.parse.unquote(parts.username or ""), urllib.parse.unquote(parts.password or "")
 
 
-def hide_credentials(url: str) -> str:
+def hide_credentials(
+    url: str,
+) -> str:
     """``url`` com o usuário e a senha embutidos trocados por ``***``, para o relatório.
 
     O esquema, quando há, fica; sem ele, tudo antes do ``@`` é usuário e senha.
@@ -287,7 +317,9 @@ def hide_credentials(url: str) -> str:
     return f"***@{tail}"
 
 
-def duckdb_proxy(environ: Mapping[str, str] | None = None) -> DuckDBProxy:
+def duckdb_proxy(
+    environ: Mapping[str, str] | None = None,
+) -> DuckDBProxy:
     """As configurações de proxy a aplicar numa sessão do DuckDB, lidas do ambiente.
 
     O DuckDB recusa o endereço com as credenciais embutidas ("Failed to parse http_proxy ... into a
@@ -328,7 +360,10 @@ def duckdb_proxy(environ: Mapping[str, str] | None = None) -> DuckDBProxy:
 # Rede: DNS e TCP como leituras, nunca como chamadas falhadas
 
 
-def resolve(name: str, port: int = 443) -> tuple[list[str], bool]:
+def resolve(
+    name: str,
+    port: int = 443,
+) -> tuple[list[str], bool]:
     """Os endereços IP de ``name`` e se todos são privados.
 
     Todos privados indicam endpoint VPC de interface com DNS privado.
@@ -338,14 +373,22 @@ def resolve(name: str, port: int = 443) -> tuple[list[str], bool]:
     return addresses, private
 
 
-def tcp_open(host: str, port: int, timeout: float = 5) -> float:
+def tcp_open(
+    host: str,
+    port: int,
+    timeout: float = 5,
+) -> float:
     """Tempo, em segundos, para abrir uma conexão TCP; levanta a exceção do socket quando falha."""
     started = time.perf_counter()
     with socket.create_connection((host, port), timeout=timeout):
         return time.perf_counter() - started
 
 
-def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
+def tcp_probe(
+    host: str,
+    port: int,
+    timeout: float = 5,
+) -> str:
     """Abre uma conexão TCP como leitura: ``conectou em N s`` ou ``não conectou: erro``.
 
     O erro do socket vira o texto da leitura, sem exceção.
@@ -356,7 +399,10 @@ def tcp_probe(host: str, port: int, timeout: float = 5) -> str:
         return f"não conectou: {error}"
 
 
-def endpoint_reachable(client: Any, timeout: float = 2) -> tuple[bool, str]:
+def endpoint_reachable(
+    client: Any,
+    timeout: float = 2,
+) -> tuple[bool, str]:
     """Se o endpoint de um cliente boto3 aceita conexão TCP em ``timeout``, e a leitura que o diz.
 
     Um serviço sem endpoint VPC e sem internet gasta ``connect_timeout`` em cada endereço que o nome
@@ -385,7 +431,9 @@ def endpoint_reachable(client: Any, timeout: float = 2) -> tuple[bool, str]:
     return reading.startswith("conectou"), f"{where}:{port} {reading}"
 
 
-def public_label(name: str) -> str:
+def public_label(
+    name: str,
+) -> str:
     """O tipo de um nome que resolve para IP público.
 
     Só o S3 e o DynamoDB têm gateway endpoint; os demais dependem da internet ou do proxy.
@@ -396,7 +444,9 @@ def public_label(name: str) -> str:
     return "público: gateway endpoint ou internet" if gateway else "público: só pela internet ou pelo proxy"
 
 
-def dns_rows(names: Iterable[str]) -> tuple[list[list[str]], dict[str, bool | None]]:
+def dns_rows(
+    names: Iterable[str],
+) -> tuple[list[list[str]], dict[str, bool | None]]:
     """As linhas da tabela de DNS e, por nome, se ele resolveu para IP privado.
 
     Um nome que não resolve fica com ``None`` e é uma leitura, não uma chamada falhada: sem
@@ -426,7 +476,9 @@ def dns_rows(names: Iterable[str]) -> tuple[list[list[str]], dict[str, bool | No
 # Formatação: JSON legível, tabelas alinhadas e segredos mascarados
 
 
-def mask(data: Any) -> Any:
+def mask(
+    data: Any,
+) -> Any:
     """Cópia de ``data`` com os valores das chaves que parecem segredo trocados por ``***``."""
     if isinstance(data, dict):
         return {
@@ -438,7 +490,10 @@ def mask(data: Any) -> Any:
     return data
 
 
-def pretty(data: Any, limit: int = 120) -> str:
+def pretty(
+    data: Any,
+    limit: int = 120,
+) -> str:
     """O JSON legível de uma resposta, sem ``ResponseMetadata`` e sem segredos.
 
     O texto é cortado em ``limit`` linhas.
@@ -452,7 +507,9 @@ def pretty(data: Any, limit: int = 120) -> str:
     return "\n".join(lines)
 
 
-def tabulate(rows: Iterable[Iterable[Any] | str]) -> str:
+def tabulate(
+    rows: Iterable[Iterable[Any] | str],
+) -> str:
     """Alinha linhas como ``column -t -s $'\\t'``, com ``-`` na célula vazia."""
     # Cada linha vira uma lista de células; uma linha dada como texto é dividida por tabulação.
     split: list[list[str]] = []
@@ -474,7 +531,12 @@ def tabulate(rows: Iterable[Iterable[Any] | str]) -> str:
     )
 
 
-def run_python(code: str, arguments: list[str], timeout: float, executable: str | None = None) -> subprocess.CompletedProcess[str]:
+def run_python(
+    code: str,
+    arguments: list[str],
+    timeout: float,
+    executable: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Roda ``code`` num subprocesso Python com espera limitada."""
     return subprocess.run(
         [executable or sys.executable, "-c", code, *arguments],
@@ -484,7 +546,9 @@ def run_python(code: str, arguments: list[str], timeout: float, executable: str 
     )
 
 
-def environment_rows(names: Iterable[str]) -> list[list[str]]:
+def environment_rows(
+    names: Iterable[str],
+) -> list[list[str]]:
     """Linhas ``nome, valor`` das variáveis; as que parecem segredo mostram só presença."""
     names = list(names)
     rows = []
@@ -521,7 +585,11 @@ class Report:
     checagens, a seção final de falhas e devolve o código de saída.
     """
 
-    def __init__(self, name: str, subject: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        subject: str,
+    ) -> None:
         OUTPUT_DIR.mkdir(exist_ok=True)
         self.path = OUTPUT_DIR / f"{name}_{time.strftime('%Y%m%d-%H%M%S')}.txt"
         self.tee = Tee(self.path)
@@ -539,29 +607,51 @@ class Report:
         print(f"interpretador {sys.executable}")
         print("=" * 80)
 
-    def h1(self, title: str) -> None:
+    def h1(
+        self,
+        title: str,
+    ) -> None:
         """Abre uma seção numerada."""
         self.section_number += 1
         print(f"\n\n{'#' * 80}\n# {self.section_number}. {title}\n{'#' * 80}\n")
 
-    def h2(self, title: str) -> None:
+    def h2(
+        self,
+        title: str,
+    ) -> None:
         """Abre uma subseção, sem número."""
         print(f"\n--- {title} ---\n")
 
-    def line(self, text: str = "") -> None:
+    def line(
+        self,
+        text: str = "",
+    ) -> None:
         """Uma linha de texto livre."""
         print(text)
 
-    def value(self, name: str, value: object) -> None:
+    def value(
+        self,
+        name: str,
+        value: object,
+    ) -> None:
         """Um identificador reaproveitado, como ``BUCKET=nome``, para refazer uma chamada à mão."""
         print(f"{name}={value}")
 
-    def table(self, rows: Iterable[Iterable[Any] | str]) -> None:
+    def table(
+        self,
+        rows: Iterable[Iterable[Any] | str],
+    ) -> None:
         """Uma tabela alinhada, a primeira linha como cabeçalho, e uma linha em branco depois."""
         print(tabulate(rows))
         print()
 
-    def call(self, label: str, action: Callable[[], T], render: Callable[[Any], str] | None = pretty, expected: bool = False) -> T | None:
+    def call(
+        self,
+        label: str,
+        action: Callable[[], T],
+        render: Callable[[Any], str] | None = pretty,
+        expected: bool = False,
+    ) -> T | None:
         """Ecoa ``label``, executa ``action`` e imprime o resultado ou o erro.
 
         Devolve o resultado de ``action``, ou ``None`` quando ela levantou exceção; nesse caso a
@@ -594,15 +684,30 @@ class Report:
         print(f"({elapsed:.1f} s)\n")
         return result
 
-    def ok(self, check_id: str, what: str, detail: str) -> None:
+    def ok(
+        self,
+        check_id: str,
+        what: str,
+        detail: str,
+    ) -> None:
         """Checagem aprovada."""
         self.checks.append(("pass", check_id, what, detail))
 
-    def fail(self, check_id: str, what: str, detail: str) -> None:
+    def fail(
+        self,
+        check_id: str,
+        what: str,
+        detail: str,
+    ) -> None:
         """Checagem reprovada: algo que impede a biblioteca; leva o código de saída a 2."""
         self.checks.append(("fail", check_id, what, detail))
 
-    def note(self, check_id: str, what: str, detail: str) -> None:
+    def note(
+        self,
+        check_id: str,
+        what: str,
+        detail: str,
+    ) -> None:
         """Leitura registrada sem veredito: o ausente, o negado, o que só a próxima etapa decide."""
         self.checks.append(("note", check_id, what, detail))
 
@@ -737,7 +842,9 @@ def python_candidates() -> list[str]:
     return seen
 
 
-def project_snapshot(timeout: float = 90) -> tuple[dict[str, Any], str]:
+def project_snapshot(
+    timeout: float = 90,
+) -> tuple[dict[str, Any], str]:
     """Lê o projeto do SageMaker Unified Studio com ``sagemaker_studio``.
 
     A leitura roda ``PROJECT_PROBE`` em cada interpretador de ``python_candidates`` até o primeiro
@@ -757,7 +864,10 @@ def project_snapshot(timeout: float = 90) -> tuple[dict[str, Any], str]:
     raise RuntimeError("; ".join(errors))
 
 
-def find_values(data: Any, names: Iterable[str]) -> dict[str, Any]:
+def find_values(
+    data: Any,
+    names: Iterable[str],
+) -> dict[str, Any]:
     """O primeiro valor não vazio de cada chave de ``names`` numa estrutura aninhada.
 
     A busca desce por dicionários, listas e tuplas, em qualquer profundidade.
@@ -765,7 +875,9 @@ def find_values(data: Any, names: Iterable[str]) -> dict[str, Any]:
     wanted = set(names)
     found: dict[str, Any] = {}
 
-    def walk(node: Any) -> None:
+    def walk(
+        node: Any,
+    ) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
                 if key in wanted and key not in found and value not in (None, ""):
@@ -784,7 +896,9 @@ def find_values(data: Any, names: Iterable[str]) -> dict[str, Any]:
 CONNECTION_DETAILS = ("s3_uri", "workgroup_name", "database_name", "jdbc_url", "host", "glue_version")
 
 
-def connection_rows(connections: Iterable[dict[str, Any]]) -> list[list[str]]:
+def connection_rows(
+    connections: Iterable[dict[str, Any]],
+) -> list[list[str]]:
     """Uma linha por conexão do projeto: nome, tipo, endpoint e o dado que a distingue.
 
     O dado é o primeiro de ``CONNECTION_DETAILS`` que a conexão traz, como a URI S3, o workgroup ou

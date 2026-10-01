@@ -36,7 +36,9 @@ from serialize_db.execution import Database
 USAGE = "uso: .venv/bin/python probes/operacao/probe_vacuum_orphans.py <origem>"
 
 
-def listed_paths(finished: lib.Finished) -> list[str]:
+def listed_paths(
+    finished: lib.Finished,
+) -> list[str]:
     """Os arquivos que ``serialize-db vacuum`` imprimiu para a tabela, um por linha recuada
     depois da linha dela."""
     paths = []
@@ -52,7 +54,10 @@ def listed_paths(finished: lib.Finished) -> list[str]:
     return paths
 
 
-def run_vacuum(db: Database, *options: str) -> list[str] | None:
+def run_vacuum(
+    db: Database,
+    *options: str,
+) -> list[str] | None:
     """``serialize-db vacuum --full`` com as opções, com a versão da tabela depois impressa;
     devolve os arquivos listados, ou ``None`` numa saída diferente de 0."""
     finished = lib.run_cli(lib.cli_arguments(db, "vacuum", "--full", *options))
@@ -63,7 +68,11 @@ def run_vacuum(db: Database, *options: str) -> list[str] | None:
     return listed_paths(finished)
 
 
-def check_listed(title: str, listed: list[str] | None, expected: list[str]) -> None:
+def check_listed(
+    title: str,
+    listed: list[str] | None,
+    expected: list[str],
+) -> None:
     """A lista de um ``vacuum`` igual à esperada."""
     problems = []
     if listed is None:

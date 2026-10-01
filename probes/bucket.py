@@ -39,7 +39,6 @@ chamada falhou, 2 alguma checagem reprovou.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 import time
@@ -76,13 +75,20 @@ Entry = tuple[str, int, Any]
 # Seção 1: o bucket
 
 
-def render_head_bucket(found: dict) -> str:
+def render_head_bucket(
+    found: dict,
+) -> str:
     """Os cabeçalhos úteis do HeadBucket: região, ARN e se o nome é alias de access point."""
     headers = found.get("ResponseMetadata", {}).get("HTTPHeaders", {})
     return pretty({key: value for key, value in headers.items() if key in HEAD_BUCKET_HEADERS})
 
 
-def bucket_settings(report: Report, client, bucket: str, resolved: str | None) -> tuple[str | None, str | None, str]:
+def bucket_settings(
+    report: Report,
+    client,
+    bucket: str,
+    resolved: str | None,
+) -> tuple[str | None, str | None, str]:
     """Seção 1, o bucket.
 
     Checagens: ``BK-1`` (acessível), ``BK-2`` (região), ``BK-5`` (criptografia) e ``BK-12``
@@ -159,7 +165,12 @@ def bucket_settings(report: Report, client, bucket: str, resolved: str | None) -
     return kms_key, status, versioning_reason
 
 
-def versioning_check(report: Report, status: str | None, why: str, sample: dict | None) -> None:
+def versioning_check(
+    report: Report,
+    status: str | None,
+    why: str,
+    sample: dict | None,
+) -> None:
     """``BK-4``, o versionamento, pela API ou, com ela negada, pela amostra do inventário."""
     consequence = (
         "cada DeleteObject do vacuum deixa uma versão não corrente, que só uma regra NoncurrentVersionExpiration "
@@ -183,7 +194,12 @@ def versioning_check(report: Report, status: str | None, why: str, sample: dict 
 # Seção 2: o ciclo de vida
 
 
-def lifecycle(report: Report, client, bucket: str, prefix: str) -> None:
+def lifecycle(
+    report: Report,
+    client,
+    bucket: str,
+    prefix: str,
+) -> None:
     """Seção 2: ``BK-3``, se alguma regra habilitada expira objetos correntes sob a raiz; a que só
     expira versões não correntes é leitura."""
     report.h1("Ciclo de vida")
@@ -240,7 +256,11 @@ def lifecycle(report: Report, client, bucket: str, prefix: str) -> None:
 # Seção 3: o inventário
 
 
-def delta_table_rows(entries: list[Entry], roots: list[str], listing_prefix: str) -> list[list[object]]:
+def delta_table_rows(
+    entries: list[Entry],
+    roots: list[str],
+    listing_prefix: str,
+) -> list[list[object]]:
     """Uma linha por tabela Delta, com o estado que a listagem mostra.
 
     As colunas são arquivos de dados, bytes, commits no log (``NNN.json``), checkpoints e último
@@ -282,7 +302,10 @@ def delta_table_rows(entries: list[Entry], roots: list[str], listing_prefix: str
     return rows
 
 
-def session_rows(entries: list[Entry], listing_prefix: str) -> list[list[object]]:
+def session_rows(
+    entries: list[Entry],
+    listing_prefix: str,
+) -> list[list[object]]:
     """Uma linha por sessão da suíte S3 (``serialize-db-poc/<id>/``) que ainda existe sob a raiz.
 
     A mais recente vem primeiro, e a tabela mostra até 20 sessões.
@@ -306,7 +329,12 @@ def session_rows(entries: list[Entry], listing_prefix: str) -> list[list[object]
     return rows
 
 
-def object_versions(report: Report, client, bucket: str, listing_prefix: str) -> None:
+def object_versions(
+    report: Report,
+    client,
+    bucket: str,
+    listing_prefix: str,
+) -> None:
     """``BK-14``: o que o versionamento acumulou sob a raiz.
 
     As versões não correntes e os marcadores de exclusão são invisíveis a ``list_objects_v2`` e
@@ -348,7 +376,9 @@ def object_versions(report: Report, client, bucket: str, listing_prefix: str) ->
         report.note("BK-14", "versões não correntes sob a raiz", f"nenhuma, nem marcador de exclusão{limit}")
 
 
-def render_head_object(found: dict) -> str:
+def render_head_object(
+    found: dict,
+) -> str:
     """Os campos do HeadObject que interessam.
 
     São a criptografia, a chave, o bucket key, a classe, o tamanho, a data e o ``VersionId``.
@@ -356,7 +386,12 @@ def render_head_object(found: dict) -> str:
     return pretty({key: found.get(key) for key in HEAD_OBJECT_FIELDS})
 
 
-def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any]:
+def inventory(
+    report: Report,
+    client,
+    bucket: str,
+    prefix: str,
+) -> dict[str, Any]:
     """Seção 3, o inventário sob a raiz.
 
     Checagens: ``BK-6`` (tabelas Delta), ``BK-13`` (sessões da suíte), ``BK-7`` (amostra) e
@@ -457,12 +492,21 @@ def inventory(report: Report, client, bucket: str, prefix: str) -> dict[str, Any
 # Seção 4: as permissões do papel
 
 
-def decisions(found: dict) -> str:
+def decisions(
+    found: dict,
+) -> str:
     """A tabela ação, decisão de uma simulação de política."""
     return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
 
 
-def permissions(report: Report, bucket: str, prefix: str, resolved: str | None, kms_key: str | None, proven: dict[str, Any]) -> None:
+def permissions(
+    report: Report,
+    bucket: str,
+    prefix: str,
+    resolved: str | None,
+    kms_key: str | None,
+    proven: dict[str, Any],
+) -> None:
     """Seção 4: ``BK-8``, o que o papel pode fazer sob a raiz, pela simulação de política do IAM.
 
     Sem a simulação (negada ao papel do projeto, ou com o IAM sem resposta ao teste TCP), a
@@ -486,7 +530,9 @@ def permissions(report: Report, bucket: str, prefix: str, resolved: str | None, 
     object_arn = f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"
     iam = session.client("iam", config=short_config(2, 5, 1))
 
-    def without_simulation(detail: str) -> None:
+    def without_simulation(
+        detail: str,
+    ) -> None:
         """A nota no lugar da simulação: o que esta execução provou e o que só a suíte S3 prova."""
         proofs = (("ListBucket sob a raiz", proven.get("listed")), ("HeadObject de uma amostra", proven.get("sample") is not None))
         shown = [name for name, done in proofs if done]
@@ -537,7 +583,9 @@ def permissions(report: Report, bucket: str, prefix: str, resolved: str | None, 
 # Seção 5: a chave KMS
 
 
-def render_key(meta: dict) -> str:
+def render_key(
+    meta: dict,
+) -> str:
     """Os campos da chave que decidem se a escrita funciona.
 
     São o ARN, o estado, o gestor, a origem, o tipo e se ela está habilitada.
@@ -545,7 +593,11 @@ def render_key(meta: dict) -> str:
     return pretty({key: meta.get(key) for key in ("Arn", "KeyState", "KeyManager", "Origin", "KeySpec", "Enabled")})
 
 
-def kms_key_section(report: Report, resolved: str | None, kms_key: str | None) -> None:
+def kms_key_section(
+    report: Report,
+    resolved: str | None,
+    kms_key: str | None,
+) -> None:
     """Seção 5: ``BK-9``, a chave KMS que criptografa cada objeto gravado.
 
     Uma chave desabilitada reprova toda escrita.
@@ -585,7 +637,12 @@ def kms_key_section(report: Report, resolved: str | None, kms_key: str | None) -
 # Seção 6: a política do bucket e os uploads incompletos
 
 
-def policy_and_uploads(report: Report, client, bucket: str, prefix: str) -> None:
+def policy_and_uploads(
+    report: Report,
+    client,
+    bucket: str,
+    prefix: str,
+) -> None:
     """Seção 6, a política do bucket e os uploads incompletos.
 
     Checagens: ``BK-10`` (a política do bucket e seus ``Deny``) e ``BK-11`` (uploads multipart
@@ -635,7 +692,9 @@ def policy_and_uploads(report: Report, client, bucket: str, prefix: str) -> None
 # main
 
 
-def main(argv: list[str]) -> int:
+def main(
+    argv: list[str],
+) -> int:
     root, source = probelib.s3_root(argv)
     if not root.startswith("s3://"):
         print(f"uso: .venv/bin/python probes/bucket.py s3://bucket/prefixo\n{probelib.NO_ROOT}", file=sys.stderr)
@@ -650,7 +709,10 @@ def main(argv: list[str]) -> int:
     report.value("REGION", resolved)
     client = boto3.client("s3", region_name=resolved, config=short_config())
 
-    def guarded(section, *arguments):
+    def guarded(
+        section,
+        *arguments,
+    ):
         # Uma seção interrompida não cala as outras; o que ela devolveria fica no valor padrão do
         # chamador.
         try:

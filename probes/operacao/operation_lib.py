@@ -62,11 +62,18 @@ DATABASES: list[Database] = []
 class Tee:
     """Escreve ao mesmo tempo num fluxo do terminal e no arquivo de saída."""
 
-    def __init__(self, file: TextIO, terminal: TextIO) -> None:
+    def __init__(
+        self,
+        file: TextIO,
+        terminal: TextIO,
+    ) -> None:
         self.file = file
         self.terminal = terminal
 
-    def write(self, text: str) -> int:
+    def write(
+        self,
+        text: str,
+    ) -> int:
         self.terminal.write(text)
         self.file.write(text)
         self.file.flush()
@@ -104,7 +111,9 @@ def _suite_root() -> str:
     sys.exit(2)
 
 
-def work_database(name: str) -> Database:
+def work_database(
+    name: str,
+) -> Database:
     """O banco da sonda ``name`` numa pasta nova, ``<raiz>/serialize-db-operacao/<name>-<id>``,
     no ambiente ``prd`` dela; abre o arquivo de saída, que recebe também os erros, e imprime o
     cabeçalho com a máquina e as versões."""
@@ -131,7 +140,10 @@ def work_database(name: str) -> Database:
     return db
 
 
-def source_partitions(source: str, count: int) -> list[str]:
+def source_partitions(
+    source: str,
+    count: int,
+) -> list[str]:
     """Os ``count`` primeiros valores de partição de ``cad_lancamentos`` na origem, em ordem de
     nome; com menos, a sonda para com o código 2."""
     found, _ = load.discover_partitions(source, TABLE)
@@ -143,7 +155,11 @@ def source_partitions(source: str, count: int) -> list[str]:
     return values
 
 
-def load_partitions(db: Database, source: str, values: list[str]) -> None:
+def load_partitions(
+    db: Database,
+    source: str,
+    values: list[str],
+) -> None:
     """A carga das partições pela biblioteca, sem o relatório de ``serialize-db load``, que soma a
     origem inteira."""
     started = time.perf_counter()
@@ -151,7 +167,10 @@ def load_partitions(db: Database, source: str, values: list[str]) -> None:
     print(f"carga de {', '.join(loaded)} em {time.perf_counter() - started:.1f} s")
 
 
-def check(title: str, problems: list[str]) -> None:
+def check(
+    title: str,
+    problems: list[str],
+) -> None:
     """Imprime a checagem ``title`` como ``OK`` ou ``PROBLEMAS`` com a lista, e a registra para o
     código de saída."""
     print(f"== {title}: {'OK' if not problems else 'PROBLEMAS'}")
@@ -163,7 +182,9 @@ def check(title: str, problems: list[str]) -> None:
         PASSED.append(title)
 
 
-def delete_root(db: Database) -> None:
+def delete_root(
+    db: Database,
+) -> None:
     """Apaga a raiz de trabalho, com o número de objetos e o tamanho impressos, a menos que
     ``SERIALIZE_DB_TEST_KEEP`` a mantenha."""
     storage = db.storage
@@ -184,7 +205,9 @@ def delete_root(db: Database) -> None:
     print(f"raiz apagada: {len(files)} objeto(s), {megabytes:.0f} MB")
 
 
-def finish(db: Database) -> None:
+def finish(
+    db: Database,
+) -> None:
     """Imprime o resumo das checagens, apaga a raiz de trabalho e encerra com o código 1 quando
     alguma checagem reprovou."""
     print(f"checagens: {len(PASSED) + len(FAILED)}, reprovadas: {len(FAILED)}")
@@ -195,7 +218,9 @@ def finish(db: Database) -> None:
     sys.exit(1 if FAILED else 0)
 
 
-def run(main: Callable[[], None]) -> None:
+def run(
+    main: Callable[[], None],
+) -> None:
     """Roda a sonda; numa exceção, apaga a raiz de trabalho antes de ela subir com o traceback,
     que o arquivo de saída recebe pelo stderr."""
     try:
@@ -209,7 +234,11 @@ def run(main: Callable[[], None]) -> None:
 # ---------------------------------------------------------------- serialize-db num processo filho
 
 
-def cli_arguments(db: Database, command: str, *options: str) -> list[str]:
+def cli_arguments(
+    db: Database,
+    command: str,
+    *options: str,
+) -> list[str]:
     """Os argumentos de um subcomando de operação sobre o banco da sonda."""
     return [command, "--root", db.storage.uri, "--environment", db.environment,
             "--metadata", METADATA, *options]
@@ -225,7 +254,9 @@ def _child_environment() -> dict[str, str]:
     return environment
 
 
-def _start(arguments: list[str]) -> subprocess.Popen:
+def _start(
+    arguments: list[str],
+) -> subprocess.Popen:
     """``serialize-db`` do ambiente virtual da sonda, com o stderr, onde vai o log, junto do
     stdout."""
     print("$ serialize-db " + " ".join(arguments))
@@ -234,7 +265,9 @@ def _start(arguments: list[str]) -> subprocess.Popen:
                             env=_child_environment())
 
 
-def run_cli(arguments: list[str]) -> Finished:
+def run_cli(
+    arguments: list[str],
+) -> Finished:
     """Roda ``serialize-db`` até o fim, ecoando cada linha da saída."""
     started = time.perf_counter()
     process = _start(arguments)
@@ -248,8 +281,11 @@ def run_cli(arguments: list[str]) -> Finished:
     return Finished(code, lines, seconds)
 
 
-def run_cli_killed(arguments: list[str], trigger: str,
-                   before_kill: Callable[[subprocess.Popen], str]) -> Finished:
+def run_cli_killed(
+    arguments: list[str],
+    trigger: str,
+    before_kill: Callable[[subprocess.Popen], str],
+) -> Finished:
     """Roda ``serialize-db`` e o encerra por ``SIGKILL``, como o kernel sem memória, sem que o
     processo rode um ``finally``: depois da primeira linha da saída que contém ``trigger`` e da
     volta de ``before_kill``, que devolve o que esperou. Sem a linha, ou com o processo terminado
@@ -288,7 +324,11 @@ def run_cli_killed(arguments: list[str], trigger: str,
     return Finished(code, lines, seconds, killed)
 
 
-def wait_for_file(storage: Storage, folder: str, process: subprocess.Popen) -> str:
+def wait_for_file(
+    storage: Storage,
+    folder: str,
+    process: subprocess.Popen,
+) -> str:
     """Espera um arquivo ``.parquet`` na pasta, listada a cada ``POLL_SECONDS``, enquanto o
     processo roda; devolve o que viu."""
     started = time.perf_counter()
@@ -301,7 +341,9 @@ def wait_for_file(storage: Storage, folder: str, process: subprocess.Popen) -> s
     return "do fim do processo"
 
 
-def no_wait(process: subprocess.Popen) -> str:
+def no_wait(
+    process: subprocess.Popen,
+) -> str:
     """O sinal logo depois da linha marcada."""
     return "da linha marcada"
 
@@ -309,12 +351,18 @@ def no_wait(process: subprocess.Popen) -> str:
 # ---------------------------------------------------------------- os arquivos de uma tabela
 
 
-def table_uri(db: Database, *parts: str) -> str:
+def table_uri(
+    db: Database,
+    *parts: str,
+) -> str:
     """A URI de uma pasta sob o ambiente, como a de ``cad_lancamentos``."""
     return db.storage.uri_of(db.storage.join(db.environment, *parts))
 
 
-def logged_files(uri: str, storage: Storage) -> dict[str, list[str]]:
+def logged_files(
+    uri: str,
+    storage: Storage,
+) -> dict[str, list[str]]:
     """Os arquivos que a versão atual da tabela registra, por valor de partição, relativos à pasta
     dela; a tabela ausente dá o dicionário vazio."""
     if not delta.table_exists(uri, storage):
@@ -329,7 +377,10 @@ def logged_files(uri: str, storage: Storage) -> dict[str, list[str]]:
     return by_value
 
 
-def folder_files(uri: str, storage: Storage) -> list[str]:
+def folder_files(
+    uri: str,
+    storage: Storage,
+) -> list[str]:
     """Os arquivos ``.parquet`` sob a pasta da tabela, fora de ``_delta_log/``, relativos a ela."""
     table_path = storage.relative(uri)
     files = []
@@ -338,7 +389,10 @@ def folder_files(uri: str, storage: Storage) -> list[str]:
     return files
 
 
-def orphans(uri: str, storage: Storage) -> list[str]:
+def orphans(
+    uri: str,
+    storage: Storage,
+) -> list[str]:
     """Os arquivos da pasta da tabela que a versão atual não registra."""
     registered = set()
     for paths in logged_files(uri, storage).values():
@@ -346,7 +400,10 @@ def orphans(uri: str, storage: Storage) -> list[str]:
     return [path for path in folder_files(uri, storage) if path not in registered]
 
 
-def delta_totals(storage: Storage, uri: str) -> tuple[int, int]:
+def delta_totals(
+    storage: Storage,
+    uri: str,
+) -> tuple[int, int]:
     """As linhas da tabela e a soma de ``id_lancamento`` pelo ``delta_scan`` do DuckDB, numa
     conexão com os limites do ambiente."""
     connection = storage.duckdb_connect(config=environment_limits())

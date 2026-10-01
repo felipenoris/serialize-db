@@ -43,8 +43,15 @@ CREATE_NUMBERS = f"""
 TOTALS = "count(*), sum(id), count(DISTINCT id), sum(d), sum(p), count(n)"
 
 
-def consume(engine: DuckDBEngine, label: str, text: str, batch_size: int, budget: int,
-            sleep: float, ordered: bool) -> list[str]:
+def consume(
+    engine: DuckDBEngine,
+    label: str,
+    text: str,
+    batch_size: int,
+    budget: int,
+    sleep: float,
+    ordered: bool,
+) -> list[str]:
     """Lê a consulta inteira por um ``DuckDBStream`` com o orçamento de memória dado e confere
     as linhas, a soma e a unicidade dos ids, a ordem quando pedida e o esquema de cada lote."""
     problems = []
@@ -79,17 +86,24 @@ def consume(engine: DuckDBEngine, label: str, text: str, batch_size: int, budget
     return problems
 
 
-def check_slow_spilled_stream(engine: DuckDBEngine) -> None:
+def check_slow_spilled_stream(
+    engine: DuckDBEngine,
+) -> None:
     """Seção A: um stream ordenado de lotes de 50.000 linhas, 3.000.000 bytes de orçamento e um
     cliente que dorme 5 ms por lote: o transbordo forçado."""
     problems = consume(engine, "A lento com transbordo", ORDERED, 50_000, 3_000_000, 0.005, True)
     report("A um stream lento com transbordo, ordenado", problems)
 
 
-def check_concurrent_streams(engine: DuckDBEngine) -> None:
+def check_concurrent_streams(
+    engine: DuckDBEngine,
+) -> None:
     """Seção B: oito streams ao mesmo tempo na mesma conexão, cada um com o seu tamanho de lote,
     orçamento e ritmo, sorteados por semente."""
-    def one(index: int) -> list[str]:
+
+    def one(
+        index: int,
+    ) -> list[str]:
         chooser = random.Random(index)
         batch_size = chooser.choice([1000, 33_333, 100_000, 250_000])
         budget = chooser.choice([1, 100_000, 5_000_000, 64 * 2**20])
@@ -101,7 +115,9 @@ def check_concurrent_streams(engine: DuckDBEngine) -> None:
     report("B oito streams ao mesmo tempo", [p for result in results for p in result])
 
 
-def output_table(index: int) -> sa.Table:
+def output_table(
+    index: int,
+) -> sa.Table:
     """A tabela de saída ``saida_<index>`` com as nove colunas de ``numeros``."""
     return sa.Table(f"saida_{index}", sa.MetaData(),
                     sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
@@ -111,7 +127,11 @@ def output_table(index: int) -> sa.Table:
                     sa.Column("j", sa.JSON), sa.Column("n", sa.String(20)))
 
 
-def totals_differences(engine: DuckDBEngine, label: str, name: str) -> list[str]:
+def totals_differences(
+    engine: DuckDBEngine,
+    label: str,
+    name: str,
+) -> list[str]:
     """As diferenças entre os totais de ``numeros`` e os da tabela ``name``: a soma do double
     com tolerância relativa de 1e-6, porque a ordem da soma muda os últimos dígitos; e o
     conteúdo pelo ``EXCEPT`` nos dois sentidos."""
@@ -134,10 +154,15 @@ def totals_differences(engine: DuckDBEngine, label: str, name: str) -> list[str]
     return problems
 
 
-def check_pipelines(engine: DuckDBEngine) -> None:
+def check_pipelines(
+    engine: DuckDBEngine,
+) -> None:
     """Seção C: quatro pipelines de ``stream`` para ``appender`` em threads, cada um na sua
     tabela, com o conteúdo conferido pelos totais e pelo ``EXCEPT``."""
-    def pipeline(index: int) -> list[str]:
+
+    def pipeline(
+        index: int,
+    ) -> list[str]:
         table = output_table(index)
         engine.create_table(table)
         stream = DuckDBStream(engine, "SELECT * FROM numeros", [], batch_size=100_000,
@@ -154,13 +179,18 @@ def check_pipelines(engine: DuckDBEngine) -> None:
            [p for result in results for p in result])
 
 
-def check_shared_appender(engine: DuckDBEngine) -> None:
+def check_shared_appender(
+    engine: DuckDBEngine,
+) -> None:
     """Seção D: um ``appender`` escrito por quatro threads, cada uma com o seu quarto das
     linhas."""
     table = output_table(99)
     engine.create_table(table)
     with engine.appender(table, queue_depth=2) as appender:
-        def writer(remainder: int) -> None:
+
+        def writer(
+            remainder: int,
+        ) -> None:
             stream = DuckDBStream(engine, f"SELECT * FROM numeros WHERE id % 4 = {remainder}", [],
                                   batch_size=50_000, budget=1_000_000)
             with stream:
@@ -175,7 +205,9 @@ def check_shared_appender(engine: DuckDBEngine) -> None:
     report("D um appender com quatro threads escrevendo", problems)
 
 
-def check_stream_after_close(engine: DuckDBEngine) -> None:
+def check_stream_after_close(
+    engine: DuckDBEngine,
+) -> None:
     """Seção E: um stream fechado depois do primeiro lote não afeta a consulta e o stream
     seguintes."""
     stream = DuckDBStream(engine, "SELECT * FROM numeros ORDER BY hash(id)", [], batch_size=1000,
@@ -188,7 +220,9 @@ def check_stream_after_close(engine: DuckDBEngine) -> None:
     report("E um stream depois de outro fechado no meio", problems)
 
 
-def check_stream_beside_failure(engine: DuckDBEngine) -> None:
+def check_stream_beside_failure(
+    engine: DuckDBEngine,
+) -> None:
     """Seção F: um stream que falha no meio da consulta, numa thread, ao lado de outro que lê
     tudo; o tipo do erro é leitura."""
     failing_text = ("SELECT CAST(CASE WHEN id = 1400000 THEN 'x' ELSE id::VARCHAR END AS INTEGER) "
@@ -212,7 +246,9 @@ def check_stream_beside_failure(engine: DuckDBEngine) -> None:
         report("F um stream ao lado de outro que falha", healthy_future.result())
 
 
-def check_spool_folder(engine: DuckDBEngine) -> None:
+def check_spool_folder(
+    engine: DuckDBEngine,
+) -> None:
     """Seção G: a pasta de transbordo do motor vazia depois de todo stream e appender fechado."""
     spool_folder = Path(engine.spool_path("sonda")).parent
     left = sorted(path.name for path in spool_folder.iterdir())

@@ -56,44 +56,91 @@ class Writer(Protocol):
 
     engine: DuckDBEngine | RedshiftEngine
 
-    def create(self, session: object, table: sa.Table) -> None: ...
-    def append(self, session: object, table: sa.Table, rows: pa.Table) -> None: ...
-    def update(self, table: sa.Table, limit: int) -> None: ...
-    def totals(self, table: sa.Table) -> tuple[int, int, float]: ...
-    def long_query(self, table: sa.Table) -> sa.sql.ClauseElement | str: ...
-    def describe(self, error: Exception) -> str: ...
+    def create(
+        self,
+        session: object,
+        table: sa.Table,
+    ) -> None: ...
+    def append(
+        self,
+        session: object,
+        table: sa.Table,
+        rows: pa.Table,
+    ) -> None: ...
+    def update(
+        self,
+        table: sa.Table,
+        limit: int,
+    ) -> None: ...
+    def totals(
+        self,
+        table: sa.Table,
+    ) -> tuple[int, int, float]: ...
+    def long_query(
+        self,
+        table: sa.Table,
+    ) -> sa.sql.ClauseElement | str: ...
+    def describe(
+        self,
+        error: Exception,
+    ) -> str: ...
 
 
 class DuckDBWriter:
     """As escritas do motor DuckDB: ``create_table`` e ``append``, o ``INSERT ... BY NAME`` do
     arquivo de transbordo do appender."""
 
-    def __init__(self, engine: DuckDBEngine) -> None:
+    def __init__(
+        self,
+        engine: DuckDBEngine,
+    ) -> None:
         self.engine = engine
 
-    def create(self, session: DuckDBEngine, table: sa.Table) -> None:
+    def create(
+        self,
+        session: DuckDBEngine,
+        table: sa.Table,
+    ) -> None:
         session.create_table(table)
 
-    def append(self, session: DuckDBEngine, table: sa.Table, rows: pa.Table) -> None:
+    def append(
+        self,
+        session: DuckDBEngine,
+        table: sa.Table,
+        rows: pa.Table,
+    ) -> None:
         session.append(table, rows)
 
-    def update(self, table: sa.Table, limit: int) -> None:
+    def update(
+        self,
+        table: sa.Table,
+        limit: int,
+    ) -> None:
         self.engine.query(sa.update(table).where(table.c.id_lancamento <= limit)
                           .values(valor=table.c.valor + 1))
 
-    def totals(self, table: sa.Table) -> tuple[int, int, float]:
+    def totals(
+        self,
+        table: sa.Table,
+    ) -> tuple[int, int, float]:
         found = self.engine.query(
             f'SELECT count(*) AS n, count(DISTINCT "id_lancamento") AS d, '
             f'coalesce(sum("valor"), 0.0) AS s FROM {quoted(table.name)}')
         row = found.to_pylist()[0]
         return row["n"], row["d"], float(row["s"])
 
-    def long_query(self, table: sa.Table) -> str:
+    def long_query(
+        self,
+        table: sa.Table,
+    ) -> str:
         self.engine.query(
             f"CREATE TABLE fonte AS SELECT range AS id FROM range({STREAM_ROWS})")
         return "SELECT id, md5(id::VARCHAR) AS s FROM fonte"
 
-    def describe(self, error: Exception) -> str:
+    def describe(
+        self,
+        error: Exception,
+    ) -> str:
         first_line = str(error).splitlines()[0] if str(error) else ""
         return f"{type(error).__name__}: {first_line[:200]}"
 
@@ -103,20 +150,39 @@ class RedshiftWriter:
     appender no ``staging/`` da execução, pela staging temporária com ``JSON_PARSE`` porque a
     tabela tem coluna JSON."""
 
-    def __init__(self, engine: RedshiftEngine) -> None:
+    def __init__(
+        self,
+        engine: RedshiftEngine,
+    ) -> None:
         self.engine = engine
 
-    def create(self, session: RedshiftEngine, table: sa.Table) -> None:
+    def create(
+        self,
+        session: RedshiftEngine,
+        table: sa.Table,
+    ) -> None:
         session.create_table(table)
 
-    def append(self, session: RedshiftEngine, table: sa.Table, rows: pa.Table) -> None:
+    def append(
+        self,
+        session: RedshiftEngine,
+        table: sa.Table,
+        rows: pa.Table,
+    ) -> None:
         session.append(table, rows)
 
-    def update(self, table: sa.Table, limit: int) -> None:
+    def update(
+        self,
+        table: sa.Table,
+        limit: int,
+    ) -> None:
         self.engine.query(sa.update(table).where(table.c.id_lancamento <= limit)
                           .values(valor=table.c.valor + 1))
 
-    def totals(self, table: sa.Table) -> tuple[int, int, float]:
+    def totals(
+        self,
+        table: sa.Table,
+    ) -> tuple[int, int, float]:
         qualified = self.engine.qualified(self.engine.prefix + table.name)
         found = self.engine.query(
             f'SELECT count(*) AS n, count(DISTINCT "id_lancamento") AS d, '
@@ -124,14 +190,23 @@ class RedshiftWriter:
         row = found.to_pylist()[0]
         return row["n"], row["d"], float(row["s"])
 
-    def long_query(self, table: sa.Table) -> sa.sql.ClauseElement:
+    def long_query(
+        self,
+        table: sa.Table,
+    ) -> sa.sql.ClauseElement:
         return sa.select(table)
 
-    def describe(self, error: Exception) -> str:
+    def describe(
+        self,
+        error: Exception,
+    ) -> str:
         return redshift.mask(describe_error(error))
 
 
-def outcome_of(writer: Writer, action: Callable[[], None]) -> Outcome:
+def outcome_of(
+    writer: Writer,
+    action: Callable[[], None],
+) -> Outcome:
     """Se a ação entrou, a descrição do erro quando não, e o tempo dela; o desfecho é leitura."""
     started = time.perf_counter()
     try:
@@ -141,8 +216,12 @@ def outcome_of(writer: Writer, action: Callable[[], None]) -> Outcome:
     return True, "entrou", time.perf_counter() - started
 
 
-def consistency(writer: Writer, table: sa.Table, entered: list[pa.Table],
-                added: float = 0.0) -> list[str]:
+def consistency(
+    writer: Writer,
+    table: sa.Table,
+    entered: list[pa.Table],
+    added: float = 0.0,
+) -> list[str]:
     """As linhas e a soma de ``valor`` da tabela contra as escritas que entraram, mais ``added``
     do ``UPDATE``; um id repetido é problema."""
     rows, distinct, total = writer.totals(table)
@@ -160,13 +239,20 @@ def consistency(writer: Writer, table: sa.Table, entered: list[pa.Table],
     return problems
 
 
-def two_appends(writer: Writer, table: sa.Table, first: pa.Table, second: pa.Table,
-                shared_session: bool) -> tuple[list[str], list[str]]:
+def two_appends(
+    writer: Writer,
+    table: sa.Table,
+    first: pa.Table,
+    second: pa.Table,
+    shared_session: bool,
+) -> tuple[list[str], list[str]]:
     """Dois escritores na tabela ao mesmo tempo, cada um numa sessão a mais ou os dois na
     principal; devolve as leituras e os problemas."""
     barrier = threading.Barrier(2)
 
-    def write(rows: pa.Table) -> Outcome:
+    def write(
+        rows: pa.Table,
+    ) -> Outcome:
         def run() -> None:
             if shared_session:
                 barrier.wait(timeout=60)
@@ -188,8 +274,13 @@ def two_appends(writer: Writer, table: sa.Table, first: pa.Table, second: pa.Tab
     return readings, consistency(writer, table, entered)
 
 
-def append_beside_update(writer: Writer, table: sa.Table, seeded: pa.Table, appended: pa.Table,
-                         limit: int) -> tuple[list[str], list[str]]:
+def append_beside_update(
+    writer: Writer,
+    table: sa.Table,
+    seeded: pa.Table,
+    appended: pa.Table,
+    limit: int,
+) -> tuple[list[str], list[str]]:
     """Um ``append`` numa sessão a mais ao lado de um ``UPDATE`` da sessão principal sobre as
     linhas já gravadas de id até ``limit``; devolve as leituras e os problemas."""
     barrier = threading.Barrier(2)
@@ -217,9 +308,13 @@ def append_beside_update(writer: Writer, table: sa.Table, seeded: pa.Table, appe
     return readings, consistency(writer, table, entered, added)
 
 
-def create_beside_stream(writer: Writer, query: sa.sql.ClauseElement | str,
-                         other_table: sa.Table, main_table: sa.Table,
-                         rows: pa.Table) -> tuple[list[str], list[str]]:
+def create_beside_stream(
+    writer: Writer,
+    query: sa.sql.ClauseElement | str,
+    other_table: sa.Table,
+    main_table: sa.Table,
+    rows: pa.Table,
+) -> tuple[list[str], list[str]]:
     """O ``CREATE TABLE`` numa sessão a mais e na principal enquanto a principal roda um
     ``stream``, e a tabela criada na sessão a mais recebendo um ``append`` da principal depois."""
     engine = writer.engine
@@ -276,12 +371,17 @@ def create_beside_stream(writer: Writer, query: sa.sql.ClauseElement | str,
     return readings, consistency(writer, other_table, [rows])
 
 
-def print_readings(readings: list[str]) -> None:
+def print_readings(
+    readings: list[str],
+) -> None:
     for reading in readings:
         print("   ", reading)
 
 
-def run_probe(writer: Writer, kind: str) -> None:
+def run_probe(
+    writer: Writer,
+    kind: str,
+) -> None:
     """As seções na ordem do cabeçalho; imprime as leituras e falha com qualquer problema."""
     rows = ROWS[kind]
     first = entry_rows(MONTHS[0], 1, rows, PROJECTED)
@@ -323,7 +423,9 @@ def run_probe(writer: Writer, kind: str) -> None:
 
 
 @pytest.mark.local
-def test_duckdb_concurrent_writers(local_location: LocalLocation) -> None:
+def test_duckdb_concurrent_writers(
+    local_location: LocalLocation,
+) -> None:
     """O motor DuckDB num banco em arquivo da pasta local."""
     storage = Storage.for_uri(local_location.child("delta"))
     config = DuckDBConfig(temp_directory=local_location.child("sandbox"))
@@ -336,7 +438,10 @@ def test_duckdb_concurrent_writers(local_location: LocalLocation) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_redshift_concurrent_writers(s3_location: S3Location, redshift_driver: None) -> None:
+def test_redshift_concurrent_writers(
+    s3_location: S3Location,
+    redshift_driver: None,
+) -> None:
     """O motor Redshift num sandbox próprio, com o ``staging/`` sob a raiz S3 da suíte; no
     substituto local, a conexão de ``tests/emulator.py``."""
     storage = Storage.for_uri(s3_location.child(f"consistencia/append-{uuid.uuid4().hex[:8]}"))

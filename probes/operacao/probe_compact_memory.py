@@ -50,7 +50,11 @@ PARTS = 32
 TARGET_BYTES = 100 * 2**20
 
 
-def logged_sizes(uri: str, db: Database, value: str) -> list[int]:
+def logged_sizes(
+    uri: str,
+    db: Database,
+    value: str,
+) -> list[int]:
     """Os tamanhos dos arquivos que a versão atual registra na partição, em bytes."""
     actions = pa.table(delta.open_table(uri, db.storage).get_add_actions(flatten=True))
     sizes = []
@@ -61,7 +65,9 @@ def logged_sizes(uri: str, db: Database, value: str) -> list[int]:
     return sizes
 
 
-def describe_sizes(sizes: list[int]) -> str:
+def describe_sizes(
+    sizes: list[int],
+) -> str:
     """Os arquivos, o total, o menor e o maior, em MB."""
     if not sizes:
         return "nenhum arquivo"
@@ -69,7 +75,11 @@ def describe_sizes(sizes: list[int]) -> str:
             f"a {max(sizes) / 2**20:.1f} MB")
 
 
-def split_partition(db: Database, uri: str, value: str) -> list[delta.RegisteredFile]:
+def split_partition(
+    db: Database,
+    uri: str,
+    value: str,
+) -> list[delta.RegisteredFile]:
     """Reparte a partição em cerca de ``PARTS`` arquivos pelo ``COPY ... FILE_SIZE_BYTES`` do
     DuckDB, numa pasta nova dentro dela, e os registra no lugar do arquivo da carga."""
     storage = db.storage
@@ -98,7 +108,9 @@ def split_partition(db: Database, uri: str, value: str) -> list[delta.Registered
     return files
 
 
-def check_compact(compact: lib.Finished) -> None:
+def check_compact(
+    compact: lib.Finished,
+) -> None:
     """O ``compact`` saiu com 0 e juntou arquivos."""
     problems = []
     if compact.code != 0:

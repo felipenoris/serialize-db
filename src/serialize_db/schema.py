@@ -150,7 +150,9 @@ _ArrowColumn = pa.Array | pa.ChunkedArray
 # ---------------------------------------------------------------- o esquema Arrow e Delta
 
 
-def _decimal_type(column: sa.Column) -> pa.DataType:
+def _decimal_type(
+    column: sa.Column,
+) -> pa.DataType:
     """O ``decimal128`` de uma coluna ``Numeric``: sem precisão, 18; sem escala, 0."""
     name = f"{column.table.name}.{column.name}"
     # A precisão 0 declarada fica 0 e é recusada abaixo; só a ausente vira o padrão 18.
@@ -170,7 +172,9 @@ def _decimal_type(column: sa.Column) -> pa.DataType:
     return pa.decimal128(precision, scale)
 
 
-def arrow_type(column: sa.Column) -> pa.DataType:
+def arrow_type(
+    column: sa.Column,
+) -> pa.DataType:
     """O tipo Arrow da coluna, pela tabela de tipos do contrato.
 
     ``Numeric(p, s)`` vira ``decimal128(p, s)``; ``DateTime`` vira ``timestamp[us]``, com
@@ -207,7 +211,10 @@ def arrow_type(column: sa.Column) -> pa.DataType:
     raise ContractError(f"{column.table.name}.{column.name}: tipo fora do contrato: {kind!r}")
 
 
-def _arrow_field(column: sa.Column, position: int) -> pa.Field:
+def _arrow_field(
+    column: sa.Column,
+    position: int,
+) -> pa.Field:
     """O campo Arrow da coluna: tipo, nulidade, ``PARQUET:field_id`` pela posição, comentário."""
     metadata = {"PARQUET:field_id": str(position)}
     if column.comment:
@@ -215,7 +222,9 @@ def _arrow_field(column: sa.Column, position: int) -> pa.Field:
     return pa.field(column.name, arrow_type(column), nullable=column.nullable, metadata=metadata)
 
 
-def arrow_schema(table: sa.Table) -> pa.Schema:
+def arrow_schema(
+    table: sa.Table,
+) -> pa.Schema:
     """O esquema Arrow da tabela: um campo por coluna, na ordem do modelo.
 
     Exemplo:
@@ -238,7 +247,9 @@ def arrow_schema(table: sa.Table) -> pa.Schema:
     return pa.schema(fields, metadata={"serialize_db_table": table.name})
 
 
-def delta_schema(table: sa.Table) -> DeltaSchema:
+def delta_schema(
+    table: sa.Table,
+) -> DeltaSchema:
     """O esquema Delta da tabela, derivado do Arrow pelo delta-rs.
 
     ``DateTime`` sem fuso vira ``timestamp_ntz`` e com fuso ``timestamp``; ``Numeric(p, s)`` vira
@@ -297,12 +308,16 @@ class TableOptions:
     ``keys["drop"]``."""
 
 
-def _column_names(columns: Iterable[sa.Column]) -> tuple[str, ...]:
+def _column_names(
+    columns: Iterable[sa.Column],
+) -> tuple[str, ...]:
     """Os nomes de uma coleção de colunas, na ordem dela."""
     return tuple(column.name for column in columns)
 
 
-def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
+def _keyed_targets(
+    table: sa.Table,
+) -> list[tuple[str, ...]]:
     """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária
     primeiro, depois as ``UniqueConstraint`` em ordem dos nomes das colunas, porque o SQLAlchemy
     as guarda num conjunto, cuja ordem muda de um processo a outro; um índice único não serve no
@@ -317,7 +332,9 @@ def _keyed_targets(table: sa.Table) -> list[tuple[str, ...]]:
     return targets + sorted(unique)
 
 
-def _declared_keys(table: sa.Table) -> list[tuple[str, ...]]:
+def _declared_keys(
+    table: sa.Table,
+) -> list[tuple[str, ...]]:
     """A chave primária, as ``UniqueConstraint`` e os índices únicos do modelo, nessa ordem; os
     índices também saem de um conjunto e vão em ordem dos nomes das colunas."""
     unique_indexes = []
@@ -327,7 +344,10 @@ def _declared_keys(table: sa.Table) -> list[tuple[str, ...]]:
     return _keyed_targets(table) + sorted(unique_indexes)
 
 
-def _adjusted_keys(keys: list[tuple[str, ...]], info: dict) -> tuple[tuple[str, ...], ...]:
+def _adjusted_keys(
+    keys: list[tuple[str, ...]],
+    info: dict,
+) -> tuple[tuple[str, ...], ...]:
     """As chaves do modelo mais ``keys["add"]`` e menos ``keys["drop"]`` de ``Table.info``."""
     adjustments = info.get("keys", {})
     declared = list(keys)
@@ -341,7 +361,9 @@ def _adjusted_keys(keys: list[tuple[str, ...]], info: dict) -> tuple[tuple[str, 
     return tuple(kept)
 
 
-def table_options(table: sa.Table) -> TableOptions:
+def table_options(
+    table: sa.Table,
+) -> TableOptions:
     """As opções físicas da tabela, lidas de ``Table.info["serialize_db"]``.
 
     Exemplo:
@@ -372,7 +394,9 @@ def table_options(table: sa.Table) -> TableOptions:
     )
 
 
-def sequential_key(table: sa.Table) -> sa.Column | None:
+def sequential_key(
+    table: sa.Table,
+) -> sa.Column | None:
     """A chave primária inteira de uma coluna, a chave sequencial que ``next_ids`` preenche;
     ``None`` quando a chave primária é outra."""
     primary = list(table.primary_key.columns)
@@ -381,7 +405,9 @@ def sequential_key(table: sa.Table) -> sa.Column | None:
     return primary[0]
 
 
-def double_columns(table: sa.Table) -> list[str]:
+def double_columns(
+    table: sa.Table,
+) -> list[str]:
     """Os nomes das colunas ``Double``, as que podem guardar ``NaN`` e infinito, que ficam sem
     mínimo e máximo no Delta (issue #59)."""
     names = []
@@ -391,12 +417,16 @@ def double_columns(table: sa.Table) -> list[str]:
     return names
 
 
-def _local_column_names(constraint: sa.ForeignKeyConstraint) -> tuple[str, ...]:
+def _local_column_names(
+    constraint: sa.ForeignKeyConstraint,
+) -> tuple[str, ...]:
     """Os nomes das colunas locais da chave estrangeira, a chave da ordenação."""
     return _column_names(constraint.columns)
 
 
-def foreign_keys_by_columns(table: sa.Table) -> list[sa.ForeignKeyConstraint]:
+def foreign_keys_by_columns(
+    table: sa.Table,
+) -> list[sa.ForeignKeyConstraint]:
     """As chaves estrangeiras na ordem das colunas locais: o SQLAlchemy as guarda num conjunto, e
     a ordem fixa a das mensagens de ``check_models`` e das verificações da auditoria."""
     return sorted(table.foreign_key_constraints, key=_local_column_names)
@@ -414,7 +444,9 @@ valor codificado é o próprio valor."""
 _PARTITION_VALUE = re.compile(PARTITION_VALUE)
 
 
-def check_partition_value(value: str) -> str:
+def check_partition_value(
+    value: str,
+) -> str:
     """O valor, quando segue ``PARTITION_VALUE`` por inteiro.
 
     Exemplo:
@@ -439,7 +471,10 @@ def check_partition_value(value: str) -> str:
 # ---------------------------------------------------------------- o DDL por motor
 
 
-def sql_type(column: sa.Column, dialect: Dialect) -> str:
+def sql_type(
+    column: sa.Column,
+    dialect: Dialect,
+) -> str:
     """O nome do tipo da coluna no motor, pela tabela de tipos do contrato.
 
     ``DECIMAL(p, s)`` para ``Numeric``; ``VARCHAR(n)`` para ``String(n)`` nos dois motores (o
@@ -472,7 +507,9 @@ def sql_type(column: sa.Column, dialect: Dialect) -> str:
     return f"VARCHAR({kind.length})" if kind.length else "VARCHAR"
 
 
-def quoted(name: str) -> str:
+def quoted(
+    name: str,
+) -> str:
     """O identificador entre aspas duplas.
 
     Todo nome de tabela e de coluna que a biblioteca emite vai entre aspas: ``to`` e
@@ -491,7 +528,9 @@ def quoted(name: str) -> str:
     return f'"{name}"'
 
 
-def literal(value: str) -> str:
+def literal(
+    value: str,
+) -> str:
     """O literal SQL de um texto, entre aspas simples e com a aspa simples dobrada.
 
     Exemplo:
@@ -503,7 +542,10 @@ def literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def column_ddl(column: sa.Column, dialect: Dialect) -> str:
+def column_ddl(
+    column: sa.Column,
+    dialect: Dialect,
+) -> str:
     """A linha da coluna no ``CREATE TABLE``: nome entre aspas, tipo e ``NOT NULL``.
 
     Exemplo:
@@ -523,7 +565,9 @@ def column_ddl(column: sa.Column, dialect: Dialect) -> str:
     return text
 
 
-def redshift_options(options: TableOptions) -> str:
+def redshift_options(
+    options: TableOptions,
+) -> str:
     """As cláusulas físicas do Redshift depois do parêntese: DISTSTYLE, DISTKEY e SORTKEY;
     protegida, para o DDL das tabelas publicadas."""
     clauses = []
@@ -539,7 +583,12 @@ def redshift_options(options: TableOptions) -> str:
     return " " + " ".join(clauses)
 
 
-def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = False) -> str:
+def ddl(
+    table: sa.Table,
+    dialect: Dialect,
+    prefix: str = "",
+    temporary: bool = False,
+) -> str:
     """O ``CREATE TABLE`` da tabela no motor, gerado como texto.
 
     Sem chave, ``DEFERRABLE``, ``Identity``, ``CHECK``, ``DEFAULT`` nem comentário: as chaves são
@@ -580,8 +629,11 @@ def ddl(table: sa.Table, dialect: Dialect, prefix: str = "", temporary: bool = F
 # ---------------------------------------------------------------- o cast por lote
 
 
-def _contract_fields(data: pa.Table | pa.RecordBatch, contract: pa.Schema,
-                     table: str) -> list[pa.Field]:
+def _contract_fields(
+    data: pa.Table | pa.RecordBatch,
+    contract: pa.Schema,
+    table: str,
+) -> list[pa.Field]:
     """Os campos do contrato presentes nos dados, na ordem do contrato; nenhum é erro."""
     present = []
     for field in contract:
@@ -592,7 +644,11 @@ def _contract_fields(data: pa.Table | pa.RecordBatch, contract: pa.Schema,
     return present
 
 
-def _refuse_double_out_of_scale(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+def _refuse_double_out_of_scale(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+) -> None:
     """Um double numa coluna Numeric entra só quando ``pc.round`` o devolve igual."""
     rounded = pc.round(column, field.type.scale)
     # min_count=0: a tabela vazia de reader.schema.empty_table() passa; sem ele, pc.all dá nulo.
@@ -601,7 +657,11 @@ def _refuse_double_out_of_scale(column: _ArrowColumn, field: pa.Field, table: st
                             "arredonde no cliente antes de chamar")
 
 
-def _refuse_timestamp_with_time(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+def _refuse_timestamp_with_time(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+) -> None:
     """Um timestamp numa coluna Date entra só quando a ida e volta o devolve igual."""
     round_trip = column.cast(field.type).cast(column.type)
     if not pc.all(pc.equal(round_trip, column), min_count=0).as_py():
@@ -609,7 +669,11 @@ def _refuse_timestamp_with_time(column: _ArrowColumn, field: pa.Field, table: st
                             "trunque no cliente")
 
 
-def _refuse_time_zone_change(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+def _refuse_time_zone_change(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+) -> None:
     """Um timestamp entra só quando ele e a coluna têm fuso, ou nenhum dos dois tem.
 
     Tirar ou pôr o fuso muda a hora gravada, e cada camada o faz de um jeito: o ``cast`` do
@@ -624,20 +688,30 @@ def _refuse_time_zone_change(column: _ArrowColumn, field: pa.Field, table: str) 
                             "fuso; declare o fuso no cliente")
 
 
-def _refuse_nested_json(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+def _refuse_nested_json(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+) -> None:
     """Um documento JSON chega serializado; struct, list e map são recusados."""
     if pa.types.is_nested(column.type):
         raise ContractError(f"{table}.{field.name}: documento JSON como {column.type}; "
                             "serialize com json.dumps antes de chamar")
 
 
-def _longest_text(column: _ArrowColumn) -> int:
+def _longest_text(
+    column: _ArrowColumn,
+) -> int:
     """O maior valor da coluna em bytes; 0 numa coluna vazia ou só de nulos."""
     return pc.max(pc.binary_length(column)).as_py() or 0
 
 
-def _refuse_text_above_length(column: _ArrowColumn, field: pa.Field, table: str,
-                              limit: int) -> None:
+def _refuse_text_above_length(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+    limit: int,
+) -> None:
     """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
     longest = _longest_text(column)
     if longest > limit:
@@ -645,7 +719,11 @@ def _refuse_text_above_length(column: _ArrowColumn, field: pa.Field, table: str,
                             f"String({limit}) em bytes; corte o valor ou aumente o comprimento")
 
 
-def _refuse_text_above_varchar(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+def _refuse_text_above_varchar(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+) -> None:
     """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
     longest = _longest_text(column)
     if longest > TEXT_LIMIT:
@@ -653,7 +731,11 @@ def _refuse_text_above_varchar(column: _ArrowColumn, field: pa.Field, table: str
                             f"{TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
 
 
-def _refuse_json_above_limit(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+def _refuse_json_above_limit(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+) -> None:
     """Documento JSON acima de 65.535 bytes, o maior que o ``COPY`` de Parquet leva a ``SUPER`` e
     que a staging ``VARCHAR`` da publicação no Redshift guarda."""
     longest = _longest_text(column)
@@ -662,7 +744,11 @@ def _refuse_json_above_limit(column: _ArrowColumn, field: pa.Field, table: str) 
                             f"teto de {TEXT_LIMIT} bytes do Redshift; reduza o documento")
 
 
-def _refuse_text_above_uuid(column: _ArrowColumn, field: pa.Field, table: str) -> None:
+def _refuse_text_above_uuid(
+    column: _ArrowColumn,
+    field: pa.Field,
+    table: str,
+) -> None:
     """Texto acima dos 36 bytes do ``VARCHAR(36)`` numa coluna ``Uuid``."""
     longest = _longest_text(column)
     if longest > UUID_LENGTH:
@@ -670,8 +756,12 @@ def _refuse_text_above_uuid(column: _ArrowColumn, field: pa.Field, table: str) -
                             f"{UUID_LENGTH} bytes de um Uuid; passe o uuid.UUID ou str(valor)")
 
 
-def _refuse_silent_losses(column: _ArrowColumn, field: pa.Field, kind: sa.types.TypeEngine,
-                          table: str) -> None:
+def _refuse_silent_losses(
+    column: _ArrowColumn,
+    field: pa.Field,
+    kind: sa.types.TypeEngine,
+    table: str,
+) -> None:
     """As perdas que ``cast(safe=True)`` não acusa, recusadas antes da conversão."""
     if pa.types.is_floating(column.type) and pa.types.is_decimal(field.type):
         _refuse_double_out_of_scale(column, field, table)
@@ -683,8 +773,12 @@ def _refuse_silent_losses(column: _ArrowColumn, field: pa.Field, kind: sa.types.
         _refuse_nested_json(column, field, table)
 
 
-def _refuse_long_text(column: _ArrowColumn, field: pa.Field, kind: sa.types.TypeEngine,
-                      table: str) -> None:
+def _refuse_long_text(
+    column: _ArrowColumn,
+    field: pa.Field,
+    kind: sa.types.TypeEngine,
+    table: str,
+) -> None:
     """O texto acima do limite da coluna, medido em bytes na coluna já convertida para ``string``.
 
     A medida vem depois da conversão porque o texto chega em outros tipos Arrow: ``large_string``
@@ -703,7 +797,9 @@ def _refuse_long_text(column: _ArrowColumn, field: pa.Field, kind: sa.types.Type
         _refuse_text_above_uuid(column, field, table)
 
 
-def _uuid_as_text(column: _ArrowColumn) -> pa.Array:
+def _uuid_as_text(
+    column: _ArrowColumn,
+) -> pa.Array:
     """O ``arrow.uuid`` no texto canônico de ``str(uuid.UUID)``: os 32 dígitos hexadecimais
     minúsculos dos 16 bytes, em grupos de 8, 4, 4, 4 e 12 separados por hífen.
 
@@ -720,7 +816,10 @@ def _uuid_as_text(column: _ArrowColumn) -> pa.Array:
     return pa.array(texts, pa.string())
 
 
-def _converted(column: _ArrowColumn, target: pa.DataType) -> _ArrowColumn:
+def _converted(
+    column: _ArrowColumn,
+    target: pa.DataType,
+) -> _ArrowColumn:
     """A coluna no tipo do contrato por ``cast(safe=True)``.
 
     O ``arrow.uuid``, o tipo que o PyArrow e o pandas inferem de um ``uuid.UUID``, vai ao texto
@@ -739,7 +838,10 @@ def _converted(column: _ArrowColumn, target: pa.DataType) -> _ArrowColumn:
     return column.cast(target, safe=True)
 
 
-def _column_to_convert(column: _ArrowColumn, target: pa.DataType) -> _ArrowColumn:
+def _column_to_convert(
+    column: _ArrowColumn,
+    target: pa.DataType,
+) -> _ArrowColumn:
     """A coluna que as recusas conferem e que a conversão leva ao contrato.
 
     O dicionário, a ``category`` do pandas, vira os seus valores: as recusas conferem o tipo dos
@@ -755,8 +857,11 @@ def _column_to_convert(column: _ArrowColumn, target: pa.DataType) -> _ArrowColum
     return column
 
 
-def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field,
-                     table: sa.Table) -> _ArrowColumn:
+def _contract_column(
+    data: pa.Table | pa.RecordBatch,
+    field: pa.Field,
+    table: sa.Table,
+) -> _ArrowColumn:
     """A coluna dos dados no tipo do contrato: as perdas que ``safe=True`` não acusa são recusadas
     antes da conversão, e o texto longo depois dela."""
     column = _column_to_convert(data.column(field.name), field.type)
@@ -773,8 +878,10 @@ def _contract_column(data: pa.Table | pa.RecordBatch, field: pa.Field,
     return converted
 
 
-def _contract_arrays(data: pa.Table | pa.RecordBatch,
-                     table: sa.Table) -> tuple[list[_ArrowColumn], pa.Schema]:
+def _contract_arrays(
+    data: pa.Table | pa.RecordBatch,
+    table: sa.Table,
+) -> tuple[list[_ArrowColumn], pa.Schema]:
     """As colunas do contrato presentes, convertidas, e o esquema delas."""
     contract = arrow_schema(table)
     fields = _contract_fields(data, contract, table.name)
@@ -784,7 +891,10 @@ def _contract_arrays(data: pa.Table | pa.RecordBatch,
     return arrays, pa.schema(fields, metadata=contract.metadata)
 
 
-def _cast_batch(batch: pa.RecordBatch, table: sa.Table) -> pa.RecordBatch:
+def _cast_batch(
+    batch: pa.RecordBatch,
+    table: sa.Table,
+) -> pa.RecordBatch:
     """O lote no esquema do contrato; nulo em coluna NOT NULL é recusado pelo cast do esquema."""
     arrays, schema = _contract_arrays(batch, table)
     try:
@@ -794,7 +904,10 @@ def _cast_batch(batch: pa.RecordBatch, table: sa.Table) -> pa.RecordBatch:
         raise ContractError(f"{table.name}: {error}") from None
 
 
-def _cast_table(data: pa.Table, table: sa.Table) -> pa.Table:
+def _cast_table(
+    data: pa.Table,
+    table: sa.Table,
+) -> pa.Table:
     """A tabela no esquema do contrato, pelo mesmo caminho do lote."""
     arrays, schema = _contract_arrays(data, table)
     try:
@@ -804,20 +917,27 @@ def _cast_table(data: pa.Table, table: sa.Table) -> pa.Table:
         raise ContractError(f"{table.name}: {error}") from None
 
 
-def _cast_batches(reader: pa.RecordBatchReader, table: sa.Table) -> Iterator[pa.RecordBatch]:
+def _cast_batches(
+    reader: pa.RecordBatchReader,
+    table: sa.Table,
+) -> Iterator[pa.RecordBatch]:
     """Os lotes do leitor convertidos um a um, para o leitor de saída."""
     for batch in reader:
         yield _cast_batch(batch, table)
 
 
-def _cast_reader(reader: pa.RecordBatchReader, table: sa.Table) -> pa.RecordBatchReader:
+def _cast_reader(
+    reader: pa.RecordBatchReader,
+    table: sa.Table,
+) -> pa.RecordBatchReader:
     """O leitor que converte lote a lote, com o esquema derivado do esquema do leitor."""
     schema = _cast_table(reader.schema.empty_table(), table).schema
     return pa.RecordBatchReader.from_batches(schema, _cast_batches(reader, table))
 
 
 def cast(
-    data: pa.Table | pa.RecordBatch | pa.RecordBatchReader, table: sa.Table
+    data: pa.Table | pa.RecordBatch | pa.RecordBatchReader,
+    table: sa.Table,
 ) -> pa.Table | pa.RecordBatch | pa.RecordBatchReader:
     """Os dados no esquema do contrato da tabela.
 
@@ -865,7 +985,9 @@ def cast(
 # ---------------------------------------------------------------- a conferência dos modelos
 
 
-def _string_without_length(kind: sa.types.TypeEngine) -> bool:
+def _string_without_length(
+    kind: sa.types.TypeEngine,
+) -> bool:
     """Se o tipo é ``String`` sem comprimento, ou uma subclasse dela sem comprimento, como
     ``Unicode()``, ``VARCHAR()`` e ``CHAR()``: o Redshift leria ``VARCHAR`` como ``VARCHAR(256)``.
     ``Text`` não declara comprimento, e o ``Enum`` já sai como tipo fora do contrato."""
@@ -876,7 +998,9 @@ def _string_without_length(kind: sa.types.TypeEngine) -> bool:
     return not kind.length
 
 
-def _column_problems(column: sa.Column) -> list[str]:
+def _column_problems(
+    column: sa.Column,
+) -> list[str]:
     """As violações de uma coluna: tipo, autoincrement, Identity, String ou subclasse dela sem
     comprimento."""
     table = column.table.name
@@ -899,7 +1023,10 @@ def _column_problems(column: sa.Column) -> list[str]:
     return problems
 
 
-def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
+def _key_problems(
+    table: sa.Table,
+    options: TableOptions,
+) -> list[str]:
     """As violações das chaves: DEFERRABLE, o alvo de chave estrangeira sem chave, a tabela sem
     chave alguma."""
     problems = []
@@ -921,7 +1048,9 @@ def _key_problems(table: sa.Table, options: TableOptions) -> list[str]:
     return problems
 
 
-def _partition_type(kind: sa.types.TypeEngine) -> bool:
+def _partition_type(
+    kind: sa.types.TypeEngine,
+) -> bool:
     """Se o tipo serve à coluna de partição: ``String(n)``, ou uma subclasse dela com comprimento,
     fora ``Text``, que a auditoria e a carga medem até 65535 bytes, e não pelo ``n``."""
     if not isinstance(kind, sa.String) or isinstance(kind, sa.Text):
@@ -929,7 +1058,10 @@ def _partition_type(kind: sa.types.TypeEngine) -> bool:
     return bool(kind.length)
 
 
-def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
+def _partition_problems(
+    table: sa.Table,
+    options: TableOptions,
+) -> list[str]:
     """As violações da partição: a coluna ausente ou fora de String(n), a origem que não
     existe."""
     problems = []
@@ -951,7 +1083,9 @@ def _partition_problems(table: sa.Table, options: TableOptions) -> list[str]:
     return problems
 
 
-def check_models(metadata: sa.MetaData) -> list[str]:
+def check_models(
+    metadata: sa.MetaData,
+) -> list[str]:
     """As violações do contrato nos modelos.
 
     As regras: tipo fora da tabela de tipos, inclusive o ``Enum`` e o ``Numeric`` de precisão fora
@@ -992,7 +1126,9 @@ def check_models(metadata: sa.MetaData) -> list[str]:
 # ---------------------------------------------------------------- os arquivos de esquema
 
 
-def _delta_schema_json(table: sa.Table) -> str:
+def _delta_schema_json(
+    table: sa.Table,
+) -> str:
     """O esquema Delta em JSON canônico: chaves ordenadas e indentado, uma linha por chave.
 
     O ``to_json()`` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda
@@ -1007,7 +1143,9 @@ def _delta_schema_json(table: sa.Table) -> str:
 _SCHEMA_SUFFIXES = (".delta.json", ".duckdb.sql", ".redshift.sql")
 
 
-def schema_files(metadata: sa.MetaData) -> dict[str, str]:
+def schema_files(
+    metadata: sa.MetaData,
+) -> dict[str, str]:
     """Os arquivos de esquema de cada tabela, em memória.
 
     O cliente os versiona no repositório do pipeline, e o diff contra a geração nova mostra o que
@@ -1035,7 +1173,10 @@ def schema_files(metadata: sa.MetaData) -> dict[str, str]:
     return files
 
 
-def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
+def write_schema_files(
+    metadata: sa.MetaData,
+    directory: str,
+) -> list[str]:
     """Grava ``schema_files`` em ``directory``.
 
     Nada é apagado: os arquivos de uma tabela que saiu do modelo ficam na pasta, e
@@ -1056,7 +1197,10 @@ def write_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
     return write_files(schema_files(metadata), directory)
 
 
-def check_schema_files(metadata: sa.MetaData, directory: str) -> list[str]:
+def check_schema_files(
+    metadata: sa.MetaData,
+    directory: str,
+) -> list[str]:
     """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
     O texto é comparado exato: o arquivo sem o ``\\n`` final difere, com o aviso

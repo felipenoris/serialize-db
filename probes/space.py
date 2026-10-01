@@ -101,7 +101,9 @@ print(json.dumps(out))
 """
 
 
-def package_version(name: str) -> str | None:
+def package_version(
+    name: str,
+) -> str | None:
     """A versão instalada de ``name`` neste interpretador, ou ``None`` quando ausente.
 
     O nome vale com ``_`` ou com ``-``.
@@ -139,7 +141,9 @@ def pinned_requirements() -> dict[str, str | None]:
     return found
 
 
-def identity(report: Report) -> None:
+def identity(
+    report: Report,
+) -> None:
     """Seção 1, identidade e credenciais.
 
     Checagens: ``SP-1`` (credenciais), ``SP-2`` (região) e ``SP-3`` (STS).
@@ -208,7 +212,9 @@ def identity(report: Report) -> None:
         report.note("SP-3", "identidade pelo STS", "sem resposta ou erro; ver a seção final")
 
 
-def project(report: Report) -> None:
+def project(
+    report: Report,
+) -> None:
     """Seção 2, o projeto do SageMaker Unified Studio.
 
     Checagens: ``SP-4`` (projeto lido) e ``SP-5`` (conexão Redshift).
@@ -253,7 +259,9 @@ def project(report: Report) -> None:
         report.note("SP-5", "conexão Redshift no projeto", "nenhuma: a etapa 5 conecta pelas variáveis SERIALIZE_DB_REDSHIFT_*, e a conexão do projeto é só um atalho para elas")
 
 
-def network(report: Report) -> None:
+def network(
+    report: Report,
+) -> None:
     """Seção 3, rede: proxy, DNS, ``SP-6`` (TCP até o S3 regional) e ``SP-7`` (internet).
 
     ``SP-7`` é leitura, nunca reprovação.
@@ -301,7 +309,10 @@ def network(report: Report) -> None:
     report.note("SP-7", "internet", "alcançável" if answer and answer.startswith("HTTP") else "inalcançável: esperado no ambiente destino")
 
 
-def mount_state(path: Path, mounts: str = "/proc/mounts") -> str:
+def mount_state(
+    path: Path,
+    mounts: str = "/proc/mounts",
+) -> str:
     """O estado de ``path``: ``ausente``, ``montada`` com tipo e modo, ou ``existe, sem montagem``.
 
     O tipo e o modo (``rw`` ou ``ro``) vêm de ``/proc/mounts``. A função segue o link simbólico
@@ -333,7 +344,9 @@ def mount_state(path: Path, mounts: str = "/proc/mounts") -> str:
     return f"existe, sem montagem{origin}"
 
 
-def machine(report: Report) -> None:
+def machine(
+    report: Report,
+) -> None:
     """Seção 4, a máquina, só com leituras e sem checagem.
 
     A tabela traz as CPUs, a memória, o disco, o limite de arquivos abertos, ``~/shared`` e os
@@ -376,7 +389,9 @@ def machine(report: Report) -> None:
     report.table(rows)
 
 
-def python_packages(report: Report) -> None:
+def python_packages(
+    report: Report,
+) -> None:
     """Seção 5, Python e pacotes: ``SP-8`` e ``SP-9``.
 
     ``SP-8`` confere o Python 3.13; ``SP-9``, as dependências de execução e o grupo ``dev`` de
@@ -428,7 +443,11 @@ def python_packages(report: Report) -> None:
         report.ok("SP-9", "dependências e grupo dev do pyproject neste interpretador", ", ".join(f"{name} {installed[name]}" for name in requirements))
 
 
-def extensions_check(report: Report, missing: list[str], directory: str | None) -> None:
+def extensions_check(
+    report: Report,
+    missing: list[str],
+    directory: str | None,
+) -> None:
     """``SP-10``: as extensões que não carregaram da pasta ``directory``; qualquer uma reprova."""
     source = directory or "pasta padrão"
     if missing:
@@ -437,7 +456,9 @@ def extensions_check(report: Report, missing: list[str], directory: str | None) 
         report.ok("SP-10", "extensões do DuckDB", ", ".join(EXTENSIONS) + f" de {source}")
 
 
-def duckdb_section(report: Report) -> None:
+def duckdb_section(
+    report: Report,
+) -> None:
     """Seção 6, DuckDB: a configuração da conexão, o proxy e ``SP-10`` (as extensões carregam).
 
     O proxy entra com o endereço separado das credenciais, e as extensões carregam da pasta
@@ -485,7 +506,9 @@ def duckdb_section(report: Report) -> None:
             missing.append(extension)
     report.table(rows)
 
-    def render_extensions(found: list[tuple]) -> str:
+    def render_extensions(
+        found: list[tuple],
+    ) -> str:
         """As extensões como tabela: nome, instalada, carregada, caminho e versão."""
         return probelib.tabulate([["extensão", "instalada", "carregada", "caminho", "versão"], *[[str(cell) for cell in row] for row in found]])
 

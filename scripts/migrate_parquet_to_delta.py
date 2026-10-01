@@ -95,7 +95,11 @@ class TableReport:
 # ---------------------------------------------------------------- a carga
 
 
-def partition_rows(db: Database, table: sa.Table, value: str | None) -> int:
+def partition_rows(
+    db: Database,
+    table: sa.Table,
+    value: str | None,
+) -> int:
     """As linhas da partição na versão atual da tabela Delta, pelas ações ``add`` do log."""
     dt = delta.open_table(db.uri(table), db.storage)
     actions = pa.table(dt.get_add_actions(flatten=True)).to_pylist()
@@ -137,8 +141,12 @@ def load_table(
     return loaded
 
 
-def side_text(side: str, rows: int | None, sums: Mapping[str, object],
-              nonfinite: Mapping[str, int]) -> str:
+def side_text(
+    side: str,
+    rows: int | None,
+    sums: Mapping[str, object],
+    nonfinite: Mapping[str, int],
+) -> str:
     """Um lado da diferença: as linhas, as somas e os não finitos, ou ``ausente`` quando a
     partição falta nele."""
     if rows is None:
@@ -146,7 +154,9 @@ def side_text(side: str, rows: int | None, sums: Mapping[str, object],
     return f"{side} {rows} linhas {dict(sums)} não finitos {dict(nonfinite)}"
 
 
-def print_report(report: LoadReport) -> None:
+def print_report(
+    report: LoadReport,
+) -> None:
     """As linhas do relatório de uma tabela, depois das partições gravadas."""
     for partition in report.partitions:
         if not partition.matches:
@@ -167,7 +177,9 @@ def print_report(report: LoadReport) -> None:
 # ---------------------------------------------------------------- o JSON da execução
 
 
-def describe_environment(arguments: argparse.Namespace) -> dict[str, object]:
+def describe_environment(
+    arguments: argparse.Namespace,
+) -> dict[str, object]:
     """A máquina, as versões, os limites do DuckDB lidos do ambiente e os parâmetros da execução,
     que o relatório leva: a memória e os núcleos mudam com a instância."""
     physical_memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
@@ -192,8 +204,13 @@ def describe_environment(arguments: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def write_progress(path: str, reports: list[TableReport], environment: dict[str, object],
-                   table: str, loaded: list[PartitionLoad]) -> None:
+def write_progress(
+    path: str,
+    reports: list[TableReport],
+    environment: dict[str, object],
+    table: str,
+    loaded: list[PartitionLoad],
+) -> None:
     """O relatório parcial, regravado depois de cada partição gravada: as tabelas já conferidas
     e, em ``in_progress``, as partições gravadas da tabela da vez. O relatório final o
     substitui."""
@@ -205,8 +222,12 @@ def write_progress(path: str, reports: list[TableReport], environment: dict[str,
     Path(path).write_text(json.dumps(document, indent=2, ensure_ascii=False, default=str))
 
 
-def write_report(path: str, reports: list[TableReport], outside: Sequence[str],
-                 environment: dict[str, object]) -> None:
+def write_report(
+    path: str,
+    reports: list[TableReport],
+    outside: Sequence[str],
+    environment: dict[str, object],
+) -> None:
     """O relatório da execução em JSON, com as somas como texto e o ambiente que a rodou."""
     document = {
         "environment": environment,
@@ -219,7 +240,9 @@ def write_report(path: str, reports: list[TableReport], outside: Sequence[str],
 # ---------------------------------------------------------------- a linha de comando
 
 
-def resolve_metadata(spec: str) -> sa.MetaData:
+def resolve_metadata(
+    spec: str,
+) -> sa.MetaData:
     """O ``MetaData`` de ``modulo:atributo``, como ``client_model:Base.metadata``, pelo
     ``pkgutil.resolve_name`` da biblioteca padrão, como o ``--metadata`` de ``serialize-db``.
 
@@ -265,7 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+) -> int:
     """Roda a migração com os argumentos de ``argv``, ou os do processo, e devolve o código de
     saída."""
     parser = build_parser()

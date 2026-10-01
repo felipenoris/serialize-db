@@ -54,7 +54,9 @@ def contract_schema() -> pa.Schema:
     )
 
 
-def addresses(column: pa.ChunkedArray | pa.Array) -> set[int]:
+def addresses(
+    column: pa.ChunkedArray | pa.Array,
+) -> set[int]:
     """Os endereços dos buffers de uma coluna: iguais dos dois lados quando a conversão não
     copiou."""
     chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
@@ -328,7 +330,9 @@ def test_record_batch_reader_from_batches_trusts_the_batches() -> None:
 
 
 @pytest.mark.local
-def test_parquet_writer_row_groups_and_footer(local_location: LocalLocation) -> None:
+def test_parquet_writer_row_groups_and_footer(
+    local_location: LocalLocation,
+) -> None:
     """``ParquetWriter`` grava um row group por lote; o rodapé traz tipos físicos, obrigatoriedade,
     ids e estatísticas."""
     folder = Path(local_location.child("pyarrow"))
@@ -379,7 +383,9 @@ def test_parquet_writer_row_groups_and_footer(local_location: LocalLocation) -> 
 
 
 @pytest.mark.local
-def test_hive_partitioned_dataset(local_location: LocalLocation) -> None:
+def test_hive_partitioned_dataset(
+    local_location: LocalLocation,
+) -> None:
     """``write_to_dataset`` grava ``mes=.../`` sem a coluna no arquivo; ``dataset`` a lê de volta e
     poda pelo filtro."""
     root = Path(local_location.child("pyarrow/dataset"))
@@ -398,7 +404,9 @@ def test_hive_partitioned_dataset(local_location: LocalLocation) -> None:
 
 
 @pytest.mark.local
-def test_parquet_streaming_read_filters_and_pandas(local_location: LocalLocation) -> None:
+def test_parquet_streaming_read_filters_and_pandas(
+    local_location: LocalLocation,
+) -> None:
     """``iter_batches`` lê por lotes sem carregar o arquivo; ``filters`` e ``columns`` reduzem a
     leitura; pandas recebe tipos Arrow."""
     folder = Path(local_location.child("pyarrow"))

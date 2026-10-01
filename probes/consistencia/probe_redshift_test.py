@@ -47,14 +47,20 @@ class Target:
     config: RedshiftConfig
     unload_to: str
 
-    def published(self, table: sa.Table) -> str:
+    def published(
+        self,
+        table: sa.Table,
+    ) -> str:
         return f'"{self.config.schema}"."{self.db.environment}_{table.name}"'
 
     def control(self) -> str:
         return f'"{self.config.schema}"."{publication.CONTROL_TABLE}"'
 
 
-def execute_all(config: RedshiftConfig, texts: list[str]) -> None:
+def execute_all(
+    config: RedshiftConfig,
+    texts: list[str],
+) -> None:
     """Os comandos numa conexão própria, em ordem."""
     connection = redshift.connect(config)
     try:
@@ -65,7 +71,10 @@ def execute_all(config: RedshiftConfig, texts: list[str]) -> None:
         connection.close()
 
 
-def relation_exists(config: RedshiftConfig, qualified: str) -> bool:
+def relation_exists(
+    config: RedshiftConfig,
+    qualified: str,
+) -> bool:
     """Se a tabela existe, por ``select 1 ... limit 0``."""
     try:
         execute_all(config, [f"SELECT 1 FROM {qualified} LIMIT 0"])
@@ -77,7 +86,10 @@ def relation_exists(config: RedshiftConfig, qualified: str) -> bool:
 
 
 @pytest.fixture
-def target(s3_location: S3Location, redshift_driver: None) -> Iterator[Target]:
+def target(
+    s3_location: S3Location,
+    redshift_driver: None,
+) -> Iterator[Target]:
     """O banco da sonda num ambiente ``poc<id>`` e a tabela de controle, criada quando não existe
     e apagada só nesse caso; as tabelas publicadas e as linhas de controle do ambiente saem no
     fim."""
@@ -98,12 +110,17 @@ def target(s3_location: S3Location, redshift_driver: None) -> Iterator[Target]:
     execute_all(config, cleanup)
 
 
-def count_of(engine: RedshiftEngine, name: str) -> int:
+def count_of(
+    engine: RedshiftEngine,
+    name: str,
+) -> int:
     found = engine.query(f"SELECT count(*) AS n FROM {engine.qualified(name)}")
     return found.column("n")[0].as_py()
 
 
-def seed(db: Database) -> tuple[dict[str, pa.Table], int, pa.Table, int]:
+def seed(
+    db: Database,
+) -> tuple[dict[str, pa.Table], int, pa.Table, int]:
     """As duas partições dos lançamentos e as contas, publicadas pelo escritor do delta-rs."""
     seeds = {}
     uri = db.uri(ENTRIES)
@@ -120,9 +137,15 @@ def seed(db: Database) -> tuple[dict[str, pa.Table], int, pa.Table, int]:
     return seeds, version, accounts, accounts_version
 
 
-def concurrent_streams(engine: RedshiftEngine, seeds: dict[str, pa.Table]) -> list[str]:
+def concurrent_streams(
+    engine: RedshiftEngine,
+    seeds: dict[str, pa.Table],
+) -> list[str]:
     """Quatro streams ao mesmo tempo, cada um de uma partição, com uma consulta no meio."""
-    def stream_month(index: int) -> list[str]:
+
+    def stream_month(
+        index: int,
+    ) -> list[str]:
         month = MONTHS[index % 2]
         statement = sa.select(ENTRIES).where(ENTRIES.c.data_base_str == month)
         with engine.stream(statement, batch_size=300 + 100 * index) as stream:
@@ -140,11 +163,19 @@ def concurrent_streams(engine: RedshiftEngine, seeds: dict[str, pa.Table]) -> li
     return problems
 
 
-def concurrent_appenders(engine: RedshiftEngine, seeds: dict[str, pa.Table],
-                         second: sa.Table) -> tuple[list[str], dict[str, pa.Table]]:
+def concurrent_appenders(
+    engine: RedshiftEngine,
+    seeds: dict[str, pa.Table],
+    second: sa.Table,
+) -> tuple[list[str], dict[str, pa.Table]]:
     """Dois appenders em threads, cada um do seu stream, nas tabelas de ``create_table``, com os
     ids deslocados; devolve os problemas e o que cada tabela deve conter."""
-    def pipeline(table: sa.Table, month: str, offset: int) -> int:
+
+    def pipeline(
+        table: sa.Table,
+        month: str,
+        offset: int,
+    ) -> int:
         statement = sa.select(ENTRIES).where(ENTRIES.c.data_base_str == month)
         engine.create_table(table)
         with (engine.stream(statement, batch_size=500) as stream,
@@ -172,8 +203,12 @@ def concurrent_appenders(engine: RedshiftEngine, seeds: dict[str, pa.Table],
     return problems, expected
 
 
-def export_projected(engine: RedshiftEngine, db: Database, expected: pa.Table,
-                     readings: list[str]) -> tuple[list[str], int]:
+def export_projected(
+    engine: RedshiftEngine,
+    db: Database,
+    expected: pa.Table,
+    readings: list[str],
+) -> tuple[list[str], int]:
     """A auditoria e a exportação da projeção, lidas pelo dataset e pelo ``delta_scan``."""
     uri = db.uri(PROJECTED)
     delta.create_table(uri, PROJECTED, db.storage)
@@ -198,7 +233,11 @@ def export_projected(engine: RedshiftEngine, db: Database, expected: pa.Table,
     return problems, version
 
 
-def extra_sessions(engine: RedshiftEngine, accounts_uri: str, accounts_version: int) -> list[str]:
+def extra_sessions(
+    engine: RedshiftEngine,
+    accounts_uri: str,
+    accounts_version: int,
+) -> list[str]:
     """Duas sessões a mais em threads: uma ingere as contas, a outra consulta; a ingestão fica
     visível na sessão principal."""
     def ingest_accounts() -> None:
@@ -222,9 +261,14 @@ def extra_sessions(engine: RedshiftEngine, accounts_uri: str, accounts_version: 
     return problems
 
 
-def publish_and_read(target: Target, execution_id: str, expected: pa.Table,
-                     accounts: pa.Table, versions: dict[str, int],
-                     readings: list[str]) -> list[str]:
+def publish_and_read(
+    target: Target,
+    execution_id: str,
+    expected: pa.Table,
+    accounts: pa.Table,
+    versions: dict[str, int],
+    readings: list[str],
+) -> list[str]:
     """``publish_redshift`` com dois workers e o leitor publicado, consultado e transmitido por
     duas threads."""
     problems = []
@@ -235,7 +279,10 @@ def publish_and_read(target: Target, execution_id: str, expected: pa.Table,
     reader = open_redshift(Base.metadata, target.db.environment, target.config,
                            unload_to=target.unload_to)
     try:
-        def read_published(index: int) -> list[str]:
+
+        def read_published(
+            index: int,
+        ) -> list[str]:
             found = reader.query(sa.select(PROJECTED))
             out = compare(expected, found, "id_lancamento", f"leitor query {index}", JSON_COLUMNS)
             with reader.stream(sa.select(ACCOUNTS), batch_size=2) as stream:
@@ -255,7 +302,9 @@ def publish_and_read(target: Target, execution_id: str, expected: pa.Table,
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_redshift_consistency(target: Target) -> None:
+def test_redshift_consistency(
+    target: Target,
+) -> None:
     """A sonda inteira, na ordem do cabeçalho; imprime as leituras e os problemas, e falha com
     qualquer problema."""
     db = target.db

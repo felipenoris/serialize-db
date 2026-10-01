@@ -205,7 +205,9 @@ SQL_TYPES = {
 HIVE_AS_TEXT = "hive_partitioning=true, hive_types_autocast=false"
 
 
-def parse_observed(text: str) -> dict[str, list[tuple[str, ...]]]:
+def parse_observed(
+    text: str,
+) -> dict[str, list[tuple[str, ...]]]:
     """Os blocos da seção 3: uma tupla por coluna, com as sete células da tabela do relatório."""
     schemas: dict[str, list[tuple[str, ...]]] = {}
     # Um bloco por tabela, separado por linha em branco: o nome, o cabeçalho e uma linha por coluna.
@@ -220,7 +222,9 @@ def parse_observed(text: str) -> dict[str, list[tuple[str, ...]]]:
     return schemas
 
 
-def read_as_the_probe(path: Path) -> list[tuple[str, ...]]:
+def read_as_the_probe(
+    path: Path,
+) -> list[tuple[str, ...]]:
     """As sete células do relatório para cada coluna de um arquivo, lidas do rodapé por
     ``parquet_source.footer_columns``, a leitura do probe."""
     rows = []
@@ -240,27 +244,38 @@ def read_as_the_probe(path: Path) -> list[tuple[str, ...]]:
     return rows
 
 
-def files_under(folder: Path) -> list[Path]:
+def files_under(
+    folder: Path,
+) -> list[Path]:
     """Todos os arquivos sob ``folder``, em qualquer profundidade, em ordem de caminho."""
     return sorted(path for path in folder.rglob("*") if path.is_file())
 
 
-def chunk_number(path: Path) -> int:
+def chunk_number(
+    path: Path,
+) -> int:
     """O número ``n`` de um arquivo ``chunk_<n>.parquet``."""
     return int(path.stem.removeprefix("chunk_"))
 
 
-def footer_keys(path: Path) -> set[bytes]:
+def footer_keys(
+    path: Path,
+) -> set[bytes]:
     """As chaves dos metadados do esquema no rodapé do arquivo."""
     return set(pq.read_schema(path).metadata or {})
 
 
-def read_partitioned(base: source.SourceBase, table: str) -> pa.Table:
+def read_partitioned(
+    base: source.SourceBase,
+    table: str,
+) -> pa.Table:
     """A tabela particionada inteira, lida pelo PyArrow com a partição Hive."""
     return ds.dataset(base.root / table, format="parquet", partitioning="hive").to_table()
 
 
-def connect_with_views(base: source.SourceBase) -> duckdb.DuckDBPyConnection:
+def connect_with_views(
+    base: source.SourceBase,
+) -> duckdb.DuckDBPyConnection:
     """Uma conexão em memória com uma view por tabela sobre os arquivos gravados; a coluna de
     partição vem do caminho como texto."""
     connection = duckdb.connect()
@@ -274,12 +289,16 @@ def connect_with_views(base: source.SourceBase) -> duckdb.DuckDBPyConnection:
 
 
 @pytest.fixture(scope="module")
-def base(local_location: LocalLocation) -> source.SourceBase:
+def base(
+    local_location: LocalLocation,
+) -> source.SourceBase:
     """A base gravada uma vez por módulo, sob a pasta da sessão da suíte local."""
     return source.write_source(Path(local_location.child("base-ficticia")))
 
 
-def test_root_has_the_table_folders_and_the_loose_file(base: source.SourceBase) -> None:
+def test_root_has_the_table_folders_and_the_loose_file(
+    base: source.SourceBase,
+) -> None:
     """14 pastas de tabela, só arquivos Parquet dentro delas, e ``schema.json`` como o único arquivo
     solto na raiz."""
     folders = sorted(path.name for path in base.root.iterdir() if path.is_dir())
@@ -304,7 +323,9 @@ def test_root_has_the_table_folders_and_the_loose_file(base: source.SourceBase) 
     assert base.rows["meta_update_status"] == status_rows
 
 
-def test_every_file_has_the_schema_the_probe_reported(base: source.SourceBase) -> None:
+def test_every_file_has_the_schema_the_probe_reported(
+    base: source.SourceBase,
+) -> None:
     """Cada arquivo de cada tabela repete a seção 3 do relatório: nome, tipo Arrow, nulidade,
     físico, lógico, convertido, sem field_id."""
     observed = parse_observed(OBSERVED_SCHEMAS)
@@ -334,7 +355,11 @@ def test_transcription_has_the_type_counts_of_the_report() -> None:
     }
 
 
-def assert_partition_files(folder: Path, partition: source.Partition, value: str) -> None:
+def assert_partition_files(
+    folder: Path,
+    partition: source.Partition,
+    value: str,
+) -> None:
     """Os arquivos da partição ``value`` não trazem a coluna do caminho e têm ``value`` na coluna de
     origem em toda linha."""
     expected = [datetime.date.fromisoformat(value)]
@@ -344,7 +369,9 @@ def assert_partition_files(folder: Path, partition: source.Partition, value: str
         assert data.column(partition.source).unique().to_pylist() == expected, path
 
 
-def test_partitions_live_in_the_path_and_equal_the_source_column(base: source.SourceBase) -> None:
+def test_partitions_live_in_the_path_and_equal_the_source_column(
+    base: source.SourceBase,
+) -> None:
     """Hive por ``data_str`` ou ``data_base_str``, valor ausente do arquivo e igual a ``data`` ou
     ``data_base`` em toda linha."""
     for table, column in OBSERVED_PARTITION_COLUMNS.items():
@@ -368,7 +395,9 @@ def test_partitions_live_in_the_path_and_equal_the_source_column(base: source.So
         assert names == ["chunk_0.parquet"], table
 
 
-def test_chunks_are_numbered_from_zero_without_padding(base: source.SourceBase) -> None:
+def test_chunks_are_numbered_from_zero_without_padding(
+    base: source.SourceBase,
+) -> None:
     """``chunk_<n>.parquet`` de 0 em diante por partição, o último com até ``CHUNK_ROWS`` linhas, e
     ``chunk_10`` antes de ``chunk_2`` na ordem alfabética."""
     for table in OBSERVED_PARTITION_COLUMNS:
@@ -393,7 +422,10 @@ def test_chunks_are_numbered_from_zero_without_padding(base: source.SourceBase) 
     assert pq.read_metadata(february_relations / "chunk_2.parquet").num_rows == 2
 
 
-def assert_column_chunks(path: Path, row_group: pq.RowGroupMetaData) -> None:
+def assert_column_chunks(
+    path: Path,
+    row_group: pq.RowGroupMetaData,
+) -> None:
     """Cada coluna do row group em SNAPPY, só com PLAIN e RLE, e com estatística fora do INT96."""
     for index in range(row_group.num_columns):
         chunk = row_group.column(index)
@@ -409,7 +441,10 @@ def assert_column_chunks(path: Path, row_group: pq.RowGroupMetaData) -> None:
         assert statistics.has_min_max or statistics.null_count == row_group.num_rows, where
 
 
-def assert_file_layout(table: str, path: Path) -> None:
+def assert_file_layout(
+    table: str,
+    path: Path,
+) -> None:
     """Um row group, formato 1.0, gravado pelo parquet-cpp-arrow, e a chave ``pandas`` no rodapé só
     onde a origem a gravou."""
     metadata = pq.read_metadata(path)
@@ -426,7 +461,9 @@ def assert_file_layout(table: str, path: Path) -> None:
     assert_column_chunks(path, metadata.row_group(0))
 
 
-def test_physical_layout_matches_the_reading(base: source.SourceBase) -> None:
+def test_physical_layout_matches_the_reading(
+    base: source.SourceBase,
+) -> None:
     """Um row group por arquivo, SNAPPY, PLAIN e RLE, formato 1.0, parquet-cpp-arrow, a chave
     ``pandas`` em parte dos arquivos e INT96 sem estatística."""
     for table in OBSERVED_TABLES:
@@ -524,7 +561,9 @@ def test_unpartitioned_values_reproduce_what_the_initial_load_handles(
     assert alembic.column("version_num").to_pylist() == [source.ALEMBIC_REVISION]
 
 
-def test_the_base_satisfies_the_reference_model(base: source.SourceBase) -> None:
+def test_the_base_satisfies_the_reference_model(
+    base: source.SourceBase,
+) -> None:
     """Toda chave do modelo é única, toda chave estrangeira tem a linha referenciada, e as colunas
     NOT NULL do modelo não têm nulo."""
     connection = connect_with_views(base)
@@ -608,7 +647,10 @@ def test_rel_contrato_operacao_apportions_each_contract_among_its_operations(
     assert repeated == 0
 
 
-def path_to_root(parent_of: dict[int, int], account: int) -> list[int]:
+def path_to_root(
+    parent_of: dict[int, int],
+    account: int,
+) -> list[int]:
     """As contas da subida de ``account`` pelos pais, até a que não tem pai; um ciclo reprova."""
     path = [account]
     while path[-1] in parent_of:
@@ -618,7 +660,9 @@ def path_to_root(parent_of: dict[int, int], account: int) -> list[int]:
     return path
 
 
-def test_rel_contas_hierarquias_is_a_tree_of_accounts(base: source.SourceBase) -> None:
+def test_rel_contas_hierarquias_is_a_tree_of_accounts(
+    base: source.SourceBase,
+) -> None:
     """A hierarquia 1 é uma árvore de contas: nenhuma conta é pai de si mesma, cada conta tem um
     pai só, há uma raiz, e a subida pelos pais leva toda conta até ela sem ciclo."""
     hierarchy = pq.read_table(base.files["rel_contas_hierarquias"][0])
@@ -672,7 +716,9 @@ def test_schema_json_is_the_previous_library_control_and_matches_the_files(
     }
 
 
-def test_both_readers_see_the_partition_column_from_the_path(base: source.SourceBase) -> None:
+def test_both_readers_see_the_partition_column_from_the_path(
+    base: source.SourceBase,
+) -> None:
     """O DuckDB e o PyArrow leem a pasta com partição Hive: as mesmas linhas, e a coluna do caminho
     tipada por cada leitor."""
     connection = duckdb.connect()

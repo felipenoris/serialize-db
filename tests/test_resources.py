@@ -29,7 +29,10 @@ pytestmark = pytest.mark.local
 GIB = 2**30
 
 
-def fabricate(folder: Path, files: dict[str, str]) -> None:
+def fabricate(
+    folder: Path,
+    files: dict[str, str],
+) -> None:
     """Grava cada arquivo de ``files`` pelo caminho relativo a ``folder``."""
     for relative, text in files.items():
         path = folder / relative
@@ -37,13 +40,18 @@ def fabricate(folder: Path, files: dict[str, str]) -> None:
         path.write_text(text)
 
 
-def meminfo(available: int) -> str:
+def meminfo(
+    available: int,
+) -> str:
     """O ``/proc/meminfo`` com ``MemAvailable`` de ``available`` bytes."""
     return f"MemTotal:       16000000 kB\nMemAvailable:   {available // 1024} kB\n"
 
 
 @pytest.fixture
-def machine(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Path:
+def machine(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
     """Uma pasta nova com ``proc/`` e ``cgroup/`` no lugar das do sistema e 8 CPUs na afinidade."""
     folder = Path(local_location.child(f"recursos/{uuid.uuid4().hex[:8]}"))
     (folder / "proc").mkdir(parents=True)
@@ -54,7 +62,9 @@ def machine(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> P
     return folder
 
 
-def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(machine: Path) -> None:
+def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(
+    machine: Path,
+) -> None:
     """A folga do cgroup v2 é o limite menos o uso, com o cache de arquivos de volta; a cota de
     1,5 CPU dá 2. Um ``MemAvailable`` menor que a folga ganha dela."""
     fabricate(machine, {
@@ -74,7 +84,9 @@ def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(machine: Pa
     assert resources.available_memory() == GIB
 
 
-def test_the_tightest_ancestor_wins(machine: Path) -> None:
+def test_the_tightest_ancestor_wins(
+    machine: Path,
+) -> None:
     """O limite de um ancestral vale para o cgroup do processo: o pai limita a memória, e o filho,
     sem limite de memória, limita a CPU a meia, que arredonda para 1."""
     fabricate(machine, {
@@ -92,7 +104,9 @@ def test_the_tightest_ancestor_wins(machine: Path) -> None:
     assert resources.available_cpus() == 1
 
 
-def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(machine: Path) -> None:
+def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(
+    machine: Path,
+) -> None:
     """No v1, a memória lê a pasta do processo e as ancestrais até a montagem, e a mais apertada é
     a montagem; a CPU não acha a pasta do processo, como no contêiner que monta o próprio cgroup, e
     lê a cota da montagem: 2,5 CPUs dão 3. A linha do v2 sem controlador não limita nada."""
@@ -129,8 +143,11 @@ def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(machine: 
         ),
     }),
 ], ids=["v2", "v1"])
-def test_shared_memory_stays_in_the_cgroup_usage(machine: Path, cgroup: str,
-                                                 files: dict[str, str]) -> None:
+def test_shared_memory_stays_in_the_cgroup_usage(
+    machine: Path,
+    cgroup: str,
+    files: dict[str, str],
+) -> None:
     """A memória compartilhada (tmpfs, ``/dev/shm``, mmap compartilhado) entra no cache de arquivos
     do ``memory.stat``, em ``file`` no v2 e em ``total_cache`` no v1, e o kernel sem swap não a
     devolve: a folga devolve o cache menos ela, ``shmem`` no v2 e ``total_shmem`` no v1. No v1, as
@@ -150,7 +167,9 @@ def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
     assert resources.available_cpus() == 8
 
 
-def test_peak_rss_mb_reads_vmhwm_from_the_process_status(machine: Path) -> None:
+def test_peak_rss_mb_reads_vmhwm_from_the_process_status(
+    machine: Path,
+) -> None:
     """O pico de memória residente é o ``VmHWM`` de ``/proc/self/status``, em KB, convertido em
     MB; sem o arquivo, fora do Linux, é o ``ru_maxrss`` do processo, positivo."""
     fabricate(machine, {

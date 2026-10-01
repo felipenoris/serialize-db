@@ -190,14 +190,19 @@ def now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def clock(at: datetime.datetime | None) -> str:
+def clock(
+    at: datetime.datetime | None,
+) -> str:
     """O instante no fuso da máquina, como ``14:05:12``; ``-`` sem instante."""
     if at is None:
         return "-"
     return at.astimezone().strftime("%H:%M:%S")
 
 
-def signed_minutes(at: datetime.datetime, reference: datetime.datetime | None) -> str:
+def signed_minutes(
+    at: datetime.datetime,
+    reference: datetime.datetime | None,
+) -> str:
     """Os minutos de ``at`` em relação a ``reference``, com sinal: ``-45 min`` antes, ``+2 min``
     depois; ``-`` sem referência."""
     if reference is None:
@@ -206,7 +211,9 @@ def signed_minutes(at: datetime.datetime, reference: datetime.datetime | None) -
     return f"{minutes:+.0f} min"
 
 
-def fingerprint(key: str | None) -> str | None:
+def fingerprint(
+    key: str | None,
+) -> str | None:
     """Os oito primeiros caracteres hexadecimais do ``sha256`` de uma chave, que a identificam no
     relatório sem mostrá-la; ``None`` sem chave."""
     if not key:
@@ -214,7 +221,9 @@ def fingerprint(key: str | None) -> str | None:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
-def secret_key_id(secret_string: str) -> str | None:
+def secret_key_id(
+    secret_string: str,
+) -> str | None:
     """O ``key_id`` que um secret do DuckDB guarda, lido do ``secret_string`` de
     ``duckdb_secrets()``, que o mostra sem redação; ``None`` sem ele."""
     found = re.search(r"(?:^|;)key_id=([^;]*)", secret_string)
@@ -223,7 +232,9 @@ def secret_key_id(secret_string: str) -> str | None:
     return found.group(1)
 
 
-def clause_key_id(clause: str) -> str | None:
+def clause_key_id(
+    clause: str,
+) -> str | None:
     """O ``ACCESS_KEY_ID`` de uma cláusula de credenciais do ``COPY`` e do ``UNLOAD``; ``None`` na
     cláusula ``IAM_ROLE``, que não leva chave."""
     found = re.search(r"ACCESS_KEY_ID '([^']*)'", clause)
@@ -232,9 +243,13 @@ def clause_key_id(clause: str) -> str | None:
     return found.group(1)
 
 
-def wait_deadline(start: datetime.datetime, expiries: list[datetime.datetime | None],
-                  margin: datetime.timedelta, ceiling: datetime.timedelta,
-                  fixed: datetime.timedelta | None) -> tuple[datetime.datetime, str]:
+def wait_deadline(
+    start: datetime.datetime,
+    expiries: list[datetime.datetime | None],
+    margin: datetime.timedelta,
+    ceiling: datetime.timedelta,
+    fixed: datetime.timedelta | None,
+) -> tuple[datetime.datetime, str]:
     """O fim da espera e o motivo dele: o tempo fixo, quando pedido; senão a última expiração mais
     a margem, limitada pelo teto; sem expiração, o próprio início."""
     if fixed is not None:
@@ -250,8 +265,10 @@ def wait_deadline(start: datetime.datetime, expiries: list[datetime.datetime | N
     return target, f"a expiração das {clock(last)} mais a margem"
 
 
-def held_verdict(readings: list[Reading],
-                 expiry: datetime.datetime | None) -> tuple[str, str]:
+def held_verdict(
+    readings: list[Reading],
+    expiry: datetime.datetime | None,
+) -> tuple[str, str]:
     """O veredito de um cliente segurado pelas leituras feitas depois da expiração da credencial
     que ele resolveu na abertura: ``pass`` quando todas passaram, ``fail`` quando alguma falhou e
     ``note`` sem expiração conhecida ou sem leitura depois dela."""
@@ -274,7 +291,9 @@ def held_verdict(readings: list[Reading],
                     f"a última {signed_minutes(last.at, expiry)}{earlier}")
 
 
-def key_change(keys: list[tuple[datetime.datetime, str | None]]) -> datetime.datetime | None:
+def key_change(
+    keys: list[tuple[datetime.datetime, str | None]],
+) -> datetime.datetime | None:
     """O instante da primeira rodada em que a chave difere da chave da primeira rodada; ``None``
     sem troca. ``keys`` traz o instante e a impressão digital da chave de cada rodada."""
     _at, initial = keys[0]
@@ -284,8 +303,10 @@ def key_change(keys: list[tuple[datetime.datetime, str | None]]) -> datetime.dat
     return None
 
 
-def key_verdict(keys: list[tuple[datetime.datetime, str | None]],
-                expiry: datetime.datetime | None) -> tuple[str, str]:
+def key_verdict(
+    keys: list[tuple[datetime.datetime, str | None]],
+    expiry: datetime.datetime | None,
+) -> tuple[str, str]:
     """O veredito de uma chave montada a cada uso, como a da cláusula, pelas rodadas depois da
     expiração da chave do início: ``pass`` quando cada uma leva outra chave, ``fail`` quando
     alguma ainda leva a do início e ``note`` sem chave, sem expiração ou sem chave lida depois
@@ -308,7 +329,13 @@ def key_verdict(keys: list[tuple[datetime.datetime, str | None]],
                     f"({signed_minutes(changed, expiry)} da expiração das {clock(expiry)})")
 
 
-def record(report: Report, status: str, check_id: str, what: str, detail: str) -> None:
+def record(
+    report: Report,
+    status: str,
+    check_id: str,
+    what: str,
+    detail: str,
+) -> None:
     """Registra uma checagem pelo veredito: ``pass``, ``fail`` ou ``note``."""
     if status == "pass":
         report.ok(check_id, what, detail)
@@ -318,14 +345,19 @@ def record(report: Report, status: str, check_id: str, what: str, detail: str) -
         report.note(check_id, what, detail)
 
 
-def cell(reading: Reading | None) -> str:
+def cell(
+    reading: Reading | None,
+) -> str:
     """A célula de uma leitura na linha do tempo: ``ok``, ``FALHOU`` ou ``-``."""
     if reading is None:
         return "-"
     return "ok" if reading.ok else "FALHOU"
 
 
-def reading_of(item: Round, client: str) -> Reading | None:
+def reading_of(
+    item: Round,
+    client: str,
+) -> Reading | None:
     """A leitura de um cliente numa rodada; ``None`` quando o cliente não leu nela."""
     for reading in item.readings:
         if reading.client == client:
@@ -333,7 +365,10 @@ def reading_of(item: Round, client: str) -> Reading | None:
     return None
 
 
-def round_line(item: Round, expiry: datetime.datetime | None) -> str:
+def round_line(
+    item: Round,
+    expiry: datetime.datetime | None,
+) -> str:
     """A linha de uma rodada, impressa durante a espera."""
     readings = ", ".join(f"{reading.client} {cell(reading)}" for reading in item.readings)
     container = (f"contêiner {item.container_key or '-'} até {clock(item.container_expiry)}")
@@ -342,8 +377,11 @@ def round_line(item: Round, expiry: datetime.datetime | None) -> str:
             f"{keys}")
 
 
-def timeline_rows(rounds: list[Round], clients: list[str],
-                  expiry: datetime.datetime | None) -> list[list[str]]:
+def timeline_rows(
+    rounds: list[Round],
+    clients: list[str],
+    expiry: datetime.datetime | None,
+) -> list[list[str]]:
     """A tabela da linha do tempo: uma linha por rodada, uma coluna por cliente e as chaves."""
     header = ["HORA", "EXPIRAÇÃO", *clients, "CONTÊINER", "ATÉ", "SECRET", "CLÁUSULA"]
     rows = [header]
@@ -370,7 +408,9 @@ def container_credential() -> tuple[str | None, str | None, bool, datetime.datet
     return found.method, fingerprint(frozen.access_key), bool(frozen.token), expiry
 
 
-def smallest_file(dt: DeltaTable) -> str:
+def smallest_file(
+    dt: DeltaTable,
+) -> str:
     """O menor arquivo de dados da versão da tabela, relativo à pasta dela."""
     # get_add_actions devolve uma tabela arro3; pa.table a converte sem cópia.
     actions = pa.table(dt.get_add_actions(flatten=True)).to_pylist()
@@ -378,14 +418,18 @@ def smallest_file(dt: DeltaTable) -> str:
     return urllib.parse.unquote(smallest["path"])
 
 
-def read_delta_table(dt: DeltaTable) -> str:
+def read_delta_table(
+    dt: DeltaTable,
+) -> str:
     """O ``DeltaTable`` segurado: a listagem do log e a primeira linha do dataset."""
     dt.update_incremental()
     rows = dt.to_pyarrow_dataset().head(1).num_rows
     return f"versão {dt.version()}, {rows} linha lida"
 
 
-def open_duckdb(storage: Storage) -> DuckDBEngine:
+def open_duckdb(
+    storage: Storage,
+) -> DuckDBEngine:
     """O motor DuckDB de uma execução, num banco em memória e com o cache de arquivos externos
     desligado, para cada leitura ir ao armazenamento."""
     engine = DuckDBEngine(DuckDBConfig(database=":memory:"), "credentials", storage)
@@ -394,7 +438,10 @@ def open_duckdb(storage: Storage) -> DuckDBEngine:
     return engine
 
 
-def read_count(engine: DuckDBEngine, source: str) -> str:
+def read_count(
+    engine: DuckDBEngine,
+    source: str,
+) -> str:
     """As linhas de uma função de leitura do DuckDB, como ``delta_scan('<uri>')``, numa sessão do
     motor: a entrada recria o secret do S3 quando a chave do ``boto3`` trocou, e o resultado é lido
     até o fim, o que encerra a consulta."""
@@ -403,7 +450,9 @@ def read_count(engine: DuckDBEngine, source: str) -> str:
     return f"{rows} linhas"
 
 
-def duckdb_secret_key(engine: DuckDBEngine) -> str | None:
+def duckdb_secret_key(
+    engine: DuckDBEngine,
+) -> str | None:
     """A impressão digital da chave que o secret do S3 do motor guarda, lida numa sessão, depois da
     recriação que a entrada faz; ``None`` sem o secret."""
     with engine.session() as connection:
@@ -414,27 +463,38 @@ def duckdb_secret_key(engine: DuckDBEngine) -> str | None:
     return fingerprint(secret_key_id(rows[0][0]))
 
 
-def read_footer(storage: Storage, path: str) -> str:
+def read_footer(
+    storage: Storage,
+    path: str,
+) -> str:
     """O rodapé de um arquivo pelo ``S3FileSystem`` do armazenamento."""
     with storage.open_input_file(path) as source:
         rows = pq.ParquetFile(source).metadata.num_rows
     return f"{rows} linhas no rodapé"
 
 
-def read_log_commit(storage: Storage, path: str) -> str:
+def read_log_commit(
+    storage: Storage,
+    path: str,
+) -> str:
     """Um commit do log por ``Storage.read_text``, o ``boto3`` no S3."""
     text, _etag = storage.read_text(path)
     return f"{len(text)} bytes"
 
 
-def read_redshift(connection: object) -> str:
+def read_redshift(
+    connection: object,
+) -> str:
     """``select 1`` na conexão do Redshift."""
     cursor = connection.cursor()
     cursor.execute("select 1")
     return f"select 1 = {cursor.fetchone()[0]}"
 
 
-def read_once(client: str, action: Callable[[], str]) -> Reading:
+def read_once(
+    client: str,
+    action: Callable[[], str],
+) -> Reading:
     """Uma leitura: o resultado de ``action`` ou o motivo da falha, com o instante e a duração."""
     at = now()
     started = time.perf_counter()
@@ -445,7 +505,9 @@ def read_once(client: str, action: Callable[[], str]) -> Reading:
     return Reading(client, at, True, detail, time.perf_counter() - started)
 
 
-def optional(action: Callable[[], T]) -> T | None:
+def optional(
+    action: Callable[[], T],
+) -> T | None:
     """O resultado de ``action``, ou ``None`` quando ela falha: uma chave é leitura de apoio, e a
     falha do cliente que a usa aparece na leitura dele."""
     try:
@@ -454,12 +516,17 @@ def optional(action: Callable[[], T]) -> T | None:
         return None
 
 
-def clause_key(config: RedshiftConfig) -> str | None:
+def clause_key(
+    config: RedshiftConfig,
+) -> str | None:
     """A impressão digital da chave que a cláusula do ``COPY`` e do ``UNLOAD`` levaria agora."""
     return fingerprint(clause_key_id(credentials_clause(config)))
 
 
-def read_round(held: Held, config: RedshiftConfig) -> Round:
+def read_round(
+    held: Held,
+    config: RedshiftConfig,
+) -> Round:
     """Uma rodada: cada cliente segurado lê, e as três chaves são lidas no mesmo momento."""
     started = now()
     readings = [read_once(client, action) for client, action in held.readers.items()]
@@ -480,8 +547,12 @@ def read_round(held: Held, config: RedshiftConfig) -> Round:
 # As seções
 
 
-def configuration_section(report: Report, storage: Storage, changed: dict[str, str],
-                          arguments: argparse.Namespace) -> RedshiftConfig:
+def configuration_section(
+    report: Report,
+    storage: Storage,
+    changed: dict[str, str],
+    arguments: argparse.Namespace,
+) -> RedshiftConfig:
     """Seção 1: a tabela, as variáveis que escolhem a credencial e o Redshift da configuração."""
     report.h1("Configuração")
     report.value("TABELA", storage.uri)
@@ -506,7 +577,11 @@ def configuration_section(report: Report, storage: Storage, changed: dict[str, s
     return config
 
 
-def open_s3_clients(report: Report, storage: Storage, held: Held) -> tuple[str, str] | None:
+def open_s3_clients(
+    report: Report,
+    storage: Storage,
+    held: Held,
+) -> tuple[str, str] | None:
     """Abre o ``DeltaTable``, a conexão do DuckDB, o ``S3FileSystem`` e o ``boto3``; devolve o menor
     arquivo e o último commit do log, relativos à tabela, ou ``None`` sem a tabela."""
     # A tabela dá o arquivo e o commit que os outros clientes leem; sem ela, nada abre.
@@ -539,7 +614,11 @@ def open_s3_clients(report: Report, storage: Storage, held: Held) -> tuple[str, 
     return sample, commit
 
 
-def open_redshift(report: Report, config: RedshiftConfig, held: Held) -> None:
+def open_redshift(
+    report: Report,
+    config: RedshiftConfig,
+    held: Held,
+) -> None:
     """Abre a conexão do Redshift pelo caminho da biblioteca, com a expiração da senha."""
     if not (config.workgroup or config.host):
         return
@@ -557,8 +636,11 @@ def open_redshift(report: Report, config: RedshiftConfig, held: Held) -> None:
         report.line(f"senha do Redshift: expira até as {clock(held.redshift_expiry)}")
 
 
-def clients_section(report: Report, storage: Storage,
-                    config: RedshiftConfig) -> tuple[Held, list[Round], tuple[str, str] | None]:
+def clients_section(
+    report: Report,
+    storage: Storage,
+    config: RedshiftConfig,
+) -> tuple[Held, list[Round], tuple[str, str] | None]:
     """Seção 2: a credencial do contêiner, a abertura de cada cliente e a primeira rodada."""
     report.h1("Os clientes")
     # A credencial do contêiner antes de abrir os clientes, que a resolvem cada um a seu modo.
@@ -586,8 +668,9 @@ def clients_section(report: Report, storage: Storage,
     return held, [first], files
 
 
-def describe_credential(credential: tuple[str | None, str | None, bool,
-                                          datetime.datetime | None]) -> str:
+def describe_credential(
+    credential: tuple[str | None, str | None, bool, datetime.datetime | None],
+) -> str:
     """O texto da credencial do contêiner: método, chave, token e expiração."""
     method, key, token, expiry = credential
     if key is None:
@@ -597,9 +680,16 @@ def describe_credential(credential: tuple[str | None, str | None, bool,
             f"expira {clock(expiry)}")
 
 
-def wait_section(report: Report, held: Held, config: RedshiftConfig, rounds: list[Round],
-                 deadline: datetime.datetime, reason: str, interval: datetime.timedelta,
-                 expiry: datetime.datetime | None) -> str:
+def wait_section(
+    report: Report,
+    held: Held,
+    config: RedshiftConfig,
+    rounds: list[Round],
+    deadline: datetime.datetime,
+    reason: str,
+    interval: datetime.timedelta,
+    expiry: datetime.datetime | None,
+) -> str:
     """Seção 3: uma rodada a cada ``interval`` até ``deadline``, impressa ao terminar; devolve
     como a espera terminou."""
     report.h1("A espera")
@@ -618,20 +708,27 @@ def wait_section(report: Report, held: Held, config: RedshiftConfig, rounds: lis
         return f"interrompida pelo operador às {clock(now())}"
 
 
-def read_fresh_delta_table(storage: Storage) -> str:
+def read_fresh_delta_table(
+    storage: Storage,
+) -> str:
     """Um ``DeltaTable`` novo e a primeira linha do dataset."""
     dt = delta.open_table(storage.uri, storage)
     rows = dt.to_pyarrow_dataset().head(1).num_rows
     return f"versão {dt.version()}, {rows} linha lida"
 
 
-def read_fresh_duckdb(storage: Storage, source: str) -> str:
+def read_fresh_duckdb(
+    storage: Storage,
+    source: str,
+) -> str:
     """Um motor DuckDB novo, a contagem e o fechamento."""
     with open_duckdb(storage) as engine:
         return read_count(engine, source)
 
 
-def read_fresh_redshift(config: RedshiftConfig) -> str:
+def read_fresh_redshift(
+    config: RedshiftConfig,
+) -> str:
     """Uma conexão nova do Redshift, com credencial nova, ``select 1`` e o fechamento."""
     connection = connect(config)
     try:
@@ -640,8 +737,13 @@ def read_fresh_redshift(config: RedshiftConfig) -> str:
         connection.close()
 
 
-def control_section(report: Report, storage: Storage, sample: str, config: RedshiftConfig,
-                    held: Held) -> list[Reading]:
+def control_section(
+    report: Report,
+    storage: Storage,
+    sample: str,
+    config: RedshiftConfig,
+    held: Held,
+) -> list[Reading]:
     """Seção 4: os clientes novos, abertos depois da espera, com a credencial daquele momento."""
     report.h1("O controle")
     # Um Storage novo, para o S3FileSystem e o boto3 resolverem a credencial de agora.
@@ -663,8 +765,12 @@ def control_section(report: Report, storage: Storage, sample: str, config: Redsh
     return readings
 
 
-def timeline_section(report: Report, rounds: list[Round], clients: list[str],
-                     expiry: datetime.datetime | None) -> None:
+def timeline_section(
+    report: Report,
+    rounds: list[Round],
+    clients: list[str],
+    expiry: datetime.datetime | None,
+) -> None:
     """Seção 5: a tabela das rodadas e as leituras que falharam, com o motivo."""
     report.h1("A linha do tempo")
     report.line(f"EXPIRAÇÃO conta a partir da expiração da credencial do contêiner lida no "
@@ -681,8 +787,15 @@ def timeline_section(report: Report, rounds: list[Round], clients: list[str],
         report.line(f"- {clock(reading.at)} {reading.client}: {reading.detail}")
 
 
-def checks(report: Report, storage: Storage, rounds: list[Round], controls: list[Reading],
-           held: Held, config: RedshiftConfig, ending: str) -> None:
+def checks(
+    report: Report,
+    storage: Storage,
+    rounds: list[Round],
+    controls: list[Reading],
+    held: Held,
+    config: RedshiftConfig,
+    ending: str,
+) -> None:
     """As checagens: ``CR-1`` a credencial do contêiner, ``CR-2`` a espera, ``CR-3`` a ``CR-8``
     cada cliente segurado, ``CR-9`` a chave do secret do DuckDB, ``CR-10`` a cláusula e ``CR-11``
     o controle."""
@@ -757,7 +870,9 @@ def checks(report: Report, storage: Storage, rounds: list[Round], controls: list
         report.ok("CR-11", "clientes novos", f"{len(controls)} cliente(s) novo(s) leram")
 
 
-def close_clients(held: Held) -> None:
+def close_clients(
+    held: Held,
+) -> None:
     """Fecha as conexões seguradas; o erro de uma não impede o fechamento da outra."""
     if held.duckdb is not None:
         held.duckdb.cleanup()
@@ -784,7 +899,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str]) -> int:
+def main(
+    argv: list[str],
+) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv[1:])
 

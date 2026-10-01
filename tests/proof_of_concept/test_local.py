@@ -57,13 +57,17 @@ print(connection.execute(f"SELECT count(*) FROM delta_scan('{table_uri}')").fetc
 
 
 @pytest.fixture(scope="session")
-def storage(local_location: LocalLocation) -> LocalLocation:
+def storage(
+    local_location: LocalLocation,
+) -> LocalLocation:
     """Raiz da sessão em disco."""
     return local_location
 
 
 @pytest.fixture(scope="session")
-def table_uri(storage: LocalLocation) -> str:
+def table_uri(
+    storage: LocalLocation,
+) -> str:
     """Tabela ``operacoes`` gravada na pasta da sessão."""
     return write_sample_table(storage)
 
@@ -77,7 +81,10 @@ def duckdb_connection() -> duckdb.DuckDBPyConnection:
 class TestLocalProofOfConcept(DeltaProofOfConcept):
     """Os testes comuns sobre a pasta mais os próprios do disco local."""
 
-    def test_commit_is_atomic_on_disk(self, storage: LocalLocation) -> None:
+    def test_commit_is_atomic_on_disk(
+        self,
+        storage: LocalLocation,
+    ) -> None:
         """O commit em disco cria o arquivo do log só se ele não existe, o equivalente do
         ``If-None-Match`` no S3.
 
@@ -95,7 +102,10 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
 
         by_month = {month: small.filter(pc.field("mes") == month) for month in MONTHS}
 
-        def overwrite(table: DeltaTable, month: str) -> None:
+        def overwrite(
+            table: DeltaTable,
+            month: str,
+        ) -> None:
             write_deltalake(table, by_month[month], mode="overwrite", predicate=f"mes = '{month}'")
 
         # Dois objetos DeltaTable abertos na mesma versão simulam duas execuções concorrentes.
@@ -121,7 +131,10 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
         assert table.to_pyarrow_table().num_rows == small.num_rows + 20
 
     def test_folder_relocates(
-        self, storage: LocalLocation, duckdb_connection: duckdb.DuckDBPyConnection, table_uri: str
+        self,
+        storage: LocalLocation,
+        duckdb_connection: duckdb.DuckDBPyConnection,
+        table_uri: str,
     ) -> None:
         """O log guarda caminhos relativos, e a pasta copiada abre na mesma versão pelo delta-rs e
         pelo DuckDB.
@@ -150,7 +163,11 @@ class TestLocalProofOfConcept(DeltaProofOfConcept):
     # A fixture duckdb_connection instala a extensão delta, ou pula o teste sem ela, antes do
     # subprocesso, que só a carrega.
     @pytest.mark.usefixtures("duckdb_connection")
-    def test_opens_without_aws_environment(self, storage: LocalLocation, table_uri: str) -> None:
+    def test_opens_without_aws_environment(
+        self,
+        storage: LocalLocation,
+        table_uri: str,
+    ) -> None:
         """Sem variáveis ``AWS_*``, sem proxy e sem ``~/.aws``, o delta-rs e o DuckDB abrem a
         tabela.
 
