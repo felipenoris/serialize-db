@@ -51,7 +51,10 @@ METADATA = "lancamentos_model:Base.metadata"
 
 
 @pytest.fixture
-def folder(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Path:
+def folder(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
     """Uma pasta nova por teste sob a raiz da sessão, que também recebe a pasta temporária do
     processo."""
     path = Path(local_location.child(f"operacao/{uuid.uuid4().hex[:8]}"))
@@ -61,7 +64,9 @@ def folder(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Pa
 
 
 @pytest.fixture
-def db(folder: Path) -> Database:
+def db(
+    folder: Path,
+) -> Database:
     """O banco do teste: os lançamentos nas duas partições, versões 1 e 2, e as contas, versão 1,
     cada commit com o ``execution_id`` da biblioteca."""
     database = Database(str(folder / "delta"), "prd", Base.metadata)
@@ -73,19 +78,28 @@ def db(folder: Path) -> Database:
     return database
 
 
-def publish(db: Database, table: sa.Table, value: str | None, data: pa.Table,
-            execution_id: str) -> None:
+def publish(
+    db: Database,
+    table: sa.Table,
+    value: str | None,
+    data: pa.Table,
+    execution_id: str,
+) -> None:
     """Publica ``data`` na partição ``value`` num commit com o ``execution_id`` informado."""
     metadata = delta.commit_metadata(execution_id, {})
     delta.publish_partition(db.uri(table), table, value, data, metadata, db.storage)
 
 
-def common_arguments(db: Database) -> list[str]:
+def common_arguments(
+    db: Database,
+) -> list[str]:
     """Os argumentos comuns dos subcomandos da operação."""
     return ["--root", db.root, "--environment", "prd", "--metadata", METADATA]
 
 
-def exit_code(arguments: list[str]) -> int | str | None:
+def exit_code(
+    arguments: list[str],
+) -> int | str | None:
     """O código de saída de ``main``, também quando o ``argparse`` encerra o processo."""
     try:
         return cli.main(arguments)
@@ -93,15 +107,21 @@ def exit_code(arguments: list[str]) -> int | str | None:
         return error.code
 
 
-def count_and_sum(db: Database, uri: str) -> tuple:
+def count_and_sum(
+    db: Database,
+    uri: str,
+) -> tuple:
     """As linhas e a soma de ``valor`` de uma tabela pelo ``delta_scan``."""
     with db.storage.duckdb_connect() as connection:
         query = f"SELECT count(*), sum(valor) FROM delta_scan('{uri}')"
         return connection.execute(query).fetchone()
 
 
-def files_of_version(db: Database, uri: str,
-                     version: int | None = None) -> list[tuple[str, int]]:
+def files_of_version(
+    db: Database,
+    uri: str,
+    version: int | None = None,
+) -> list[tuple[str, int]]:
     """O caminho relativo e o tamanho de cada arquivo de uma versão, em ordem."""
     table = delta.open_table(uri, db.storage, version=version)
     actions = pa.table(table.get_add_actions(flatten=True))
@@ -111,7 +131,8 @@ def files_of_version(db: Database, uri: str,
 
 
 def test_snapshot_records_every_table_and_history_shows_the_metadata(
-    db: Database, capsys: pytest.CaptureFixture
+    db: Database,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """``snapshot`` grava a versão atual de cada tabela existente do ambiente e recusa o nome
     repetido com 2, sem traceback, com o ``serialize-db channel`` na mensagem; ``history`` lista
@@ -146,7 +167,10 @@ def test_snapshot_records_every_table_and_history_shows_the_metadata(
     assert "serialize_db_execution_id" not in history[-1]
 
 
-def test_vacuum_keeps_the_snapshot_version(db: Database, capsys: pytest.CaptureFixture) -> None:
+def test_vacuum_keeps_the_snapshot_version(
+    db: Database,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """Dentro da retenção nada é listado; com retenção zero, o arquivo que só a versão anterior ao
     snapshot usava é listado e, com ``--apply``, apagado, e a versão do snapshot continua legível
     enquanto a anterior perde o arquivo."""
@@ -174,7 +198,8 @@ def test_vacuum_keeps_the_snapshot_version(db: Database, capsys: pytest.CaptureF
 
 
 def test_compact_refuses_after_a_snapshot_on_the_current_version(
-    db: Database, capsys: pytest.CaptureFixture
+    db: Database,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """Três arquivos pequenos numa partição: a compactação é recusada enquanto o snapshot está na
     versão atual, e feita depois de uma versão nova, num commit sem alteração de dados; a tabela
@@ -195,8 +220,11 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     # Depois de uma versão nova, a compactação num commit sem alteração de dados.
     publish(db, PROJECTED, MONTHS[0], entry_rows(MONTHS[0], 50, 10, PROJECTED), "exec-2")
     assert cli.main([*compact, "--partitions", MONTHS[1]]) == 0
-    assert re.search(r"1 arquivo\(s\) gravado\(s\), 3 removido\(s\), em \d+\.\d s; "
-                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
+    assert re.search(
+        r"1 arquivo\(s\) gravado\(s\), 3 removido\(s\), em \d+\.\d s; "
+        r"RSS máximo do processo \d+ MB",
+        capsys.readouterr().out,
+    )
     current = delta.open_table(uri, storage).version()
     assert current == 6
     assert delta.version_diff(uri, 5, 6, PROJECTED, storage) == set()
@@ -215,16 +243,22 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     assert "de cad_contas" in capsys.readouterr().err
     publish(db, ACCOUNTS, None, account_rows(["A", "B", "C", "D"]), "exec-5")
     assert cli.main(accounts_compact) == 0
-    assert re.search(r"cad_contas: nada a juntar em 1 arquivo\(s\), nenhum commit, em \d+\.\d s; "
-                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
+    assert re.search(
+        r"cad_contas: nada a juntar em 1 arquivo\(s\), nenhum commit, em \d+\.\d s; "
+        r"RSS máximo do processo \d+ MB",
+        capsys.readouterr().out,
+    )
     assert delta.open_table(db.uri(ACCOUNTS), storage).version() == 2
 
     # A tabela ausente.
     assert cli.main(["compact", *common_arguments(db), "--table", "nada"]) == 2
 
 
-def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pytest.CaptureFixture,
-                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+def test_archive_copies_each_table_with_the_same_sums(
+    db: Database,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``archive`` copia cada tabela do snapshot na versão registrada, com os mesmos arquivos e as
     mesmas somas e uma versão por partição, move a entrada para ``archived``, solta a versão no
     ``vacuum``, ocupa o nome em ``snapshot``, recusa o snapshot com uma tabela que já não existe e,
@@ -240,8 +274,11 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     # O arquivamento: a saída, as cópias e a entrada movida.
     assert cli.main(["archive", *common_arguments(db), "--name", "2026T3"]) == 0
     printed = capsys.readouterr().out
-    assert re.search(r"cad_lancamentos: versão 2 copiada para .*, versão 2 no arquivo, "
-                     r"em \d+\.\d s; RSS máximo do processo \d+ MB", printed)
+    assert re.search(
+        r"cad_lancamentos: versão 2 copiada para .*, versão 2 no arquivo, "
+        r"em \d+\.\d s; RSS máximo do processo \d+ MB",
+        printed,
+    )
     assert "cad_contas: versão 1 copiada para" in printed
     assert "versão 1 no arquivo" in printed
     assert "snapshot 2026T3 movido para archived" in printed
@@ -288,7 +325,11 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     copies = []
     original_copy = Storage.copy
 
-    def copy_until_the_third(self: Storage, source: str, destination: str) -> None:
+    def copy_until_the_third(
+        self: Storage,
+        source: str,
+        destination: str,
+    ) -> None:
         copies.append(destination)
         if len(copies) == 3:
             raise OSError("cópia interrompida")
@@ -319,15 +360,22 @@ def test_archive_copies_each_table_with_the_same_sums(db: Database, capsys: pyte
     assert control["archived"]["2026T4"] == {"cad_contas": 1, "cad_lancamentos": 3}
 
 
-def test_archive_exits_with_2_on_a_conflicting_copy(db: Database, capsys: pytest.CaptureFixture,
-                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+def test_archive_exits_with_2_on_a_conflicting_copy(
+    db: Database,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """O commit da cópia de uma tabela que perde para outro escritor da mesma partição sai com 2,
     com a tabela na mensagem e sem traceback, e a entrada do snapshot fica em ``snapshots``."""
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 0
     capsys.readouterr()  # descarta a saída do snapshot
     original_deep_copy = delta.deep_copy
 
-    def copy_losing_the_entries(uri: str, *args: object, **options: object) -> int:
+    def copy_losing_the_entries(
+        uri: str,
+        *args: object,
+        **options: object,
+    ) -> int:
         if uri == db.uri(ENTRIES):
             raise ExecutionConflict(f"cad_lancamentos partição {MONTHS[0]}: commit concorrente")
         return original_deep_copy(uri, *args, **options)
@@ -341,7 +389,10 @@ def test_archive_exits_with_2_on_a_conflicting_copy(db: Database, capsys: pytest
     assert "2026T3" in control["snapshots"]
 
 
-def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixture) -> None:
+def test_export_by_copy_and_by_rewrite(
+    db: Database,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``export`` grava as pastas ``<coluna>=<valor>/`` por cópia e por reescrita, de uma versão
     antiga inclusive, e recusa o destino não vazio e o destino fora da raiz."""
     storage = db.storage
@@ -349,8 +400,11 @@ def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixtu
     export = ["export", *common_arguments(db), "--table", "cad_lancamentos", "--destination"]
     copy_uri = storage.uri_of("prd/exportacao/copia")
     assert cli.main([*export, copy_uri]) == 0
-    assert re.search(r"cad_lancamentos: 2 arquivo\(s\) em .*, em \d+\.\d s; "
-                     r"RSS máximo do processo \d+ MB", capsys.readouterr().out)
+    assert re.search(
+        r"cad_lancamentos: 2 arquivo\(s\) em .*, em \d+\.\d s; "
+        r"RSS máximo do processo \d+ MB",
+        capsys.readouterr().out,
+    )
     rewrite_uri = storage.uri_of("prd/exportacao/reescrita")
     assert cli.main([*export, rewrite_uri, "--mode", "rewrite"]) == 0
     assert cli.main([*export, storage.uri_of("prd/exportacao/antiga"), "--version", "1"]) == 0
@@ -360,8 +414,10 @@ def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixtu
         assert len(files) == 2
         assert all("/data_base_str=2026-0" in path for path in files)
     with storage.duckdb_connect() as connection:
-        query = (f"SELECT count(*), sum(valor) FROM read_parquet('{copy_uri}/*/*.parquet', "
-                 "hive_partitioning = true, hive_types_autocast = false)")
+        query = (
+            f"SELECT count(*), sum(valor) FROM read_parquet('{copy_uri}/*/*.parquet', "
+            "hive_partitioning = true, hive_types_autocast = false)"
+        )
         assert connection.execute(query).fetchone() == count_and_sum(db, db.uri(ENTRIES))
 
     # O destino não vazio e o destino fora da raiz.
@@ -371,19 +427,26 @@ def test_export_by_copy_and_by_rewrite(db: Database, capsys: pytest.CaptureFixtu
     assert "fora da raiz" in capsys.readouterr().err
 
 
-def test_channel_points_moves_and_lists(db: Database, capsys: pytest.CaptureFixture) -> None:
+def test_channel_points_moves_and_lists(
+    db: Database,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``channel --name --snapshot`` aponta o canal e imprime o snapshot anterior e o novo, e sem
     argumentos lista os canais; saem com 2 o snapshot ausente, o canal ``current``, um só dos dois
     argumentos e o ``archive`` do snapshot de um canal, que não copia nada."""
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T3"]) == 0
     assert cli.main(["channel", *common_arguments(db)]) == 0
     assert capsys.readouterr().out.endswith("nenhum canal em prd\n")
-    assert cli.main(["channel", *common_arguments(db), "--name", "default",
-                     "--snapshot", "2026T3"]) == 0
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "default", "--snapshot", "2026T3"])
+        == 0
+    )
     assert capsys.readouterr().out == "default: (nenhum) -> 2026T3\n"
     assert cli.main(["snapshot", *common_arguments(db), "--name", "2026T4"]) == 0
-    assert cli.main(["channel", *common_arguments(db), "--name", "default",
-                     "--snapshot", "2026T4"]) == 0
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "default", "--snapshot", "2026T4"])
+        == 0
+    )
     assert capsys.readouterr().out.endswith("default: 2026T3 -> 2026T4\n")
     assert cli.main(["channel", *common_arguments(db)]) == 0
     assert capsys.readouterr().out == "default: 2026T4\n"
@@ -391,11 +454,15 @@ def test_channel_points_moves_and_lists(db: Database, capsys: pytest.CaptureFixt
     assert control["channels"] == {"default": "2026T4"}
 
     # Os erros: o snapshot ausente, o canal current, um só argumento e o archive do canal.
-    assert cli.main(["channel", *common_arguments(db), "--name", "default",
-                     "--snapshot", "2026T9"]) == 2
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "default", "--snapshot", "2026T9"])
+        == 2
+    )
     assert "não está em snapshots" in capsys.readouterr().err
-    assert cli.main(["channel", *common_arguments(db), "--name", "current",
-                     "--snapshot", "2026T3"]) == 2
+    assert (
+        cli.main(["channel", *common_arguments(db), "--name", "current", "--snapshot", "2026T3"])
+        == 2
+    )
     assert "reservado" in capsys.readouterr().err
     assert cli.main(["channel", *common_arguments(db), "--name", "default"]) == 2
     assert "juntos" in capsys.readouterr().err
@@ -407,8 +474,11 @@ def test_channel_points_moves_and_lists(db: Database, capsys: pytest.CaptureFixt
     assert delta.read_snapshots(db.storage, "prd")[0] == control
 
 
-def test_empty_environment_variable_counts_as_absent(db: Database, capsys: pytest.CaptureFixture,
-                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+def test_empty_environment_variable_counts_as_absent(
+    db: Database,
+    capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``SERIALIZE_DB_ENVIRONMENT`` vazia conta como ausente, como em ``run``, ``audit`` e
     ``publish_redshift``: o ambiente é ``dsv``, e não um erro de uso."""
     monkeypatch.setenv("SERIALIZE_DB_ENVIRONMENT", "")
@@ -419,28 +489,59 @@ def test_empty_environment_variable_counts_as_absent(db: Database, capsys: pytes
     assert control["snapshots"] == {"2026T3": {}}
 
 
-def test_cli_operation_usage_errors(db: Database, capsys: pytest.CaptureFixture) -> None:
+def test_cli_operation_usage_errors(
+    db: Database,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """Os erros de uso: o nome ausente, o modo desconhecido, a tabela fora do modelo e a tabela
     do modelo sem Delta, sem traceback."""
     assert exit_code(["snapshot", *common_arguments(db)]) == 2
-    assert exit_code(["export", *common_arguments(db), "--table", "cad_contas",
-                      "--destination", "x", "--mode", "outro"]) == 2
+    assert (
+        exit_code(
+            [
+                "export",
+                *common_arguments(db),
+                "--table",
+                "cad_contas",
+                "--destination",
+                "x",
+                "--mode",
+                "outro",
+            ]
+        )
+        == 2
+    )
     assert cli.main(["history", *common_arguments(db), "--table", "nada"]) == 2
     projected_history = ["history", *common_arguments(db), "--table", "cad_lancamentos_projetados"]
     assert cli.main(projected_history) == 2
-    assert cli.main(["export", *common_arguments(db), "--table", "cad_lancamentos_projetados",
-                     "--destination", db.storage.uri_of("prd/exportacao/x")]) == 2
+    assert (
+        cli.main(
+            [
+                "export",
+                *common_arguments(db),
+                "--table",
+                "cad_lancamentos_projetados",
+                "--destination",
+                db.storage.uri_of("prd/exportacao/x"),
+            ]
+        )
+        == 2
+    )
     printed_errors = capsys.readouterr().err
     assert "não existe" in printed_errors
     assert "Traceback" not in printed_errors
 
 
-def test_status_and_load_lines_print_no_none(capsys: pytest.CaptureFixture) -> None:
+def test_status_and_load_lines_print_no_none(
+    capsys: pytest.CaptureFixture,
+) -> None:
     """A linha do estado da publicação diz ``nunca publicada`` e ``tabela inteira`` na tabela sem
     partição que nunca foi publicada; a diferença da carga diz ``ausente`` do lado sem a
     partição."""
-    statuses = [PublicationStatus("prd_cad_contas", None, 1, (None,)),
-                PublicationStatus("prd_cad_lancamentos", 2, 3, (MONTHS[1],))]
+    statuses = [
+        PublicationStatus("prd_cad_contas", None, 1, (None,)),
+        PublicationStatus("prd_cad_lancamentos", 2, 3, (MONTHS[1],)),
+    ]
     cli._print_statuses(statuses)
     assert capsys.readouterr().out.splitlines() == [
         "prd_cad_contas: nunca publicada, atual 1, pendentes ['tabela inteira']",
@@ -448,15 +549,21 @@ def test_status_and_load_lines_print_no_none(capsys: pytest.CaptureFixture) -> N
     ]
 
     # A partição que falta no Delta e a que falta na origem.
-    missing_in_delta = PartitionReport(MONTHS[0], 38, None, {"valor": Decimal("1.5")}, {},
-                                       {"valor": 0}, {})
-    missing_in_source = PartitionReport(MONTHS[1], None, 5, {}, {"valor": Decimal("2.5")}, {},
-                                        {"valor": 0})
+    missing_in_delta = PartitionReport(
+        MONTHS[0], 38, None, {"valor": Decimal("1.5")}, {}, {"valor": 0}, {}
+    )
+    missing_in_source = PartitionReport(
+        MONTHS[1], None, 5, {}, {"valor": Decimal("2.5")}, {}, {"valor": 0}
+    )
     report = LoadReport("cad_lancamentos", (missing_in_delta, missing_in_source), (), ())
     cli._print_load_report(report, [])
     printed = capsys.readouterr().out
-    assert (f"DIFERENÇA em {MONTHS[0]}: origem 38 linhas {{'valor': Decimal('1.5')}} não finitos "
-            "{'valor': 0}, Delta ausente\n") in printed
-    assert (f"DIFERENÇA em {MONTHS[1]}: origem ausente, Delta 5 linhas "
-            "{'valor': Decimal('2.5')} não finitos {'valor': 0}\n") in printed
+    assert (
+        f"DIFERENÇA em {MONTHS[0]}: origem 38 linhas {{'valor': Decimal('1.5')}} não finitos "
+        "{'valor': 0}, Delta ausente\n"
+    ) in printed
+    assert (
+        f"DIFERENÇA em {MONTHS[1]}: origem ausente, Delta 5 linhas "
+        "{'valor': Decimal('2.5')} não finitos {'valor': 0}\n"
+    ) in printed
     assert "None" not in printed

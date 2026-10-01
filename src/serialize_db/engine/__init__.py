@@ -46,9 +46,11 @@ from serialize_db.errors import ContractError
 __all__ = ["Appender", "BatchStream", "Engine", "duckdb", "redshift"]
 
 # A mensagem que recusa o que não é Arrow e aponta a conversão sem cópia.
-ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
-              "DataFrame vira pa.Table.from_pandas(frame, preserve_index=False) ou "
-              "pa.RecordBatch.from_pandas(frame, preserve_index=False)")
+ARROW_ONLY = (
+    "recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
+    "DataFrame vira pa.Table.from_pandas(frame, preserve_index=False) ou "
+    "pa.RecordBatch.from_pandas(frame, preserve_index=False)"
+)
 
 
 class BatchStream(Protocol):
@@ -111,8 +113,14 @@ class BatchStream(Protocol):
         """
 
     def __enter__(self) -> BatchStream: ...
-    def __exit__(self, *exc: object) -> None: ...
-    def __arrow_c_stream__(self, requested_schema: object = None) -> object: ...
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None: ...
+    def __arrow_c_stream__(
+        self,
+        requested_schema: object = None,
+    ) -> object: ...
 
 
 class Appender(Protocol):
@@ -133,7 +141,10 @@ class Appender(Protocol):
     rows: int
     """As linhas gravadas até agora; depois do ``close``, as acrescentadas à tabela."""
 
-    def write(self, data: pa.RecordBatch | pa.Table) -> None:
+    def write(
+        self,
+        data: pa.RecordBatch | pa.Table,
+    ) -> None:
         """Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
         gravação, que bloqueia quando está cheia.
 
@@ -162,7 +173,10 @@ class Appender(Protocol):
         """
 
     def __enter__(self) -> Appender: ...
-    def __exit__(self, *exc: object) -> None: ...
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -218,10 +232,19 @@ class Engine(Protocol):
         """
 
     def __enter__(self) -> Engine: ...
-    def __exit__(self, *exc: object) -> None: ...
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None: ...
 
-    def ingest(self, table: sa.Table, uri: str, version: int | None,
-               partitions: list[str] | None = None, materialize: bool = False) -> None:
+    def ingest(
+        self,
+        table: sa.Table,
+        uri: str,
+        version: int | None,
+        partitions: list[str] | None = None,
+        materialize: bool = False,
+    ) -> None:
         """Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o nome do
         modelo.
 
@@ -244,7 +267,12 @@ class Engine(Protocol):
             da partição.
         """
 
-    def pinned_delta(self, table: sa.Table, uri: str, version: int | None) -> sa.FromClause:
+    def pinned_delta(
+        self,
+        table: sa.Table,
+        uri: str,
+        version: int | None,
+    ) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
         sandbox.
 
@@ -262,9 +290,12 @@ class Engine(Protocol):
         :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``).
         """
 
-    def stream(self, statement_or_sql: sa.sql.ClauseElement | str,
-               params: Mapping[str, object] | None = None,
-               batch_size: int = 100_000) -> BatchStream:
+    def stream(
+        self,
+        statement_or_sql: sa.sql.ClauseElement | str,
+        params: Mapping[str, object] | None = None,
+        batch_size: int = 100_000,
+    ) -> BatchStream:
         """Os lotes da consulta, lidos na ordem dela enquanto o cliente trabalha no lote
         anterior.
 
@@ -288,8 +319,11 @@ class Engine(Protocol):
             texto.
         """
 
-    def query(self, statement_or_sql: sa.sql.ClauseElement | str,
-              params: Mapping[str, object] | None = None) -> pa.Table:
+    def query(
+        self,
+        statement_or_sql: sa.sql.ClauseElement | str,
+        params: Mapping[str, object] | None = None,
+    ) -> pa.Table:
         """O resultado inteiro como ``pa.Table``, sob o lock.
 
         Exemplo:
@@ -308,7 +342,10 @@ class Engine(Protocol):
             texto.
         """
 
-    def create_table(self, table: sa.Table) -> None:
+    def create_table(
+        self,
+        table: sa.Table,
+    ) -> None:
         """Cria no sandbox a tabela vazia do modelo, pelo DDL do motor, para os dados que não vêm
         do ``ingest``.
 
@@ -322,7 +359,11 @@ class Engine(Protocol):
         :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
         """
 
-    def appender(self, table: sa.Table, queue_depth: int = 2) -> Appender:
+    def appender(
+        self,
+        table: sa.Table,
+        queue_depth: int = 2,
+    ) -> Appender:
         """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
         ``ingest`` com ``materialize=True`` ou por ``create_table``, e os insere no ``close``.
 
@@ -348,7 +389,8 @@ class Engine(Protocol):
         """
 
     def append(
-        self, table: sa.Table,
+        self,
+        table: sa.Table,
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
         """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
@@ -372,10 +414,16 @@ class Engine(Protocol):
             ``ingest`` ocupa.
         """
 
-    def audit(self, table: sa.Table, partitions: list[str] | None, uri: str | None = None,
-              version: int | None = None, foreign_keys: bool = False,
-              key_scope: KeyScope | None = None,
-              referenced: Mapping[str, tuple[str, int]] | None = None) -> AuditReport:
+    def audit(
+        self,
+        table: sa.Table,
+        partitions: list[str] | None,
+        uri: str | None = None,
+        version: int | None = None,
+        foreign_keys: bool = False,
+        key_scope: KeyScope | None = None,
+        referenced: Mapping[str, tuple[str, int]] | None = None,
+    ) -> AuditReport:
         """Roda as verificações do contrato sobre a tabela do sandbox.
 
         Exemplo:
@@ -405,9 +453,15 @@ class Engine(Protocol):
         :raises ContractError: um valor de ``partitions`` fora da regra da partição.
         """
 
-    def export_partition(self, table: sa.Table, uri: str, value: str | None,
-                         metadata: Mapping[str, str], expected_rows: int | None = None,
-                         columns_without_min_max: Collection[str] = ()) -> int:
+    def export_partition(
+        self,
+        table: sa.Table,
+        uri: str,
+        value: str | None,
+        metadata: Mapping[str, str],
+        expected_rows: int | None = None,
+        columns_without_min_max: Collection[str] = (),
+    ) -> int:
         """Leva a partição do sandbox ao Delta num commit.
 
         Exemplo:
@@ -449,7 +503,9 @@ class Engine(Protocol):
 # ---------------------------------------------------------------- os lotes e as filas dos motores
 
 
-def batches_of(data: object) -> Iterator[pa.RecordBatch]:
+def batches_of(
+    data: object,
+) -> Iterator[pa.RecordBatch]:
     """Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de lotes; protegida,
     para o ``append`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError`` antes de
     qualquer gravação."""
@@ -471,7 +527,9 @@ def batches_of(data: object) -> Iterator[pa.RecordBatch]:
     return itertools.chain([first], iterator)
 
 
-def checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
+def checked_batches(
+    data: pa.RecordBatch | pa.Table,
+) -> list[pa.RecordBatch]:
     """Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; protegida, para o ``write`` dos
     appenders. Outro tipo é ``ContractError``."""
     if isinstance(data, pa.Table):
@@ -481,7 +539,10 @@ def checked_batches(data: pa.RecordBatch | pa.Table) -> list[pa.RecordBatch]:
     raise ContractError(f"appender.write {ARROW_ONLY}; recebido {type(data).__name__}")
 
 
-def take(source: queue.Queue, stop: threading.Event) -> object | None:
+def take(
+    source: queue.Queue,
+    stop: threading.Event,
+) -> object | None:
     """O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o ``stop`` em
     vez de ficar preso num ``get`` sem fim; protegida, para as threads dos motores. ``None`` quando
     ``stop`` chega com a fila vazia; nenhum item da fila é ``None``."""

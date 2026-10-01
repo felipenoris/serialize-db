@@ -75,7 +75,14 @@ import probelib
 PROBE_TIMEOUT = 60
 
 # As variáveis mostradas com valor, e as mostradas só como presença (credenciais).
-SHOWN_VARIABLES = ("AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", *probelib.PROXY_VARIABLES)
+SHOWN_VARIABLES = (
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_PROFILE",
+    "AWS_ENDPOINT_URL",
+    "AWS_ENDPOINT_URL_S3",
+    *probelib.PROXY_VARIABLES,
+)
 PRESENCE_VARIABLES = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SESSION_TOKEN",
@@ -96,7 +103,12 @@ STS_SUMMARY = {
 # O formato das linhas
 
 
-def report(status: str, label: str, detail: str, started: float | None = None) -> None:
+def report(
+    status: str,
+    label: str,
+    detail: str,
+    started: float | None = None,
+) -> None:
     """Imprime uma linha ``[status] rótulo: detalhe (tempo)``."""
     elapsed = f" ({time.perf_counter() - started:.1f} s)" if started is not None else ""
     print(f"[{status:^5}] {label}: {detail}{elapsed}")
@@ -106,7 +118,9 @@ def report(status: str, label: str, detail: str, started: float | None = None) -
 # O contexto: versões, variáveis e região
 
 
-def show_versions(root: str) -> None:
+def show_versions(
+    root: str,
+) -> None:
     """O cabeçalho: a raiz, a data, a plataforma e as versões das bibliotecas que a suíte usa."""
     import boto3
     import botocore
@@ -115,7 +129,9 @@ def show_versions(root: str) -> None:
 
     print(f"== diagnóstico de {root} em {time.strftime('%Y-%m-%d %H:%M:%S %z')}")
     print(f"  {platform.platform()}; python {platform.python_version()}")
-    print(f"  boto3 {boto3.__version__}; botocore {botocore.__version__}; deltalake {deltalake.__version__}; duckdb {duckdb.__version__}")
+    print(
+        f"  boto3 {boto3.__version__}; botocore {botocore.__version__}; deltalake {deltalake.__version__}; duckdb {duckdb.__version__}"
+    )
 
 
 def show_environment() -> None:
@@ -134,7 +150,9 @@ def show_environment() -> None:
         print(f"  ~/.aws/{file} {'existe' if (aws_folder / file).is_file() else '(ausente)'}")
 
 
-def no_proxy_state(environ: Mapping[str, str]) -> str:
+def no_proxy_state(
+    environ: Mapping[str, str],
+) -> str:
     """``NO_PROXY`` como o ambiente a tem: ``ausente``, ``vazia`` ou ``definida``.
 
     Vazia e ausente diferem para o delta-rs.
@@ -145,7 +163,9 @@ def no_proxy_state(environ: Mapping[str, str]) -> str:
     return "vazia" if value == "" else "definida"
 
 
-def suite_environment(environ: Mapping[str, str]) -> dict[str, str]:
+def suite_environment(
+    environ: Mapping[str, str],
+) -> dict[str, str]:
     """As variáveis que a suíte exporta antes de abrir a tabela.
 
     A suíte exporta ``NO_PROXY`` de ``no_proxy`` quando a maiúscula está ausente ou vazia. O cliente
@@ -166,8 +186,18 @@ def resolve_regions() -> tuple[str | None, str | None]:
     delta_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
     print("== região")
-    report("ok" if boto3_region else "falha", "boto3", boto3_region or "nenhuma: o boto3 lê AWS_DEFAULT_REGION ou o perfil, não AWS_REGION, e sem região usa o endpoint global s3.amazonaws.com")
-    report("ok" if delta_region else "falha", "delta-rs", delta_region or "nenhuma: sem AWS_REGION nem AWS_DEFAULT_REGION o delta-rs consulta o IMDS e cai em us-east-1")
+    report(
+        "ok" if boto3_region else "falha",
+        "boto3",
+        boto3_region
+        or "nenhuma: o boto3 lê AWS_DEFAULT_REGION ou o perfil, não AWS_REGION, e sem região usa o endpoint global s3.amazonaws.com",
+    )
+    report(
+        "ok" if delta_region else "falha",
+        "delta-rs",
+        delta_region
+        or "nenhuma: sem AWS_REGION nem AWS_DEFAULT_REGION o delta-rs consulta o IMDS e cai em us-east-1",
+    )
     return boto3_region, delta_region
 
 
@@ -175,7 +205,10 @@ def resolve_regions() -> tuple[str | None, str | None]:
 # As verificações: DNS, credenciais, S3 por cada cliente, STS
 
 
-def check_dns(bucket: str, region: str | None) -> None:
+def check_dns(
+    bucket: str,
+    region: str | None,
+) -> None:
     """O DNS dos endpoints do S3 e do STS.
 
     Um IP privado indica endpoint VPC de interface com DNS privado.
@@ -183,7 +216,11 @@ def check_dns(bucket: str, region: str | None) -> None:
     print("== DNS")
     names = ["s3.amazonaws.com"]
     if region:
-        names += [f"s3.{region}.amazonaws.com", f"{bucket}.s3.{region}.amazonaws.com", f"sts.{region}.amazonaws.com"]
+        names += [
+            f"s3.{region}.amazonaws.com",
+            f"{bucket}.s3.{region}.amazonaws.com",
+            f"sts.{region}.amazonaws.com",
+        ]
 
     for name in names:
         started = time.perf_counter()
@@ -216,7 +253,12 @@ def check_boto3_credentials() -> bool:
     return True
 
 
-def check_s3_boto3(bucket: str, prefix: str, region: str | None, label: str) -> bool:
+def check_s3_boto3(
+    bucket: str,
+    prefix: str,
+    region: str | None,
+    label: str,
+) -> bool:
     """Lista um objeto sob ``<raiz>/serialize-db-poc/`` como a suíte faz, com a região dada."""
     import boto3
 
@@ -224,15 +266,21 @@ def check_s3_boto3(bucket: str, prefix: str, region: str | None, label: str) -> 
     client = boto3.client("s3", region_name=region, config=probelib.short_config())
     started = time.perf_counter()
     try:
-        client.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/serialize-db-poc/".lstrip("/"), MaxKeys=1)
+        client.list_objects_v2(
+            Bucket=bucket, Prefix=f"{prefix}/serialize-db-poc/".lstrip("/"), MaxKeys=1
+        )
     except Exception as error:  # noqa: BLE001 - qualquer falha é o diagnóstico.
-        report("falha", label, f"{client.meta.endpoint_url}: {probelib.describe_error(error)}", started)
+        report(
+            "falha", label, f"{client.meta.endpoint_url}: {probelib.describe_error(error)}", started
+        )
         return False
     report("ok", label, client.meta.endpoint_url, started)
     return True
 
 
-def sts_verdict(error: BaseException) -> str:
+def sts_verdict(
+    error: BaseException,
+) -> str:
     """O veredito de uma chamada ao STS que falhou.
 
     É ``respondeu`` para um erro de credencial ou de permissão, ``sem resposta`` para a rede, o
@@ -246,7 +294,9 @@ def sts_verdict(error: BaseException) -> str:
     return "erro local"
 
 
-def check_sts(region: str | None) -> str:
+def check_sts(
+    region: str | None,
+) -> str:
     """Chama ``get_caller_identity`` e devolve o veredito: ``respondeu``, com identidade ou com
     erro, ``sem resposta`` ou ``erro local``."""
     import boto3
@@ -266,7 +316,13 @@ def check_sts(region: str | None) -> str:
 # O delta-rs e o DuckDB, cada um num subprocesso com espera limitada
 
 
-def run_probe(label: str, code: str, arguments: list[str], on_success: Callable[[str], str], environment: Mapping[str, str] | None = None) -> bool:
+def run_probe(
+    label: str,
+    code: str,
+    arguments: list[str],
+    on_success: Callable[[str], str],
+    environment: Mapping[str, str] | None = None,
+) -> bool:
     """Roda ``code`` num subprocesso com espera limitada e imprime a linha da verificação.
 
     A espera é limitada porque o delta-rs e o DuckDB têm esperas próprias. ``environment``
@@ -275,7 +331,11 @@ def run_probe(label: str, code: str, arguments: list[str], on_success: Callable[
     started = time.perf_counter()
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", code, *arguments], capture_output=True, text=True, timeout=PROBE_TIMEOUT, env=dict(environment) if environment is not None else None
+            [sys.executable, "-c", code, *arguments],
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT,
+            env=dict(environment) if environment is not None else None,
         )
     except subprocess.TimeoutExpired:
         report("falha", label, f"sem resposta em {PROBE_TIMEOUT} s", started)
@@ -308,13 +368,24 @@ except Exception as error:
 """
 
 
-def check_delta_rs(root: str, options: dict[str, str], label: str, environment: Mapping[str, str] | None = None) -> bool:
+def check_delta_rs(
+    root: str,
+    options: dict[str, str],
+    label: str,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
     """Lista ``_delta_log/`` de uma tabela sob a raiz pelo ``is_deltatable`` do delta-rs.
 
     A listagem exercita as credenciais, a região e o endpoint do delta-rs, sem escrever.
     """
     uri = f"{root}/serialize-db-poc/_diagnostico"
-    return run_probe(label, DELTA_PROBE, [uri, json.dumps(options)], lambda out: f"listou o prefixo (tabela existe: {out})", environment)
+    return run_probe(
+        label,
+        DELTA_PROBE,
+        [uri, json.dumps(options)],
+        lambda out: f"listou o prefixo (tabela existe: {out})",
+        environment,
+    )
 
 
 # O programa do DuckDB: abre a conexão por Storage.duckdb_connect, como a suíte S3 e os motores, e
@@ -339,7 +410,10 @@ except Exception as error:
 """
 
 
-def check_duckdb(root: str, region: str | None) -> bool:
+def check_duckdb(
+    root: str,
+    region: str | None,
+) -> bool:
     """Lista o prefixo pela conexão de ``Storage.duckdb_connect``, a da suíte S3 e dos motores.
 
     A conexão carrega ``httpfs`` e ``delta`` da pasta de extensões e cria o secret com a chave que o
@@ -347,23 +421,32 @@ def check_duckdb(root: str, region: str | None) -> bool:
     """
     proxy = probelib.duckdb_proxy()
 
-    def listed(output: str) -> str:
+    def listed(
+        output: str,
+    ) -> str:
         """A linha do DuckDB que listou: os objetos, a pasta de extensões da conexão e o proxy."""
         found = json.loads(output)
         directory = found["extension_directory"] or "(padrão)"
         return f"listou serialize-db-poc/ e subpastas ({found['objects']} objetos) com extensões de {directory} e proxy {proxy.reading}"
 
-    return run_probe("DuckDB como a suíte (Storage.duckdb_connect)", DUCKDB_PROBE, [root, region or ""], listed)
+    return run_probe(
+        "DuckDB como a suíte (Storage.duckdb_connect)", DUCKDB_PROBE, [root, region or ""], listed
+    )
 
 
 # --------------------------------------------------------------------------------------------------
 # O diagnóstico e o resumo
 
 
-def main(argv: list[str]) -> int:
+def main(
+    argv: list[str],
+) -> int:
     root, _ = probelib.s3_root(argv)
     if not root.startswith("s3://"):
-        print(f"uso: .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo\n{probelib.NO_ROOT}", file=sys.stderr)
+        print(
+            f"uso: .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo\n{probelib.NO_ROOT}",
+            file=sys.stderr,
+        )
         return 2
 
     # O stdout vai ao terminal e ao arquivo até o fim do diagnóstico.
@@ -380,7 +463,9 @@ def main(argv: list[str]) -> int:
         print(f"resultado gravado em {path}")
 
 
-def endpoint_summary(environ: Mapping[str, str]) -> str:
+def endpoint_summary(
+    environ: Mapping[str, str],
+) -> str:
     """A linha do endpoint no resumo, pelo que a suíte faz com cada variável.
 
     A suíte passa ``AWS_ENDPOINT_URL`` ao ``boto3``, ao PyArrow, ao delta-rs e ao secret do DuckDB,
@@ -393,10 +478,14 @@ def endpoint_summary(environ: Mapping[str, str]) -> str:
     s3_endpoint = environ.get("AWS_ENDPOINT_URL_S3")
     if s3_endpoint:
         return f"{s3_endpoint} só em AWS_ENDPOINT_URL_S3, que o PyArrow e o DuckDB da suíte não recebem; exporte AWS_ENDPOINT_URL com ele (manutenção necessária)"
-    return "sem AWS_ENDPOINT_URL; os nomes s3.<região>.amazonaws.com precisam resolver (ver DNS acima)"
+    return (
+        "sem AWS_ENDPOINT_URL; os nomes s3.<região>.amazonaws.com precisam resolver (ver DNS acima)"
+    )
 
 
-def diagnose(root: str) -> int:
+def diagnose(
+    root: str,
+) -> int:
     """As verificações na ordem do relatório e o resumo.
 
     Devolve 0 quando os três clientes e o STS responderam, senão 1.
@@ -419,20 +508,31 @@ def diagnose(root: str) -> int:
     # Cada cliente lista o prefixo como a suíte faz; quando só um dos dois lê a região, a variante
     # com a região do outro mostra se a manutenção (copiar a região entre as variáveis) resolveria.
     print("== S3")
-    results["s3_boto3_suite"] = check_s3_boto3(bucket, prefix, None, "boto3 como a suíte (região do boto3)")
+    results["s3_boto3_suite"] = check_s3_boto3(
+        bucket, prefix, None, "boto3 como a suíte (região do boto3)"
+    )
     if not boto3_region and delta_region:
-        results["s3_boto3_region"] = check_s3_boto3(bucket, prefix, delta_region, f"boto3 com region_name={delta_region}")
+        results["s3_boto3_region"] = check_s3_boto3(
+            bucket, prefix, delta_region, f"boto3 com region_name={delta_region}"
+        )
     # O delta-rs como o ambiente está e, quando a suíte exportaria NO_PROXY, de novo como a suíte o
     # deixa.
     results["delta_rs_as_found"] = check_delta_rs(root, {}, "delta-rs como encontrado")
     changes = suite_environment(os.environ)
     environment = {**os.environ, **changes}
     if changes:
-        results["delta_rs"] = check_delta_rs(root, {}, "delta-rs como a suíte (NO_PROXY exportada de no_proxy)", environment)
+        results["delta_rs"] = check_delta_rs(
+            root, {}, "delta-rs como a suíte (NO_PROXY exportada de no_proxy)", environment
+        )
     else:
         results["delta_rs"] = results["delta_rs_as_found"]
     if not delta_region and boto3_region:
-        results["delta_rs_region"] = check_delta_rs(root, {"AWS_REGION": boto3_region}, f"delta-rs com AWS_REGION={boto3_region}", environment)
+        results["delta_rs_region"] = check_delta_rs(
+            root,
+            {"AWS_REGION": boto3_region},
+            f"delta-rs com AWS_REGION={boto3_region}",
+            environment,
+        )
     results["duckdb"] = check_duckdb(root, region)
 
     print("== STS")
@@ -442,24 +542,47 @@ def diagnose(root: str) -> int:
     # O resumo: a manutenção de que a suíte precisa para rodar neste ambiente.
     print("== resumo")
     if boto3_region:
-        print(f"  região: {boto3_region}, resolvida pelo boto3" + ("" if delta_region else "; a suíte a copia para AWS_REGION, que o delta-rs exige") + " (sem manutenção)")
+        print(
+            f"  região: {boto3_region}, resolvida pelo boto3"
+            + ("" if delta_region else "; a suíte a copia para AWS_REGION, que o delta-rs exige")
+            + " (sem manutenção)"
+        )
     elif delta_region:
-        print("  região: só AWS_REGION, que o boto3 ignora; a suíte precisa exportar AWS_DEFAULT_REGION a partir dela (manutenção necessária)")
+        print(
+            "  região: só AWS_REGION, que o boto3 ignora; a suíte precisa exportar AWS_DEFAULT_REGION a partir dela (manutenção necessária)"
+        )
     else:
-        print("  região: nenhuma; defina AWS_DEFAULT_REGION antes da suíte, porque atrás de endpoint VPC o endpoint global é inalcançável")
+        print(
+            "  região: nenhuma; defina AWS_DEFAULT_REGION antes da suíte, porque atrás de endpoint VPC o endpoint global é inalcançável"
+        )
     print(f"  STS: {STS_SUMMARY[sts]}")
     proxies = [name for name in probelib.PROXY_VARIABLES if os.environ.get(name)]
     if not proxies:
         print("  proxy: sem variáveis; nada a fazer")
     elif changes:
-        outcome = "com ela o delta-rs listou" if results["delta_rs"] else "e mesmo assim o delta-rs falhou (manutenção necessária)"
-        print(f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}: a suíte a exporta de no_proxy, {outcome}")
+        outcome = (
+            "com ela o delta-rs listou"
+            if results["delta_rs"]
+            else "e mesmo assim o delta-rs falhou (manutenção necessária)"
+        )
+        print(
+            f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}: a suíte a exporta de no_proxy, {outcome}"
+        )
     else:
-        print(f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}, a suíte não a altera")
+        print(
+            f"  proxy: variáveis {', '.join(proxies)}; NO_PROXY {no_proxy_state(os.environ)}, a suíte não a altera"
+        )
     print(f"  endpoint: {endpoint_summary(os.environ)}")
     # A suíte S3 como está depende dos três clientes; o código de saída 0 exige também o STS.
     core = ("s3_boto3_suite", "delta_rs", "duckdb")
-    print("  suíte S3 como está: " + ("os três clientes listaram o prefixo" if all(results[key] for key in core) else "algum cliente falhou; ver as linhas acima"))
+    print(
+        "  suíte S3 como está: "
+        + (
+            "os três clientes listaram o prefixo"
+            if all(results[key] for key in core)
+            else "algum cliente falhou; ver as linhas acima"
+        )
+    )
     return 0 if all(results[key] for key in core) and results["sts"] else 1
 
 

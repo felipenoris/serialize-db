@@ -49,7 +49,9 @@ LARGE_ROWS = 2_000_000
 GIL_RELEASED_SHARE = 0.25
 
 
-def large_table(con: duckdb.DuckDBPyConnection) -> pa.Table:
+def large_table(
+    con: duckdb.DuckDBPyConnection,
+) -> pa.Table:
     """Tabela Arrow de ``LARGE_ROWS`` linhas gerada pelo DuckDB: inteiro, resto, decimal e texto."""
     sql = (
         "SELECT range AS id, range % 12 AS m, ((range * 7) % 1000) / 100.0 AS v, "
@@ -58,7 +60,9 @@ def large_table(con: duckdb.DuckDBPyConnection) -> pa.Table:
     return con.execute(sql).to_arrow_table()
 
 
-def python_rate_during(action: Callable[[], object]) -> tuple[float, float]:
+def python_rate_during(
+    action: Callable[[], object],
+) -> tuple[float, float]:
     """Roda ``action`` nesta thread enquanto outra conta iterações Python.
 
     Devolve a duração da ação e as iterações por segundo do laço. A ação só começa depois da
@@ -98,15 +102,22 @@ def reference_rate() -> float:
     return rate
 
 
-def assert_gil_released(reference: float, label: str, action: Callable[[], object]) -> None:
+def assert_gil_released(
+    reference: float,
+    label: str,
+    action: Callable[[], object],
+) -> None:
     """Mede ``action`` contra a referência, registra e reprova a taxa abaixo de
     ``GIL_RELEASED_SHARE``."""
     elapsed, rate = python_rate_during(action)
     share = rate / reference
-    record(f"concurrency.gil.{label}",
-           f"{elapsed:.3f} s; laço Python a {share:.0%} da referência ({rate / 1e6:.1f} M it/s)")
+    record(
+        f"concurrency.gil.{label}",
+        f"{elapsed:.3f} s; laço Python a {share:.0%} da referência ({rate / 1e6:.1f} M it/s)",
+    )
     assert share >= GIL_RELEASED_SHARE, (
-        f"{label}: o laço Python caiu a {share:.0%} da referência, o GIL ficou retido")
+        f"{label}: o laço Python caiu a {share:.0%} da referência, o GIL ficou retido"
+    )
 
 
 def test_duckdb_and_pyarrow_release_the_gil() -> None:
@@ -114,8 +125,9 @@ def test_duckdb_and_pyarrow_release_the_gil() -> None:
     e lê Parquet em memória."""
     con = duckdb.connect(config={"threads": 2})
     reference = reference_rate()
-    record("concurrency.gil.reference",
-           f"{reference / 1e6:.1f} M it/s com a thread principal em sleep")
+    record(
+        "concurrency.gil.reference", f"{reference / 1e6:.1f} M it/s com a thread principal em sleep"
+    )
 
     def aggregate() -> None:
         con.execute("SELECT sum(range * range) FROM range(60_000_000)").fetchall()
@@ -132,11 +144,13 @@ def test_duckdb_and_pyarrow_release_the_gil() -> None:
 
     # Parquet em memória: o mesmo escritor e leitor dos arquivos, sem tocar o disco.
     sink = pa.BufferOutputStream()
-    assert_gil_released(reference, "pyarrow_write_parquet",
-                        lambda: pq.write_table(produced["table"], sink))
+    assert_gil_released(
+        reference, "pyarrow_write_parquet", lambda: pq.write_table(produced["table"], sink)
+    )
     buffer = sink.getvalue()
-    assert_gil_released(reference, "pyarrow_read_parquet",
-                        lambda: pq.read_table(pa.BufferReader(buffer)))
+    assert_gil_released(
+        reference, "pyarrow_read_parquet", lambda: pq.read_table(pa.BufferReader(buffer))
+    )
     con.close()
 
 
@@ -190,13 +204,17 @@ def test_drivers_share_the_module_not_the_connection() -> None:
     """
     assert duckdb.threadsafety == 1
     assert redshift_connector.threadsafety == 1
-    record("concurrency.threadsafety",
-           f"duckdb {duckdb.threadsafety}, redshift_connector {redshift_connector.threadsafety}")
+    record(
+        "concurrency.threadsafety",
+        f"duckdb {duckdb.threadsafety}, redshift_connector {redshift_connector.threadsafety}",
+    )
 
     # Um cursor por thread: cada thread cria a sua tabela, e a conexão raiz vê as duas.
     con = duckdb.connect(config={"threads": 2})
 
-    def create(name: str) -> None:
+    def create(
+        name: str,
+    ) -> None:
         cursor = con.cursor()
         cursor.execute(f"CREATE TABLE {name} AS SELECT range AS x FROM range(1000)")
         cursor.close()
@@ -226,8 +244,10 @@ def test_drivers_share_the_module_not_the_connection() -> None:
 
     run_in_threads([first, second])
     assert fetched["a"] == [("b", 0)]
-    record("concurrency.shared_connection",
-           "o fetchall da thread A devolveu o resultado da thread B, sem erro")
+    record(
+        "concurrency.shared_connection",
+        "o fetchall da thread A devolveu o resultado da thread B, sem erro",
+    )
 
     # Dois connect() em memória são dois bancos: a tabela criada num não existe no outro.
     other = duckdb.connect()
@@ -264,7 +284,9 @@ def test_duckdb_thread_pool_is_global_and_each_caller_joins_it() -> None:
     # 20.000.000 de linhas são 163 grupos de 122.880, a unidade da varredura paralela.
     con.execute("CREATE TABLE numeros AS SELECT range AS id FROM range(20_000_000)")
 
-    def scan(connection: duckdb.DuckDBPyConnection) -> None:
+    def scan(
+        connection: duckdb.DuckDBPyConnection,
+    ) -> None:
         connection.execute("SELECT sum(hash(id)) FROM numeros").fetchall()
 
     def four_sessions_together() -> float:
@@ -279,14 +301,18 @@ def test_duckdb_thread_pool_is_global_and_each_caller_joins_it() -> None:
         con.execute(f"SET threads = {threads}")
         one = min(run_in_threads([functools.partial(scan, con)]) for _ in range(3))
         four = min(four_sessions_together() for _ in range(3))
-        readings.append(f"threads={threads}: uma sessão {one:.3f} s, "
-                        f"quatro juntas {four:.3f} s ({four / one:.2f}x)")
+        readings.append(
+            f"threads={threads}: uma sessão {one:.3f} s, "
+            f"quatro juntas {four:.3f} s ({four / one:.2f}x)"
+        )
     record("concurrency.duckdb_thread_pool", "; ".join(readings))
     con.close()
 
 
 @pytest.mark.local
-def test_deltalake_and_delta_scan_release_the_gil(local_location: LocalLocation) -> None:
+def test_deltalake_and_delta_scan_release_the_gil(
+    local_location: LocalLocation,
+) -> None:
     """O laço Python mantém a taxa durante ``write_deltalake``, ``to_pyarrow_table`` e o
     ``delta_scan`` do DuckDB."""
     con = connect_duckdb(["delta"])
@@ -298,16 +324,20 @@ def test_deltalake_and_delta_scan_release_the_gil(local_location: LocalLocation)
     def aggregate_by_delta_scan() -> None:
         con.execute(f"SELECT count(*), sum(v) FROM delta_scan('{uri}')").fetchall()
 
-    assert_gil_released(reference, "deltalake_write",
-                        lambda: write_deltalake(uri, table, mode="overwrite"))
-    assert_gil_released(reference, "deltalake_to_pyarrow_table",
-                        lambda: DeltaTable(uri).to_pyarrow_table())
+    assert_gil_released(
+        reference, "deltalake_write", lambda: write_deltalake(uri, table, mode="overwrite")
+    )
+    assert_gil_released(
+        reference, "deltalake_to_pyarrow_table", lambda: DeltaTable(uri).to_pyarrow_table()
+    )
     assert_gil_released(reference, "duckdb_delta_scan", aggregate_by_delta_scan)
     con.close()
 
 
 @pytest.mark.local
-def test_two_threads_run_native_work_in_parallel(local_location: LocalLocation) -> None:
+def test_two_threads_run_native_work_in_parallel(
+    local_location: LocalLocation,
+) -> None:
     """Duas escritas Delta em tabelas distintas e dois ``CREATE TABLE AS`` em dois cursores, em
     sequência e em duas threads.
 
@@ -317,7 +347,10 @@ def test_two_threads_run_native_work_in_parallel(local_location: LocalLocation) 
     con = duckdb.connect(str(local_location.path / "parallel.duckdb"), config={"threads": 2})
     table = large_table(con)
 
-    def compare(label: str, action: Callable[[int], object]) -> None:
+    def compare(
+        label: str,
+        action: Callable[[int], object],
+    ) -> None:
         """``action(0)`` e ``action(1)`` em sequência, ``action(2)`` e ``action(3)`` em duas
         threads; os tempos vão ao relatório."""
         started = time.perf_counter()
@@ -325,14 +358,20 @@ def test_two_threads_run_native_work_in_parallel(local_location: LocalLocation) 
         action(1)
         sequential = time.perf_counter() - started
         parallel = run_in_threads([functools.partial(action, 2), functools.partial(action, 3)])
-        record(f"concurrency.timing.{label}",
-               f"sequencial {sequential:.3f} s, duas threads {parallel:.3f} s "
-               f"({sequential / parallel:.2f}x)")
+        record(
+            f"concurrency.timing.{label}",
+            f"sequencial {sequential:.3f} s, duas threads {parallel:.3f} s "
+            f"({sequential / parallel:.2f}x)",
+        )
 
-    def delta_write(k: int) -> None:
+    def delta_write(
+        k: int,
+    ) -> None:
         write_deltalake(local_location.child(f"w{k}"), table, mode="overwrite")
 
-    def create_table(k: int) -> None:
+    def create_table(
+        k: int,
+    ) -> None:
         cursor = con.cursor()
         cursor.execute(f"CREATE TABLE c{k} AS SELECT range AS x FROM range(10_000_000)")
         cursor.close()
@@ -351,7 +390,8 @@ def test_two_threads_run_native_work_in_parallel(local_location: LocalLocation) 
 
 @pytest.mark.local
 def test_duckdb_file_is_shared_in_the_process_by_the_same_configuration(
-        local_location: LocalLocation) -> None:
+    local_location: LocalLocation,
+) -> None:
     """Dois ``connect()`` do mesmo arquivo com a mesma configuração abrem a mesma instância.
 
     Outra configuração, ou ``read_only``, é recusada enquanto a primeira está aberta.
@@ -362,22 +402,27 @@ def test_duckdb_file_is_shared_in_the_process_by_the_same_configuration(
     second = duckdb.connect(path, config={"threads": 2})
     assert second.execute("SELECT x FROM t").fetchall() == [(1,)]
 
-    refused = ("Can't open a connection to same database file with a different configuration "
-               "than existing connections")
+    refused = (
+        "Can't open a connection to same database file with a different configuration "
+        "than existing connections"
+    )
     with pytest.raises(duckdb.ConnectionException, match=refused):
         duckdb.connect(path, config={"threads": 3})
     with pytest.raises(duckdb.ConnectionException, match=refused):
         duckdb.connect(path, read_only=True)
-    record("concurrency.duckdb_file_second_connect",
-           "a mesma configuração compartilha a instância; outra configuração ou read_only: "
-           "ConnectionException")
+    record(
+        "concurrency.duckdb_file_second_connect",
+        "a mesma configuração compartilha a instância; outra configuração ou read_only: "
+        "ConnectionException",
+    )
     second.close()
     first.close()
 
 
 @pytest.mark.local
 def test_delta_readers_keep_their_version_while_a_writer_commits(
-        local_location: LocalLocation) -> None:
+    local_location: LocalLocation,
+) -> None:
     """Quatro leitores carregam a versão 0, um ``append`` cria a versão 1 enquanto eles esperam, e
     cada um lê as linhas da versão 0."""
     uri = local_location.child("readers")
@@ -388,7 +433,9 @@ def test_delta_readers_keep_their_version_while_a_writer_commits(
     commit_done = threading.Event()
     seen: dict[int, tuple[int, int]] = {}
 
-    def read(k: int) -> None:
+    def read(
+        k: int,
+    ) -> None:
         table = DeltaTable(uri)  # o snapshot é a versão carregada aqui, sem sessão nem bloqueio
         loaded.wait()
         assert commit_done.wait(timeout=10)
@@ -417,5 +464,7 @@ def test_delta_readers_keep_their_version_while_a_writer_commits(
     current.to_pyarrow_table()
     one = time.perf_counter() - started
     four = run_in_threads([read_current] * 4)
-    record("concurrency.timing.delta_read_one_vs_four_threads",
-           f"uma leitura {one:.3f} s, quatro em paralelo {four:.3f} s")
+    record(
+        "concurrency.timing.delta_read_one_vs_four_threads",
+        f"uma leitura {one:.3f} s, quatro em paralelo {four:.3f} s",
+    )

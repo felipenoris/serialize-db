@@ -65,18 +65,22 @@ class Operacao(Base):
     # autoincrement=False: a chave é gerada no cliente; com o padrão, o duckdb_engine emitiria
     # SERIAL.
     id_operacao: Mapped[int] = mapped_column(
-        sa.BigInteger, primary_key=True, autoincrement=False, comment="Identificador da operação")
+        sa.BigInteger, primary_key=True, autoincrement=False, comment="Identificador da operação"
+    )
     data_ref: Mapped[dt.date] = mapped_column(sa.Date, nullable=False, comment="Data de referência")
     id_cliente: Mapped[int] = mapped_column(
-        sa.BigInteger, nullable=False, comment="Chave do cliente")
+        sa.BigInteger, nullable=False, comment="Chave do cliente"
+    )
     valor: Mapped[decimal.Decimal] = mapped_column(
-        sa.Numeric(18, 2), nullable=False, comment="Valor em reais")
+        sa.Numeric(18, 2), nullable=False, comment="Valor em reais"
+    )
     descricao: Mapped[str | None] = mapped_column(sa.String(200), comment="Texto livre")
 
     # JSON no DuckDB e SUPER no Redshift, pelo mesmo atributo: with_variant troca o tipo por
     # dialeto.
     meta: Mapped[dict | None] = mapped_column(
-        sa.JSON().with_variant(SUPER(), "redshift"), comment="Documento sem esquema fixo")
+        sa.JSON().with_variant(SUPER(), "redshift"), comment="Documento sem esquema fixo"
+    )
     mes: Mapped[str] = mapped_column(sa.String(7), nullable=False, comment="Partição YYYY-MM")
 
 
@@ -98,18 +102,42 @@ DIALECTS = {
 }
 
 OPERACOES = [
-    {"id_operacao": 1, "data_ref": dt.date(2026, 8, 1), "id_cliente": 7,
-     "valor": decimal.Decimal("150.00"), "descricao": "a", "meta": {"canal": "app"},
-     "mes": "2026-08"},
-    {"id_operacao": 2, "data_ref": dt.date(2026, 8, 2), "id_cliente": 7,
-     "valor": decimal.Decimal("50.00"), "descricao": None, "meta": None,
-     "mes": "2026-08"},
-    {"id_operacao": 3, "data_ref": dt.date(2026, 7, 1), "id_cliente": 9,
-     "valor": decimal.Decimal("200.00"), "descricao": "c", "meta": None,
-     "mes": "2026-07"},
-    {"id_operacao": 4, "data_ref": dt.date(2026, 8, 3), "id_cliente": 9,
-     "valor": decimal.Decimal("120.00"), "descricao": "d", "meta": None,
-     "mes": "2026-08"},
+    {
+        "id_operacao": 1,
+        "data_ref": dt.date(2026, 8, 1),
+        "id_cliente": 7,
+        "valor": decimal.Decimal("150.00"),
+        "descricao": "a",
+        "meta": {"canal": "app"},
+        "mes": "2026-08",
+    },
+    {
+        "id_operacao": 2,
+        "data_ref": dt.date(2026, 8, 2),
+        "id_cliente": 7,
+        "valor": decimal.Decimal("50.00"),
+        "descricao": None,
+        "meta": None,
+        "mes": "2026-08",
+    },
+    {
+        "id_operacao": 3,
+        "data_ref": dt.date(2026, 7, 1),
+        "id_cliente": 9,
+        "valor": decimal.Decimal("200.00"),
+        "descricao": "c",
+        "meta": None,
+        "mes": "2026-07",
+    },
+    {
+        "id_operacao": 4,
+        "data_ref": dt.date(2026, 8, 3),
+        "id_cliente": 9,
+        "valor": decimal.Decimal("120.00"),
+        "descricao": "d",
+        "meta": None,
+        "mes": "2026-08",
+    },
 ]
 CLIENTES = [
     {"id_cliente": 7, "nome": "Alfa", "mes": "2026-08"},
@@ -117,7 +145,9 @@ CLIENTES = [
 ]
 
 
-def redshift_ddl(table: sa.Table) -> str:
+def redshift_ddl(
+    table: sa.Table,
+) -> str:
     """O ``CREATE TABLE`` do Redshift compilado pelo dialeto, com as opções físicas de
     ``Table.info["serialize_db"]`` no fim.
 
@@ -143,12 +173,16 @@ def redshift_ddl(table: sa.Table) -> str:
     return " ".join(parts)
 
 
-def normalized(sql: str) -> str:
+def normalized(
+    sql: str,
+) -> str:
     """O texto com espaços e quebras de linha reduzidos a um espaço, para comparações."""
     return " ".join(sql.split())
 
 
-def literal_text(statement: sa.sql.ClauseElement) -> str:
+def literal_text(
+    statement: sa.sql.ClauseElement,
+) -> str:
     """O texto do DuckDB com as constantes embutidas (``literal_binds``), numa linha só."""
     compiled = statement.compile(dialect=DIALECTS["duckdb"], compile_kwargs={"literal_binds": True})
     return normalized(str(compiled))
@@ -165,15 +199,21 @@ def engine() -> Iterator[sa.Engine]:
     engine.dispose()
 
 
-def load_sample(engine: sa.Engine) -> None:
+def load_sample(
+    engine: sa.Engine,
+) -> None:
     """Carrega as linhas de exemplo por um único ``INSERT`` de várias linhas por tabela."""
     with engine.begin() as connection:
         connection.execute(sa.insert(Operacao).values(OPERACOES))
         connection.execute(sa.insert(Cliente).values(CLIENTES))
 
 
-def insert_by_arrow(engine: sa.Engine, id_operacao: int, data_ref: dt.date,
-                    valor: decimal.Decimal) -> None:
+def insert_by_arrow(
+    engine: sa.Engine,
+    id_operacao: int,
+    data_ref: dt.date,
+    valor: decimal.Decimal,
+) -> None:
     """Insere uma operação do cliente 7 em 2026-08 por uma tabela Arrow registrada na conexão
     bruta, com ``INSERT ... BY NAME`` e sem ``executemany``."""
     incoming = pa.table(
@@ -231,7 +271,8 @@ def test_ddl_per_dialect() -> None:
 
     assert "meta SUPER" in redshift_text
     assert redshift_text.endswith(
-        "DISTSTYLE KEY DISTKEY (id_cliente) SORTKEY (data_ref, id_operacao)")
+        "DISTSTYLE KEY DISTKEY (id_cliente) SORTKEY (data_ref, id_operacao)"
+    )
 
     # O dialeto sozinho não lê info: o CREATE TABLE compilado sem a função termina na lista de
     # colunas.
@@ -246,7 +287,9 @@ def test_ddl_per_dialect() -> None:
     assert "texto TEXT" in normalized(redshift_ddl(text_table))
 
 
-def test_create_all_and_reflection(engine: sa.Engine) -> None:
+def test_create_all_and_reflection(
+    engine: sa.Engine,
+) -> None:
     """``create_all`` cria as tabelas no DuckDB; a reflexão devolve colunas, tipos e comentários,
     não a chave."""
     inspector = sa.inspect(engine)
@@ -270,7 +313,9 @@ def test_create_all_and_reflection(engine: sa.Engine) -> None:
         metadata.create_all(engine)
 
 
-def test_core_insert_and_select(engine: sa.Engine) -> None:
+def test_core_insert_and_select(
+    engine: sa.Engine,
+) -> None:
     """``insert(...).values(lista)`` é um único comando; ``select`` com join e agregação devolve
     ``Decimal``."""
     load_sample(engine)
@@ -300,7 +345,9 @@ def test_core_insert_and_select(engine: sa.Engine) -> None:
     assert meta == {"canal": "app"}
 
 
-def test_arrow_path_on_raw_connection(engine: sa.Engine) -> None:
+def test_arrow_path_on_raw_connection(
+    engine: sa.Engine,
+) -> None:
     """O SQL compilado pelo SQLAlchemy roda na conexão DuckDB por trás do engine, com Arrow na saída
     e na entrada."""
     load_sample(engine)
@@ -325,7 +372,9 @@ def test_arrow_path_on_raw_connection(engine: sa.Engine) -> None:
         assert connection.execute(count).scalar_one() == 5
 
 
-def test_numeric_precision_dialect_versus_arrow(engine: sa.Engine) -> None:
+def test_numeric_precision_dialect_versus_arrow(
+    engine: sa.Engine,
+) -> None:
     """Pelo dialeto, ``Numeric`` passa por ``float``; pelo Arrow, ``decimal128(18, 2)`` guarda os 18
     dígitos."""
     exact = decimal.Decimal("1234567890123.45")  # 15 dígitos significativos
@@ -358,13 +407,14 @@ def test_numeric_precision_dialect_versus_arrow(engine: sa.Engine) -> None:
     assert stored == big
 
 
-def test_pandas_read_sql_keeps_decimal_only_with_coerce_float_off(engine: sa.Engine) -> None:
+def test_pandas_read_sql_keeps_decimal_only_with_coerce_float_off(
+    engine: sa.Engine,
+) -> None:
     """``pandas.read_sql`` converte ``Decimal`` em ``float`` por padrão; ``coerce_float=False``
     preserva os objetos."""
     load_sample(engine)
-    query = (
-        sa.select(Operacao.id_operacao, Operacao.data_ref, Operacao.valor)
-        .order_by(Operacao.id_operacao)
+    query = sa.select(Operacao.id_operacao, Operacao.data_ref, Operacao.valor).order_by(
+        Operacao.id_operacao
     )
 
     default = pd.read_sql(query, engine)
@@ -376,7 +426,8 @@ def test_pandas_read_sql_keeps_decimal_only_with_coerce_float_off(engine: sa.Eng
 
 
 def test_literal_binds_renders_a_bindparam_without_value_as_null(
-        recwarn: pytest.WarningsRecorder) -> None:
+    recwarn: pytest.WarningsRecorder,
+) -> None:
     """Sob ``literal_binds``, o ``bindparam`` sem valor sai ``NULL`` sem erro, e o ``SAWarning`` só
     aparece numa comparação por ``=``.
 
@@ -387,7 +438,8 @@ def test_literal_binds_renders_a_bindparam_without_value_as_null(
     """
     operations = Operacao.__table__
     like_statement = sa.select(operations.c.id_operacao).where(
-        operations.c.descricao.like(sa.bindparam("padrao")))
+        operations.c.descricao.like(sa.bindparam("padrao"))
+    )
     month = sa.bindparam("mes", type_=sa.String(7))
     coalesce_statement = sa.select(sa.func.coalesce(operations.c.mes, month))
     insert_statement = sa.insert(operations).values(id_operacao=1, mes=sa.bindparam("mes"))
@@ -396,8 +448,9 @@ def test_literal_binds_renders_a_bindparam_without_value_as_null(
     # O fim do texto esperado de cada statement: o parâmetro virou NULL.
     silent = {
         "WHERE cad_operacoes.descricao LIKE NULL": like_statement,
-        "SELECT coalesce(cad_operacoes.mes, NULL) AS coalesce_1 FROM cad_operacoes":
-            coalesce_statement,
+        (
+            "SELECT coalesce(cad_operacoes.mes, NULL) AS coalesce_1 FROM cad_operacoes"
+        ): coalesce_statement,
         "INSERT INTO cad_operacoes (id_operacao, mes) VALUES (1, NULL)": insert_statement,
         "WHERE mes = NULL": text_statement,
     }
@@ -436,7 +489,9 @@ def test_compiled_binds_marks_the_bindparam_without_value_as_required() -> None:
     assert constructed == {**values, "cliente": 7, "valor_1": decimal.Decimal("100.00")}
 
     # replacement_traverse chama a função em cada nó e deixa o nó como está quando ela devolve None.
-    def placeholder(element: sa.sql.ClauseElement) -> sa.sql.ClauseElement | None:
+    def placeholder(
+        element: sa.sql.ClauseElement,
+    ) -> sa.sql.ClauseElement | None:
         if isinstance(element, sa.BindParameter) and element.required:
             return sa.literal_column(f":{element.key}", type_=element.type)
         return None
@@ -490,8 +545,10 @@ def test_dialects_quote_only_their_reserved_words() -> None:
     compilado deixa um espaço antes de cada quebra de linha, que o ``render`` apara.
     """
     contracts = sa.Table(
-        "cad_contratos", sa.MetaData(),
-        sa.Column("to", sa.Date), sa.Column("timestamp", sa.DateTime),
+        "cad_contratos",
+        sa.MetaData(),
+        sa.Column("to", sa.Date),
+        sa.Column("timestamp", sa.DateTime),
         sa.Column("numero", sa.String(20)),
     )
     query = sa.select(contracts)
@@ -534,11 +591,14 @@ def test_in_list_needs_render_postcompile_on_the_engine_path() -> None:
     operations = Operacao.__table__
     connection = duckdb.connect()
     connection.execute(
-        "CREATE TABLE cad_operacoes (id_operacao BIGINT, id_cliente BIGINT, mes VARCHAR)")
+        "CREATE TABLE cad_operacoes (id_operacao BIGINT, id_cliente BIGINT, mes VARCHAR)"
+    )
     connection.execute(
-        "INSERT INTO cad_operacoes VALUES (1, 7, '2026-06'), (2, 7, '2026-07'), (3, 9, '2026-08')")
+        "INSERT INTO cad_operacoes VALUES (1, 7, '2026-06'), (2, 7, '2026-07'), (3, 9, '2026-08')"
+    )
     in_list = sa.select(operations.c.id_operacao).where(
-        operations.c.mes.in_(["2026-07", "2026-08"]))
+        operations.c.mes.in_(["2026-07", "2026-08"])
+    )
 
     # Sem render_postcompile: o marcador fica no texto, e o DuckDB não o lê.
     compiled = in_list.compile(dialect=DIALECTS["duckdb"])
@@ -565,8 +625,9 @@ def test_in_list_needs_render_postcompile_on_the_engine_path() -> None:
 
     # O valor que falta é recusado na compilação.
     missing = statement.params(meses=["2026-06"])
-    with pytest.raises(InvalidRequestError,
-                       match="A value is required for bind parameter 'cliente'"):
+    with pytest.raises(
+        InvalidRequestError, match="A value is required for bind parameter 'cliente'"
+    ):
         missing.compile(dialect=qmark, compile_kwargs=postcompile)
     connection.close()
 
@@ -599,13 +660,19 @@ def test_generic_function_subclass_registers_in_sa_func_for_the_whole_process() 
         inherit_cache = True
 
     @compiles(serialize_db_sonda_bytes, "duckdb")
-    def _duckdb_bytes(element: FunctionElement, compiler: sa.sql.compiler.SQLCompiler,
-                      **kw: object) -> str:
+    def _duckdb_bytes(
+        element: FunctionElement,
+        compiler: sa.sql.compiler.SQLCompiler,
+        **kw: object,
+    ) -> str:
         return f"strlen({compiler.process(element.clauses, **kw)})"
 
     @compiles(serialize_db_sonda_bytes, "redshift")
-    def _redshift_bytes(element: FunctionElement, compiler: sa.sql.compiler.SQLCompiler,
-                        **kw: object) -> str:
+    def _redshift_bytes(
+        element: FunctionElement,
+        compiler: sa.sql.compiler.SQLCompiler,
+        **kw: object,
+    ) -> str:
         return f"octet_length({compiler.process(element.clauses, **kw)})"
 
     duckdb_text = str(serialize_db_sonda_bytes(column).compile(dialect=DIALECTS["duckdb"]))
@@ -627,9 +694,14 @@ def test_three_part_name_needs_quoted_name_without_quotes() -> None:
     """
     dialect = DIALECTS["redshift"]
 
-    def table(schema: str) -> sa.Table:
-        return sa.Table("operacoes", sa.MetaData(schema=schema),
-                        sa.Column("id_operacao", sa.BigInteger, nullable=False))
+    def table(
+        schema: str,
+    ) -> sa.Table:
+        return sa.Table(
+            "operacoes",
+            sa.MetaData(schema=schema),
+            sa.Column("id_operacao", sa.BigInteger, nullable=False),
+        )
 
     # O esquema com ponto em texto simples: um identificador só, entre aspas.
     plain = normalized(redshift_ddl(table("datalake_rw_shared.sbx_aco_decon")))
@@ -644,7 +716,8 @@ def test_three_part_name_needs_quoted_name_without_quotes() -> None:
     insert = sa.insert(table(name)).values([{"id_operacao": 1}])
     compiled_insert = insert.compile(dialect=dialect, compile_kwargs={"literal_binds": True})
     assert normalized(str(compiled_insert)).startswith(
-        "INSERT INTO datalake_rw_shared.sbx_aco_decon.operacoes")
+        "INSERT INTO datalake_rw_shared.sbx_aco_decon.operacoes"
+    )
 
 
 def test_redshift_dialect_compiles_dml() -> None:
@@ -668,7 +741,8 @@ def test_redshift_dialect_compiles_dml() -> None:
     )
     update_text = normalized(str(update.compile(dialect=dialect)))
     assert update_text.startswith(
-        "UPDATE cad_operacoes SET descricao=cad_clientes.nome FROM cad_clientes")
+        "UPDATE cad_operacoes SET descricao=cad_clientes.nome FROM cad_clientes"
+    )
 
     delete = sa.delete(operations).where(operations.c.id_cliente == clients.c.id_cliente)
     assert "USING cad_clientes" in normalized(str(delete.compile(dialect=dialect)))
@@ -685,11 +759,13 @@ def test_arrow_and_delta_schema_from_table() -> None:
     """
     schema = pa.schema(
         [
-            pa.field("id_operacao", pa.int64(), nullable=False,
-                     metadata={"PARQUET:field_id": "1"}),
+            pa.field("id_operacao", pa.int64(), nullable=False, metadata={"PARQUET:field_id": "1"}),
             pa.field("data_ref", pa.date32(), metadata={"PARQUET:field_id": "2"}),
-            pa.field("id_cliente", pa.int64(),
-                     metadata={"PARQUET:field_id": "3", "comment": "Chave do cliente"}),
+            pa.field(
+                "id_cliente",
+                pa.int64(),
+                metadata={"PARQUET:field_id": "3", "comment": "Chave do cliente"},
+            ),
             pa.field("valor", pa.decimal128(18, 2), metadata={"PARQUET:field_id": "4"}),
             pa.field("meta", pa.string(), metadata={"PARQUET:field_id": "6"}),
             pa.field("mes", pa.string(), nullable=False, metadata={"PARQUET:field_id": "7"}),

@@ -23,6 +23,7 @@ Exemplo:
     export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
     .venv/bin/python probes/operacao/probe_vacuum_orphans.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import sys
@@ -36,7 +37,9 @@ from serialize_db.execution import Database
 USAGE = "uso: .venv/bin/python probes/operacao/probe_vacuum_orphans.py <origem>"
 
 
-def listed_paths(finished: lib.Finished) -> list[str]:
+def listed_paths(
+    finished: lib.Finished,
+) -> list[str]:
     """Os arquivos que ``serialize-db vacuum`` imprimiu para a tabela, um por linha recuada
     depois da linha dela."""
     paths = []
@@ -52,7 +55,10 @@ def listed_paths(finished: lib.Finished) -> list[str]:
     return paths
 
 
-def run_vacuum(db: Database, *options: str) -> list[str] | None:
+def run_vacuum(
+    db: Database,
+    *options: str,
+) -> list[str] | None:
     """``serialize-db vacuum --full`` com as opções, com a versão da tabela depois impressa;
     devolve os arquivos listados, ou ``None`` numa saída diferente de 0."""
     finished = lib.run_cli(lib.cli_arguments(db, "vacuum", "--full", *options))
@@ -63,7 +69,11 @@ def run_vacuum(db: Database, *options: str) -> list[str] | None:
     return listed_paths(finished)
 
 
-def check_listed(title: str, listed: list[str] | None, expected: list[str]) -> None:
+def check_listed(
+    title: str,
+    listed: list[str] | None,
+    expected: list[str],
+) -> None:
     """A lista de um ``vacuum`` igual à esperada."""
     problems = []
     if listed is None:
@@ -87,13 +97,17 @@ def main() -> None:
     table_path = storage.relative(uri)
     registered = lib.logged_files(uri, storage)[value]
     totals = lib.delta_totals(storage, uri)
-    print(f"no log: {registered}; {totals[0]} linhas; versão "
-          f"{delta.open_table(uri, storage).version()}")
+    print(
+        f"no log: {registered}; {totals[0]} linhas; versão "
+        f"{delta.open_table(uri, storage).version()}"
+    )
 
     # Os órfãos: cópias do arquivo registrado na pasta da partição e num prefixo dentro dela.
     partition_folder = f"{lib.PARTITION_BY}={value}"
-    orphans = [f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}.parquet",
-               f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}/0000_part_00.parquet"]
+    orphans = [
+        f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}.parquet",
+        f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}/0000_part_00.parquet",
+    ]
     for orphan in orphans:
         storage.copy(storage.join(table_path, registered[0]), storage.join(table_path, orphan))
         print(f"órfão gravado: {orphan}")

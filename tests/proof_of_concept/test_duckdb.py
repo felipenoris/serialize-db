@@ -49,7 +49,9 @@ def con() -> Iterator[duckdb.DuckDBPyConnection]:
     connection.close()
 
 
-def return_stats(cursor: duckdb.DuckDBPyConnection) -> dict[str, object]:
+def return_stats(
+    cursor: duckdb.DuckDBPyConnection,
+) -> dict[str, object]:
     """A linha do ``RETURN_STATS`` de um ``COPY``, pelo nome de cada coluna."""
     names = [column[0] for column in cursor.description]
     return dict(zip(names, cursor.fetchone()))
@@ -78,7 +80,9 @@ def test_connection_config() -> None:
     connection.close()
 
 
-def test_arrow_in_and_out(con: duckdb.DuckDBPyConnection) -> None:
+def test_arrow_in_and_out(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """Uma tabela Arrow registrada é consultada sem cópia; o resultado sai como tabela Arrow ou como
     leitor em lotes."""
     sample = sample_table().slice(0, 1000)
@@ -107,7 +111,9 @@ def test_arrow_in_and_out(con: duckdb.DuckDBPyConnection) -> None:
     record("duckdb.arrow_reader_batches_for_2000_rows_batch_500", len(batches))
 
 
-def test_arrow_reader_is_invalidated_by_the_next_command(con: duckdb.DuckDBPyConnection) -> None:
+def test_arrow_reader_is_invalidated_by_the_next_command(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """O leitor pertence à consulta em curso: outro comando na mesma conexão o esvazia, sem erro.
 
     O leitor precisa ser consumido antes do próximo comando; o que sobrar some em silêncio.
@@ -126,7 +132,8 @@ def test_arrow_reader_is_invalidated_by_the_next_command(con: duckdb.DuckDBPyCon
 
 
 def test_arrow_reader_on_its_own_cursor_survives_commands_on_another(
-        con: duckdb.DuckDBPyConnection) -> None:
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """O leitor preso a um cursor entrega o snapshot da sua consulta enquanto outro cursor insere na
     mesma tabela, cria, altera e apaga tabelas.
 
@@ -160,7 +167,8 @@ def test_arrow_reader_on_its_own_cursor_survives_commands_on_another(
 
 
 def test_temp_table_is_seen_by_the_threads_of_its_connection_not_by_a_cursor(
-        con: duckdb.DuckDBPyConnection) -> None:
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """A tabela temporária é da conexão: outra thread que usa a mesma conexão a lê, e um cursor
     dela, que é outra conexão ao mesmo banco, vê a tabela confirmada e não a temporária.
 
@@ -185,7 +193,8 @@ def test_temp_table_is_seen_by_the_threads_of_its_connection_not_by_a_cursor(
 
 
 def test_registered_arrow_table_is_seen_only_by_its_connection(
-        con: duckdb.DuckDBPyConnection) -> None:
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """O registro de uma tabela Arrow pertence à conexão: um cursor dela, que é outra conexão, não a
     vê."""
     con.register("somente_aqui", pa.table({"x": [1, 2, 3]}))
@@ -220,7 +229,9 @@ def peak_mb() -> float:
 # Roda num subprocesso, um cenário por chamada: a memória máxima do processo depende só do cenário.
 # A base é o pico depois das importações e da conexão, com o pyarrow importado antes dela, como no
 # SPOOL_PROBE; o cenário se mede pelo que acrescenta a ela.
-MEMORY_PROBE = PEAK_MB + r"""
+MEMORY_PROBE = (
+    PEAK_MB
+    + r"""
 import json, time
 import duckdb, pyarrow
 scenario = sys.argv[1]
@@ -240,16 +251,23 @@ print(json.dumps({
     "peak_mb": round(peak_mb()),
 }))
 """
+)
 
 
-def run_probe(script: str, *arguments: str) -> dict[str, object]:
+def run_probe(
+    script: str,
+    *arguments: str,
+) -> dict[str, object]:
     """Roda ``script`` num Python novo com ``arguments`` e devolve o JSON que ele imprime."""
-    completed = subprocess.run([sys.executable, "-c", script, *arguments],
-                               capture_output=True, text=True, check=True)
+    completed = subprocess.run(
+        [sys.executable, "-c", script, *arguments], capture_output=True, text=True, check=True
+    )
     return json.loads(completed.stdout)
 
 
-def increment_mb(reading: dict[str, object]) -> int:
+def increment_mb(
+    reading: dict[str, object],
+) -> int:
     """O que o cenário acrescentou à memória do processo: o pico menos a base depois das importações
     e da conexão, que muda com a plataforma."""
     return reading["peak_mb"] - reading["base_mb"]
@@ -262,7 +280,9 @@ def test_streaming_query_starts_before_the_end() -> None:
     con = duckdb.connect(config={"threads": 2})
     sql = STREAM_SQL.format(rows=rows)
 
-    def timing(query: str) -> tuple[float, float, float, int]:
+    def timing(
+        query: str,
+    ) -> tuple[float, float, float, int]:
         """Os segundos do ``execute``, do primeiro lote e do total, e as linhas lidas."""
         started = time.perf_counter()
         reader = con.execute(query).to_arrow_reader(100_000)
@@ -275,7 +295,11 @@ def test_streaming_query_starts_before_the_end() -> None:
         total_seconds = time.perf_counter() - started
         return execute_seconds, first_batch_seconds, total_seconds, count
 
-    def describe(executed: float, first: float, total: float) -> str:
+    def describe(
+        executed: float,
+        first: float,
+        total: float,
+    ) -> str:
         """Os três tempos de ``timing`` no texto do relatório."""
         return f"execute {executed:.3f} s, primeiro lote {first:.3f} s, total {total:.3f} s"
 
@@ -305,8 +329,10 @@ def test_streaming_query_bounds_memory() -> None:
         peaks[scenario] = run_probe(MEMORY_PROBE, scenario, sql)
     readings = {}
     for scenario, reading in peaks.items():
-        readings[scenario] = (f"{reading['peak_mb']} MB, {increment_mb(reading)} MB acima da base, "
-                              f"em {reading['seconds']} s")
+        readings[scenario] = (
+            f"{reading['peak_mb']} MB, {increment_mb(reading)} MB acima da base, "
+            f"em {reading['seconds']} s"
+        )
     record("duckdb.peak_rss_10M_rows", readings)
     assert peaks["stream"]["rows"] == peaks["table"]["rows"] == rows
     assert increment_mb(peaks["stream"]) < increment_mb(peaks["table"]) / 2
@@ -314,7 +340,9 @@ def test_streaming_query_bounds_memory() -> None:
 
 # O stream da sessão única: o leitor inteiro gravado num arquivo Arrow IPC com LZ4, e o arquivo lido
 # lote a lote. Roda num subprocesso, como MEMORY_PROBE, para a memória máxima ser só dele.
-SPOOL_PROBE = PEAK_MB + r"""
+SPOOL_PROBE = (
+    PEAK_MB
+    + r"""
 import json, os, threading, time
 import duckdb, pyarrow as pa
 folder = sys.argv[1]
@@ -366,10 +394,13 @@ print(json.dumps({
     "peak_mb": round(peak_mb()),
 }))
 """
+)
 
 
 @pytest.mark.local
-def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
+def test_spooled_stream_bounds_memory(
+    local_location: LocalLocation,
+) -> None:
     """O resultado gravado lote a lote num arquivo Arrow IPC com LZ4 por uma thread, e lido lote a
     lote enquanto ela grava, mantém o processo no tamanho de um lote, como o leitor direto.
 
@@ -400,14 +431,20 @@ def test_spooled_stream_bounds_memory(local_location: LocalLocation) -> None:
 ID_AND_VALOR = pa.schema([("id", pa.int64()), ("valor", pa.float64())])
 
 
-def batch_of_thousand(k: int) -> pa.RecordBatch:
+def batch_of_thousand(
+    k: int,
+) -> pa.RecordBatch:
     """O lote ``k``: os ids de ``k * 1000`` a ``(k + 1) * 1000 - 1`` e ``valor`` igual a ``k``."""
     ids = pa.array(range(k * 1000, (k + 1) * 1000), pa.int64())
     values = pa.array([float(k)] * 1000)
     return pa.RecordBatch.from_pydict({"id": ids, "valor": values})
 
 
-def insert_from_reader(con: duckdb.DuckDBPyConnection, reader: object, table: str) -> None:
+def insert_from_reader(
+    con: duckdb.DuckDBPyConnection,
+    reader: object,
+    table: str,
+) -> None:
     """Registra ``reader`` como ``entrada``, roda ``INSERT INTO <table> BY NAME`` sobre ele e o
     desregistra, também quando o comando falha."""
     con.register("entrada", reader)
@@ -417,7 +454,9 @@ def insert_from_reader(con: duckdb.DuckDBPyConnection, reader: object, table: st
         con.unregister("entrada")
 
 
-def test_insert_from_a_generator_reader_is_one_statement(con: duckdb.DuckDBPyConnection) -> None:
+def test_insert_from_a_generator_reader_is_one_statement(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """Um ``INSERT ... SELECT`` de um ``RecordBatchReader`` sobre um gerador Python é um comando só:
     a falha do gerador deixa a tabela como estava.
 
@@ -428,7 +467,10 @@ def test_insert_from_a_generator_reader_is_one_statement(con: duckdb.DuckDBPyCon
     threads: set[int] = set()
     delivered: list[int] = []
 
-    def generate(count: int, fail_at: int | None = None) -> Iterator[pa.RecordBatch]:
+    def generate(
+        count: int,
+        fail_at: int | None = None,
+    ) -> Iterator[pa.RecordBatch]:
         for k in range(count):
             threads.add(threading.get_ident())
             if k == fail_at:
@@ -457,7 +499,8 @@ def test_insert_from_a_generator_reader_is_one_statement(con: duckdb.DuckDBPyCon
 
 
 def test_read_ahead_keeps_pulling_the_generator_after_a_failed_insert(
-        con: duckdb.DuckDBPyConnection) -> None:
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """A leitura antecipada do Arrow, que alimenta o ``arrow_scan``, puxa lotes além do que o
     comando consumiu e continua depois de o comando falhar.
 
@@ -471,7 +514,9 @@ def test_read_ahead_keeps_pulling_the_generator_after_a_failed_insert(
     con.execute("CREATE TABLE estreita (id INTEGER, valor DOUBLE)")
     delivered: list[int] = []
 
-    def generate_wide(count: int) -> Iterator[pa.RecordBatch]:
+    def generate_wide(
+        count: int,
+    ) -> Iterator[pa.RecordBatch]:
         for k in range(count):
             delivered.append(k)
             ids = pa.array([2**40] * 1000, pa.int64())
@@ -484,11 +529,15 @@ def test_read_ahead_keeps_pulling_the_generator_after_a_failed_insert(
     time.sleep(0.5)
     con.unregister("entrada")
     assert len(delivered) > 1
-    record("duckdb.batches_pulled_ahead_of_a_failed_insert",
-           f"{at_failure} na falha, {len(delivered)} meio segundo depois")
+    record(
+        "duckdb.batches_pulled_ahead_of_a_failed_insert",
+        f"{at_failure} na falha, {len(delivered)} meio segundo depois",
+    )
 
 
-def test_insert_from_a_reader_trusts_the_batches(con: duckdb.DuckDBPyConnection) -> None:
+def test_insert_from_a_reader_trusts_the_batches(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """O leitor não confere os lotes contra o esquema declarado, e o ``arrow_scan`` os lê pelo
     esquema declarado: um lote com as colunas em outra ordem entra com os bytes trocados, sem erro,
     e um lote com uma coluna a mais falha.
@@ -500,7 +549,8 @@ def test_insert_from_a_reader_trusts_the_batches(con: duckdb.DuckDBPyConnection)
 
     # A ordem trocada corrompe em silêncio.
     swapped = pa.RecordBatch.from_pydict(
-        {"valor": pa.array([1.0]), "id": pa.array([1], pa.int64())})
+        {"valor": pa.array([1.0]), "id": pa.array([1], pa.int64())}
+    )
     insert_from_reader(con, pa.RecordBatchReader.from_batches(ID_AND_VALOR, [swapped]), "destino")
     corrupted = con.execute("SELECT id, valor FROM destino").fetchall()
     assert len(corrupted) == 1
@@ -509,7 +559,8 @@ def test_insert_from_a_reader_trusts_the_batches(con: duckdb.DuckDBPyConnection)
 
     # A coluna a mais falha.
     extra = pa.RecordBatch.from_pydict(
-        {"id": pa.array([1], pa.int64()), "valor": pa.array([1.0]), "x": ["z"]})
+        {"id": pa.array([1], pa.int64()), "valor": pa.array([1.0]), "x": ["z"]}
+    )
     with_extra = pa.RecordBatchReader.from_batches(ID_AND_VALOR, [extra])
     with pytest.raises(duckdb.InvalidInputException, match="3 children, expected 2"):
         insert_from_reader(con, with_extra, "destino")
@@ -517,7 +568,8 @@ def test_insert_from_a_reader_trusts_the_batches(con: duckdb.DuckDBPyConnection)
     # A nulidade declarada no esquema do leitor não é conferida; a coluna NOT NULL do DuckDB é.
     strict = pa.schema([pa.field("id", pa.int64(), nullable=False), ("valor", pa.float64())])
     with_null = pa.RecordBatch.from_pydict(
-        {"id": pa.array([1, None], pa.int64()), "valor": pa.array([1.0, 2.0])})
+        {"id": pa.array([1, None], pa.int64()), "valor": pa.array([1.0, 2.0])}
+    )
     con.execute("DELETE FROM destino")
     insert_from_reader(con, pa.RecordBatchReader.from_batches(strict, [with_null]), "destino")
     nulls = con.execute("SELECT count(*) FILTER (WHERE id IS NULL) FROM destino").fetchone()[0]
@@ -528,7 +580,9 @@ def test_insert_from_a_reader_trusts_the_batches(con: duckdb.DuckDBPyConnection)
         insert_from_reader(con, null_into_strict, "estrito")
 
 
-def test_register_takes_an_object_with_only_arrow_c_stream(con: duckdb.DuckDBPyConnection) -> None:
+def test_register_takes_an_object_with_only_arrow_c_stream(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """Um objeto que só expõe ``__arrow_c_stream__`` entra por ``register`` como um leitor."""
     con.execute("CREATE TABLE estrito (id BIGINT NOT NULL, valor DOUBLE)")
     batches = (batch_of_thousand(k) for k in range(3))
@@ -537,7 +591,9 @@ def test_register_takes_an_object_with_only_arrow_c_stream(con: duckdb.DuckDBPyC
     assert con.execute("SELECT count(*) FROM estrito").fetchone()[0] == 3000
 
 
-def test_decimal_from_pandas_sample_versus_arrow_schema(con: duckdb.DuckDBPyConnection) -> None:
+def test_decimal_from_pandas_sample_versus_arrow_schema(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """Uma coluna ``object`` de ``Decimal`` recebe o tipo dos valores presentes; o esquema Arrow
     fixa ``DECIMAL(18,2)``."""
     values = [decimal.Decimal("12345.67")] * 1500 + [decimal.Decimal("123456789.01")]
@@ -568,7 +624,9 @@ def test_decimal_from_pandas_sample_versus_arrow_schema(con: duckdb.DuckDBPyConn
     assert maximum == decimal.Decimal("123456789.01")
 
 
-def test_json_column(con: duckdb.DuckDBPyConnection) -> None:
+def test_json_column(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """A coluna ``JSON`` valida na entrada e responde a ``->>``, ``json_extract`` e
     ``json_valid``."""
     con.execute("CREATE TABLE eventos (id BIGINT, meta JSON)")
@@ -591,7 +649,9 @@ def test_json_column(con: duckdb.DuckDBPyConnection) -> None:
     record("duckdb.json_column_arrow_type", str(table.schema.field("meta").type))
 
 
-def test_executemany_versus_arrow(con: duckdb.DuckDBPyConnection) -> None:
+def test_executemany_versus_arrow(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """``executemany`` faz uma ida por linha; a tabela Arrow entra num comando só."""
     rows = 5000
     con.execute("CREATE TABLE lote (id BIGINT, valor DECIMAL(18,2))")
@@ -615,7 +675,9 @@ def test_executemany_versus_arrow(con: duckdb.DuckDBPyConnection) -> None:
 
 
 @pytest.mark.local
-def test_copy_to_parquet_with_return_stats(local_location: LocalLocation) -> None:
+def test_copy_to_parquet_with_return_stats(
+    local_location: LocalLocation,
+) -> None:
     """``COPY ... TO`` grava o Parquet e devolve contagem, tamanho e estatísticas por coluna, sem
     reabrir o arquivo."""
     folder = Path(local_location.child("duckdb"))
@@ -638,7 +700,8 @@ def test_copy_to_parquet_with_return_stats(local_location: LocalLocation) -> Non
     # O esquema físico do arquivo: DECIMAL(18,2) como INT64, timestamp como INT64, toda coluna
     # optional.
     schema = con.execute(
-        f"SELECT name, type, repetition_type FROM parquet_schema('{path}')").fetchall()
+        f"SELECT name, type, repetition_type FROM parquet_schema('{path}')"
+    ).fetchall()
     physical = {name: kind for name, kind, _ in schema}
     repetition = {name: kind for name, _, kind in schema}
     assert physical["valor"] == "INT64"
@@ -650,7 +713,9 @@ def test_copy_to_parquet_with_return_stats(local_location: LocalLocation) -> Non
 
 
 @pytest.mark.local
-def test_return_stats_leave_nan_out_and_bound_long_text(local_location: LocalLocation) -> None:
+def test_return_stats_leave_nan_out_and_bound_long_text(
+    local_location: LocalLocation,
+) -> None:
     """O ``RETURN_STATS`` de um ``DOUBLE`` com ``NaN`` marca ``has_nan`` e dá o máximo sem ele.
 
     O infinito sai ``inf``; o texto longo sai truncado em 256 caracteres, com o máximo arredondado
@@ -668,7 +733,10 @@ def test_return_stats_leave_nan_out_and_bound_long_text(local_location: LocalLoc
     target = folder / "f.parquet"
     con = duckdb.connect()
 
-    def column_stats(values_sql: str, column: str) -> dict[str, str]:
+    def column_stats(
+        values_sql: str,
+        column: str,
+    ) -> dict[str, str]:
         """As estatísticas de ``column`` no ``RETURN_STATS`` de um arquivo com ``values_sql``."""
         con.execute(f"CREATE OR REPLACE TABLE t AS SELECT * FROM (VALUES {values_sql}) v({column})")
         cursor = con.execute(f"COPY t TO '{target}' (FORMAT parquet, RETURN_STATS)")
@@ -699,7 +767,8 @@ def test_return_stats_leave_nan_out_and_bound_long_text(local_location: LocalLoc
 
 @pytest.mark.local
 def test_return_stats_has_nan_follows_only_the_last_row_group(
-        local_location: LocalLocation) -> None:
+    local_location: LocalLocation,
+) -> None:
     """O ``has_nan`` do ``RETURN_STATS`` num arquivo de dois grupos de linhas só vê o ``NaN`` do
     último grupo; o rodapé omite o mínimo e o máximo de todo grupo com ``NaN``.
 
@@ -734,7 +803,8 @@ def test_return_stats_has_nan_follows_only_the_last_row_group(
 
 @pytest.mark.local
 def test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer(
-        local_location: LocalLocation) -> None:
+    local_location: LocalLocation,
+) -> None:
     """O leitor Parquet do DuckDB poda pelo máximo do rodapé um grupo de linhas com ``NaN`` gravado
     pelo pyarrow, e perde a linha que ele mesmo ordena acima de todo número; o arquivo do próprio
     DuckDB e a tabela nativa a devolvem.
@@ -757,7 +827,10 @@ def test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer(
     pq.write_table(table, arrow_path, row_group_size=3)
     con.execute(f"COPY nativa TO '{duckdb_path}' (FORMAT parquet)")
 
-    def count(source: str, predicate: str = "valor > 3") -> int:
+    def count(
+        source: str,
+        predicate: str = "valor > 3",
+    ) -> int:
         return con.execute(f"SELECT count(*) FROM {source} WHERE {predicate}").fetchone()[0]
 
     arrow_file = f"read_parquet('{arrow_path}')"
@@ -774,7 +847,9 @@ def test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer(
     con.close()
 
 
-def test_control_total_fails_on_nan_and_infinity(con: duckdb.DuckDBPyConnection) -> None:
+def test_control_total_fails_on_nan_and_infinity(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """A soma de controle da auditoria falha com ``ConversionException`` num ``NaN`` ou infinito.
 
     A soma é ``sum(CAST(valor AS DECIMAL(38, 6)))``, e falha também sob
@@ -803,7 +878,8 @@ def test_control_total_fails_on_nan_and_infinity(con: duckdb.DuckDBPyConnection)
 
 
 def test_control_total_by_decimal_does_not_depend_on_threads(
-        con: duckdb.DuckDBPyConnection) -> None:
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """A soma de controle por ``DECIMAL(38, 6)`` dá o mesmo valor com qualquer número de threads; a
     soma em ``DOUBLE`` depende da ordem, e as suas somas são leituras do relatório.
 
@@ -838,7 +914,9 @@ def test_interrupt_stops_a_blocking_query_from_another_thread() -> None:
     con.execute("CREATE TABLE t AS SELECT range AS id, hash(range) AS h FROM range(20_000_000)")
     outcome: dict[str, object] = {}
 
-    def sort_all(connection: duckdb.DuckDBPyConnection) -> None:
+    def sort_all(
+        connection: duckdb.DuckDBPyConnection,
+    ) -> None:
         try:
             connection.execute("SELECT id FROM t ORDER BY h").to_arrow_table()
             outcome["error"] = None
@@ -899,14 +977,17 @@ def test_cursor_opens_while_the_connection_runs_a_query() -> None:
     worker.join(timeout=30)
     assert running
     assert opened < 0.1
-    record("duckdb.cursor_during_a_query",
-           f"{opened * 1e3:.2f} ms com a consulta da conexão em curso")
+    record(
+        "duckdb.cursor_during_a_query", f"{opened * 1e3:.2f} ms com a consulta da conexão em curso"
+    )
     cursor.close()
     con.close()
 
 
 @pytest.mark.local
-def test_copy_partition_by_month(local_location: LocalLocation) -> None:
+def test_copy_partition_by_month(
+    local_location: LocalLocation,
+) -> None:
     """``PARTITION_BY (mes)`` grava ``mes=.../data_0.parquet`` sem a coluna dentro do arquivo; a
     leitura Hive a restaura."""
     out = Path(local_location.child("duckdb/particionado"))
@@ -937,7 +1018,9 @@ def test_copy_partition_by_month(local_location: LocalLocation) -> None:
 
 
 @pytest.mark.local
-def test_database_file_and_temp_directory(local_location: LocalLocation) -> None:
+def test_database_file_and_temp_directory(
+    local_location: LocalLocation,
+) -> None:
     """O sandbox em arquivo sobrevive ao fechamento e reabre só de leitura; a pasta de transbordo é
     configurável."""
     folder = Path(local_location.child("duckdb"))
@@ -957,7 +1040,9 @@ def test_database_file_and_temp_directory(local_location: LocalLocation) -> None
     again.close()
 
 
-def test_audit_queries(con: duckdb.DuckDBPyConnection) -> None:
+def test_audit_queries(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
     """As consultas da auditoria acham cada defeito de uma partição.
 
     Os defeitos: chave repetida, nulo, partição diferente da data de origem, JSON inválido, texto
@@ -978,7 +1063,8 @@ def test_audit_queries(con: duckdb.DuckDBPyConnection) -> None:
     )
 
     duplicates = con.execute(
-        "SELECT id, count(*) FROM lancamentos GROUP BY id HAVING count(*) > 1").fetchall()
+        "SELECT id, count(*) FROM lancamentos GROUP BY id HAVING count(*) > 1"
+    ).fetchall()
     assert duplicates == [(1, 2)]
 
     # O String(n) do contrato é medido em bytes, a medida do VARCHAR(n) do Redshift: strlen conta

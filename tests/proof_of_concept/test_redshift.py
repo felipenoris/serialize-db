@@ -91,7 +91,9 @@ SERVICE_ERRORS = (
 
 
 @pytest.fixture(scope="session")
-def duckdb_connection(s3_location: S3Location) -> Iterator[duckdb.DuckDBPyConnection]:
+def duckdb_connection(
+    s3_location: S3Location,
+) -> Iterator[duckdb.DuckDBPyConnection]:
     """Conexão com ``httpfs`` e ``delta`` e um secret S3 com a chave da credencial do
     ``boto3``, com as opções de ``Storage.duckdb_setup``, fechada no fim da sessão."""
     # s3_location roda antes do secret: pelo proxy_environment, AWS_REGION e NO_PROXY estão no
@@ -103,8 +105,14 @@ def duckdb_connection(s3_location: S3Location) -> Iterator[duckdb.DuckDBPyConnec
     connection.close()
 
 
-def contract_table(name: str, schema_name: str, *, month: bool = False, extra: bool = False,
-                   text: bool = False) -> sa.Table:
+def contract_table(
+    name: str,
+    schema_name: str,
+    *,
+    month: bool = False,
+    extra: bool = False,
+    text: bool = False,
+) -> sa.Table:
     """O ``Table`` de ``operacoes`` no esquema da sessão, na ordem das colunas dos arquivos do
     delta-rs.
 
@@ -134,13 +142,19 @@ def contract_table(name: str, schema_name: str, *, month: bool = False, extra: b
     return sa.Table(name, sa.MetaData(schema=quoted_name(schema_name, False)), *columns)
 
 
-def ddl(table: sa.Table) -> str:
+def ddl(
+    table: sa.Table,
+) -> str:
     """O ``CREATE TABLE`` compilado pelo dialeto do Redshift."""
     return str(CreateTable(table).compile(dialect=REDSHIFT))
 
 
-def write_manifest(location: S3Location, key_suffix: str, table: DeltaTable,
-                   month: str | None = None) -> str:
+def write_manifest(
+    location: S3Location,
+    key_suffix: str,
+    table: DeltaTable,
+    month: str | None = None,
+) -> str:
     """Grava o manifesto do ``COPY`` com os arquivos do snapshot (de um mês, quando informado) e
     devolve a URI.
 
@@ -179,8 +193,10 @@ def write_manifest(location: S3Location, key_suffix: str, table: DeltaTable,
     return f"s3://{location.bucket}/{key}"
 
 
-def outcome(action: Callable[[], object],
-            errors: tuple[type[Exception], ...] = SERVICE_ERRORS) -> str:
+def outcome(
+    action: Callable[[], object],
+    errors: tuple[type[Exception], ...] = SERVICE_ERRORS,
+) -> str:
     """``ok`` quando a chamada passa; num dos ``errors``, o tipo e a mensagem do erro, para o
     relatório. Outro erro sobe."""
     try:
@@ -190,8 +206,10 @@ def outcome(action: Callable[[], object],
         return describe_error(error)
 
 
-def reading(action: Callable[[], object],
-            errors: tuple[type[Exception], ...] = SERVICE_ERRORS) -> object:
+def reading(
+    action: Callable[[], object],
+    errors: tuple[type[Exception], ...] = SERVICE_ERRORS,
+) -> object:
     """O valor da chamada, ou, num dos ``errors``, o tipo e a mensagem do erro: uma leitura que o
     ambiente decide vai para o relatório. Outro erro sobe."""
     try:
@@ -200,22 +218,35 @@ def reading(action: Callable[[], object],
         return describe_error(error)
 
 
-def first_row(session: RedshiftSession, text: str, params: tuple | None = None) -> list[object]:
+def first_row(
+    session: RedshiftSession,
+    text: str,
+    params: tuple | None = None,
+) -> list[object]:
     """A primeira linha do resultado de ``text``."""
     return session.execute(text, params)[0]
 
 
-def first_value(session: RedshiftSession, text: str, params: tuple | None = None) -> object:
+def first_value(
+    session: RedshiftSession,
+    text: str,
+    params: tuple | None = None,
+) -> object:
     """A primeira coluna da primeira linha do resultado de ``text``."""
     return session.execute(text, params)[0][0]
 
 
-def rows_as_tuples(session: RedshiftSession, text: str) -> list[tuple]:
+def rows_as_tuples(
+    session: RedshiftSession,
+    text: str,
+) -> list[tuple]:
     """As linhas do resultado de ``text``, cada uma como tupla."""
     return [tuple(row) for row in session.execute(text)]
 
 
-def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None:
+def test_session_and_named_parameters(
+    redshift_session: RedshiftSession,
+) -> None:
     """A sessão responde; o cursor aceita ``paramstyle = "named"``; o que ``has_schema_privilege``
     diz do esquema é leitura."""
     session = redshift_session
@@ -242,7 +273,9 @@ def test_session_and_named_parameters(redshift_session: RedshiftSession) -> None
     )
 
 
-def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession) -> None:
+def test_cursor_fetchmany_feeds_record_batches(
+    redshift_session: RedshiftSession,
+) -> None:
     """``fetchmany`` entrega o resultado em fatias, e cada fatia vira um ``RecordBatch`` com o
     esquema do statement: o caminho do cursor, que no motor Redshift é o do ``query``."""
     arrow_schema = pa.schema(
@@ -268,9 +301,7 @@ def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession
     rows = cursor.fetchmany(2)
     while rows:
         batches.append(
-            pa.RecordBatch.from_pylist(
-                [dict(zip(names, row)) for row in rows], schema=arrow_schema
-            )
+            pa.RecordBatch.from_pylist([dict(zip(names, row)) for row in rows], schema=arrow_schema)
         )
         rows = cursor.fetchmany(2)
     assert [batch.num_rows for batch in batches] == [2, 2, 1]
@@ -282,7 +313,9 @@ def test_cursor_fetchmany_feeds_record_batches(redshift_session: RedshiftSession
     assert table.column("dia")[4].as_py() == dt.date(2026, 8, 5)
 
 
-def test_schema_location_and_use_of_the_share_database(redshift_session: RedshiftSession) -> None:
+def test_schema_location_and_use_of_the_share_database(
+    redshift_session: RedshiftSession,
+) -> None:
     """Em que banco está o esquema do projeto, o que o ``USE`` mudou na sessão, e o ida e volta por
     ``esquema.tabela``."""
     session = redshift_session
@@ -329,7 +362,9 @@ def test_schema_location_and_use_of_the_share_database(redshift_session: Redshif
     record("redshift.fully_qualified_name", session.fully_qualified(name))
 
 
-def test_sqlalchemy_ddl_creates_table(redshift_session: RedshiftSession) -> None:
+def test_sqlalchemy_ddl_creates_table(
+    redshift_session: RedshiftSession,
+) -> None:
     """O DDL do SQLAlchemy cria a tabela no esquema; o cursor descreve as colunas, e as visões de
     catálogo são leitura."""
     session = redshift_session
@@ -341,7 +376,13 @@ def test_sqlalchemy_ddl_creates_table(redshift_session: RedshiftSession) -> None
     cursor = session.connection.cursor()
     cursor.execute(f"select * from {session.qualified(name)} limit 0")
     assert [column[0] for column in cursor.description] == [
-        "id_operacao", "data_ref", "id_cliente", "valor", "descricao", "mes", "observacao",
+        "id_operacao",
+        "data_ref",
+        "id_cliente",
+        "valor",
+        "descricao",
+        "mes",
+        "observacao",
     ]
 
     # information_schema.columns respondeu vazio depois do USE no ambiente alvo (2026-09-21): ela
@@ -368,7 +409,8 @@ def test_sqlalchemy_ddl_creates_table(redshift_session: RedshiftSession) -> None
 
 
 def test_copy_manifest_from_delta_files(
-    redshift_session: RedshiftSession, s3_location: S3Location
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
 ) -> None:
     """Os arquivos do delta-rs entram por ``COPY ... MANIFEST`` numa staging sem ``mes``, e cada mês
     recebe o valor no ``INSERT``."""
@@ -413,7 +455,8 @@ def test_copy_manifest_from_delta_files(
 
 
 def test_copy_column_list_and_fillrecord(
-    redshift_session: RedshiftSession, s3_location: S3Location
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
 ) -> None:
     """Um arquivo anterior a uma coluna nova: o que o ``COPY`` aceita, lista de colunas,
     ``FILLRECORD`` ou nenhum."""
@@ -466,7 +509,7 @@ def test_copy_column_list_and_fillrecord(
 
 
 def test_repeated_statement_after_truncate_and_the_driver_cache(
-    redshift_session: RedshiftSession
+    redshift_session: RedshiftSession,
 ) -> None:
     """Um comando repetido depois de um ``TRUNCATE`` na mesma conexão: sem o cache de prepared
     statements do driver ele passa; com o cache, o que o datashare responde é leitura.
@@ -532,12 +575,17 @@ def test_repeated_statement_after_truncate_and_the_driver_cache(
         connection.close()
 
 
-def test_copy_varchar_overflow(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+def test_copy_varchar_overflow(
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
+) -> None:
     """Uma string acima do ``VARCHAR`` de destino: o ``COPY`` trunca ou aborta, e o motivo fica em
     ``stl_load_errors``."""
     session = redshift_session
-    long_text = sample_table().slice(0, 10).set_column(
-        5, "descricao", pa.array(["x" * 300] * 10, pa.string())
+    long_text = (
+        sample_table()
+        .slice(0, 10)
+        .set_column(5, "descricao", pa.array(["x" * 300] * 10, pa.string()))
     )
 
     uri = s3_location.child("redshift/texto_longo")
@@ -595,7 +643,10 @@ def test_copy_varchar_overflow(redshift_session: RedshiftSession, s3_location: S
     record("redshift.copy.varchar_overflow_truncatecolumns", outcome(copy_manifest_truncating))
 
 
-def test_super_and_json_parse(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+def test_super_and_json_parse(
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
+) -> None:
     """``SUPER`` recebe texto por ``JSON_PARSE`` e devolve campos por caminho; um documento acima de
     65.535 bytes por ``INSERT`` e por ``COPY`` é leitura."""
     session = redshift_session
@@ -714,13 +765,19 @@ def operation_rows() -> list[dict[str, object]]:
     ]
 
 
-def read_object(location: S3Location, uri: str) -> bytes:
+def read_object(
+    location: S3Location,
+    uri: str,
+) -> bytes:
     """O conteúdo do objeto ``uri`` no bucket da sessão."""
     key = uri.removeprefix(f"s3://{location.bucket}/")
     return boto3.client("s3").get_object(Bucket=location.bucket, Key=key)["Body"].read()
 
 
-def register_unloaded(destination: str, entries: list[dict]) -> None:
+def register_unloaded(
+    destination: str,
+    entries: list[dict],
+) -> None:
     """Cria em ``destination`` a tabela Delta de ``operacoes`` particionada por ``mes`` e registra
     cada arquivo do manifesto do ``UNLOAD`` numa ``AddAction``, sem estatísticas de coluna."""
     arrow_schema = pa.schema(
@@ -760,7 +817,8 @@ def register_unloaded(destination: str, entries: list[dict]) -> None:
 
 
 def test_unload_partition_by_and_register(
-    redshift_session: RedshiftSession, s3_location: S3Location,
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
     duckdb_connection: duckdb.DuckDBPyConnection,
 ) -> None:
     """``UNLOAD ... PARTITION BY (mes) MANIFEST VERBOSE`` grava o layout do Delta; os arquivos
@@ -842,9 +900,10 @@ def test_unload_partition_by_and_register(
         DeltaTable(destination).to_pyarrow_table()
 
     record("redshift.unload.delta_rs_read", outcome(read_by_delta_rs))
-    assert duckdb_connection.execute(
-        f"SELECT count(*) FROM delta_scan('{destination}')"
-    ).fetchone()[0] == 6
+    assert (
+        duckdb_connection.execute(f"SELECT count(*) FROM delta_scan('{destination}')").fetchone()[0]
+        == 6
+    )
 
     # Onde o UNLOAD recusa gravar sem ALLOWOVERWRITE: o mesmo prefixo, um prefixo pai com arquivos
     # abaixo, e um subprefixo novo e vazio dentro de uma pasta com arquivos, que é o destino novo
@@ -865,7 +924,9 @@ def test_unload_partition_by_and_register(
         )
 
 
-def cell_value(cell: dict) -> object:
+def cell_value(
+    cell: dict,
+) -> object:
     """O valor de uma célula da Data API: o único item do dicionário, ou ``None`` com ``isNull``."""
     if cell.get("isNull"):
         return None
@@ -873,7 +934,7 @@ def cell_value(cell: dict) -> object:
 
 
 def test_data_api_runs_the_statement_and_pages_the_result(
-    redshift_session: RedshiftSession
+    redshift_session: RedshiftSession,
 ) -> None:
     """A Data API executa por HTTPS, assíncrona: cada célula é um dicionário de um item, e
     ``DECIMAL`` volta como texto.
@@ -936,7 +997,8 @@ def test_data_api_runs_the_statement_and_pages_the_result(
 
 
 def test_parallel_copy_and_unload_on_two_connections(
-    redshift_session: RedshiftSession, s3_location: S3Location
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
 ) -> None:
     """Duas tabelas carregadas por ``COPY ... MANIFEST`` e descarregadas por ``UNLOAD`` em paralelo,
     uma conexão por tabela.
@@ -960,7 +1022,9 @@ def test_parallel_copy_and_unload_on_two_connections(
     for target in targets:
         session.execute(ddl(contract_table(target, session.schema)))
 
-    def run_on_own_connection(*commands: str) -> list:
+    def run_on_own_connection(
+        *commands: str,
+    ) -> list:
         """Roda os comandos em ordem numa conexão própria e devolve as linhas do último."""
         _, connection = connect_redshift()
         try:
@@ -971,7 +1035,9 @@ def test_parallel_copy_and_unload_on_two_connections(
         finally:
             connection.close()
 
-    def copy_into_target(k: int) -> int:
+    def copy_into_target(
+        k: int,
+    ) -> int:
         """O ``COPY`` do manifesto ``k`` na tabela ``k``, numa conexão própria; devolve a
         contagem."""
         qualified = session.qualified(targets[k])
@@ -993,7 +1059,9 @@ def test_parallel_copy_and_unload_on_two_connections(
     # 2. Dois UNLOAD em paralelo, para prefixos distintos.
     destinations = [s3_location.child(f"redshift/unload_paralelo_{k}") for k in range(2)]
 
-    def unload_target(k: int) -> None:
+    def unload_target(
+        k: int,
+    ) -> None:
         """O ``UNLOAD`` da tabela ``k`` para o prefixo ``k``, numa conexão própria."""
         command = (
             f"UNLOAD ('select * from {session.qualified(targets[k])}') TO '{destinations[k]}/' "
@@ -1013,7 +1081,11 @@ def test_parallel_copy_and_unload_on_two_connections(
 # ---------------------------------------------------------------- as leituras da etapa 5
 
 
-def unload_text(select: str, destination: str, credentials: str) -> str:
+def unload_text(
+    select: str,
+    destination: str,
+    credentials: str,
+) -> str:
     """O ``UNLOAD`` do ``stream`` da etapa 5, pelo motor: o ``select`` em Parquet para
     ``destination``, com manifesto verboso e ``PARALLEL OFF``, a contrabarra e a aspa simples
     dobradas no literal (leituras de 2026-09-23). O texto devolvido carrega a cláusula de
@@ -1021,7 +1093,10 @@ def unload_text(select: str, destination: str, credentials: str) -> str:
     return redshift.unload_text(select, destination, credentials, parallel=False)
 
 
-def read_manifest(location: S3Location, destination: str) -> dict | None:
+def read_manifest(
+    location: S3Location,
+    destination: str,
+) -> dict | None:
     """O manifesto que o ``UNLOAD`` gravou em ``<destination>/manifest``, ou ``None`` quando ele não
     existe."""
     s3 = boto3.client("s3")
@@ -1033,13 +1108,19 @@ def read_manifest(location: S3Location, destination: str) -> dict | None:
     return json.loads(body)
 
 
-def unload_count(session: RedshiftSession) -> object:
+def unload_count(
+    session: RedshiftSession,
+) -> object:
     """As linhas que o último ``UNLOAD`` da sessão descarregou, por ``pg_last_unload_count()``, ou
     o erro, para o relatório."""
     return reading(functools.partial(first_value, session, "select pg_last_unload_count()"))
 
 
-def unloaded_manifest(session: RedshiftSession, location: S3Location, destination: str) -> dict:
+def unloaded_manifest(
+    session: RedshiftSession,
+    location: S3Location,
+    destination: str,
+) -> dict:
     """O manifesto de um ``UNLOAD ... MANIFEST`` que passou; a falta dele reprova, com a contagem
     do ``UNLOAD`` na mensagem."""
     manifest = read_manifest(location, destination)
@@ -1050,7 +1131,11 @@ def unloaded_manifest(session: RedshiftSession, location: S3Location, destinatio
     return manifest
 
 
-def stream_entries(session: RedshiftSession, location: S3Location, destination: str) -> list[dict]:
+def stream_entries(
+    session: RedshiftSession,
+    location: S3Location,
+    destination: str,
+) -> list[dict]:
     """As entradas do manifesto do ``UNLOAD`` do ``stream``, nenhuma quando ele não descarregou
     linha.
 
@@ -1069,7 +1154,10 @@ def stream_entries(session: RedshiftSession, location: S3Location, destination: 
     return []
 
 
-def read_unloaded(location: S3Location, entries: list[dict]) -> pa.Table:
+def read_unloaded(
+    location: S3Location,
+    entries: list[dict],
+) -> pa.Table:
     """As linhas dos arquivos do manifesto, na ordem das entradas, com o ``INT96`` lido em
     microssegundos."""
     tables = []
@@ -1079,7 +1167,9 @@ def read_unloaded(location: S3Location, entries: list[dict]) -> pa.Table:
     return pa.concat_tables(tables)
 
 
-def unbound_parameters(statement: sa.sql.ClauseElement) -> list[str]:
+def unbound_parameters(
+    statement: sa.sql.ClauseElement,
+) -> list[str]:
     """Os ``bindparam`` do statement ainda sem valor, pelo guarda do pacote
     (``sql.required_parameters``): sob ``literal_binds``, ``compiled.binds`` sai vazio e o
     ``bindparam`` sem valor vira ``NULL`` calado, até num ``IN`` de lista (sonda local de
@@ -1087,7 +1177,10 @@ def unbound_parameters(statement: sa.sql.ClauseElement) -> list[str]:
     return sorted(sql.required_parameters(statement))
 
 
-def footer_statistics(parquet: pq.ParquetFile, column: str) -> list[dict]:
+def footer_statistics(
+    parquet: pq.ParquetFile,
+    column: str,
+) -> list[dict]:
     """O mínimo e o máximo do rodapé de ``column`` em cada grupo de linhas, em texto (``repr``) para
     o relatório."""
     index = parquet.schema_arrow.get_field_index(column)
@@ -1104,7 +1197,8 @@ def footer_statistics(parquet: pq.ParquetFile, column: str) -> list[dict]:
 
 
 def test_unload_to_a_hive_prefix_and_register(
-    redshift_session: RedshiftSession, s3_location: S3Location,
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
     duckdb_connection: duckdb.DuckDBPyConnection,
 ) -> None:
     """O ``UNLOAD`` sem ``PARTITION BY``, com a coluna de partição fora do ``select``, para
@@ -1190,7 +1284,8 @@ def test_unload_to_a_hive_prefix_and_register(
 
 
 def test_stream_by_unload_with_literal_values(
-    redshift_session: RedshiftSession, s3_location: S3Location
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
 ) -> None:
     """O ``stream`` da etapa 5 por ``UNLOAD``: os valores do cliente entram no texto como literais,
     e as linhas lidas dos arquivos são comparadas com as do ``query``, que leva os mesmos valores
@@ -1255,8 +1350,9 @@ def test_stream_by_unload_with_literal_values(
         ),
         (
             "carimbo_taxa",
-            base.where(table.c.carimbo > sa.bindparam("carimbo"))
-            .where(table.c.taxa < sa.bindparam("taxa")),
+            base.where(table.c.carimbo > sa.bindparam("carimbo")).where(
+                table.c.taxa < sa.bindparam("taxa")
+            ),
             {"carimbo": dt.datetime(2026, 8, 28, 12, 0, 0, 123456), "taxa": 0.25},
         ),
     ]
@@ -1314,7 +1410,8 @@ def test_stream_by_unload_with_literal_values(
 
 
 def test_unload_limit_empty_result_temp_table_and_super(
-    redshift_session: RedshiftSession, s3_location: S3Location
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
 ) -> None:
     """Os casos de borda do ``stream`` por ``UNLOAD`` da etapa 5: o ``LIMIT`` no ``select`` externo,
     o resultado vazio, a tabela temporária da sessão e a coluna ``SUPER`` no Parquet.
@@ -1368,7 +1465,8 @@ def test_unload_limit_empty_result_temp_table_and_super(
     manifest = read_manifest(s3_location, empty)
     record(
         "redshift.stream.empty.manifest",
-        None if manifest is None
+        None
+        if manifest is None
         else {"entries": len(manifest["entries"]), "schema": manifest.get("schema")},
     )
     listing = s3.list_objects_v2(
@@ -1442,7 +1540,9 @@ def test_unload_limit_empty_result_temp_table_and_super(
         )
 
 
-def test_row_description_oids_and_type_modifier(redshift_session: RedshiftSession) -> None:
+def test_row_description_oids_and_type_modifier(
+    redshift_session: RedshiftSession,
+) -> None:
     """O OID e o ``type_modifier`` de cada coluna de um resultado: a tabela de
     ``schema_from_row_description`` da etapa 5.
 
@@ -1503,13 +1603,17 @@ def test_row_description_oids_and_type_modifier(redshift_session: RedshiftSessio
             }
             if field["type_oid"] == 1700 and modifier != -1:
                 column["precisao_escala"] = [
-                    ((modifier - 4) >> 16) & 0xFFFF, (modifier - 4) & 0xFFFF
+                    ((modifier - 4) >> 16) & 0xFFFF,
+                    (modifier - 4) & 0xFFFF,
                 ]
             columns.append(column)
         record(f"redshift.row_desc.{label}", columns)
 
 
-def test_small_load_copy_cost(redshift_session: RedshiftSession, s3_location: S3Location) -> None:
+def test_small_load_copy_cost(
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
+) -> None:
     """O custo fixo de carregar 10 linhas, como leitura: o Parquet no S3 mais ``COPY``, o caminho do
     ``append`` da etapa 5, contra o ``INSERT`` de várias linhas que saiu dele.
 
@@ -1575,7 +1679,8 @@ def test_small_load_copy_cost(redshift_session: RedshiftSession, s3_location: S3
 
 
 def test_unload_footer_statistics_with_nan(
-    redshift_session: RedshiftSession, s3_location: S3Location,
+    redshift_session: RedshiftSession,
+    s3_location: S3Location,
     duckdb_connection: duckdb.DuckDBPyConnection,
 ) -> None:
     """O mínimo e o máximo que o ``UNLOAD`` grava no rodapé de uma coluna ``DOUBLE PRECISION`` com
@@ -1643,18 +1748,24 @@ def test_unload_footer_statistics_with_nan(
         )
 
 
-def finite_text(expression: str) -> str:
+def finite_text(
+    expression: str,
+) -> str:
     """O ``is_finite`` da auditoria para o Redshift, aplicado a ``expression``: o texto que o motor
     roda."""
     return str(audit.is_finite(sa.literal_column(expression)).compile(dialect=REDSHIFT_NAMED))
 
 
-def as_text(rows: list) -> list[list[str]]:
+def as_text(
+    rows: list,
+) -> list[list[str]]:
     """As linhas de um resultado em texto, para o relatório."""
     return [[str(value) for value in row] for row in rows]
 
 
-def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: RedshiftSession) -> None:
+def test_audit_sql_under_search_path_and_nan_comparison(
+    redshift_session: RedshiftSession,
+) -> None:
     """O texto da auditoria da etapa 4 pelo caminho do motor da etapa 5, e como o Redshift compara o
     ``NaN``.
 
@@ -1679,12 +1790,16 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
     try:
         cursor = connection.cursor()
 
-        def run(text: str) -> list:
+        def run(
+            text: str,
+        ) -> list:
             """Executa ``text`` na conexão do caso e devolve as linhas, ou uma lista vazia."""
             cursor.execute(text)
             return cursor.fetchall() if cursor.description else []
 
-        def run_as_text(text: str) -> list[list[str]]:
+        def run_as_text(
+            text: str,
+        ) -> list[list[str]]:
             """As linhas de ``text`` em texto, para o relatório."""
             return as_text(run(text))
 
@@ -1767,9 +1882,15 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
         if not emulator_enabled():
             assert detail == [["False", "False", "False", "False", "NaN"]]
         expected = {
-            "linhas": "4", "particao_data_str": "1", "naofinito_valor": "2",
-            "total_valor": "4.500000", "total_preco": "16.250000", "json_meta": "0",
-            "texto_meta": "0", "texto_nome": "0", "valor_data_str": "0",
+            "linhas": "4",
+            "particao_data_str": "1",
+            "naofinito_valor": "2",
+            "total_valor": "4.500000",
+            "total_preco": "16.250000",
+            "json_meta": "0",
+            "texto_meta": "0",
+            "texto_nome": "0",
+            "valor_data_str": "0",
         }
 
         # 4. O texto de cada verificação, como o motor o roda; a de linhas também medida a medida,
@@ -1825,7 +1946,9 @@ def test_audit_sql_under_search_path_and_nan_comparison(redshift_session: Redshi
         connection.close()
 
 
-def test_alter_column_type_on_the_share(redshift_session: RedshiftSession) -> None:
+def test_alter_column_type_on_the_share(
+    redshift_session: RedshiftSession,
+) -> None:
     """O aumento de ``VARCHAR(n)`` por ``ALTER TABLE ... ALTER COLUMN ... TYPE`` no esquema do
     datashare, numa coluna comum e numa da chave primária informativa.
 
@@ -1874,7 +1997,9 @@ def test_alter_column_type_on_the_share(redshift_session: RedshiftSession) -> No
         assert "0A000" in refusal, (label, refusal)
 
 
-def test_explain_of_a_join_on_the_share(redshift_session: RedshiftSession) -> None:
+def test_explain_of_a_join_on_the_share(
+    redshift_session: RedshiftSession,
+) -> None:
     """O ``EXPLAIN`` de um join entre duas tabelas do esquema do datashare, a leitura da
     distribuição que a etapa 8 faz depois da primeira publicação.
 

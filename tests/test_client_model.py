@@ -23,14 +23,18 @@ from reference_model.model_db_projetado import Base as ReferenceBase
 REFERENCE_TABLES = ReferenceBase.metadata.tables
 
 
-def partition_column(name: str) -> str | None:
+def partition_column(
+    name: str,
+) -> str | None:
     """A coluna de partição da tabela ``name`` na base; ``None`` numa tabela sem partição."""
     if name not in source.PARTITIONS:
         return None
     return source.PARTITIONS[name].column
 
 
-def references_a_primary_key(column: sa.Column) -> bool:
+def references_a_primary_key(
+    column: sa.Column,
+) -> bool:
     """Se a coluna é chave primária ou aponta, por chave estrangeira simples, para uma."""
     if column.primary_key:
         return True
@@ -40,7 +44,9 @@ def references_a_primary_key(column: sa.Column) -> bool:
     return False
 
 
-def unique_constraints(table: sa.Table) -> set[tuple[str, ...]]:
+def unique_constraints(
+    table: sa.Table,
+) -> set[tuple[str, ...]]:
     """As ``UniqueConstraint`` da tabela, como tuplas de colunas."""
     keys = set()
     for constraint in table.constraints:
@@ -49,7 +55,9 @@ def unique_constraints(table: sa.Table) -> set[tuple[str, ...]]:
     return keys
 
 
-def unique_indexes(table: sa.Table) -> set[tuple[str, ...]]:
+def unique_indexes(
+    table: sa.Table,
+) -> set[tuple[str, ...]]:
     """Os índices únicos da tabela, como tuplas de colunas."""
     keys = set()
     for index in table.indexes:
@@ -58,7 +66,9 @@ def unique_indexes(table: sa.Table) -> set[tuple[str, ...]]:
     return keys
 
 
-def expected_type(reference_column: sa.Column) -> type:
+def expected_type(
+    reference_column: sa.Column,
+) -> type:
     """O tipo que a cópia declara para a coluna do original: ``BigInteger`` na chave inteira e na
     coluna que aponta para uma, e o mesmo tipo nas demais."""
     is_integer = isinstance(reference_column.type, sa.Integer)
@@ -76,12 +86,16 @@ def column_pairs() -> list[tuple[str, sa.Column, sa.Column]]:
     return pairs
 
 
-def unique_keys(table: sa.Table) -> set[tuple[str, ...]]:
+def unique_keys(
+    table: sa.Table,
+) -> set[tuple[str, ...]]:
     """As ``UniqueConstraint`` e os índices únicos da tabela, como tuplas de colunas."""
     return unique_constraints(table) | unique_indexes(table)
 
 
-def foreign_keys(table: sa.Table) -> set[tuple[tuple[str, ...], str, tuple[str, ...]]]:
+def foreign_keys(
+    table: sa.Table,
+) -> set[tuple[tuple[str, ...], str, tuple[str, ...]]]:
     """As chaves estrangeiras da tabela: colunas, tabela referenciada e colunas referenciadas."""
     keys = set()
     for constraint in table.foreign_key_constraints:

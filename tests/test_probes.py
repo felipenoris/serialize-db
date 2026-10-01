@@ -68,7 +68,10 @@ PROXY_ADDRESS_WITH_PASSWORD = "usuario:se%40nha@proxy01.exemplo.net:8080"
 HIDDEN_PROXY_ADDRESS = "***@proxy01.exemplo.net:8080"
 
 
-def client_error(code: str, operation: str = "Operation") -> botocore.exceptions.ClientError:
+def client_error(
+    code: str,
+    operation: str = "Operation",
+) -> botocore.exceptions.ClientError:
     """Uma ``ClientError`` do botocore com o código dado, como o serviço a devolveria."""
     error_response = {"Error": {"Code": code, "Message": "mensagem"}}
     return botocore.exceptions.ClientError(error_response, operation)
@@ -80,7 +83,9 @@ def denied_call() -> None:
 
 
 @pytest.fixture
-def folder(local_location: LocalLocation) -> Path:
+def folder(
+    local_location: LocalLocation,
+) -> Path:
     """Uma pasta nova sob a pasta da sessão da suíte local, onde o teste grava."""
     path = Path(local_location.child(f"probes-{uuid.uuid4().hex[:8]}"))
     path.mkdir()
@@ -88,7 +93,10 @@ def folder(local_location: LocalLocation) -> Path:
 
 
 @contextlib.contextmanager
-def make_report(folder: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[probelib.Report]:
+def make_report(
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[probelib.Report]:
     """Um ``Report`` que grava em ``folder``; no fim, fecha o arquivo e devolve ``sys.stdout`` ao
     pytest."""
     monkeypatch.setattr(probelib, "OUTPUT_DIR", folder)
@@ -102,7 +110,10 @@ def make_report(folder: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[probe
         sys.stdout = stdout
 
 
-def checks(report: probelib.Report, check_id: str) -> list[str]:
+def checks(
+    report: probelib.Report,
+    check_id: str,
+) -> list[str]:
     """Os detalhes das checagens com o id dado, na ordem em que foram registradas."""
     details = []
     for _status, identifier, _what, detail in report.checks:
@@ -111,7 +122,10 @@ def checks(report: probelib.Report, check_id: str) -> list[str]:
     return details
 
 
-def statuses(report: probelib.Report, check_id: str) -> list[str]:
+def statuses(
+    report: probelib.Report,
+    check_id: str,
+) -> list[str]:
     """Os resultados (``pass``, ``fail`` ou ``note``) das checagens com o id dado, em ordem."""
     found = []
     for status, identifier, _what, _detail in report.checks:
@@ -124,10 +138,16 @@ class FakePaginator:
     """Um paginador do boto3 que devolve páginas prontas, ou levanta a exceção colocada no lugar de
     uma página."""
 
-    def __init__(self, pages: list[dict | Exception]) -> None:
+    def __init__(
+        self,
+        pages: list[dict | Exception],
+    ) -> None:
         self.pages = pages
 
-    def paginate(self, **kwargs: object) -> Iterator[dict]:
+    def paginate(
+        self,
+        **kwargs: object,
+    ) -> Iterator[dict]:
         for page in self.pages:
             if isinstance(page, Exception):
                 raise page
@@ -141,38 +161,68 @@ class FakeS3:
     lugar da resposta; ``get_paginator`` recebe a lista de páginas.
     """
 
-    def __init__(self, **responses: dict | list | Exception) -> None:
+    def __init__(
+        self,
+        **responses: dict | list | Exception,
+    ) -> None:
         self.responses = responses
 
-    def respond(self, operation: str) -> dict:
+    def respond(
+        self,
+        operation: str,
+    ) -> dict:
         """A resposta pronta de ``operation``, ou a exceção colocada no lugar dela, levantada."""
         response = self.responses[operation]
         if isinstance(response, Exception):
             raise response
         return response
 
-    def head_bucket(self, **kwargs: object) -> dict:
+    def head_bucket(
+        self,
+        **kwargs: object,
+    ) -> dict:
         return self.respond("head_bucket")
 
-    def get_bucket_versioning(self, **kwargs: object) -> dict:
+    def get_bucket_versioning(
+        self,
+        **kwargs: object,
+    ) -> dict:
         return self.respond("get_bucket_versioning")
 
-    def get_bucket_encryption(self, **kwargs: object) -> dict:
+    def get_bucket_encryption(
+        self,
+        **kwargs: object,
+    ) -> dict:
         return self.respond("get_bucket_encryption")
 
-    def get_object_lock_configuration(self, **kwargs: object) -> dict:
+    def get_object_lock_configuration(
+        self,
+        **kwargs: object,
+    ) -> dict:
         return self.respond("get_object_lock_configuration")
 
-    def get_public_access_block(self, **kwargs: object) -> dict:
+    def get_public_access_block(
+        self,
+        **kwargs: object,
+    ) -> dict:
         return self.respond("get_public_access_block")
 
-    def get_bucket_ownership_controls(self, **kwargs: object) -> dict:
+    def get_bucket_ownership_controls(
+        self,
+        **kwargs: object,
+    ) -> dict:
         return self.respond("get_bucket_ownership_controls")
 
-    def get_bucket_lifecycle_configuration(self, **kwargs: object) -> dict:
+    def get_bucket_lifecycle_configuration(
+        self,
+        **kwargs: object,
+    ) -> dict:
         return self.respond("get_bucket_lifecycle_configuration")
 
-    def get_paginator(self, name: str) -> FakePaginator:
+    def get_paginator(
+        self,
+        name: str,
+    ) -> FakePaginator:
         return FakePaginator(self.responses[name])
 
 
@@ -231,7 +281,9 @@ def test_public_label_marks_gateway_endpoint_only_for_s3_and_dynamodb() -> None:
     assert probelib.public_label("pypi.org") == proxy
 
 
-def fake_client(url: str) -> types.SimpleNamespace:
+def fake_client(
+    url: str,
+) -> types.SimpleNamespace:
     """Um cliente boto3 fabricado: ``endpoint_reachable`` lê só ``meta.endpoint_url``."""
     return types.SimpleNamespace(meta=types.SimpleNamespace(endpoint_url=url))
 
@@ -470,7 +522,8 @@ def test_report_exit_code(
 
 @pytest.mark.local
 def test_report_call_returns_the_result_and_records_the_failure(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``call`` devolve o resultado da ação; na exceção, devolve ``None``, guarda o motivo e
     registra a falha na seção final."""
@@ -548,7 +601,8 @@ def test_session_rows_list_the_suite_sessions_newest_first() -> None:
 
 @pytest.mark.local
 def test_object_versions_reads_denied_accumulated_and_clean(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``BK-14``: negado com o motivo; versões não correntes e marcadores contados; ou nada
     acumulado."""
@@ -576,7 +630,8 @@ def test_object_versions_reads_denied_accumulated_and_clean(
 
 @pytest.mark.local
 def test_versioning_check_uses_the_api_or_the_sample(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``BK-4``: pela API quando lida; com ela negada, um VersionId na amostra prova o
     versionamento."""
@@ -597,13 +652,17 @@ def test_versioning_check_uses_the_api_or_the_sample(
         )
 
 
-def lock_with_retention(retention: dict[str, object]) -> dict[str, object]:
+def lock_with_retention(
+    retention: dict[str, object],
+) -> dict[str, object]:
     """A configuração de Object Lock ativo com a retenção padrão ``retention``."""
     rule = {"DefaultRetention": retention}
     return {"ObjectLockConfiguration": {"ObjectLockEnabled": "Enabled", "Rule": rule}}
 
 
-def bucket_client(lock: dict | Exception) -> FakeS3:
+def bucket_client(
+    lock: dict | Exception,
+) -> FakeS3:
     """O cliente que ``bucket_settings`` lê: região us-west-2, versionamento negado, criptografia
     KMS e o Object Lock ``lock``."""
     return FakeS3(
@@ -618,7 +677,8 @@ def bucket_client(lock: dict | Exception) -> FakeS3:
 
 @pytest.mark.local
 def test_bucket_settings_read_the_region_the_encryption_and_the_denied_versioning(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``BK-1``, ``BK-2`` e ``BK-5``: o bucket, a região e a chave KMS; o versionamento negado
     volta com o motivo."""
@@ -654,7 +714,10 @@ def test_bucket_settings_read_the_region_the_encryption_and_the_denied_versionin
 )
 @pytest.mark.local
 def test_bucket_settings_interpret_object_lock(
-    folder: Path, monkeypatch: pytest.MonkeyPatch, lock: dict | Exception, expected: str
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    lock: dict | Exception,
+    expected: str,
 ) -> None:
     """``BK-12``: a ausência de Object Lock é uma leitura (``desativado``), a negação traz o motivo,
     e a retenção padrão sai por extenso."""
@@ -665,7 +728,8 @@ def test_bucket_settings_interpret_object_lock(
 
 @pytest.mark.local
 def test_lifecycle_flags_an_enabled_expiration_that_reaches_the_root(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``BK-3``: só uma regra habilitada, com expiração, cujo prefixo contém a raiz ou está contido
     nela, reprova."""
@@ -703,7 +767,8 @@ def test_lifecycle_flags_an_enabled_expiration_that_reaches_the_root(
 
 @pytest.mark.local
 def test_lifecycle_reads_the_noncurrent_expiration_and_compares_the_root_as_a_folder(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``BK-3``: só um ``Expiration`` com ``Days`` ou ``Date`` reprova; a regra que
     ``docs/index.md`` recomenda, ``NoncurrentVersionExpiration``, é leitura, porque o Delta não lê
@@ -768,7 +833,9 @@ def test_principal_arn_turns_an_assumed_role_into_the_role() -> None:
 
 
 @pytest.mark.local
-def test_mount_state_follows_the_link_and_reads_proc_mounts(folder: Path) -> None:
+def test_mount_state_follows_the_link_and_reads_proc_mounts(
+    folder: Path,
+) -> None:
     """``~/shared`` é um link para a montagem; o estado vem do caminho real em ``/proc/mounts``, com
     o tipo e ``rw`` ou ``ro``."""
     real = (folder / "shared").resolve()
@@ -795,7 +862,8 @@ def test_mount_state_follows_the_link_and_reads_proc_mounts(folder: Path) -> Non
 
 @pytest.mark.local
 def test_pinned_requirements_read_the_pinned_versions_of_pyproject(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``SP-9`` compara o venv com as dependências de execução e o grupo ``dev`` de
     ``pyproject.toml``: nome de importação e versão quando fixada por ``==``, e nenhum pacote dos
@@ -836,7 +904,8 @@ dev = ["boto3>=1.40", "duckdb==1.5.5", "pytest>=8.4", "redshift-connector>=2.1"]
 
 @pytest.mark.local
 def test_pinned_requirements_keep_the_runtime_pin_over_a_lower_bound(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Uma entrada sem ``==`` não desfaz a versão que outra fixou: o ``boto3>=1.40`` do grupo
     ``dev`` não apaga o ``boto3==1.43.102`` das dependências de execução."""
@@ -853,7 +922,8 @@ def test_pinned_requirements_keep_the_runtime_pin_over_a_lower_bound(
 
 @pytest.mark.local
 def test_python_packages_fail_sp9_on_a_version_below_the_runtime_pin(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``SP-9`` reprova o ``boto3`` e o ``redshift-connector`` fora da versão fixada, que o limite
     do grupo ``dev`` aceitaria, e manda rodar ``uv sync --all-groups``, que não tira os outros
@@ -862,8 +932,12 @@ def test_python_packages_fail_sp9_on_a_version_below_the_runtime_pin(
     monkeypatch.setattr(probelib, "REPO_ROOT", folder)
     # Só este interpretador, com as versões instaladas fabricadas.
     monkeypatch.setattr(probelib, "python_candidates", lambda: [sys.executable])
-    installed = {"boto3": "1.40.0", "duckdb": "1.5.5", "redshift_connector": "2.1.0",
-                 "pytest": "9.1.1"}
+    installed = {
+        "boto3": "1.40.0",
+        "duckdb": "1.5.5",
+        "redshift_connector": "2.1.0",
+        "pytest": "9.1.1",
+    }
     monkeypatch.setattr(space, "package_version", installed.get)
 
     with make_report(folder, monkeypatch) as report:
@@ -879,7 +953,8 @@ def test_python_packages_fail_sp9_on_a_version_below_the_runtime_pin(
 
 @pytest.mark.local
 def test_extensions_check_fails_on_any_extension_that_does_not_load(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``SP-10`` reprova por qualquer extensão que não carregou e passa com as da biblioteca e as
     embutidas, sem a ``aws``, que nenhum código do projeto carrega."""
@@ -897,7 +972,8 @@ def test_extensions_check_fails_on_any_extension_that_does_not_load(
 
 @pytest.mark.local
 def test_duckdb_section_neither_loads_nor_lists_aws(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Numa pasta de extensões vazia, ``SP-10`` reprova pela ``httpfs`` e pela ``delta``, e a
     ``aws`` não aparece na tabela do ``LOAD`` nem na de ``duckdb_extensions()``."""
@@ -931,7 +1007,8 @@ def test_table_format_recognizes_iceberg_delta_and_parquet() -> None:
 
 @pytest.mark.local
 def test_target_from_connection_fills_host_port_and_database(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Os parâmetros da conexão do projeto: o endpoint físico, os dados em camelCase e a URL JDBC
     preenchem o alvo."""
@@ -1085,12 +1162,19 @@ class FakeIam:
     ``Throttling`` no lugar da resposta; ``calls`` guarda as ações e os recursos de cada chamada.
     """
 
-    def __init__(self, allowed: dict[str, str], failing_call: int | None = None) -> None:
+    def __init__(
+        self,
+        allowed: dict[str, str],
+        failing_call: int | None = None,
+    ) -> None:
         self.allowed = allowed
         self.failing_call = failing_call
         self.calls: list[tuple[list[str], list[str]]] = []
 
-    def simulate_principal_policy(self, **kwargs: object) -> dict:
+    def simulate_principal_policy(
+        self,
+        **kwargs: object,
+    ) -> dict:
         actions = list(kwargs["ActionNames"])
         resources = list(kwargs["ResourceArns"])
         self.calls.append((actions, resources))
@@ -1108,7 +1192,8 @@ class FakeIam:
 
 @pytest.mark.local
 def test_copy_access_simulates_each_action_against_its_resource(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``RS-11`` simula ``ListBucket`` contra o bucket e ``GetObject`` e ``PutObject`` contra os
     objetos sob a raiz, uma chamada por recurso, como o ``BK-8``: a política de privilégio mínimo
@@ -1145,7 +1230,8 @@ def test_copy_access_simulates_each_action_against_its_resource(
 
 @pytest.mark.local
 def test_copy_access_reads_a_failed_object_simulation(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A simulação dos objetos que falha depois da do bucket deixa o ``RS-11`` como leitura, com o
     motivo da chamada e o bloqueio da identidade, e a chamada vai para a seção final."""
@@ -1185,7 +1271,9 @@ def test_credential_text_shows_the_key_prefix_the_token_and_the_expiry() -> None
     assert "(há 5 min)" in expired
 
 
-def public_dns_rows(names: list[str]) -> tuple[list[list[str]], dict[str, bool | None]]:
+def public_dns_rows(
+    names: list[str],
+) -> tuple[list[list[str]], dict[str, bool | None]]:
     """``dns_rows`` fabricado: todo nome resolve para um IP público de documentação."""
     rows = [[name, "203.0.113.10", "público"] for name in names]
     return rows, {name: False for name in names}
@@ -1193,7 +1281,8 @@ def public_dns_rows(names: list[str]) -> tuple[list[list[str]], dict[str, bool |
 
 @pytest.mark.local
 def test_network_judges_only_the_api_endpoints(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``RS-14`` julga só os endpoints regionais das APIs: o host do workgroup não é API, e sem
     região a checagem diz que não os resolveu."""
@@ -1453,7 +1542,9 @@ DECIMAL_AMOUNT_COLUMN = column(
 
 
 def file_reading(
-    path: str, statistics: dict | None = None, columns: list | None = None
+    path: str,
+    statistics: dict | None = None,
+    columns: list | None = None,
 ) -> parquet_source.FileReading:
     """O rodapé fabricado de um arquivo, com a partição derivada do caminho como o probe faz."""
     statistics = statistics or {}
@@ -1527,8 +1618,9 @@ def test_schema_difference_names_missing_extra_retyped_and_reordered() -> None:
     missing = parquet_source.schema_difference(reference, reference[:2])
     assert ["mes", "ausente", "string no majoritário", "-"] in missing
 
-    execution_id = column("id_execucao", arrow_type="string", physical="BYTE_ARRAY",
-                          logical="String")
+    execution_id = column(
+        "id_execucao", arrow_type="string", physical="BYTE_ARRAY", logical="String"
+    )
     extra = parquet_source.schema_difference(reference, [*reference, execution_id])
     assert extra == [["id_execucao", "a mais", "-", "string"]]
 
@@ -1700,11 +1792,15 @@ def test_parse_reads_the_root_and_the_options() -> None:
 # duckdb_threads.py: os valores de threads, a partição comum, os totais do log e as medições
 
 
-def threads_input(name: str, rows: int) -> duckdb_threads.TableInput:
+def threads_input(
+    name: str,
+    rows: int,
+) -> duckdb_threads.TableInput:
     """Uma tabela medida fabricada, sem partição, com as linhas que o log diz ter."""
     table = sa.Table(name, sa.MetaData(), sa.Column("id", sa.BigInteger))
-    return duckdb_threads.TableInput(table=table, uri=f"/delta/{name}", version=3, partitions=None,
-                                     files=1, bytes=100, rows=rows)
+    return duckdb_threads.TableInput(
+        table=table, uri=f"/delta/{name}", version=3, partitions=None, files=1, bytes=100, rows=rows
+    )
 
 
 def test_thread_values_multiply_the_default_or_take_the_requested() -> None:
@@ -1752,11 +1848,13 @@ def test_latest_common_partition_needs_the_value_in_every_table() -> None:
 def test_partition_totals_sum_the_partition_or_the_whole_table() -> None:
     """Os arquivos, os bytes e as linhas das ações ``add`` da partição, ou de todas sem coluna de
     partição."""
-    actions = pa.table({
-        "partition.data_str": ["2026-06-30", "2026-06-30", "2026-03-31"],
-        "size_bytes": [10, 20, 40],
-        "num_records": [1, 2, 4],
-    })
+    actions = pa.table(
+        {
+            "partition.data_str": ["2026-06-30", "2026-06-30", "2026-03-31"],
+            "size_bytes": [10, 20, 40],
+            "num_records": [1, 2, 4],
+        }
+    )
     assert duckdb_threads.partition_totals(actions, "data_str", "2026-06-30") == (2, 30, 3)
     assert duckdb_threads.partition_totals(actions, None, None) == (3, 70, 7)
 
@@ -1774,15 +1872,22 @@ def test_threads_metadata_that_does_not_import_is_a_usage_error() -> None:
 
 @pytest.mark.local
 def test_threads_interrupted_section_goes_to_the_failures(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Uma seção interrompida vai para a seção final de falhas e devolve ``None``; a seguinte
     roda, e o código de saída é 1."""
 
-    def broken_section(report: probelib.Report, value: int) -> int:
+    def broken_section(
+        report: probelib.Report,
+        value: int,
+    ) -> int:
         raise RuntimeError("quebrou")
 
-    def next_section(report: probelib.Report, value: int) -> int:
+    def next_section(
+        report: probelib.Report,
+        value: int,
+    ) -> int:
         return value + 1
 
     with make_report(folder, monkeypatch) as report:
@@ -1808,10 +1913,18 @@ def test_measurement_rows_and_fastest_configuration() -> None:
     curto da configuração que falhou; a mais rápida ignora a que falhou."""
     inputs = [threads_input("cad_lancamentos", 10), threads_input("cad_contratos", 5)]
     measurements = [
-        duckdb_threads.Measurement("materializada", 4, seconds=[2.0, 1.0], threads_read=4,
-                                   base_mb=100, peak_mb=150, rows=10),
-        duckdb_threads.Measurement("materializada", 8, seconds=[0.5], threads_read=8,
-                                   base_mb=100, peak_mb=160, rows=10),
+        duckdb_threads.Measurement(
+            "materializada",
+            4,
+            seconds=[2.0, 1.0],
+            threads_read=4,
+            base_mb=100,
+            peak_mb=150,
+            rows=10,
+        ),
+        duckdb_threads.Measurement(
+            "materializada", 8, seconds=[0.5], threads_read=8, base_mb=100, peak_mb=160, rows=10
+        ),
         duckdb_threads.Measurement(
             "materializada", 12, error="OutOfMemoryException: sem memória\nmais"
         ),
@@ -1835,18 +1948,22 @@ def test_measurement_rows_and_fastest_configuration() -> None:
 
 @pytest.mark.local
 def test_measurement_checks_flag_rows_threads_and_failed_configurations(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``DT-2`` reprova as linhas lidas diferentes das do log, ``DT-3`` as threads que o DuckDB não
     aplicou, e ``DT-4`` registra a configuração que falhou, que também vai para a seção final."""
     inputs = [threads_input("cad_lancamentos", 10)]
     measurements = [
-        duckdb_threads.Measurement("materializada", 4, seconds=[1.0], threads_read=4,
-                                   base_mb=100, peak_mb=150, rows=10),
-        duckdb_threads.Measurement("materializada", 8, seconds=[1.0], threads_read=8,
-                                   base_mb=100, peak_mb=150, rows=9),
-        duckdb_threads.Measurement("agregada", 4, seconds=[1.0], threads_read=2,
-                                   base_mb=100, peak_mb=150, rows=10),
+        duckdb_threads.Measurement(
+            "materializada", 4, seconds=[1.0], threads_read=4, base_mb=100, peak_mb=150, rows=10
+        ),
+        duckdb_threads.Measurement(
+            "materializada", 8, seconds=[1.0], threads_read=8, base_mb=100, peak_mb=150, rows=9
+        ),
+        duckdb_threads.Measurement(
+            "agregada", 4, seconds=[1.0], threads_read=2, base_mb=100, peak_mb=150, rows=10
+        ),
         duckdb_threads.Measurement("agregada", 8, error="IOException: sem arquivo"),
     ]
     with make_report(folder, monkeypatch) as report:
@@ -1858,8 +1975,11 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
         assert report.finish() == 2
 
     # Sem reprovação nem falha, a saída é 0.
-    passing = [duckdb_threads.Measurement("materializada", 4, seconds=[1.0], threads_read=4,
-                                          base_mb=100, peak_mb=150, rows=10)]
+    passing = [
+        duckdb_threads.Measurement(
+            "materializada", 4, seconds=[1.0], threads_read=4, base_mb=100, peak_mb=150, rows=10
+        )
+    ]
     with make_report(folder, monkeypatch) as report:
         duckdb_threads.measurement_checks(report, passing, inputs)
         assert report.finish() == 0
@@ -1878,19 +1998,28 @@ SECRET_STRING = (
 )
 
 
-def credential_reading(client: str, minutes: float, ok: bool = True,
-                       detail: str = "4 linhas") -> credentials.Reading:
+def credential_reading(
+    client: str,
+    minutes: float,
+    ok: bool = True,
+    detail: str = "4 linhas",
+) -> credentials.Reading:
     """Uma leitura fabricada de ``client``, ``minutes`` minutos depois de ``NOW``."""
     return credentials.Reading(client, NOW + minutes * MINUTE, ok, detail, 0.1)
 
 
-def credential_round(minutes: float, readings: list[credentials.Reading],
-                     container_key: str | None = "aaaa1111", secret_key: str | None = "aaaa1111",
-                     clause_key: str | None = "aaaa1111") -> credentials.Round:
+def credential_round(
+    minutes: float,
+    readings: list[credentials.Reading],
+    container_key: str | None = "aaaa1111",
+    secret_key: str | None = "aaaa1111",
+    clause_key: str | None = "aaaa1111",
+) -> credentials.Round:
     """Uma rodada fabricada ``minutes`` minutos depois de ``NOW``, com a credencial do contêiner
     expirando 60 minutos depois de ``NOW``."""
-    return credentials.Round(NOW + minutes * MINUTE, readings, container_key, NOW + 60 * MINUTE,
-                             secret_key, clause_key)
+    return credentials.Round(
+        NOW + minutes * MINUTE, readings, container_key, NOW + 60 * MINUTE, secret_key, clause_key
+    )
 
 
 def test_fingerprint_identifies_a_key_without_showing_it() -> None:
@@ -1921,16 +2050,18 @@ def test_wait_deadline_passes_the_last_expiry_by_the_margin_up_to_the_ceiling() 
     ceiling = 90 * MINUTE
     last = NOW + 60 * MINUTE
 
-    deadline, reason = credentials.wait_deadline(NOW, [NOW + 50 * MINUTE, None, last], margin,
-                                                 ceiling, None)
+    deadline, reason = credentials.wait_deadline(
+        NOW, [NOW + 50 * MINUTE, None, last], margin, ceiling, None
+    )
     assert deadline == NOW + 63 * MINUTE
     assert reason == f"a expiração das {credentials.clock(last)} mais a margem"
 
     late = NOW + 120 * MINUTE
     deadline, reason = credentials.wait_deadline(NOW, [late], margin, ceiling, None)
     assert deadline == NOW + ceiling
-    assert reason == (f"o teto de --max-wait-minutes, antes da expiração das "
-                      f"{credentials.clock(late)}")
+    assert reason == (
+        f"o teto de --max-wait-minutes, antes da expiração das {credentials.clock(late)}"
+    )
 
     deadline, _reason = credentials.wait_deadline(NOW, [last], margin, ceiling, 2 * MINUTE)
     assert deadline == NOW + 2 * MINUTE
@@ -1970,8 +2101,7 @@ def test_key_verdict_needs_another_key_in_every_round_after_the_expiry() -> None
     """A chave montada a cada uso passa quando toda rodada depois da expiração leva outra chave e
     reprova quando alguma ainda leva a do início; a rodada que não leu a chave não conta."""
     expiry = NOW + 60 * MINUTE
-    renewed = [(NOW, "aaaa1111"), (NOW + 55 * MINUTE, "bbbb2222"),
-               (NOW + 65 * MINUTE, "bbbb2222")]
+    renewed = [(NOW, "aaaa1111"), (NOW + 55 * MINUTE, "bbbb2222"), (NOW + 65 * MINUTE, "bbbb2222")]
     assert credentials.key_change(renewed) == NOW + 55 * MINUTE
     status, text = credentials.key_verdict(renewed, expiry)
     assert status == "pass"
@@ -1998,17 +2128,33 @@ def test_timeline_rows_and_round_line_show_each_client_and_the_keys() -> None:
     leu, e as chaves pela impressão digital; a linha da rodada traz o mesmo."""
     clients = [credentials.DELTA_RS, credentials.DUCKDB_DELTA]
     rounds = [
-        credential_round(0, [credential_reading(credentials.DELTA_RS, 0),
-                             credential_reading(credentials.DUCKDB_DELTA, 0)]),
-        credential_round(65, [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False)],
-                         container_key="bbbb2222", secret_key=None),
+        credential_round(
+            0,
+            [
+                credential_reading(credentials.DELTA_RS, 0),
+                credential_reading(credentials.DUCKDB_DELTA, 0),
+            ],
+        ),
+        credential_round(
+            65,
+            [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False)],
+            container_key="bbbb2222",
+            secret_key=None,
+        ),
     ]
     expiry = NOW + 60 * MINUTE
     rows = credentials.timeline_rows(rounds, clients, expiry)
     assert rows[0] == ["HORA", "EXPIRAÇÃO", *clients, "CONTÊINER", "ATÉ", "SECRET", "CLÁUSULA"]
     assert rows[1][1:4] == ["-60 min", "ok", "ok"]
-    assert rows[2][1:] == ["+5 min", "-", "FALHOU", "bbbb2222", credentials.clock(expiry), "-",
-                           "aaaa1111"]
+    assert rows[2][1:] == [
+        "+5 min",
+        "-",
+        "FALHOU",
+        "bbbb2222",
+        credentials.clock(expiry),
+        "-",
+        "aaaa1111",
+    ]
 
     line = credentials.round_line(rounds[1], expiry)
     assert line.startswith(f"{credentials.clock(rounds[1].at)} (+5 min): duckdb delta_scan FALHOU;")
@@ -2017,19 +2163,25 @@ def test_timeline_rows_and_round_line_show_each_client_and_the_keys() -> None:
 
 @pytest.mark.local
 def test_credential_checks_blame_a_held_client_only_when_a_new_one_reads(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``CR-4`` reprova o ``delta_scan`` segurado que falha depois da expiração quando o cliente
     novo lê; ``CR-6`` fica nota quando o cliente novo também falha; ``CR-10`` reprova a cláusula
     que ainda leva a chave expirada, e ``CR-11`` o cliente novo que falhou."""
-    first = [credential_reading(credentials.DUCKDB_DELTA, 0),
-             credential_reading(credentials.PYARROW, 0)]
-    after = [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False, detail="ExpiredToken"),
-             credential_reading(credentials.PYARROW, 65, ok=False, detail="ExpiredToken")]
-    rounds = [credential_round(0, first),
-              credential_round(65, after, container_key="bbbb2222")]
-    controls = [credential_reading(credentials.DUCKDB_DELTA, 66),
-                credential_reading(credentials.PYARROW, 66, ok=False, detail="AccessDenied")]
+    first = [
+        credential_reading(credentials.DUCKDB_DELTA, 0),
+        credential_reading(credentials.PYARROW, 0),
+    ]
+    after = [
+        credential_reading(credentials.DUCKDB_DELTA, 65, ok=False, detail="ExpiredToken"),
+        credential_reading(credentials.PYARROW, 65, ok=False, detail="ExpiredToken"),
+    ]
+    rounds = [credential_round(0, first), credential_round(65, after, container_key="bbbb2222")]
+    controls = [
+        credential_reading(credentials.DUCKDB_DELTA, 66),
+        credential_reading(credentials.PYARROW, 66, ok=False, detail="AccessDenied"),
+    ]
     # As checagens leem só os nomes dos clientes abertos.
     held = credentials.Held(readers={credentials.DUCKDB_DELTA: str, credentials.PYARROW: str})
     storage = types.SimpleNamespace(is_s3=True)
@@ -2059,14 +2211,17 @@ def no_container_credential() -> tuple[None, None, bool, None]:
     return None, None, False, None
 
 
-def fabricated_clause(config: object) -> str:
+def fabricated_clause(
+    config: object,
+) -> str:
     """``credentials_clause`` com uma chave fabricada, sem consultar a cadeia do ``boto3``."""
     return "ACCESS_KEY_ID 'AKIAEXEMPLO' SECRET_ACCESS_KEY 'segredo'"
 
 
 @pytest.mark.local
 def test_credentials_probe_reads_a_local_table_in_every_round(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A sonda inteira sobre uma tabela Delta local, com uma espera de menos de um segundo: cada
     cliente lê em cada rodada, os clientes novos leem, nada reprova sem credencial a expirar, a
@@ -2079,22 +2234,28 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
     monkeypatch.setattr(credentials, "prepare_environment", no_environment_change)
     monkeypatch.setattr(credentials, "container_credential", no_container_credential)
     monkeypatch.setattr(credentials, "credentials_clause", fabricated_clause)
-    for name in ("SERIALIZE_DB_REDSHIFT_WORKGROUP", "SERIALIZE_DB_REDSHIFT_HOST",
-                 "SERIALIZE_DB_REDSHIFT_IAM_ROLE"):
+    for name in (
+        "SERIALIZE_DB_REDSHIFT_WORKGROUP",
+        "SERIALIZE_DB_REDSHIFT_HOST",
+        "SERIALIZE_DB_REDSHIFT_IAM_ROLE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
     stdout = sys.stdout
     try:
-        code = credentials.main(["credentials.py", str(table), "--wait-minutes", "0.01",
-                                 "--interval-minutes", "0.004"])
+        code = credentials.main(
+            ["credentials.py", str(table), "--wait-minutes", "0.01", "--interval-minutes", "0.004"]
+        )
     finally:
         sys.stdout = stdout
 
     assert code == 0
     text = next(folder.glob("credentials_*.txt")).read_text()
-    every_client = ("delta-rs ok, duckdb delta_scan ok, duckdb read_parquet ok, pyarrow ok, "
-                    "boto3 ok; contêiner - até -, secret -, cláusula "
-                    f"{credentials.fingerprint('AKIAEXEMPLO')}")
+    every_client = (
+        "delta-rs ok, duckdb delta_scan ok, duckdb read_parquet ok, pyarrow ok, "
+        "boto3 ok; contêiner - até -, secret -, cláusula "
+        f"{credentials.fingerprint('AKIAEXEMPLO')}"
+    )
     assert every_client in text
     assert "Nenhuma leitura falhou." in text
     assert "4 cliente(s) novo(s) leram" in text

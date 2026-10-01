@@ -25,6 +25,7 @@ Exemplo:
     export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
     .venv/bin/python probes/operacao/probe_load_resume.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import shutil
@@ -40,12 +41,16 @@ from serialize_db import delta
 USAGE = "uso: .venv/bin/python probes/operacao/probe_load_resume.py <origem>"
 
 
-def execution_of(path: str) -> str:
+def execution_of(
+    path: str,
+) -> str:
     """O ``execution_id`` no nome de um arquivo da carga, ``<execution_id>_<uuid>.parquet``."""
     return path.rsplit("/", 1)[-1].split("_", 1)[0]
 
 
-def duckdb_leftovers(execution_ids: set[str]) -> list[Path]:
+def duckdb_leftovers(
+    execution_ids: set[str],
+) -> list[Path]:
     """As pastas temporárias do motor DuckDB das execuções em ``tempfile.gettempdir()``: o
     ``cleanup`` do motor as apaga, e o processo encerrado por ``SIGKILL`` não o roda."""
     found = []
@@ -56,7 +61,9 @@ def duckdb_leftovers(execution_ids: set[str]) -> list[Path]:
     return found
 
 
-def folder_megabytes(folder: Path) -> float:
+def folder_megabytes(
+    folder: Path,
+) -> float:
     """O tamanho dos arquivos sob a pasta, em MB."""
     total = 0
     for path in folder.rglob("*"):
@@ -65,19 +72,26 @@ def folder_megabytes(folder: Path) -> float:
     return total / 2**20
 
 
-def report_leftovers(execution_ids: set[str]) -> None:
+def report_leftovers(
+    execution_ids: set[str],
+) -> None:
     """Imprime e apaga as pastas temporárias que a execução encerrada deixou."""
     leftovers = duckdb_leftovers(execution_ids)
     if not leftovers:
         print(f"pasta temporária do DuckDB deixada em {tempfile.gettempdir()}: nenhuma")
     for folder in leftovers:
-        print(f"pasta temporária do DuckDB deixada: {folder}, {folder_megabytes(folder):.1f} MB; "
-              "apagada pela sonda")
+        print(
+            f"pasta temporária do DuckDB deixada: {folder}, {folder_megabytes(folder):.1f} MB; "
+            "apagada pela sonda"
+        )
         shutil.rmtree(folder)
 
 
-def check_killed(killed: lib.Finished, after_kill: dict[str, list[str]],
-                 values: list[str]) -> None:
+def check_killed(
+    killed: lib.Finished,
+    after_kill: dict[str, list[str]],
+    values: list[str],
+) -> None:
     """O sinal chegou com a primeira partição no log e a terceira fora dele."""
     problems = []
     if not killed.killed:
@@ -89,7 +103,11 @@ def check_killed(killed: lib.Finished, after_kill: dict[str, list[str]],
     lib.check("o processo encerrado entre a primeira e a terceira partição", problems)
 
 
-def check_rerun(rerun: lib.Finished, missing: list[str], values: list[str]) -> None:
+def check_rerun(
+    rerun: lib.Finished,
+    missing: list[str],
+    values: list[str],
+) -> None:
     """A repetição gravou só as partições ausentes do log e conferiu só as pedidas, sem
     diferença, com a saída 0."""
     problems = []
@@ -119,13 +137,15 @@ def main() -> None:
     storage = db.storage
     values = lib.source_partitions(source, 3)
     uri = lib.table_uri(db, lib.TABLE.name)
-    arguments = lib.cli_arguments(db, "load", "--source", source, "--tables", lib.TABLE.name,
-                                  "--partitions", *values)
-    second_folder = storage.join(db.environment, lib.TABLE.name,
-                                 f"{lib.PARTITION_BY}={values[1]}")
+    arguments = lib.cli_arguments(
+        db, "load", "--source", source, "--tables", lib.TABLE.name, "--partitions", *values
+    )
+    second_folder = storage.join(db.environment, lib.TABLE.name, f"{lib.PARTITION_BY}={values[1]}")
 
     # O sinal espera o arquivo da segunda partição, depois da linha da primeira no log.
-    def wait_second_file(process: subprocess.Popen) -> str:
+    def wait_second_file(
+        process: subprocess.Popen,
+    ) -> str:
         return lib.wait_for_file(storage, second_folder, process)
 
     print(f"partições pedidas: {', '.join(values)}")
@@ -135,8 +155,10 @@ def main() -> None:
     after_kill = lib.logged_files(uri, storage)
     written = lib.folder_files(uri, storage)
     killed_ids = {execution_of(path) for path in written}
-    print(f"depois do sinal: {sorted(after_kill)} no log; {len(written)} arquivo(s) na pasta, "
-          f"da execução {', '.join(sorted(killed_ids))}")
+    print(
+        f"depois do sinal: {sorted(after_kill)} no log; {len(written)} arquivo(s) na pasta, "
+        f"da execução {', '.join(sorted(killed_ids))}"
+    )
     arrived = "chegou ao log" if values[1] in after_kill else "ficou fora do log"
     print(f"a segunda partição, {values[1]}, {arrived} antes do sinal")
     check_killed(killed, after_kill, values)

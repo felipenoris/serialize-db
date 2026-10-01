@@ -62,13 +62,23 @@ from serialize_db.publication import PublishedColumn
 from serialize_db.storage import Storage
 
 SCHEMA = "esquema"
-CONFIG = RedshiftConfig(host="host", user="usuario", password="senha", database="dev",
-                        share_database="compartilhado", schema=SCHEMA, iam_role="default")
+CONFIG = RedshiftConfig(
+    host="host",
+    user="usuario",
+    password="senha",
+    database="dev",
+    share_database="compartilhado",
+    schema=SCHEMA,
+    iam_role="default",
+)
 METADATA = delta.commit_metadata("exec-0", {})
 CONTROL = f'"{SCHEMA}"."serialize_db_publications"'
 
 
-def server_error(message: str, code: str = "XX000") -> redshift_connector.ProgrammingError:
+def server_error(
+    message: str,
+    code: str = "XX000",
+) -> redshift_connector.ProgrammingError:
     """O erro do driver com os campos do servidor."""
     return redshift_connector.ProgrammingError({"S": "ERROR", "C": code, "M": message})
 
@@ -76,12 +86,19 @@ def server_error(message: str, code: str = "XX000") -> redshift_connector.Progra
 class FakeCursor:
     """O cursor de uma ``FakeConnection``."""
 
-    def __init__(self, connection: FakeConnection) -> None:
+    def __init__(
+        self,
+        connection: FakeConnection,
+    ) -> None:
         self.connection = connection
         self.rowcount = -1
         self._rows: list = []
 
-    def execute(self, text: str, params: object = None) -> FakeCursor:
+    def execute(
+        self,
+        text: str,
+        params: object = None,
+    ) -> FakeCursor:
         self._rows, self.rowcount = self.connection.answer(text)
         return self
 
@@ -94,9 +111,14 @@ class FakeConnection:
     a linha de controle de cada tabela, as colunas de ``svv_all_columns`` e o ``rowcount`` do
     ``UPDATE``, e falha no comando que casa com ``fail``."""
 
-    def __init__(self, control_table: bool = True, rows: dict[str, int] | None = None,
-                 columns: list[tuple] | None = None, update_rowcount: int = 1,
-                 fail: tuple[str, Exception] | None = None) -> None:
+    def __init__(
+        self,
+        control_table: bool = True,
+        rows: dict[str, int] | None = None,
+        columns: list[tuple] | None = None,
+        update_rowcount: int = 1,
+        fail: tuple[str, Exception] | None = None,
+    ) -> None:
         self.control_table = control_table
         self.rows = dict(rows or {})
         self.columns = columns or []
@@ -112,17 +134,22 @@ class FakeConnection:
     def close(self) -> None:
         self.closed = True
 
-    def answer(self, text: str) -> tuple[list, int]:
+    def answer(
+        self,
+        text: str,
+    ) -> tuple[list, int]:
         self.commands.append(mask(text))
         if self.fail is not None and re.search(self.fail[0], text):
             raise self.fail[1]
         if text == f"SELECT 1 FROM {CONTROL} LIMIT 0":
             if self.control_table:
                 return [], -1
-            raise server_error("Relation serialize_db_publications does not exist in the "
-                               "database.")
-        control_read = re.fullmatch(rf"SELECT delta_version FROM {re.escape(CONTROL)} "
-                                    r"WHERE table_name = '(\w+)'", text)
+            raise server_error("Relation serialize_db_publications does not exist in the database.")
+        control_read = re.fullmatch(
+            rf"SELECT delta_version FROM {re.escape(CONTROL)} "
+            r"WHERE table_name = '(\w+)'",
+            text,
+        )
         if control_read is not None:
             name = control_read.group(1)
             if name not in self.rows:
@@ -139,36 +166,52 @@ class FakeConnection:
             return [], self.update_rowcount
         return [], -1
 
-    def texts(self, first_word: str | None = None) -> list[str]:
+    def texts(
+        self,
+        first_word: str | None = None,
+    ) -> list[str]:
         """Os comandos registrados, ou só os que começam por ``first_word``."""
         if first_word is None:
             return list(self.commands)
         return [text for text in self.commands if text.startswith(first_word)]
 
 
-def use_fake(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection) -> None:
+def use_fake(
+    monkeypatch: pytest.MonkeyPatch,
+    connection: FakeConnection,
+) -> None:
     """A conexão de mentira no lugar do driver, para toda conexão que a publicação abrir."""
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
 
 
-def local_db(local_location: LocalLocation, environment: str = "prd") -> Database:
+def local_db(
+    local_location: LocalLocation,
+    environment: str = "prd",
+) -> Database:
     """Um banco numa pasta nova, com o modelo das suítes."""
     root = local_location.child(f"publicacao/{uuid.uuid4().hex[:8]}")
     return Database(root, environment, Base.metadata)
 
 
-def text_columns_table(*names: str) -> sa.Table:
+def text_columns_table(
+    *names: str,
+) -> sa.Table:
     """``cad_colunas``, particionada por ``parte``, com as colunas de texto ``names`` entre a chave
     ``id`` e a partição, na ordem pedida."""
     columns = [sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False)]
     for name in names:
         columns.append(sa.Column(name, sa.String(10)))
     columns.append(sa.Column("parte", sa.String(10), nullable=False))
-    return sa.Table("cad_colunas", sa.MetaData(), *columns,
-                    info={"serialize_db": {"partition_by": ["parte"]}})
+    return sa.Table(
+        "cad_colunas", sa.MetaData(), *columns, info={"serialize_db": {"partition_by": ["parte"]}}
+    )
 
 
-def text_columns_rows(table: sa.Table, value: str, ids: list[int]) -> pa.Table:
+def text_columns_rows(
+    table: sa.Table,
+    value: str,
+    ids: list[int],
+) -> pa.Table:
     """As linhas de ``cad_colunas`` na partição ``value``, no contrato: cada coluna de texto com o
     nome dela seguido do id, como ``a1``."""
     data = {"id": pa.array(ids, pa.int64())}
@@ -179,8 +222,12 @@ def text_columns_rows(table: sa.Table, value: str, ids: list[int]) -> pa.Table:
     return schema.cast(pa.table(data), table)
 
 
-def published_entries(db: Database, months: list[str], rows: int = 30,
-                      table: sa.Table = ENTRIES) -> int:
+def published_entries(
+    db: Database,
+    months: list[str],
+    rows: int = 30,
+    table: sa.Table = ENTRIES,
+) -> int:
     """A tabela Delta com ``rows`` linhas por mês; devolve a última versão."""
     uri = db.uri(table)
     delta.create_table(uri, table, db.storage)
@@ -191,7 +238,12 @@ def published_entries(db: Database, months: list[str], rows: int = 30,
     return version
 
 
-def partition_files(db: Database, uri: str, version: int, value: str) -> list[str]:
+def partition_files(
+    db: Database,
+    uri: str,
+    version: int,
+    value: str,
+) -> list[str]:
     """Os nomes dos arquivos de uma partição numa versão da tabela, em ordem."""
     dt = delta.open_table(uri, db.storage, version=version)
     names = []
@@ -201,12 +253,16 @@ def partition_files(db: Database, uri: str, version: int, value: str) -> list[st
     return sorted(names)
 
 
-def manifest_files(manifest: dict) -> list[str]:
+def manifest_files(
+    manifest: dict,
+) -> list[str]:
     """Os nomes dos arquivos de um manifesto do ``COPY``, em ordem."""
     return sorted(entry["url"].rsplit("/", 1)[-1] for entry in manifest["entries"])
 
 
-def exit_code(arguments: list[str]) -> int | str | None:
+def exit_code(
+    arguments: list[str],
+) -> int | str | None:
     """O código de saída de ``main``, também quando o ``argparse`` encerra o processo."""
     try:
         return cli.main(arguments)
@@ -218,8 +274,10 @@ def exit_code(arguments: list[str]) -> int | str | None:
 
 
 @pytest.mark.local
-def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
-                                            local_location: LocalLocation) -> None:
+def test_publish_requires_the_control_table(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Sem a tabela de controle, ``publish_redshift``, ``unpublish_redshift`` e
     ``publication_status`` levantam ``PublicationError`` com o comando de inicialização e não
     rodam outro comando; ``control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta e a tabela
@@ -236,15 +294,17 @@ def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
     for action in actions:
         with pytest.raises(PublicationError, match="publish_redshift --init"):
             action()
-    commands = [text for text in connection.texts()
-                if not text.startswith(("USE ", "SET search_path"))]
+    commands = [
+        text for text in connection.texts() if not text.startswith(("USE ", "SET search_path"))
+    ]
     assert commands == [f"SELECT 1 FROM {CONTROL} LIMIT 0"] * 3
     assert connection.closed
 
     # O DDL da tabela de controle, sem IF NOT EXISTS.
     assert publication.control_ddl(SCHEMA) == (
         f"CREATE TABLE {CONTROL} (table_name VARCHAR(127), delta_version BIGINT, "
-        "execution_id VARCHAR(127), published_at TIMESTAMP)")
+        "execution_id VARCHAR(127), published_at TIMESTAMP)"
+    )
     assert "IF NOT EXISTS" not in publication.control_ddl(SCHEMA)
 
     # A tabela do modelo sem Delta é recusada; create_publications_table roda o DDL.
@@ -265,11 +325,16 @@ def test_publication_statements_text() -> None:
     arquivos dele; ``control_read``, ``published_ddl`` e ``unpublication_statements``."""
     file_columns = tuple(column.name for column in redshift.columns_without_partition(ENTRIES))
     folder = "s3://b/prd/publicacao/exec-1/cad_lancamentos/2026-08-31"
-    manifests = {MONTHS[1]: [delta.CopyManifest(f"{folder}/1.manifest", file_columns),
-                             delta.CopyManifest(f"{folder}/2.manifest", file_columns[::-1])]}
+    manifests = {
+        MONTHS[1]: [
+            delta.CopyManifest(f"{folder}/1.manifest", file_columns),
+            delta.CopyManifest(f"{folder}/2.manifest", file_columns[::-1]),
+        ]
+    }
     credentials = "ACCESS_KEY_ID 'AKIA' SECRET_ACCESS_KEY 'segredo' SESSION_TOKEN 'token'"
-    first = publication.publication_statements(SCHEMA, "prd", ENTRIES, [MONTHS[1]], manifests,
-                                               58, None, "exec-1", credentials)
+    first = publication.publication_statements(
+        SCHEMA, "prd", ENTRIES, [MONTHS[1]], manifests, 58, None, "exec-1", credentials
+    )
     published = f'"{SCHEMA}"."prd_cad_lancamentos"'
     staging = '"prd_cad_lancamentos_staging"'
     assert first[0] == publication.published_ddl(SCHEMA, "prd", ENTRIES)
@@ -281,16 +346,21 @@ def test_publication_statements_text() -> None:
     assert first[2] == f"DELETE FROM {published} WHERE \"data_base_str\" = '{MONTHS[1]}'"
     assert first[3] == f"DELETE FROM {staging}"
     listed = ", ".join(f'"{name}"' for name in file_columns)
-    assert first[4] == (f"COPY {staging} ({listed})\nFROM '{folder}/1.manifest'\n{credentials}\n"
-                        "FORMAT AS PARQUET MANIFEST FILLRECORD")
+    assert first[4] == (
+        f"COPY {staging} ({listed})\nFROM '{folder}/1.manifest'\n{credentials}\n"
+        "FORMAT AS PARQUET MANIFEST FILLRECORD"
+    )
     listed_backwards = ", ".join(f'"{name}"' for name in file_columns[::-1])
-    assert first[5] == (f"COPY {staging} ({listed_backwards})\nFROM '{folder}/2.manifest'\n"
-                        f"{credentials}\nFORMAT AS PARQUET MANIFEST FILLRECORD")
+    assert first[5] == (
+        f"COPY {staging} ({listed_backwards})\nFROM '{folder}/2.manifest'\n"
+        f"{credentials}\nFORMAT AS PARQUET MANIFEST FILLRECORD"
+    )
     assert first[6].startswith(f"INSERT INTO {published} (")
-    assert f"JSON_PARSE(\"meta\"), \"to\", \"codigo\", '{MONTHS[1]}' FROM {staging}" in first[6]
+    assert f'JSON_PARSE("meta"), "to", "codigo", \'{MONTHS[1]}\' FROM {staging}' in first[6]
     assert first[7] == f"DROP TABLE {staging}"
-    assert first[8] == (f"INSERT INTO {CONTROL} VALUES ('prd_cad_lancamentos', 58, 'exec-1', "
-                        "getdate())")
+    assert first[8] == (
+        f"INSERT INTO {CONTROL} VALUES ('prd_cad_lancamentos', 58, 'exec-1', getdate())"
+    )
     assert len(first) == 9
     joined = "\n".join(mask(text) for text in first)
     assert "segredo" not in joined
@@ -300,28 +370,32 @@ def test_publication_statements_text() -> None:
 
     # A publicação seguinte: sem o CREATE TABLE, a partição removida só com o DELETE, e o UPDATE
     # condicionado à versão lida.
-    following = publication.publication_statements(SCHEMA, "prd", ENTRIES,
-                                                   [MONTHS[0], MONTHS[1]], manifests, 58, 57,
-                                                   "exec-2", credentials)
+    following = publication.publication_statements(
+        SCHEMA, "prd", ENTRIES, [MONTHS[0], MONTHS[1]], manifests, 58, 57, "exec-2", credentials
+    )
     assert following[0].startswith("CREATE TEMP TABLE")
     assert following[1] == f"DELETE FROM {published} WHERE \"data_base_str\" = '{MONTHS[0]}'"
     assert following[2] == f"DELETE FROM {published} WHERE \"data_base_str\" = '{MONTHS[1]}'"
-    assert following[-1] == (f"UPDATE {CONTROL} SET delta_version = 58, execution_id = 'exec-2', "
-                             "published_at = getdate() WHERE table_name = 'prd_cad_lancamentos' "
-                             "AND delta_version = 57")
+    assert following[-1] == (
+        f"UPDATE {CONTROL} SET delta_version = 58, execution_id = 'exec-2', "
+        "published_at = getdate() WHERE table_name = 'prd_cad_lancamentos' "
+        "AND delta_version = 57"
+    )
     assert len(following) == 9
 
     # A tabela sem partição: o DELETE inteiro e o INSERT sem literal.
     whole_table = {None: [delta.CopyManifest("s3://b/m/1.manifest", ("id_conta", "numero"))]}
-    whole = publication.publication_statements(SCHEMA, "dsv", ACCOUNTS, [None], whole_table, 3,
-                                               None, "exec-3", "IAM_ROLE default")
+    whole = publication.publication_statements(
+        SCHEMA, "dsv", ACCOUNTS, [None], whole_table, 3, None, "exec-3", "IAM_ROLE default"
+    )
     assert whole[2] == f'DELETE FROM "{SCHEMA}"."dsv_cad_contas"'
     assert whole[4].startswith('COPY "dsv_cad_contas_staging" ("id_conta", "numero")\n')
     assert whole[5].endswith('SELECT "id_conta", "numero" FROM "dsv_cad_contas_staging"')
 
     # A leitura da linha de controle e a despublicação.
     assert publication.control_read(SCHEMA, "prd", ENTRIES) == (
-        f"SELECT delta_version FROM {CONTROL} WHERE table_name = 'prd_cad_lancamentos'")
+        f"SELECT delta_version FROM {CONTROL} WHERE table_name = 'prd_cad_lancamentos'"
+    )
     assert publication.unpublication_statements(SCHEMA, "prd", ENTRIES, 58) == [
         f"DROP TABLE {published}",
         f"DELETE FROM {CONTROL} WHERE table_name = 'prd_cad_lancamentos' AND delta_version = 58",
@@ -329,8 +403,10 @@ def test_publication_statements_text() -> None:
 
 
 @pytest.mark.local
-def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
-                                         local_location: LocalLocation) -> None:
+def test_publish_checks_the_version_read(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """A versão lida igual à do Delta encerra a transação por ``ROLLBACK`` sem outro comando; a
     lida abaixo publica só as partições de ``version_diff``; a lida acima da pedida, com as
     versões de um snapshot, publica as partições alteradas entre as duas com os arquivos da
@@ -338,18 +414,22 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     tabela publicada que outra primeira publicação criou são ``ExecutionConflict`` com
     ``ROLLBACK``, e nenhum comando se repete."""
     db = local_db(local_location)
-    published_entries(db, MONTHS)   # a versão 2
+    published_entries(db, MONTHS)  # a versão 2
 
     connection = FakeConnection(rows={"prd_cad_lancamentos": 2})
     use_fake(monkeypatch, connection)
     assert publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1") == {ENTRIES.name: 2}
     assert connection.texts()[-3:] == [
-        "BEGIN", publication.control_read(SCHEMA, "prd", ENTRIES), "ROLLBACK"]
+        "BEGIN",
+        publication.control_read(SCHEMA, "prd", ENTRIES),
+        "ROLLBACK",
+    ]
 
     # A versão lida abaixo: só a partição alterada, e o UPDATE por último.
     uri = db.uri(ENTRIES)
-    delta.publish_partition(uri, ENTRIES, MONTHS[1], entry_rows(MONTHS[1], 100, 5), METADATA,
-                            db.storage)   # a versão 3
+    delta.publish_partition(
+        uri, ENTRIES, MONTHS[1], entry_rows(MONTHS[1], 100, 5), METADATA, db.storage
+    )  # a versão 3
     connection = FakeConnection(rows={"prd_cad_lancamentos": 2})
     use_fake(monkeypatch, connection)
     assert publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1") == {ENTRIES.name: 3}
@@ -358,12 +438,14 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     assert texts[-2].startswith(f"UPDATE {CONTROL} SET delta_version = 3")
     assert texts[-2].endswith("AND delta_version = 2")
     deletes = [text for text in texts if text.startswith(f'DELETE FROM "{SCHEMA}"')]
-    assert deletes == [f'DELETE FROM "{SCHEMA}"."prd_cad_lancamentos" '
-                       f"WHERE \"data_base_str\" = '{MONTHS[1]}'"]
+    assert deletes == [
+        f'DELETE FROM "{SCHEMA}"."prd_cad_lancamentos" WHERE "data_base_str" = \'{MONTHS[1]}\''
+    ]
     assert len(connection.texts("COPY")) == 1
     manifest_uri = re.search(r"FROM '([^']+)'", connection.texts("COPY")[0]).group(1)
     assert manifest_uri == db.storage.uri_of(
-        f"prd/publicacao/exec-1/cad_lancamentos/{MONTHS[1]}/1.manifest")
+        f"prd/publicacao/exec-1/cad_lancamentos/{MONTHS[1]}/1.manifest"
+    )
     manifest = json.loads(db.storage.read_text(db.storage.relative(manifest_uri))[0])
     assert manifest_files(manifest) == partition_files(db, uri, 3, MONTHS[1])
 
@@ -371,8 +453,9 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     # a mesma partição com o arquivo da versão 2, e o UPDATE confere a versão 3 lida.
     connection = FakeConnection(rows={"prd_cad_lancamentos": 3})
     use_fake(monkeypatch, connection)
-    reverted = publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-r",
-                                            versions={ENTRIES.name: 2})
+    reverted = publication.publish_redshift(
+        db, CONFIG, [ENTRIES], "exec-r", versions={ENTRIES.name: 2}
+    )
     assert reverted == {ENTRIES.name: 2}
     texts = connection.texts()
     assert texts[-1] == "COMMIT"
@@ -381,20 +464,36 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
     assert [text for text in texts if text.startswith(f'DELETE FROM "{SCHEMA}"')] == deletes
     manifest_uri = re.search(r"FROM '([^']+)'", connection.texts("COPY")[0]).group(1)
     assert manifest_uri == db.storage.uri_of(
-        f"prd/publicacao/exec-r/cad_lancamentos/{MONTHS[1]}/1.manifest")
+        f"prd/publicacao/exec-r/cad_lancamentos/{MONTHS[1]}/1.manifest"
+    )
     manifest = json.loads(db.storage.read_text(db.storage.relative(manifest_uri))[0])
     assert manifest_files(manifest) == partition_files(db, uri, 2, MONTHS[1])
 
     # O UPDATE sem linha, o 1023 e a tabela que outra primeira publicação criou.
     for label, connection in (
-        ("mudou desde a leitura", FakeConnection(rows={"prd_cad_lancamentos": 2},
-                                                 update_rowcount=0)),
-        ("1023", FakeConnection(rows={"prd_cad_lancamentos": 2}, fail=(
-            r"^DELETE FROM \"esquema\"", server_error(
-                "1023 DETAIL: Serializable isolation violation on table - 12345")))),
-        ("outra primeira publicação", FakeConnection(fail=(
-            r"^CREATE TABLE \"esquema\"", server_error(
-                'Relation "prd_cad_lancamentos" already exists', "42P07")))),
+        (
+            "mudou desde a leitura",
+            FakeConnection(rows={"prd_cad_lancamentos": 2}, update_rowcount=0),
+        ),
+        (
+            "1023",
+            FakeConnection(
+                rows={"prd_cad_lancamentos": 2},
+                fail=(
+                    r"^DELETE FROM \"esquema\"",
+                    server_error("1023 DETAIL: Serializable isolation violation on table - 12345"),
+                ),
+            ),
+        ),
+        (
+            "outra primeira publicação",
+            FakeConnection(
+                fail=(
+                    r"^CREATE TABLE \"esquema\"",
+                    server_error('Relation "prd_cad_lancamentos" already exists', "42P07"),
+                )
+            ),
+        ),
     ):
         use_fake(monkeypatch, connection)
         with pytest.raises(ExecutionConflict, match=label):
@@ -412,8 +511,10 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.local
-def test_publish_builds_the_credentials_for_each_copy(monkeypatch: pytest.MonkeyPatch,
-                                                      local_location: LocalLocation) -> None:
+def test_publish_builds_the_credentials_for_each_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Cada ``COPY`` da transação leva a cláusula de credenciais montada logo antes do seu
     ``execute``, e nenhum outro comando a leva: a chave que vence no meio da transação de uma
     tabela não chega ao ``COPY`` seguinte."""
@@ -426,7 +527,9 @@ def test_publish_builds_the_credentials_for_each_copy(monkeypatch: pytest.Monkey
     # registrado, e a posição do comando que a conexão roda em seguida.
     positions = []
 
-    def fresh_clause(config: RedshiftConfig) -> str:
+    def fresh_clause(
+        config: RedshiftConfig,
+    ) -> str:
         positions.append(len(connection.commands))
         return f"IAM_ROLE 'arn:aws:iam::123456789012:role/papel-{len(positions)}'"
 
@@ -461,22 +564,23 @@ def test_reconcile_published_add_column_and_recreate() -> None:
         PublishedColumn("data_base_str", "character varying", 10, None, None),
     ]
     assert publication.reconcile_published(SCHEMA, "prd", ENTRIES, columns) == ([], [])
-    spelled = [dataclasses.replace(columns[3], data_type="timestamp"),
-               dataclasses.replace(columns[6], data_type="varchar"),
-               dataclasses.replace(columns[5], data_type="decimal")]
+    spelled = [
+        dataclasses.replace(columns[3], data_type="timestamp"),
+        dataclasses.replace(columns[6], data_type="varchar"),
+        dataclasses.replace(columns[5], data_type="decimal"),
+    ]
     respelled = spelled + columns[:3] + [columns[4]] + columns[7:]
     assert publication.reconcile_published(SCHEMA, "prd", ENTRIES, respelled) == ([], [])
 
     # As colunas NOT NULL novas são destrutivas; a anulável nova sai por ADD COLUMN.
-    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES,
-                                                              columns[:-2])
+    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES, columns[:-2])
     assert destructive == ["codigo: coluna NOT NULL nova", "data_base_str: coluna NOT NULL nova"]
     assert statements == []
     without_area = [column for column in columns if column.name != "area"]
-    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES,
-                                                              without_area)
-    assert statements == [f'ALTER TABLE "{SCHEMA}"."prd_cad_lancamentos" ADD COLUMN '
-                          '"area" VARCHAR(10)']
+    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES, without_area)
+    assert statements == [
+        f'ALTER TABLE "{SCHEMA}"."prd_cad_lancamentos" ADD COLUMN "area" VARCHAR(10)'
+    ]
     assert destructive == []
 
     # A largura, a escala e o tipo mudados e a coluna removida do modelo.
@@ -491,8 +595,10 @@ def test_reconcile_published_add_column_and_recreate() -> None:
 
 
 @pytest.mark.local
-def test_publication_status_lists_pending_partitions(monkeypatch: pytest.MonkeyPatch,
-                                                     local_location: LocalLocation) -> None:
+def test_publication_status_lists_pending_partitions(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """A versão publicada, a atual e as partições pendentes por tabela: todas na nunca publicada,
     as alteradas na publicada, nenhuma na publicada na versão atual; a tabela fora do Delta fica
     de fora."""
@@ -500,10 +606,12 @@ def test_publication_status_lists_pending_partitions(monkeypatch: pytest.MonkeyP
     published_entries(db, MONTHS)
     accounts_uri = db.uri(ACCOUNTS)
     delta.create_table(accounts_uri, ACCOUNTS, db.storage)
-    delta.publish_partition(accounts_uri, ACCOUNTS, None, account_rows(["A", "B"]), METADATA,
-                            db.storage)
-    delta.publish_partition(db.uri(ENTRIES), ENTRIES, MONTHS[1], entry_rows(MONTHS[1], 100, 5),
-                            METADATA, db.storage)
+    delta.publish_partition(
+        accounts_uri, ACCOUNTS, None, account_rows(["A", "B"]), METADATA, db.storage
+    )
+    delta.publish_partition(
+        db.uri(ENTRIES), ENTRIES, MONTHS[1], entry_rows(MONTHS[1], 100, 5), METADATA, db.storage
+    )
     connection = FakeConnection(rows={"prd_cad_lancamentos": 2, "prd_cad_contas": 1})
     use_fake(monkeypatch, connection)
     statuses = publication.publication_status(db, CONFIG)
@@ -535,14 +643,20 @@ class Target:
     def environment(self) -> str:
         return self.db.environment
 
-    def published(self, table: sa.Table) -> str:
+    def published(
+        self,
+        table: sa.Table,
+    ) -> str:
         return f'"{self.config.schema}"."{self.environment}_{table.name}"'
 
     def control(self) -> str:
         return f'"{self.config.schema}"."{publication.CONTROL_TABLE}"'
 
 
-def rows_of(config: RedshiftConfig, text: str) -> list[tuple]:
+def rows_of(
+    config: RedshiftConfig,
+    text: str,
+) -> list[tuple]:
     """As linhas de uma consulta numa conexão própria."""
     connection = redshift.connect(config)
     try:
@@ -553,7 +667,10 @@ def rows_of(config: RedshiftConfig, text: str) -> list[tuple]:
         connection.close()
 
 
-def relation_exists(config: RedshiftConfig, qualified: str) -> bool:
+def relation_exists(
+    config: RedshiftConfig,
+    qualified: str,
+) -> bool:
     """Se a tabela existe, por ``select 1 ... limit 0``."""
     try:
         rows_of(config, f"SELECT 1 FROM {qualified} LIMIT 0")
@@ -565,8 +682,11 @@ def relation_exists(config: RedshiftConfig, qualified: str) -> bool:
 
 
 @pytest.fixture
-def target(s3_location: S3Location, local_location: LocalLocation,
-           redshift_driver: None) -> Iterator[Target]:
+def target(
+    s3_location: S3Location,
+    local_location: LocalLocation,
+    redshift_driver: None,
+) -> Iterator[Target]:
     """O banco do teste, o ambiente ``poc<id>`` e a tabela de controle, criada quando não existe
     e apagada só nesse caso; as tabelas publicadas, as do modelo e ``cad_colunas``, e as linhas de
     controle do ambiente saem no fim."""
@@ -588,14 +708,20 @@ def target(s3_location: S3Location, local_location: LocalLocation,
         if created:
             cursor.execute(f"DROP TABLE {target.control()}")
         else:
-            cursor.execute(f"DELETE FROM {target.control()} "
-                           f"WHERE table_name LIKE '{environment}_%'")
+            cursor.execute(
+                f"DELETE FROM {target.control()} WHERE table_name LIKE '{environment}_%'"
+            )
     finally:
         connection.close()
 
 
-def export_with_duckdb(target: Target, table: sa.Table, months: list[str], rows: int = 40,
-                       execution_id: str = "exec-duckdb") -> int:
+def export_with_duckdb(
+    target: Target,
+    table: sa.Table,
+    months: list[str],
+    rows: int = 40,
+    execution_id: str = "exec-duckdb",
+) -> int:
     """As partições exportadas pelo motor DuckDB, pelo registro do arquivo do ``COPY``: os
     arquivos que a publicação lê; devolve a versão."""
     db = target.db
@@ -616,31 +742,51 @@ def export_with_duckdb(target: Target, table: sa.Table, months: list[str], rows:
     return version
 
 
-def published_rows(target: Target, table: sa.Table) -> dict[str, list[tuple]]:
+def published_rows(
+    target: Target,
+    table: sa.Table,
+) -> dict[str, list[tuple]]:
     """As linhas da tabela publicada por partição: o id, o preço, o carimbo e o JSON."""
-    rows = rows_of(target.config, (
-        'SELECT "data_base_str", "id_lancamento", "preco", "carimbo", JSON_SERIALIZE("meta") '
-        f'FROM {target.published(table)} ORDER BY "id_lancamento"'))
+    rows = rows_of(
+        target.config,
+        (
+            'SELECT "data_base_str", "id_lancamento", "preco", "carimbo", JSON_SERIALIZE("meta") '
+            f'FROM {target.published(table)} ORDER BY "id_lancamento"'
+        ),
+    )
     by_partition: dict[str, list[tuple]] = {}
     for value, *rest in rows:
         by_partition.setdefault(value, []).append(tuple(rest))
     return by_partition
 
 
-def control_rows(target: Target) -> dict[str, tuple[int, str]]:
+def control_rows(
+    target: Target,
+) -> dict[str, tuple[int, str]]:
     """A versão e a execução de cada linha de controle do ambiente."""
-    rows = rows_of(target.config, (
-        f"SELECT table_name, delta_version, execution_id FROM {target.control()} "
-        f"WHERE table_name LIKE '{target.environment}_%'"))
+    rows = rows_of(
+        target.config,
+        (
+            f"SELECT table_name, delta_version, execution_id FROM {target.control()} "
+            f"WHERE table_name LIKE '{target.environment}_%'"
+        ),
+    )
     return {name: (int(version), execution_id) for name, version, execution_id in rows}
 
 
-def use_cli_environment(target: Target, monkeypatch: pytest.MonkeyPatch) -> None:
+def use_cli_environment(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """As variáveis ``SERIALIZE_DB_REDSHIFT_*`` da configuração do teste, que a linha de comando
     lê, e a pasta temporária do processo na pasta do teste."""
-    for name, value in (("SCHEMA", target.config.schema), ("HOST", target.config.host),
-                        ("USER", target.config.user), ("PASSWORD", target.config.password),
-                        ("WORKGROUP", target.config.workgroup)):
+    for name, value in (
+        ("SCHEMA", target.config.schema),
+        ("HOST", target.config.host),
+        ("USER", target.config.user),
+        ("PASSWORD", target.config.password),
+        ("WORKGROUP", target.config.workgroup),
+    ):
         if value is None:
             monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
         else:
@@ -648,7 +794,11 @@ def use_cli_environment(target: Target, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(tempfile, "tempdir", str(target.folder))
 
 
-def delta_ids(db: Database, value: str, channel: str | None = None) -> list[int]:
+def delta_ids(
+    db: Database,
+    value: str,
+    channel: str | None = None,
+) -> list[int]:
     """Os ids da partição ``value`` de ``Projetado`` pelo leitor Delta do canal; sem canal, o
     leitor que abre sem argumento, o do canal ``default``."""
     statement = (
@@ -663,8 +813,10 @@ def delta_ids(db: Database, value: str, channel: str | None = None) -> list[int]
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_first_publication_loads_every_partition(target: Target,
-                                                 caplog: pytest.LogCaptureFixture) -> None:
+def test_first_publication_loads_every_partition(
+    target: Target,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Sem linha de controle, a tabela publicada criada, todas as partições e o ``INSERT`` da
     linha de controle, numa transação, sobre os arquivos que o motor DuckDB exportou pelo
     registro, com ``Numeric(18, 2)``, ``DateTime`` e a coluna JSON, e a tabela no log com as
@@ -673,9 +825,13 @@ def test_first_publication_loads_every_partition(target: Target,
     version = export_with_duckdb(target, PROJECTED, MONTHS)
     with caplog.at_level(logging.INFO, logger="serialize_db.publication"):
         assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-1") == {
-            PROJECTED.name: version}
-    assert re.search(rf"{PROJECTED.name} publicada na versão {version}: partições \[.*\], "
-                     r"em \d+\.\d s; RSS máximo do processo \d+ MB", caplog.text)
+            PROJECTED.name: version
+        }
+    assert re.search(
+        rf"{PROJECTED.name} publicada na versão {version}: partições \[.*\], "
+        r"em \d+\.\d s; RSS máximo do processo \d+ MB",
+        caplog.text,
+    )
     rows = published_rows(target, PROJECTED)
     assert {value: len(items) for value, items in rows.items()} == {MONTHS[0]: 40, MONTHS[1]: 40}
     expected = entry_rows(MONTHS[1], 41, 40, PROJECTED)
@@ -686,40 +842,48 @@ def test_first_publication_loads_every_partition(target: Target,
     assert json.loads(first[3]) == {"k": 41}
     assert control_rows(target) == {f"{target.environment}_{PROJECTED.name}": (version, "exec-1")}
     total = sum(len(partition_rows) for partition_rows in rows.values())
-    record("redshift.publication.first",
-           f"{total} linhas de {len(rows)} partições exportadas pelo motor DuckDB")
+    record(
+        "redshift.publication.first",
+        f"{total} linhas de {len(rows)} partições exportadas pelo motor DuckDB",
+    )
 
     # A repetição na mesma versão não publica nada.
     assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-2") == {
-        PROJECTED.name: version}
+        PROJECTED.name: version
+    }
     assert control_rows(target)[f"{target.environment}_{PROJECTED.name}"] == (version, "exec-1")
 
 
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_publish_only_changed_partitions(target: Target) -> None:
+def test_publish_only_changed_partitions(
+    target: Target,
+) -> None:
     """Duas publicações: a segunda, depois de uma partição alterada, troca só essa partição, e a
     linha de controle passa à versão nova; a partição removida no Delta sai da tabela
     publicada; o estado lista as partições pendentes antes de cada publicação."""
     db = target.db
     version = export_with_duckdb(target, PROJECTED, MONTHS)
     status = publication.publication_status(db, target.config)
-    assert status == [publication.PublicationStatus(
-        f"{target.environment}_{PROJECTED.name}", None, version, tuple(MONTHS))]
+    assert status == [
+        publication.PublicationStatus(
+            f"{target.environment}_{PROJECTED.name}", None, version, tuple(MONTHS)
+        )
+    ]
     publication.publish_redshift(db, target.config, [PROJECTED], "exec-1")
 
     # Uma partição alterada: só ela é trocada.
     uri = db.uri(PROJECTED)
     replacement = entry_rows(MONTHS[1], 1000, 7, PROJECTED)
-    changed = delta.publish_partition(uri, PROJECTED, MONTHS[1], replacement, METADATA,
-                                      db.storage)
+    changed = delta.publish_partition(uri, PROJECTED, MONTHS[1], replacement, METADATA, db.storage)
     status = publication.publication_status(db, target.config)
     assert status[0].published_version == version
     assert status[0].current_version == changed
     assert status[0].pending_partitions == (MONTHS[1],)
     assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-2") == {
-        PROJECTED.name: changed}
+        PROJECTED.name: changed
+    }
     rows = published_rows(target, PROJECTED)
     assert [row[0] for row in rows[MONTHS[0]]] == list(range(1, 41))
     assert [row[0] for row in rows[MONTHS[1]]] == list(range(1000, 1007))
@@ -729,7 +893,8 @@ def test_publish_only_changed_partitions(target: Target) -> None:
     empty = entry_rows(MONTHS[0], 1, 0, PROJECTED)
     removed = delta.publish_partition(uri, PROJECTED, MONTHS[0], empty, METADATA, db.storage)
     assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-3") == {
-        PROJECTED.name: removed}
+        PROJECTED.name: removed
+    }
     rows = published_rows(target, PROJECTED)
     assert list(rows) == [MONTHS[1]]
     assert publication.publication_status(db, target.config)[0].pending_partitions == ()
@@ -739,8 +904,12 @@ class PausingCursor:
     """O cursor da publicação B, nas partes que a publicação usa: depois da leitura da linha de
     controle, avisa ``read_done`` e espera ``resume``."""
 
-    def __init__(self, cursor: object, read_done: threading.Event,
-                 resume: threading.Event) -> None:
+    def __init__(
+        self,
+        cursor: object,
+        read_done: threading.Event,
+        resume: threading.Event,
+    ) -> None:
         self.cursor = cursor
         self.read_done = read_done
         self.resume = resume
@@ -749,7 +918,11 @@ class PausingCursor:
     def rowcount(self) -> int:
         return self.cursor.rowcount
 
-    def execute(self, text: str, params: object = None) -> PausingCursor:
+    def execute(
+        self,
+        text: str,
+        params: object = None,
+    ) -> PausingCursor:
         self.cursor.execute(text, params)
         if text.startswith("SELECT delta_version FROM"):
             self.read_done.set()
@@ -764,8 +937,12 @@ class PausingConnection:
     """A conexão da publicação B, que para depois da leitura da linha de controle até a
     publicação A confirmar: as duas leem a mesma versão, e a segunda a gravar conflita."""
 
-    def __init__(self, connection: object, read_done: threading.Event,
-                 resume: threading.Event) -> None:
+    def __init__(
+        self,
+        connection: object,
+        read_done: threading.Event,
+        resume: threading.Event,
+    ) -> None:
         self.connection = connection
         self.read_done = read_done
         self.resume = resume
@@ -775,7 +952,10 @@ class PausingConnection:
         return self.connection.autocommit
 
     @autocommit.setter
-    def autocommit(self, value: bool) -> None:
+    def autocommit(
+        self,
+        value: bool,
+    ) -> None:
         self.connection.autocommit = value
 
     def cursor(self) -> PausingCursor:
@@ -788,8 +968,10 @@ class PausingConnection:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_concurrent_publication_raises_execution_conflict(target: Target,
-                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+def test_concurrent_publication_raises_execution_conflict(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Duas publicações da mesma tabela a partir da mesma versão lida: a segunda levanta
     ``ExecutionConflict``, pelo ``1023`` ou pelo ``UPDATE`` sem linha; a partição e a linha de
     controle ficam as da primeira."""
@@ -798,14 +980,15 @@ def test_concurrent_publication_raises_execution_conflict(target: Target,
     publication.publish_redshift(db, target.config, [PROJECTED], "exec-1")
     uri = db.uri(PROJECTED)
     replacement = entry_rows(MONTHS[1], 500, 3, PROJECTED)
-    changed = delta.publish_partition(uri, PROJECTED, MONTHS[1], replacement, METADATA,
-                                      db.storage)
+    changed = delta.publish_partition(uri, PROJECTED, MONTHS[1], replacement, METADATA, db.storage)
 
     read_done = threading.Event()
     resume = threading.Event()
     plain_connect = redshift.driver_connect
 
-    def connect_b(login: dict) -> object:
+    def connect_b(
+        login: dict,
+    ) -> object:
         # Toda conexão de B pausa na leitura da linha de controle; a da conferência da tabela de
         # controle não a lê.
         return PausingConnection(plain_connect(login), read_done, resume)
@@ -814,8 +997,9 @@ def test_concurrent_publication_raises_execution_conflict(target: Target,
 
     def publish_b() -> None:
         try:
-            outcome["result"] = publication.publish_redshift(db, target.config, [PROJECTED],
-                                                             "exec-b")
+            outcome["result"] = publication.publish_redshift(
+                db, target.config, [PROJECTED], "exec-b"
+            )
         except BaseException as error:  # noqa: BLE001 - o desfecho de B é a leitura
             outcome["error"] = error
 
@@ -825,7 +1009,8 @@ def test_concurrent_publication_raises_execution_conflict(target: Target,
     assert read_done.wait(timeout=120)
     monkeypatch.setattr(redshift, "driver_connect", plain_connect)
     assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-a") == {
-        PROJECTED.name: changed}
+        PROJECTED.name: changed
+    }
     resume.set()
     thread.join(timeout=180)
     assert not thread.is_alive()
@@ -839,7 +1024,9 @@ def test_concurrent_publication_raises_execution_conflict(target: Target,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_unpublish_drops_the_table_and_the_control_row(target: Target) -> None:
+def test_unpublish_drops_the_table_and_the_control_row(
+    target: Target,
+) -> None:
     """Depois de uma publicação, ``unpublish_redshift`` apaga a tabela publicada e a linha de
     controle numa transação; a segunda chamada não acha linha e devolve ``None``; a publicação
     seguinte é uma primeira publicação."""
@@ -847,13 +1034,14 @@ def test_unpublish_drops_the_table_and_the_control_row(target: Target) -> None:
     version = export_with_duckdb(target, PROJECTED, MONTHS)
     publication.publish_redshift(db, target.config, [PROJECTED], "exec-1")
     assert publication.unpublish_redshift(db, target.config, [PROJECTED]) == {
-        PROJECTED.name: version}
+        PROJECTED.name: version
+    }
     assert not relation_exists(target.config, target.published(PROJECTED))
     assert control_rows(target) == {}
-    assert publication.unpublish_redshift(db, target.config, [PROJECTED]) == {
-        PROJECTED.name: None}
+    assert publication.unpublish_redshift(db, target.config, [PROJECTED]) == {PROJECTED.name: None}
     assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-2") == {
-        PROJECTED.name: version}
+        PROJECTED.name: version
+    }
     assert control_rows(target) == {f"{target.environment}_{PROJECTED.name}": (version, "exec-2")}
     assert len(published_rows(target, PROJECTED)[MONTHS[0]]) == 40
 
@@ -861,27 +1049,40 @@ def test_unpublish_drops_the_table_and_the_control_row(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_failed_copy_leaves_control_row_untouched(target: Target,
-                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_copy_leaves_control_row_untouched(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto."""
     db = target.db
     version = export_with_duckdb(target, PROJECTED, MONTHS)
     publication.publish_redshift(db, target.config, [PROJECTED], "exec-1")
     uri = db.uri(PROJECTED)
     for month in MONTHS:
-        delta.publish_partition(uri, PROJECTED, month, entry_rows(month, 700, 2, PROJECTED),
-                                METADATA, db.storage)
+        delta.publish_partition(
+            uri, PROJECTED, month, entry_rows(month, 700, 2, PROJECTED), METADATA, db.storage
+        )
     plain = delta.copy_manifest
     broken = []
 
-    def broken_manifest(uri: str, version: int, partitions: list | None, destination: str,
-                        storage: Storage, **options: object) -> list[delta.CopyManifest]:
+    def broken_manifest(
+        uri: str,
+        version: int,
+        partitions: list | None,
+        destination: str,
+        storage: Storage,
+        **options: object,
+    ) -> list[delta.CopyManifest]:
         manifests = plain(uri, version, partitions, destination, storage, **options)
         if partitions == [MONTHS[1]]:
-            missing = {"url": storage.uri_of("nao/existe.parquet"), "mandatory": True,
-                       "meta": {"content_length": 1}}
-            storage.write_text(storage.relative(manifests[0].uri),
-                               json.dumps({"entries": [missing]}))
+            missing = {
+                "url": storage.uri_of("nao/existe.parquet"),
+                "mandatory": True,
+                "meta": {"content_length": 1},
+            }
+            storage.write_text(
+                storage.relative(manifests[0].uri), json.dumps({"entries": [missing]})
+            )
             broken.append(manifests[0].uri)
         return manifests
 
@@ -901,23 +1102,30 @@ def test_failed_copy_leaves_control_row_untouched(target: Target,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_reconcile_published_on_the_target(target: Target) -> None:
+def test_reconcile_published_on_the_target(
+    target: Target,
+) -> None:
     """A tabela publicada igual ao modelo não tem diff na leitura de ``svv_all_columns``; uma
     coluna anulável nova entra por ``ADD COLUMN`` e a publicação seguinte a preenche; a largura
     de ``VARCHAR(n)`` que muda despublica e recria a tabela com todas as partições."""
     db = target.db
     export_with_duckdb(target, PROJECTED, MONTHS)
     publication.publish_redshift(db, target.config, [PROJECTED], "exec-1")
-    columns = rows_of(target.config, (
-        "SELECT column_name, data_type, character_maximum_length, numeric_precision, "
-        f"numeric_scale FROM svv_all_columns WHERE schema_name = '{target.config.schema}' "
-        f"AND table_name = '{target.environment}_{PROJECTED.name}' ORDER BY ordinal_position"))
+    columns = rows_of(
+        target.config,
+        (
+            "SELECT column_name, data_type, character_maximum_length, numeric_precision, "
+            f"numeric_scale FROM svv_all_columns WHERE schema_name = '{target.config.schema}' "
+            f"AND table_name = '{target.environment}_{PROJECTED.name}' ORDER BY ordinal_position"
+        ),
+    )
     record("redshift.publication.svv_all_columns", [list(column) for column in columns])
     listed = []
     for name, data_type, length, precision, scale in columns:
         listed.append(PublishedColumn(str(name), str(data_type), length, precision, scale))
-    assert publication.reconcile_published(target.config.schema, target.environment, PROJECTED,
-                                           listed) == ([], [])
+    assert publication.reconcile_published(
+        target.config.schema, target.environment, PROJECTED, listed
+    ) == ([], [])
 
     # A coluna anulável nova: ADD COLUMN, e a partição alterada a preenche.
     metadata = sa.MetaData()
@@ -926,16 +1134,23 @@ def test_reconcile_published_on_the_target(target: Target) -> None:
     db_wider = Database(db.root, target.environment, metadata)
     delta.reconcile(db.uri(wider), wider, db.storage)
     with_channel = entry_rows(MONTHS[1], 900, 2, PROJECTED).append_column(
-        "canal", pa.array(["web", "app"]))
-    changed = delta.publish_partition(db.uri(wider), wider, MONTHS[1], with_channel, METADATA,
-                                      db.storage)
+        "canal", pa.array(["web", "app"])
+    )
+    changed = delta.publish_partition(
+        db.uri(wider), wider, MONTHS[1], with_channel, METADATA, db.storage
+    )
     assert publication.publish_redshift(db_wider, target.config, [wider], "exec-2") == {
-        wider.name: changed}
-    rows = rows_of(target.config, (
-        f'SELECT "id_lancamento", "canal" FROM {target.published(wider)} '
-        f"WHERE \"data_base_str\" = '{MONTHS[1]}' ORDER BY 1"))
+        wider.name: changed
+    }
+    rows = rows_of(
+        target.config,
+        (
+            f'SELECT "id_lancamento", "canal" FROM {target.published(wider)} '
+            f"WHERE \"data_base_str\" = '{MONTHS[1]}' ORDER BY 1"
+        ),
+    )
     assert rows == [(900, "web"), (901, "app")]
-    assert rows_of(target.config, f'SELECT count(*) FROM {target.published(wider)}')[0][0] == 42
+    assert rows_of(target.config, f"SELECT count(*) FROM {target.published(wider)}")[0][0] == 42
 
     # A largura de VARCHAR(n) que muda: despublicada e recriada com todas as partições.
     narrower = sa.MetaData()
@@ -944,15 +1159,18 @@ def test_reconcile_published_on_the_target(target: Target) -> None:
     db_narrow = Database(db.root, target.environment, narrower)
     delta.reconcile(db.uri(narrow), narrow, db.storage)
     assert publication.publish_redshift(db_narrow, target.config, [narrow], "exec-3") == {
-        narrow.name: changed}
+        narrow.name: changed
+    }
     assert control_rows(target) == {f"{target.environment}_{PROJECTED.name}": (changed, "exec-3")}
-    assert rows_of(target.config, f'SELECT count(*) FROM {target.published(narrow)}')[0][0] == 42
+    assert rows_of(target.config, f"SELECT count(*) FROM {target.published(narrow)}")[0][0] == 42
 
 
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_publication_loads_files_before_a_middle_column(target: Target) -> None:
+def test_publication_loads_files_before_a_middle_column(
+    target: Target,
+) -> None:
     """Uma coluna anulável nova no meio do modelo depois de uma partição gravada: a primeira
     publicação põe cada valor do arquivo anterior a ela na coluna de mesmo nome, com ela nula; a
     seguinte troca a partição antiga, que ganhou um arquivo com a coluna nova, com os dois grupos
@@ -962,31 +1180,40 @@ def test_publication_loads_files_before_a_middle_column(target: Target) -> None:
     after = text_columns_table("novo", "a", "b")
     uri = db.uri(before)
     delta.create_table(uri, before, db.storage)
-    delta.publish_partition(uri, before, "p1", text_columns_rows(before, "p1", [1, 2]), METADATA,
-                            db.storage)
+    delta.publish_partition(
+        uri, before, "p1", text_columns_rows(before, "p1", [1, 2]), METADATA, db.storage
+    )
     delta.reconcile(uri, after, db.storage)
-    version = delta.publish_partition(uri, after, "p2", text_columns_rows(after, "p2", [3]),
-                                      METADATA, db.storage)
+    version = delta.publish_partition(
+        uri, after, "p2", text_columns_rows(after, "p2", [3]), METADATA, db.storage
+    )
     assert publication.publish_redshift(db, target.config, [after], "exec-1") == {
-        after.name: version}
-    select = (f'SELECT "id", "novo", "a", "b", "parte" FROM {target.published(after)} '
-              'ORDER BY "id"')
-    expected = [(1, None, "a1", "b1", "p1"), (2, None, "a2", "b2", "p1"),
-                (3, "novo3", "a3", "b3", "p2")]
+        after.name: version
+    }
+    select = f'SELECT "id", "novo", "a", "b", "parte" FROM {target.published(after)} ORDER BY "id"'
+    expected = [
+        (1, None, "a1", "b1", "p1"),
+        (2, None, "a2", "b2", "p1"),
+        (3, "novo3", "a3", "b3", "p2"),
+    ]
     assert rows_of(target.config, select) == expected
 
     # A partição p1 com um arquivo de cada lista de colunas: um COPY por lista.
-    write_deltalake(delta.open_table(uri, db.storage), text_columns_rows(after, "p1", [4]),
-                    mode="append")
+    write_deltalake(
+        delta.open_table(uri, db.storage), text_columns_rows(after, "p1", [4]), mode="append"
+    )
     assert publication.publish_redshift(db, target.config, [after], "exec-2") == {
-        after.name: version + 1}
+        after.name: version + 1
+    }
     assert rows_of(target.config, select) == [*expected, (4, "novo4", "a4", "b4", "p1")]
 
 
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_publication_loads_reordered_columns(target: Target) -> None:
+def test_publication_loads_reordered_columns(
+    target: Target,
+) -> None:
     """Duas colunas do modelo trocadas de lugar depois de uma partição gravada, sem diferença
     para o esquema Delta: a publicação põe cada valor na coluna de mesmo nome."""
     db = target.db
@@ -994,11 +1221,12 @@ def test_publication_loads_reordered_columns(target: Target) -> None:
     reordered = text_columns_table("b", "a")
     uri = db.uri(written)
     delta.create_table(uri, written, db.storage)
-    version = delta.publish_partition(uri, written, "p1",
-                                      text_columns_rows(written, "p1", [1, 2]), METADATA,
-                                      db.storage)
+    version = delta.publish_partition(
+        uri, written, "p1", text_columns_rows(written, "p1", [1, 2]), METADATA, db.storage
+    )
     assert publication.publish_redshift(db, target.config, [reordered], "exec-1") == {
-        reordered.name: version}
+        reordered.name: version
+    }
     select = f'SELECT "id", "a", "b" FROM {target.published(reordered)} ORDER BY "id"'
     assert rows_of(target.config, select) == [(1, "a1", "b1"), (2, "a2", "b2")]
 
@@ -1006,7 +1234,9 @@ def test_publication_loads_reordered_columns(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_published_join_redistribution_is_read(target: Target) -> None:
+def test_published_join_redistribution_is_read(
+    target: Target,
+) -> None:
     """O ``EXPLAIN`` de um join típico entre as tabelas publicadas, ``cad_lancamentos`` com
     ``cad_contas`` por ``id_conta``, depois da primeira publicação: os rótulos ``DS_*`` de cada
     passo, como leitura, nunca como reprovação."""
@@ -1014,12 +1244,17 @@ def test_published_join_redistribution_is_read(target: Target) -> None:
     export_with_duckdb(target, ENTRIES, MONTHS)
     accounts_uri = db.uri(ACCOUNTS)
     delta.create_table(accounts_uri, ACCOUNTS, db.storage)
-    delta.publish_partition(accounts_uri, ACCOUNTS, None, account_rows(["A", "B", "C"]), METADATA,
-                            db.storage)
+    delta.publish_partition(
+        accounts_uri, ACCOUNTS, None, account_rows(["A", "B", "C"]), METADATA, db.storage
+    )
     publication.publish_redshift(db, target.config, [ENTRIES, ACCOUNTS], "exec-1", max_workers=2)
-    plan = rows_of(target.config, (
-        f'EXPLAIN SELECT count(*) FROM {target.published(ENTRIES)} l '
-        f'JOIN {target.published(ACCOUNTS)} c ON l."id_conta" = c."id_conta"'))
+    plan = rows_of(
+        target.config,
+        (
+            f"EXPLAIN SELECT count(*) FROM {target.published(ENTRIES)} l "
+            f'JOIN {target.published(ACCOUNTS)} c ON l."id_conta" = c."id_conta"'
+        ),
+    )
     found = set()
     for row in plan:
         found.update(re.findall(r"DS_\w+", str(row)))
@@ -1030,9 +1265,11 @@ def test_published_join_redistribution_is_read(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
-                                                           monkeypatch: pytest.MonkeyPatch,
-                                                           capsys: pytest.CaptureFixture) -> None:
+def test_cli_publishes_by_channel_and_snapshot_and_reverts(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``serialize-db publish_redshift`` publica as versões do snapshot do canal ``default``, as
     de um snapshot pelo nome, de volta a um anterior, e a versão atual pelo canal ``current``;
     ``--status`` e ``--unpublish`` seguem pela linha de comando; saem com 2 o snapshot arquivado,
@@ -1040,12 +1277,21 @@ def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
     ``--status`` com um deles, o canal sem snapshot e a tabela fora do modelo."""
     db = target.db
     environment = target.environment
-    export_with_duckdb(target, PROJECTED, MONTHS)   # a versão 2
+    export_with_duckdb(target, PROJECTED, MONTHS)  # a versão 2
     delta.snapshot(db.storage, environment, "A", {PROJECTED.name: 2})
     delta.set_channel(db.storage, environment, delta.DEFAULT_CHANNEL, "A")
     use_cli_environment(target, monkeypatch)
-    common = ["publish_redshift", "--root", db.root, "--environment", environment,
-              "--metadata", "lancamentos_model:Base.metadata", "--tables", PROJECTED.name]
+    common = [
+        "publish_redshift",
+        "--root",
+        db.root,
+        "--environment",
+        environment,
+        "--metadata",
+        "lancamentos_model:Base.metadata",
+        "--tables",
+        PROJECTED.name,
+    ]
     published = f"{environment}_{PROJECTED.name}"
 
     # O canal default: o snapshot A, a versão 2.
@@ -1057,16 +1303,25 @@ def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
 
     # O snapshot B, duas versões à frente: a partição 1 trocada e um mês novo.
     uri = db.uri(PROJECTED)
-    delta.publish_partition(uri, PROJECTED, MONTHS[1], entry_rows(MONTHS[1], 1000, 7, PROJECTED),
-                            METADATA, db.storage)   # a versão 3
-    delta.publish_partition(uri, PROJECTED, "2026-09-30",
-                            entry_rows("2026-09-30", 2000, 5, PROJECTED), METADATA,
-                            db.storage)   # a versão 4
+    delta.publish_partition(
+        uri, PROJECTED, MONTHS[1], entry_rows(MONTHS[1], 1000, 7, PROJECTED), METADATA, db.storage
+    )  # a versão 3
+    delta.publish_partition(
+        uri,
+        PROJECTED,
+        "2026-09-30",
+        entry_rows("2026-09-30", 2000, 5, PROJECTED),
+        METADATA,
+        db.storage,
+    )  # a versão 4
     delta.snapshot(db.storage, environment, "B", {PROJECTED.name: 4})
     assert cli.main([*common, "--snapshot", "B", "--execution-id", "exec-b"]) == 0
     rows = published_rows(target, PROJECTED)
-    assert {month: len(rows[month]) for month in rows} == {MONTHS[0]: 40, MONTHS[1]: 7,
-                                                           "2026-09-30": 5}
+    assert {month: len(rows[month]) for month in rows} == {
+        MONTHS[0]: 40,
+        MONTHS[1]: 7,
+        "2026-09-30": 5,
+    }
     assert control_rows(target) == {published: (4, "exec-b")}
 
     # A volta ao snapshot A: a partição 1 volta às 40 linhas, e o mês novo sai.
@@ -1110,9 +1365,11 @@ def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_redo_a_snapshot_and_revert_by_the_channel(target: Target,
-                                                   monkeypatch: pytest.MonkeyPatch,
-                                                   capsys: pytest.CaptureFixture) -> None:
+def test_redo_a_snapshot_and_revert_by_the_channel(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """O runbook "Refazer um snapshot" de ``docs/operacao.md``, sobre o snapshot ``2026T3``
     publicado pelo canal ``default``: uma ``Execution`` com ``execution_id`` novo refaz uma
     partição, marcada com o snapshot ``2026T3.r2``; ``serialize-db channel`` aponta o canal para
@@ -1123,15 +1380,21 @@ def test_redo_a_snapshot_and_revert_by_the_channel(target: Target,
     partição refeita."""
     db = target.db
     use_cli_environment(target, monkeypatch)
-    database = ["--root", db.root, "--environment", target.environment,
-                "--metadata", "lancamentos_model:Base.metadata"]
+    database = [
+        "--root",
+        db.root,
+        "--environment",
+        target.environment,
+        "--metadata",
+        "lancamentos_model:Base.metadata",
+    ]
     # O ambiente do teste só tem Projetado, e --tables deixa de fora as tabelas do modelo sem
     # versão no snapshot.
     publish = ["publish_redshift", *database, "--tables", PROJECTED.name, "--channel", "default"]
     published = f"{target.environment}_{PROJECTED.name}"
 
     # O estado inicial: o snapshot 2026T3, na versão 2, publicado pelo canal default.
-    export_with_duckdb(target, PROJECTED, MONTHS)   # a versão 2
+    export_with_duckdb(target, PROJECTED, MONTHS)  # a versão 2
     assert cli.main(["snapshot", *database, "--name", "2026T3"]) == 0
     assert cli.main(["channel", *database, "--name", "default", "--snapshot", "2026T3"]) == 0
     assert cli.main([*publish, "--execution-id", "exec-p1"]) == 0
@@ -1143,7 +1406,7 @@ def test_redo_a_snapshot_and_revert_by_the_channel(target: Target,
         run.sandbox.create_table(PROJECTED)
         run.sandbox.append(PROJECTED, entry_rows(MONTHS[1], 1000, 7, PROJECTED))
         run.audit(PROJECTED, [MONTHS[1]])
-        run.publish_delta(PROJECTED, partitions=[MONTHS[1]])   # a versão 3
+        run.publish_delta(PROJECTED, partitions=[MONTHS[1]])  # a versão 3
     control, _ = delta.read_snapshots(db.storage, target.environment)
     assert control["snapshots"]["2026T3.r2"] == {PROJECTED.name: 3}
 

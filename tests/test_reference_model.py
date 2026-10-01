@@ -31,13 +31,16 @@ ARROW_TYPES = (
 )
 
 
-def arrow_type_in_files(column: sa.Column) -> pa.DataType:
+def arrow_type_in_files(
+    column: sa.Column,
+) -> pa.DataType:
     """O tipo Arrow da coluna do modelo nos arquivos, pela tabela ``ARROW_TYPES``."""
     for sa_type, arrow_type in ARROW_TYPES:
         if isinstance(column.type, sa_type):
             return arrow_type
     raise AssertionError(
-        f"{column.table.name}.{column.name}: o tipo {column.type!r} não está em ARROW_TYPES")
+        f"{column.table.name}.{column.name}: o tipo {column.type!r} não está em ARROW_TYPES"
+    )
 
 
 def column_fields() -> list[tuple[str, sa.Column, pa.Field]]:
@@ -51,7 +54,9 @@ def column_fields() -> list[tuple[str, sa.Column, pa.Field]]:
     return fields
 
 
-def declared_keys(table: sa.Table) -> list[list[str]]:
+def declared_keys(
+    table: sa.Table,
+) -> list[list[str]]:
     """A chave primária, as ``UniqueConstraint`` e os índices únicos da tabela, como listas de
     colunas."""
     keys = [[column.name for column in table.primary_key.columns]]

@@ -124,7 +124,10 @@ class Database:
         """O armazenamento da raiz, criado no primeiro uso, sem tocar a rede."""
         return Storage.for_uri(self.root)
 
-    def uri(self, table: sa.Table) -> str:
+    def uri(
+        self,
+        table: sa.Table,
+    ) -> str:
         """A pasta da tabela.
 
         Exemplo:
@@ -151,7 +154,10 @@ class Database:
         """
         return self.storage.join(self.environment, delta.CONTROL_FILE)
 
-    def staging_prefix(self, execution_id: str) -> str:
+    def staging_prefix(
+        self,
+        execution_id: str,
+    ) -> str:
         """Os arquivos intermediários de uma execução.
 
         Exemplo:
@@ -165,7 +171,10 @@ class Database:
         """
         return self.storage.join(self.environment, "staging", execution_id)
 
-    def publication_prefix(self, execution_id: str) -> str:
+    def publication_prefix(
+        self,
+        execution_id: str,
+    ) -> str:
         """Os manifestos da publicação no Redshift de uma execução.
 
         Exemplo:
@@ -179,7 +188,10 @@ class Database:
         """
         return self.storage.join(self.environment, "publicacao", execution_id)
 
-    def archive_prefix(self, name: str) -> str:
+    def archive_prefix(
+        self,
+        name: str,
+    ) -> str:
         """A pasta de arquivo de um snapshot do banco.
 
         Exemplo:
@@ -207,8 +219,12 @@ class Database:
         """
         return list(self.metadata.sorted_tables)
 
-    def open_delta(self, snapshot: str | None = None, channel: str | None = None,
-                   config: DuckDBConfig | None = None) -> DeltaReader:
+    def open_delta(
+        self,
+        snapshot: str | None = None,
+        channel: str | None = None,
+        config: DuckDBConfig | None = None,
+    ) -> DeltaReader:
         """O leitor da base Delta (``serialize_db.reader.DeltaReader``): um DuckDB no processo
         com uma view por tabela do modelo, presa à versão do snapshot lido.
 
@@ -237,8 +253,11 @@ class Database:
         """
         return DeltaReader(self, snapshot, channel, config)
 
-    def open_redshift(self, config: RedshiftConfig | None = None,
-                      unload_to: str | None = None) -> RedshiftReader:
+    def open_redshift(
+        self,
+        config: RedshiftConfig | None = None,
+        unload_to: str | None = None,
+    ) -> RedshiftReader:
         """O leitor da base publicada no Redshift (``serialize_db.reader.RedshiftReader``), pelas
         tabelas ``<ambiente>_<tabela>`` do esquema.
 
@@ -274,7 +293,10 @@ class Database:
 # ---------------------------------------------------------------- as regras de entrada
 
 
-def _checked_partition(value: str, db: Database) -> str:
+def _checked_partition(
+    value: str,
+    db: Database,
+) -> str:
     """A partição da execução: a regra da partição e o ``String(n)`` de cada coluna de partição do
     modelo, medido em bytes."""
     check_partition_value(value)
@@ -285,18 +307,23 @@ def _checked_partition(value: str, db: Database) -> str:
         length = table.c[column].type.length
         if len(value.encode("utf-8")) > length:
             raise ContractError(
-                f"partição {value!r} acima de String({length}) em {table.name}.{column}")
+                f"partição {value!r} acima de String({length}) em {table.name}.{column}"
+            )
     return value
 
 
-def _partition_text(partition: str | None) -> str:
+def _partition_text(
+    partition: str | None,
+) -> str:
     """A partição da execução no log: ``partição <valor>``, ou ``sem partição``."""
     if partition is None:
         return "sem partição"
     return f"partição {partition}"
 
 
-def _where_text(partitions: list[str] | None) -> str:
+def _where_text(
+    partitions: list[str] | None,
+) -> str:
     """As partições de ``audit`` e de ``publish_delta`` no log e nas mensagens: ``em [<valores>]``,
     ou ``na tabela inteira`` sem a lista."""
     if partitions is None:
@@ -310,7 +337,9 @@ def _new_execution_id() -> str:
     return f"exec-{today}-{uuid.uuid4().hex[:8]}"
 
 
-def _checked_partitions(partitions: Sequence[str] | None) -> list[str] | None:
+def _checked_partitions(
+    partitions: Sequence[str] | None,
+) -> list[str] | None:
     """Os valores de ``partitions`` pela regra da partição."""
     if partitions is None:
         return None
@@ -320,14 +349,18 @@ def _checked_partitions(partitions: Sequence[str] | None) -> list[str] | None:
     return checked
 
 
-def _sequential_key(table: sa.Table) -> sa.Column:
+def _sequential_key(
+    table: sa.Table,
+) -> sa.Column:
     """A chave sequencial, a chave primária inteira de uma coluna, a única que ``next_ids``
     preenche; outra chave é ``ContractError``."""
     key = sequential_key(table)
     if key is None:
         names = [column.name for column in table.primary_key.columns]
-        raise ContractError(f"{table.name}: next_ids serve à chave primária inteira de uma coluna, "
-                            f"e a chave é {names}; numa chave composta o cliente decide os ids")
+        raise ContractError(
+            f"{table.name}: next_ids serve à chave primária inteira de uma coluna, "
+            f"e a chave é {names}; numa chave composta o cliente decide os ids"
+        )
     return key
 
 
@@ -345,9 +378,14 @@ class Execution:
             run.versions   # {"cad_lancamentos": 143, "cad_lancamentos_projetados": None}
     """
 
-    def __init__(self, db: Database, engine: str | Engine, partition: str | None = None,
-                 execution_id: str | None = None,
-                 redshift: RedshiftConfig | None = None) -> None:
+    def __init__(
+        self,
+        db: Database,
+        engine: str | Engine,
+        partition: str | None = None,
+        execution_id: str | None = None,
+        redshift: RedshiftConfig | None = None,
+    ) -> None:
         """Guarda os parâmetros da execução, com a partição e o ``execution_id`` conferidos; nada
         é aberto antes da entrada do ``with``.
 
@@ -399,7 +437,10 @@ class Execution:
     # ------------------------------------------------------------ abertura e encerramento
 
     @contextmanager
-    def _step(self, name: str) -> Iterator[None]:
+    def _step(
+        self,
+        name: str,
+    ) -> Iterator[None]:
         """Soma o tempo do passo, para o resumo no log."""
         started = time.perf_counter()
         try:
@@ -433,19 +474,32 @@ class Execution:
 
             if self.redshift is None:
                 self.redshift = RedshiftConfig.from_environment()
-            return RedshiftEngine(self.redshift, self.execution_id, self.db.storage,
-                                  self.db.staging_prefix(self.execution_id))
+            return RedshiftEngine(
+                self.redshift,
+                self.execution_id,
+                self.db.storage,
+                self.db.staging_prefix(self.execution_id),
+            )
         raise ContractError(f"motor {self._engine!r}: use 'duckdb' ou 'redshift'")
 
     def __enter__(self) -> Execution:
         with self._step("abertura"):
             self._open_tables()
             self.sandbox = self._build_engine()
-        log.info("execução %s aberta: %s, versões %s", self.execution_id,
-                 _partition_text(self.partition), self.versions)
+        log.info(
+            "execução %s aberta: %s, versões %s",
+            self.execution_id,
+            _partition_text(self.partition),
+            self.versions,
+        )
         return self
 
-    def __exit__(self, exc_type: object, exc: BaseException | None, tb: object) -> None:
+    def __exit__(
+        self,
+        exc_type: object,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
         # A saída conclui só quando o descarte do sandbox e a gravação do snapshot terminam; a
         # falha de um dos dois sobe ao cliente e vai ao resumo como erro.
         closed = False
@@ -458,9 +512,15 @@ class Execution:
         finally:
             timings = {name: round(seconds, 3) for name, seconds in self._timings.items()}
             outcome = "concluída" if exc is None and closed else "com erro"
-            log.info("execução %s %s: %s, versões lidas %s, versões gravadas %s, tempos %s",
-                     self.execution_id, outcome, _partition_text(self.partition), self._read,
-                     self._written, timings)
+            log.info(
+                "execução %s %s: %s, versões lidas %s, versões gravadas %s, tempos %s",
+                self.execution_id,
+                outcome,
+                _partition_text(self.partition),
+                self._read,
+                self._written,
+                timings,
+            )
 
     def _write_snapshot(self) -> None:
         """A entrada do snapshot marcado, com a versão de toda tabela do ambiente."""
@@ -473,14 +533,24 @@ class Execution:
 
     # ------------------------------------------------------------ a leitura
 
-    def _uri(self, table: sa.Table) -> str:
+    def _uri(
+        self,
+        table: sa.Table,
+    ) -> str:
         return self.db.uri(table)
 
-    def _version(self, table: sa.Table) -> int | None:
+    def _version(
+        self,
+        table: sa.Table,
+    ) -> int | None:
         with self._lock:
             return self.versions.get(table.name)
 
-    def _pinned_table(self, table: sa.Table, version: int) -> DeltaTable:
+    def _pinned_table(
+        self,
+        table: sa.Table,
+        version: int,
+    ) -> DeltaTable:
         """A tabela aberta na versão fixada ``version``: a da abertura, ou reaberta quando
         ``publish_delta`` avançou a versão fixada; quem chama segura o lock."""
         opened = self._tables.get(table.name)
@@ -489,7 +559,11 @@ class Execution:
             self._tables[table.name] = opened
         return opened
 
-    def previous_partitions(self, table: sa.Table, n: int) -> list[str]:
+    def previous_partitions(
+        self,
+        table: sa.Table,
+        n: int,
+    ) -> list[str]:
         """Os ``n`` últimos valores de partição da tabela até a partição da execução, inclusive.
 
         Exemplo:
@@ -508,8 +582,10 @@ class Execution:
         if partition_by is None:
             raise ContractError(f"{table.name}: tabela sem partição")
         if self.partition is None:
-            raise ContractError(f"previous_partitions de {table.name}: a execução "
-                                f"{self.execution_id} não tem partição")
+            raise ContractError(
+                f"previous_partitions de {table.name}: a execução "
+                f"{self.execution_id} não tem partição"
+            )
         with self._lock:
             version = self.versions.get(table.name)
             if version is None:
@@ -527,24 +603,38 @@ class Execution:
             return []
         return up_to_partition[-n:]
 
-    def _ingest_one(self, engine: Engine, table: sa.Table, partitions: list[str] | None,
-                    materialize: bool) -> None:
+    def _ingest_one(
+        self,
+        engine: Engine,
+        table: sa.Table,
+        partitions: list[str] | None,
+        materialize: bool,
+    ) -> None:
         """A ingestão de uma tabela na versão fixada; a tabela que não existe é
         ``SandboxError``."""
         version = self._version(table)
         if version is None:
             raise SandboxError(
-                f"{table.name}: a tabela não existe no ambiente {self.db.environment}")
+                f"{table.name}: a tabela não existe no ambiente {self.db.environment}"
+            )
         engine.ingest(table, self._uri(table), version, partitions, materialize)
 
-    def _ingest_in_new_session(self, table: sa.Table, partitions: list[str] | None,
-                               materialize: bool) -> None:
+    def _ingest_in_new_session(
+        self,
+        table: sa.Table,
+        partitions: list[str] | None,
+        materialize: bool,
+    ) -> None:
         """A ingestão de uma tabela numa sessão a mais do motor, fechada no fim."""
         with self.sandbox.new_session() as session:
             self._ingest_one(session, table, partitions, materialize)
 
-    def ingest(self, *tables: sa.Table, partitions: list[str] | None = None,
-               materialize: bool = False) -> None:
+    def ingest(
+        self,
+        *tables: sa.Table,
+        partitions: list[str] | None = None,
+        materialize: bool = False,
+    ) -> None:
         """Traz as tabelas ao sandbox na versão fixada.
 
         Uma tabela entra na sessão principal; mais de uma entram todas em paralelo, cada uma numa
@@ -578,7 +668,10 @@ class Execution:
                 tasks.append((table.name, task))
             run_in_pool(tasks, max_workers=max(len(tables), 1))
 
-    def pinned_delta(self, table: sa.Table) -> sa.FromClause:
+    def pinned_delta(
+        self,
+        table: sa.Table,
+    ) -> sa.FromClause:
         """A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é por ela
         que o pipeline lê as partições já gravadas no Delta da tabela que ele mesmo grava.
 
@@ -595,7 +688,11 @@ class Execution:
         """
         return self.sandbox.pinned_delta(table, self._uri(table), self._version(table))
 
-    def _first_id(self, table: sa.Table, key: sa.Column) -> int:
+    def _first_id(
+        self,
+        table: sa.Table,
+        key: sa.Column,
+    ) -> int:
         """O primeiro id de ``next_ids``: o maior da versão fixada mais um, ou 1 na tabela nova;
         quem chama segura o lock."""
         version = self.versions.get(table.name)
@@ -603,7 +700,11 @@ class Execution:
             return 1
         return delta.max_key(self._pinned_table(table, version), key.name) + 1
 
-    def next_ids(self, table: sa.Table, n: int) -> range:
+    def next_ids(
+        self,
+        table: sa.Table,
+        n: int,
+    ) -> range:
         """Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da versão
         fixada.
 
@@ -634,7 +735,10 @@ class Execution:
 
     # ------------------------------------------------------------ a auditoria
 
-    def _referenced(self, table: sa.Table) -> dict[str, tuple[str, int]]:
+    def _referenced(
+        self,
+        table: sa.Table,
+    ) -> dict[str, tuple[str, int]]:
         """A URI e a versão fixada de cada tabela que uma chave estrangeira aponta."""
         referenced = {}
         for constraint in table.foreign_key_constraints:
@@ -644,8 +748,13 @@ class Execution:
                 referenced[target.name] = (self._uri(target), version)
         return referenced
 
-    def audit(self, table: sa.Table, partitions: list[str] | None, foreign_keys: bool = False,
-              key_scope: KeyScope | None = None) -> AuditReport:
+    def audit(
+        self,
+        table: sa.Table,
+        partitions: list[str] | None,
+        foreign_keys: bool = False,
+        key_scope: KeyScope | None = None,
+    ) -> AuditReport:
         """Roda a auditoria do motor e guarda o relatório aprovado.
 
         O relatório, com o SQL de cada verificação e as amostras, vai para o log. A contagem por
@@ -677,19 +786,28 @@ class Execution:
         version = self._version(table)
         uri = self._uri(table) if version is not None else None
         with self._step("audit"):
-            report = self.sandbox.audit(table, checked, uri, version, foreign_keys, key_scope,
-                                        self._referenced(table))
+            report = self.sandbox.audit(
+                table, checked, uri, version, foreign_keys, key_scope, self._referenced(table)
+            )
         failed = [result.name for result in report.results if not result.passed]
-        log.info("auditoria de %s %s: %s; não rodaram %s\n%s", table.name, _where_text(checked),
-                 "aprovada" if report.passed else f"reprovada em {failed}", list(report.not_run),
-                 report.sql())
+        log.info(
+            "auditoria de %s %s: %s; não rodaram %s\n%s",
+            table.name,
+            _where_text(checked),
+            "aprovada" if report.passed else f"reprovada em {failed}",
+            list(report.not_run),
+            report.sql(),
+        )
         for result in report.results:
             if not result.passed:
-                log.warning("amostra de %s.%s: %s", table.name, result.name,
-                            result.sample.to_pylist())
+                log.warning(
+                    "amostra de %s.%s: %s", table.name, result.name, result.sample.to_pylist()
+                )
         if not report.passed:
-            raise AuditFailed(f"{table.name} {_where_text(checked)}: reprovada em {failed}; o "
-                              "relatório está no log")
+            raise AuditFailed(
+                f"{table.name} {_where_text(checked)}: reprovada em {failed}; o "
+                "relatório está no log"
+            )
         key = (table.name, tuple(checked) if checked is not None else None)
         with self._lock:
             self._audits[key] = report
@@ -697,35 +815,54 @@ class Execution:
 
     # ------------------------------------------------------------ a publicação no Delta
 
-    def _values(self, table: sa.Table, partitions: list[str] | None) -> list[str | None]:
+    def _values(
+        self,
+        table: sa.Table,
+        partitions: list[str] | None,
+    ) -> list[str | None]:
         """As partições a publicar: as pedidas, ou ``[None]`` numa tabela sem partição."""
         partition_by = table_options(table).partition_by
         if partition_by is None:
             if partitions is not None:
                 raise ContractError(
-                    f"{table.name}: tabela sem partição recebeu partitions={partitions}")
+                    f"{table.name}: tabela sem partição recebeu partitions={partitions}"
+                )
             return [None]
         if partitions is None:
             raise ContractError(
-                f"{table.name}: publish_delta de uma tabela particionada exige partitions")
+                f"{table.name}: publish_delta de uma tabela particionada exige partitions"
+            )
         return list(partitions)
 
-    def _approved(self, table: sa.Table, partitions: list[str] | None,
-                  audit: bool) -> AuditReport | None:
+    def _approved(
+        self,
+        table: sa.Table,
+        partitions: list[str] | None,
+        audit: bool,
+    ) -> AuditReport | None:
         """O relatório aprovado das partições, exigido quando ``audit`` é verdadeiro."""
         if not audit:
-            log.warning("publish_delta de %s %s sem auditoria (audit=False)", table.name,
-                        _where_text(partitions))
+            log.warning(
+                "publish_delta de %s %s sem auditoria (audit=False)",
+                table.name,
+                _where_text(partitions),
+            )
             return None
         key = (table.name, tuple(partitions) if partitions is not None else None)
         with self._lock:
             report = self._audits.get(key)
         if report is None:
-            raise AuditFailed(f"{table.name}: publish_delta {_where_text(partitions)} exige a "
-                              "auditoria aprovada na própria execução, ou audit=False")
+            raise AuditFailed(
+                f"{table.name}: publish_delta {_where_text(partitions)} exige a "
+                "auditoria aprovada na própria execução, ou audit=False"
+            )
         return report
 
-    def _check_no_data_change(self, table: sa.Table, uri: str) -> None:
+    def _check_no_data_change(
+        self,
+        table: sa.Table,
+        uri: str,
+    ) -> None:
         """Confere que nenhuma alteração de dados entrou na tabela desde a versão fixada; um avanço
         só de metadados ou de manutenção atualiza a versão fixada. A tabela ausente nasce aqui."""
         storage = self.db.storage
@@ -740,12 +877,17 @@ class Execution:
             if changed:
                 raise ExecutionConflict(
                     f"{table.name}: outra execução gravou dados em {sorted(changed, key=str)} "
-                    f"depois da versão fixada {pinned} (atual {current})")
+                    f"depois da versão fixada {pinned} (atual {current})"
+                )
         with self._lock:
             self.versions[table.name] = current
 
-    def _publish_table(self, table: sa.Table, values: list[str | None],
-                       report: AuditReport | None) -> int:
+    def _publish_table(
+        self,
+        table: sa.Table,
+        values: list[str | None],
+        report: AuditReport | None,
+    ) -> int:
         """A reconciliação e a exportação de cada partição de uma tabela; devolve a versão final."""
         uri = self._uri(table)
         self._check_no_data_change(table, uri)
@@ -753,8 +895,9 @@ class Execution:
         version = self._version(table)
         for value in values:
             with self._lock:
-                metadata = delta.commit_metadata(self.execution_id, dict(self._read),
-                                                 self._snapshot)
+                metadata = delta.commit_metadata(
+                    self.execution_id, dict(self._read), self._snapshot
+                )
             # Sem auditoria não há contagem a conferir, e toda coluna Double sai sem mínimo e
             # máximo, porque nada diz quais têm valor não finito.
             if report is None:
@@ -763,16 +906,26 @@ class Execution:
             else:
                 expected = report.rows(value)
                 nonfinite = report.nonfinite_columns.get(value, ())
-            version = self.sandbox.export_partition(table, uri, value, metadata,
-                                                    expected_rows=expected,
-                                                    columns_without_min_max=nonfinite)
+            version = self.sandbox.export_partition(
+                table,
+                uri,
+                value,
+                metadata,
+                expected_rows=expected,
+                columns_without_min_max=nonfinite,
+            )
             with self._lock:
                 self.versions[table.name] = version
                 self._written[table.name] = version
         return version
 
-    def publish_delta(self, *tables: sa.Table, partitions: list[str] | None = None,
-                      audit: bool = True, max_workers: int = 1) -> dict[str, int]:
+    def publish_delta(
+        self,
+        *tables: sa.Table,
+        partitions: list[str] | None = None,
+        audit: bool = True,
+        max_workers: int = 1,
+    ) -> dict[str, int]:
         """Leva as partições auditadas de cada tabela ao Delta.
 
         As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
@@ -820,7 +973,10 @@ class Execution:
         with self._step("publish_delta"):
             return run_in_pool(tasks, max_workers)
 
-    def snapshot(self, name: str) -> None:
+    def snapshot(
+        self,
+        name: str,
+    ) -> None:
         """Marca a execução: ``serialize_db_snapshot`` nos commits seguintes e, no encerramento sem
         erro, a entrada do snapshot com a versão de toda tabela do ambiente.
 
@@ -848,8 +1004,10 @@ class Execution:
         # novo em delta.snapshot, contra outro escritor.
         control, _ = delta.read_snapshots(self.db.storage, self.db.environment)
         if name in control["snapshots"] or name in control.get("archived", {}):
-            raise ContractError(f"{self.db.environment}: o snapshot {name} já existe, e o nome não "
-                                "volta a ser usado, nem arquivado; marque a execução com outro "
-                                "nome e aponte o canal para ele com serialize-db channel")
+            raise ContractError(
+                f"{self.db.environment}: o snapshot {name} já existe, e o nome não "
+                "volta a ser usado, nem arquivado; marque a execução com outro "
+                "nome e aponte o canal para ele com serialize-db channel"
+            )
         with self._lock:
             self._snapshot = name

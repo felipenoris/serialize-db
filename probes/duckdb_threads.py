@@ -94,7 +94,7 @@ from serialize_db.schema import quoted, table_options
 from serialize_db.storage import Storage, prepare_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from probelib import Report, describe_error, tabulate  # noqa: E402
+from probelib import Report, describe_error  # noqa: E402
 
 T = TypeVar("T")
 
@@ -121,7 +121,14 @@ EXECUTION_ID = "sonda-threads"
 
 # As falhas de uma medição que entram no relatório sem parar o probe: o processo filho morto (a
 # falta de memória, por exemplo), o erro do DuckDB, do delta-rs e do armazenamento.
-MEASUREMENT_ERRORS = (BrokenProcessPool, duckdb.Error, DeltaError, OSError, MemoryError, RuntimeError)
+MEASUREMENT_ERRORS = (
+    BrokenProcessPool,
+    duckdb.Error,
+    DeltaError,
+    OSError,
+    MemoryError,
+    RuntimeError,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -157,7 +164,10 @@ class Measurement:
 # Funções puras: os valores medidos, a partição, os totais do log e a formatação
 
 
-def thread_values(default_threads: int, requested: list[int] | None) -> list[int]:
+def thread_values(
+    default_threads: int,
+    requested: list[int] | None,
+) -> list[int]:
     """Os valores de ``threads`` medidos, em ordem e sem repetição: os pedidos, ou o padrão do motor
     vezes 0,5 e 1 a 5, a metade arredondada para baixo e no mínimo 1."""
     if requested:
@@ -166,7 +176,10 @@ def thread_values(default_threads: int, requested: list[int] | None) -> list[int
     return sorted(values)
 
 
-def reference_threads(values: list[int], default_threads: int) -> int:
+def reference_threads(
+    values: list[int],
+    default_threads: int,
+) -> int:
     """O valor de ``threads`` contra o qual a razão compara: o padrão do motor quando ele é medido,
     senão o primeiro valor medido."""
     if default_threads in values:
@@ -174,7 +187,10 @@ def reference_threads(values: list[int], default_threads: int) -> int:
     return values[0]
 
 
-def reference_label(reference: int, default_threads: int) -> str:
+def reference_label(
+    reference: int,
+    default_threads: int,
+) -> str:
     """O valor de referência da razão como o relatório o nomeia: ``o padrão do motor`` só quando
     ele é o padrão, senão ``o primeiro valor medido``."""
     if reference == default_threads:
@@ -182,7 +198,9 @@ def reference_label(reference: int, default_threads: int) -> str:
     return f"threads={reference}, o primeiro valor medido"
 
 
-def threads_per_core(siblings: str | None) -> int | None:
+def threads_per_core(
+    siblings: str | None,
+) -> int | None:
     """As threads de um núcleo físico pela lista das CPUs irmãs da CPU 0 (``"0,2"`` e ``"0-1"``
     são duas, ``"0"`` é uma); ``None`` sem a lista, fora do Linux."""
     if not siblings or not siblings.strip():
@@ -194,7 +212,9 @@ def threads_per_core(siblings: str | None) -> int | None:
     return count
 
 
-def latest_common_partition(values_by_table: dict[str, set[str]]) -> str | None:
+def latest_common_partition(
+    values_by_table: dict[str, set[str]],
+) -> str | None:
     """A partição mais recente presente em todas as tabelas particionadas, ou ``None`` quando elas
     não têm partição em comum."""
     common: set[str] | None = None
@@ -208,7 +228,11 @@ def latest_common_partition(values_by_table: dict[str, set[str]]) -> str | None:
     return max(common)
 
 
-def partition_totals(actions: pa.Table, column: str | None, value: str | None) -> tuple[int, int, int]:
+def partition_totals(
+    actions: pa.Table,
+    column: str | None,
+    value: str | None,
+) -> tuple[int, int, int]:
     """Os arquivos, os bytes e as linhas das ações ``add`` da partição, ou de todas numa tabela sem
     partição; as linhas vêm do ``numRecords`` de cada ação."""
     if column is not None:
@@ -218,22 +242,30 @@ def partition_totals(actions: pa.Table, column: str | None, value: str | None) -
     return actions.num_rows, total_bytes, total_rows
 
 
-def short_error(error: str, limit: int = 100) -> str:
+def short_error(
+    error: str,
+    limit: int = 100,
+) -> str:
     """A primeira linha do erro, cortada em ``limit`` caracteres, para caber numa célula."""
     first_line = error.splitlines()[0] if error else ""
     if len(first_line) <= limit:
         return first_line
-    return first_line[:limit - 3] + "..."
+    return first_line[: limit - 3] + "..."
 
 
-def best(seconds: list[float]) -> float | None:
+def best(
+    seconds: list[float],
+) -> float | None:
     """O menor tempo das repetições, ou ``None`` sem repetição."""
     if not seconds:
         return None
     return min(seconds)
 
 
-def speedup(reference: float | None, value: float | None) -> str:
+def speedup(
+    reference: float | None,
+    value: float | None,
+) -> str:
     """Quantas vezes ``value`` é mais rápido que ``reference``, como ``1.80x``; ``-`` sem um dos
     dois."""
     if not reference or not value:
@@ -241,7 +273,10 @@ def speedup(reference: float | None, value: float | None) -> str:
     return f"{reference / value:.2f}x"
 
 
-def expected_rows(scenario: str, inputs: list[TableInput]) -> int:
+def expected_rows(
+    scenario: str,
+    inputs: list[TableInput],
+) -> int:
     """As linhas que o log diz que o cenário lê: a primeira tabela nas medidas de uma tabela, a
     soma de todas nas de várias."""
     if scenario in SINGLE_TABLE_SCENARIOS:
@@ -249,12 +284,28 @@ def expected_rows(scenario: str, inputs: list[TableInput]) -> int:
     return sum(item.rows for item in inputs)
 
 
-def measurement_rows(measurements: list[Measurement], inputs: list[TableInput], reference: int) -> list[list[str]]:
+def measurement_rows(
+    measurements: list[Measurement],
+    inputs: list[TableInput],
+    reference: int,
+) -> list[list[str]]:
     """As linhas da tabela de uma seção: por cenário e valor de ``threads``, as threads aplicadas,
     a melhor repetição, cada repetição, a razão sobre o valor ``reference`` do cenário, a memória e
     as linhas lidas contra as do log."""
-    rows = [["CENÁRIO", "THREADS", "APLICADAS", "MELHOR S", "REPETIÇÕES S", "RAZÃO", "BASE MB", "PICO MB",
-             "LINHAS LIDAS", "LINHAS DO LOG"]]
+    rows = [
+        [
+            "CENÁRIO",
+            "THREADS",
+            "APLICADAS",
+            "MELHOR S",
+            "REPETIÇÕES S",
+            "RAZÃO",
+            "BASE MB",
+            "PICO MB",
+            "LINHAS LIDAS",
+            "LINHAS DO LOG",
+        ]
+    ]
     # A razão compara com a melhor repetição do cenário no valor de referência (reference_threads).
     reference_seconds: dict[str, float | None] = {}
     for measurement in measurements:
@@ -263,27 +314,43 @@ def measurement_rows(measurements: list[Measurement], inputs: list[TableInput], 
     for measurement in measurements:
         fastest = best(measurement.seconds)
         if measurement.error:
-            rows.append([measurement.scenario, str(measurement.threads), "-", "-",
-                         short_error(measurement.error), "-", "-", "-", "-",
-                         str(expected_rows(measurement.scenario, inputs))])
+            rows.append(
+                [
+                    measurement.scenario,
+                    str(measurement.threads),
+                    "-",
+                    "-",
+                    short_error(measurement.error),
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    str(expected_rows(measurement.scenario, inputs)),
+                ]
+            )
             continue
         repetitions = ", ".join(f"{value:.3f}" for value in measurement.seconds)
-        rows.append([
-            measurement.scenario,
-            str(measurement.threads),
-            str(measurement.threads_read),
-            f"{fastest:.3f}",
-            repetitions,
-            speedup(reference_seconds.get(measurement.scenario), fastest),
-            f"{measurement.base_mb:.0f}",
-            f"{measurement.peak_mb:.0f}",
-            str(measurement.rows),
-            str(expected_rows(measurement.scenario, inputs)),
-        ])
+        rows.append(
+            [
+                measurement.scenario,
+                str(measurement.threads),
+                str(measurement.threads_read),
+                f"{fastest:.3f}",
+                repetitions,
+                speedup(reference_seconds.get(measurement.scenario), fastest),
+                f"{measurement.base_mb:.0f}",
+                f"{measurement.peak_mb:.0f}",
+                str(measurement.rows),
+                str(expected_rows(measurement.scenario, inputs)),
+            ]
+        )
     return rows
 
 
-def fastest_configuration(measurements: list[Measurement], scenario: str) -> tuple[int, float] | None:
+def fastest_configuration(
+    measurements: list[Measurement],
+    scenario: str,
+) -> tuple[int, float] | None:
     """O valor de ``threads`` com a melhor repetição do cenário, e o tempo dela; ``None`` quando
     nenhuma configuração do cenário terminou."""
     found: tuple[int, float] | None = None
@@ -313,23 +380,35 @@ def peak_rss_mb() -> float:
     return int(kilobytes) / 1024
 
 
-def drop_tables(engine: DuckDBEngine, inputs: list[TableInput]) -> None:
+def drop_tables(
+    engine: DuckDBEngine,
+    inputs: list[TableInput],
+) -> None:
     """Apaga as tabelas materializadas das entradas, para a repetição seguinte recriá-las."""
     with engine.session() as connection:
         for item in inputs:
             connection.execute(f"DROP TABLE {quoted(item.table.name)}")
 
 
-def count_rows(engine: DuckDBEngine, inputs: list[TableInput]) -> int:
+def count_rows(
+    engine: DuckDBEngine,
+    inputs: list[TableInput],
+) -> int:
     """As linhas das tabelas materializadas das entradas, somadas."""
     total = 0
     with engine.session() as connection:
         for item in inputs:
-            total += connection.execute(f"SELECT count(*) FROM {quoted(item.table.name)}").fetchone()[0]
+            total += connection.execute(
+                f"SELECT count(*) FROM {quoted(item.table.name)}"
+            ).fetchone()[0]
     return total
 
 
-def time_materialized(engine: DuckDBEngine, inputs: list[TableInput], repetitions: int) -> tuple[list[float], int]:
+def time_materialized(
+    engine: DuckDBEngine,
+    inputs: list[TableInput],
+    repetitions: int,
+) -> tuple[list[float], int]:
     """A primeira tabela materializada, apagada depois de cada repetição; as linhas saem da
     primeira."""
     item = inputs[0]
@@ -345,7 +424,11 @@ def time_materialized(engine: DuckDBEngine, inputs: list[TableInput], repetition
     return seconds, rows
 
 
-def time_aggregated(engine: DuckDBEngine, inputs: list[TableInput], repetitions: int) -> tuple[list[float], int]:
+def time_aggregated(
+    engine: DuckDBEngine,
+    inputs: list[TableInput],
+    repetitions: int,
+) -> tuple[list[float], int]:
     """A primeira tabela lida inteira pela view de ``ingest`` e ``max(COLUMNS(*))``, sem gravar."""
     item = inputs[0]
     engine.ingest(item.table, item.uri, item.version, item.partitions)
@@ -361,7 +444,11 @@ def time_aggregated(engine: DuckDBEngine, inputs: list[TableInput], repetitions:
     return seconds, rows
 
 
-def time_in_series(engine: DuckDBEngine, inputs: list[TableInput], repetitions: int) -> tuple[list[float], int]:
+def time_in_series(
+    engine: DuckDBEngine,
+    inputs: list[TableInput],
+    repetitions: int,
+) -> tuple[list[float], int]:
     """As tabelas materializadas uma depois da outra na sessão principal."""
     seconds = []
     rows = 0
@@ -376,13 +463,20 @@ def time_in_series(engine: DuckDBEngine, inputs: list[TableInput], repetitions: 
     return seconds, rows
 
 
-def ingest_in_new_session(engine: DuckDBEngine, item: TableInput) -> None:
+def ingest_in_new_session(
+    engine: DuckDBEngine,
+    item: TableInput,
+) -> None:
     """Uma tabela materializada numa sessão a mais, fechada no fim, como ``run.ingest`` faz."""
     with engine.new_session() as session:
         session.ingest(item.table, item.uri, item.version, item.partitions, materialize=True)
 
 
-def time_in_new_sessions(engine: DuckDBEngine, inputs: list[TableInput], repetitions: int) -> tuple[list[float], int]:
+def time_in_new_sessions(
+    engine: DuckDBEngine,
+    inputs: list[TableInput],
+    repetitions: int,
+) -> tuple[list[float], int]:
     """Cada tabela numa sessão a mais, todas juntas num pool de uma thread por tabela, como
     ``run.ingest`` de várias tabelas."""
     seconds = []
@@ -409,7 +503,13 @@ SCENARIOS = {
 }
 
 
-def measure(scenario: str, threads: int, inputs: list[TableInput], repetitions: int, root: str) -> Measurement:
+def measure(
+    scenario: str,
+    threads: int,
+    inputs: list[TableInput],
+    repetitions: int,
+    root: str,
+) -> Measurement:
     """Mede um cenário num motor novo com ``threads``; roda num processo novo, e a base é a memória
     dele depois das importações e da conexão."""
     engine = DuckDBEngine(DuckDBConfig(threads=threads), EXECUTION_ID, Storage.for_uri(root))
@@ -419,7 +519,8 @@ def measure(scenario: str, threads: int, inputs: list[TableInput], repetitions: 
             # O cache é da instância: desligado aqui, vale também para as sessões a mais.
             connection.execute("SET enable_external_file_cache = false")
             applied, cached = connection.execute(
-                "SELECT current_setting('threads'), current_setting('enable_external_file_cache')").fetchone()
+                "SELECT current_setting('threads'), current_setting('enable_external_file_cache')"
+            ).fetchone()
         if cached:
             raise RuntimeError("o DuckDB manteve o cache de arquivos externos ligado")
         seconds, rows = SCENARIOS[scenario](engine, inputs, repetitions)
@@ -428,7 +529,13 @@ def measure(scenario: str, threads: int, inputs: list[TableInput], repetitions: 
         engine.cleanup()
 
 
-def run_measurement(scenario: str, threads: int, inputs: list[TableInput], repetitions: int, root: str) -> Measurement:
+def run_measurement(
+    scenario: str,
+    threads: int,
+    inputs: list[TableInput],
+    repetitions: int,
+    root: str,
+) -> Measurement:
     """Roda ``measure`` num processo novo, pelo ``spawn``, para o pico de memória ser só da
     configuração; a configuração que falha entra com o erro."""
     context = multiprocessing.get_context("spawn")
@@ -439,7 +546,13 @@ def run_measurement(scenario: str, threads: int, inputs: list[TableInput], repet
         return Measurement(scenario, threads, error=f"{type(error).__name__}: {error}")
 
 
-def run_scenarios(scenarios: tuple[str, ...], values: list[int], inputs: list[TableInput], repetitions: int, root: str) -> list[Measurement]:
+def run_scenarios(
+    scenarios: tuple[str, ...],
+    values: list[int],
+    inputs: list[TableInput],
+    repetitions: int,
+    root: str,
+) -> list[Measurement]:
     """Cada cenário com cada valor de ``threads``, um processo por configuração; o andamento sai no
     terminal."""
     measurements = []
@@ -457,7 +570,9 @@ def run_scenarios(scenarios: tuple[str, ...], values: list[int], inputs: list[Ta
 # As seções do relatório
 
 
-def resolve_metadata(spec: str) -> sa.MetaData:
+def resolve_metadata(
+    spec: str,
+) -> sa.MetaData:
     """O ``MetaData`` de ``módulo:atributo``, como ``client_model:Base.metadata``, pelo
     ``pkgutil.resolve_name`` da biblioteca padrão, como o ``--metadata`` de ``serialize-db``.
 
@@ -476,13 +591,21 @@ def resolve_metadata(spec: str) -> sa.MetaData:
     return target
 
 
-def read_log(storage: Storage, table: sa.Table) -> tuple[int, pa.Table]:
+def read_log(
+    storage: Storage,
+    table: sa.Table,
+) -> tuple[int, pa.Table]:
     """A versão atual da tabela Delta ``<raiz>/<tabela>`` e as ações ``add`` dela."""
     opened = delta.open_table(storage.uri_of(table.name), storage)
     return opened.version(), pa.table(opened.get_add_actions(flatten=True))
 
 
-def tables_section(report: Report, storage: Storage, tables: list[sa.Table], requested: str | None) -> list[TableInput] | None:
+def tables_section(
+    report: Report,
+    storage: Storage,
+    tables: list[sa.Table],
+    requested: str | None,
+) -> list[TableInput] | None:
     """Seção 1: cada tabela aberta pelo log, a versão, a coluna e a quantidade de partições, e os
     arquivos, os bytes e as linhas da partição medida; checagem ``DT-1``. Devolve as entradas das
     medições, ou ``None`` quando uma tabela ou a partição falta."""
@@ -491,10 +614,15 @@ def tables_section(report: Report, storage: Storage, tables: list[sa.Table], req
     # DT-1: o log de cada tabela abre; a que não abre reprova, e o probe termina sem medir.
     logs: dict[str, tuple[int, pa.Table]] = {}
     for table in tables:
-        read = report.call(f"ler o log de {storage.uri_of(table.name)}", lambda: read_log(storage, table),
-                           render=lambda result: f"versão {result[0]}, {result[1].num_rows} arquivo(s)")
+        read = report.call(
+            f"ler o log de {storage.uri_of(table.name)}",
+            lambda: read_log(storage, table),
+            render=lambda result: f"versão {result[0]}, {result[1].num_rows} arquivo(s)",
+        )
         if read is None:
-            report.fail("DT-1", "tabelas e partição", f"{table.name} não abriu: {report.last_reason}")
+            report.fail(
+                "DT-1", "tabelas e partição", f"{table.name} não abriu: {report.last_reason}"
+            )
             return None
         logs[table.name] = read
 
@@ -509,29 +637,58 @@ def tables_section(report: Report, storage: Storage, tables: list[sa.Table], req
     partition = requested or latest_common_partition(values_by_table)
     missing = [name for name, values in values_by_table.items() if partition not in values]
     if values_by_table and (partition is None or missing):
-        report.fail("DT-1", "tabelas e partição", f"partição {partition} ausente em {', '.join(missing) or 'todas'}")
+        report.fail(
+            "DT-1",
+            "tabelas e partição",
+            f"partição {partition} ausente em {', '.join(missing) or 'todas'}",
+        )
         return None
     report.value("PARTICAO", partition)
 
     # O que o log diz de cada leitura: é o que as linhas lidas nas medições devem repetir.
     inputs = []
-    rows = [["TABELA", "VERSÃO", "COLUNA DE PARTIÇÃO", "PARTIÇÕES", "ARQUIVOS LIDOS", "MB LIDOS", "LINHAS LIDAS"]]
+    rows = [
+        [
+            "TABELA",
+            "VERSÃO",
+            "COLUNA DE PARTIÇÃO",
+            "PARTIÇÕES",
+            "ARQUIVOS LIDOS",
+            "MB LIDOS",
+            "LINHAS LIDAS",
+        ]
+    ]
     for table in tables:
         version, actions = logs[table.name]
         column = table_options(table).partition_by
         value = partition if column is not None else None
         files, size, lines = partition_totals(actions, column, value)
         partitions = [partition] if column is not None else None
-        inputs.append(TableInput(table, storage.uri_of(table.name), version, partitions, files, size, lines))
+        inputs.append(
+            TableInput(table, storage.uri_of(table.name), version, partitions, files, size, lines)
+        )
         count = len(values_by_table.get(table.name, ())) or "-"
-        rows.append([table.name, str(version), column or "(sem partição)", str(count), str(files), f"{size / 2**20:.0f}", str(lines)])
+        rows.append(
+            [
+                table.name,
+                str(version),
+                column or "(sem partição)",
+                str(count),
+                str(files),
+                f"{size / 2**20:.0f}",
+                str(lines),
+            ]
+        )
     report.table(rows)
     report.ok("DT-1", "tabelas e partição", f"{len(tables)} tabela(s) na partição {partition}")
     return inputs
 
 
-def machine_section(report: Report, requested: list[int] | None,
-                    repetitions: int) -> tuple[list[int], int, int]:
+def machine_section(
+    report: Report,
+    requested: list[int] | None,
+    repetitions: int,
+) -> tuple[list[int], int, int]:
     """Seção 2: as CPUs, as threads por núcleo, a memória, o disco da pasta temporária do motor, os
     limites que o motor lê do ambiente, os padrões do DuckDB e os valores medidos; nenhuma
     checagem. Devolve os valores de ``threads``, o de referência da razão e o padrão do motor."""
@@ -541,7 +698,8 @@ def machine_section(report: Report, requested: list[int] | None,
     connection = duckdb.connect()
     duckdb_threads, duckdb_memory_limit, file_cache = connection.execute(
         "SELECT current_setting('threads'), current_setting('memory_limit'), "
-        "current_setting('enable_external_file_cache')").fetchone()
+        "current_setting('enable_external_file_cache')"
+    ).fetchone()
     connection.close()
 
     # Os limites que o motor lê do ambiente, e deles os valores medidos e a referência da razão.
@@ -556,37 +714,57 @@ def machine_section(report: Report, requested: list[int] | None,
     memory_mb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**20
     temporary = tempfile.gettempdir()
     free_gib = shutil.disk_usage(temporary).free / 2**30
-    packages = ", ".join(f"{name} {importlib.metadata.version(name)}" for name in ("duckdb", "deltalake", "pyarrow"))
-    report.table([
-        ["LEITURA", "VALOR"],
-        ["núcleos (os.cpu_count)", str(os.cpu_count())],
-        ["CPUs do processo (available_cpus)", str(default_threads)],
-        ["threads por núcleo físico (CPU 0)", str(per_core) if per_core else "(sem a lista)"],
-        ["memória", f"{memory_mb:.0f} MB"],
-        ["memória disponível (available_memory)", f"{available_memory() / 2**20:.0f} MB"],
-        ["pasta temporária do motor", f"{temporary}, {free_gib:.1f} GiB livres"],
-        ["pacotes", packages],
-        ["threads e memory_limit do motor", f"{default_threads}, {limits['memory_limit']}"],
-        ["threads e memory_limit padrão do DuckDB", f"{duckdb_threads}, {duckdb_memory_limit}"],
-        ["cache de arquivos externos", f"{'ligado' if file_cache else 'desligado'} por padrão; desligado nas medições"],
-        ["threads medidas", ", ".join(str(value) for value in values)],
-        ["referência da razão", f"threads={reference}"],
-        ["repetições por configuração", str(repetitions)],
-    ])
+    packages = ", ".join(
+        f"{name} {importlib.metadata.version(name)}" for name in ("duckdb", "deltalake", "pyarrow")
+    )
+    report.table(
+        [
+            ["LEITURA", "VALOR"],
+            ["núcleos (os.cpu_count)", str(os.cpu_count())],
+            ["CPUs do processo (available_cpus)", str(default_threads)],
+            ["threads por núcleo físico (CPU 0)", str(per_core) if per_core else "(sem a lista)"],
+            ["memória", f"{memory_mb:.0f} MB"],
+            ["memória disponível (available_memory)", f"{available_memory() / 2**20:.0f} MB"],
+            ["pasta temporária do motor", f"{temporary}, {free_gib:.1f} GiB livres"],
+            ["pacotes", packages],
+            ["threads e memory_limit do motor", f"{default_threads}, {limits['memory_limit']}"],
+            ["threads e memory_limit padrão do DuckDB", f"{duckdb_threads}, {duckdb_memory_limit}"],
+            [
+                "cache de arquivos externos",
+                f"{'ligado' if file_cache else 'desligado'} por padrão; desligado nas medições",
+            ],
+            ["threads medidas", ", ".join(str(value) for value in values)],
+            ["referência da razão", f"threads={reference}"],
+            ["repetições por configuração", str(repetitions)],
+        ]
+    )
     return values, reference, default_threads
 
 
-def single_table_section(report: Report, values: list[int], reference: int, default_threads: int,
-                         inputs: list[TableInput], repetitions: int, root: str) -> list[Measurement]:
+def single_table_section(
+    report: Report,
+    values: list[int],
+    reference: int,
+    default_threads: int,
+    inputs: list[TableInput],
+    repetitions: int,
+    root: str,
+) -> list[Measurement]:
     """Seção 3: a partição da primeira tabela ``materializada`` e ``agregada`` com cada valor de
     ``threads``, a razão sobre o valor ``reference``, nomeado como o padrão do motor só quando é
     ``default_threads``; checagem ``DT-5`` e as medições para ``DT-2`` a ``DT-4``."""
     report.h1(f"Uma tabela: {inputs[0].table.name}")
-    report.line("materializada: ingest(..., materialize=True), numa transação o DDL do modelo, com os tipos e o "
-                "NOT NULL do contrato, e o INSERT INTO ... BY NAME do delta_scan, apagada a cada repetição.")
-    report.line("agregada: a view de ingest lida inteira por SELECT count(*), max(COLUMNS(*)), sem gravar.")
+    report.line(
+        "materializada: ingest(..., materialize=True), numa transação o DDL do modelo, com os tipos e o "
+        "NOT NULL do contrato, e o INSERT INTO ... BY NAME do delta_scan, apagada a cada repetição."
+    )
+    report.line(
+        "agregada: a view de ingest lida inteira por SELECT count(*), max(COLUMNS(*)), sem gravar."
+    )
     label = reference_label(reference, default_threads)
-    report.line(f"RAZÃO: a melhor repetição com {label}, dividida pela desta linha; acima de 1 é mais rápido.\n")
+    report.line(
+        f"RAZÃO: a melhor repetição com {label}, dividida pela desta linha; acima de 1 é mais rápido.\n"
+    )
     measurements = run_scenarios(SINGLE_TABLE_SCENARIOS, values, inputs, repetitions, root)
     report.table(measurement_rows(measurements, inputs, reference))
 
@@ -594,24 +772,36 @@ def single_table_section(report: Report, values: list[int], reference: int, defa
     readings = []
     for scenario in SINGLE_TABLE_SCENARIOS:
         found = fastest_configuration(measurements, scenario)
-        default = fastest_configuration([item for item in measurements if item.threads == reference], scenario)
+        default = fastest_configuration(
+            [item for item in measurements if item.threads == reference], scenario
+        )
         if found is None or default is None:
             readings.append(f"{scenario}: sem medição completa")
             continue
-        readings.append(f"{scenario}: melhor com threads={found[0]}, {found[1]:.3f} s, "
-                        f"{speedup(default[1], found[1])} sobre threads={reference}")
+        readings.append(
+            f"{scenario}: melhor com threads={found[0]}, {found[1]:.3f} s, "
+            f"{speedup(default[1], found[1])} sobre threads={reference}"
+        )
     report.note("DT-5", "threads de uma tabela", "; ".join(readings))
     return measurements
 
 
-def many_tables_section(report: Report, values: list[int], reference: int, inputs: list[TableInput], repetitions: int,
-                        root: str) -> list[Measurement]:
+def many_tables_section(
+    report: Report,
+    values: list[int],
+    reference: int,
+    inputs: list[TableInput],
+    repetitions: int,
+    root: str,
+) -> list[Measurement]:
     """Seção 4: as tabelas ``em série`` na sessão principal e em ``sessões a mais`` com cada valor
     de ``threads``, a razão da tabela sobre o valor ``reference``; checagem ``DT-6`` e as medições
     para ``DT-2`` a ``DT-4``."""
     report.h1("Várias tabelas: " + ", ".join(item.table.name for item in inputs))
     report.line("em série: cada tabela materializada depois da outra na sessão principal.")
-    report.line("sessões a mais: cada tabela materializada numa sessão a mais, todas juntas, como run.ingest.\n")
+    report.line(
+        "sessões a mais: cada tabela materializada numa sessão a mais, todas juntas, como run.ingest.\n"
+    )
     measurements = run_scenarios(MANY_TABLES_SCENARIOS, values, inputs, repetitions, root)
     report.table(measurement_rows(measurements, inputs, reference))
 
@@ -626,26 +816,42 @@ def many_tables_section(report: Report, values: list[int], reference: int, input
             readings.append(f"threads={threads}: sem medição completa")
             continue
         readings.append(f"threads={threads}: {speedup(series[1], sessions[1])}")
-    report.note("DT-6", "sessões a mais sobre em série",
-                "o tempo em série dividido pelo das sessões a mais; " + "; ".join(readings))
+    report.note(
+        "DT-6",
+        "sessões a mais sobre em série",
+        "o tempo em série dividido pelo das sessões a mais; " + "; ".join(readings),
+    )
     return measurements
 
 
-def measurement_checks(report: Report, measurements: list[Measurement], inputs: list[TableInput]) -> None:
+def measurement_checks(
+    report: Report,
+    measurements: list[Measurement],
+    inputs: list[TableInput],
+) -> None:
     """As checagens de todas as medições: ``DT-2`` as linhas lidas contra as do log, ``DT-3`` as
     threads que o DuckDB aplicou, ``DT-4`` as configurações que falharam."""
     finished = [item for item in measurements if not item.error]
 
     # DT-2: a ingestão leu as linhas que o log diz ter; uma diferença é leitura perdida ou a mais.
-    wrong_rows = [f"{item.scenario}/{item.threads}: {item.rows} contra {expected_rows(item.scenario, inputs)}"
-                  for item in finished if item.rows != expected_rows(item.scenario, inputs)]
+    wrong_rows = [
+        f"{item.scenario}/{item.threads}: {item.rows} contra {expected_rows(item.scenario, inputs)}"
+        for item in finished
+        if item.rows != expected_rows(item.scenario, inputs)
+    ]
     if wrong_rows:
         report.fail("DT-2", "linhas lidas", "; ".join(wrong_rows))
     else:
-        report.ok("DT-2", "linhas lidas", f"{len(finished)} configuração(ões) leram as linhas do log")
+        report.ok(
+            "DT-2", "linhas lidas", f"{len(finished)} configuração(ões) leram as linhas do log"
+        )
 
     # DT-3: o motor abriu a conexão com o valor pedido; outro valor invalida a linha da tabela.
-    wrong_threads = [f"{item.scenario}/{item.threads}: {item.threads_read}" for item in finished if item.threads_read != item.threads]
+    wrong_threads = [
+        f"{item.scenario}/{item.threads}: {item.threads_read}"
+        for item in finished
+        if item.threads_read != item.threads
+    ]
     if wrong_threads:
         report.fail("DT-3", "threads aplicadas", "; ".join(wrong_threads))
     else:
@@ -660,26 +866,60 @@ def measurement_checks(report: Report, measurements: list[Measurement], inputs: 
         details = [f"{item.scenario}/{item.threads}: {short_error(item.error)}" for item in failed]
         report.note("DT-4", "configurações medidas", "; ".join(details))
     else:
-        report.ok("DT-4", "configurações medidas", f"{len(measurements)} configuração(ões) terminaram")
+        report.ok(
+            "DT-4", "configurações medidas", f"{len(measurements)} configuração(ões) terminaram"
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
     """O parser da linha de comando, com os padrões de cada opção."""
     parser = argparse.ArgumentParser(
         description="Mede a ingestão das tabelas Delta pelo motor DuckDB com cada valor de threads, "
-        "numa tabela e em várias, em série e em sessões a mais.")
-    parser.add_argument("root", help="a pasta das tabelas Delta, local ou s3://bucket/prefixo: <root>/<ambiente> da migração")
-    parser.add_argument("--metadata", default=DEFAULT_METADATA, type=resolve_metadata,
-                        help=f"o MetaData do modelo, {DEFAULT_METADATA} por padrão")
-    parser.add_argument("--tables", nargs="+", default=list(DEFAULT_TABLES), metavar="TABELA", help="as tabelas medidas, a primeira a grande")
-    parser.add_argument("--partition", metavar="AAAA-MM-DD", help="a partição lida; por padrão a mais recente comum às tabelas")
-    parser.add_argument("--threads", nargs="+", type=int, metavar="N",
-                        help="os valores medidos; por padrão as CPUs que o processo pode usar vezes 0,5 e 1 a 5")
-    parser.add_argument("--repetitions", type=int, default=DEFAULT_REPETITIONS, help=f"repetições por configuração, {DEFAULT_REPETITIONS} por padrão")
+        "numa tabela e em várias, em série e em sessões a mais."
+    )
+    parser.add_argument(
+        "root",
+        help="a pasta das tabelas Delta, local ou s3://bucket/prefixo: <root>/<ambiente> da migração",
+    )
+    parser.add_argument(
+        "--metadata",
+        default=DEFAULT_METADATA,
+        type=resolve_metadata,
+        help=f"o MetaData do modelo, {DEFAULT_METADATA} por padrão",
+    )
+    parser.add_argument(
+        "--tables",
+        nargs="+",
+        default=list(DEFAULT_TABLES),
+        metavar="TABELA",
+        help="as tabelas medidas, a primeira a grande",
+    )
+    parser.add_argument(
+        "--partition",
+        metavar="AAAA-MM-DD",
+        help="a partição lida; por padrão a mais recente comum às tabelas",
+    )
+    parser.add_argument(
+        "--threads",
+        nargs="+",
+        type=int,
+        metavar="N",
+        help="os valores medidos; por padrão as CPUs que o processo pode usar vezes 0,5 e 1 a 5",
+    )
+    parser.add_argument(
+        "--repetitions",
+        type=int,
+        default=DEFAULT_REPETITIONS,
+        help=f"repetições por configuração, {DEFAULT_REPETITIONS} por padrão",
+    )
     return parser
 
 
-def guarded(report: Report, section: Callable[..., T], *arguments: object) -> T | None:
+def guarded(
+    report: Report,
+    section: Callable[..., T],
+    *arguments: object,
+) -> T | None:
     """O resultado de ``section(report, *arguments)``, ou ``None`` quando ela é interrompida.
 
     A exceção vai para o relatório e para a seção final de falhas, e o probe segue com o que as
@@ -693,7 +933,9 @@ def guarded(report: Report, section: Callable[..., T], *arguments: object) -> T 
         return None
 
 
-def main(argv: list[str]) -> int:
+def main(
+    argv: list[str],
+) -> int:
     # Os argumentos e as tabelas pedidas no modelo; um --metadata que não importa e uma tabela fora
     # do modelo são erros de uso.
     parser = build_parser()
@@ -707,8 +949,12 @@ def main(argv: list[str]) -> int:
     # As variáveis que o delta-rs e o botocore leem, acertadas como a biblioteca acerta na abertura.
     changed = prepare_environment()
     storage = Storage.for_uri(arguments.root)
-    report = Report("duckdb_threads", f"o threads do DuckDB na ingestão das tabelas Delta em {storage.uri}")
-    report.line("Só leitura sob a raiz: nada é criado, alterado ou apagado nela; o banco de cada configuração fica na pasta temporária do motor e sai no cleanup.")
+    report = Report(
+        "duckdb_threads", f"o threads do DuckDB na ingestão das tabelas Delta em {storage.uri}"
+    )
+    report.line(
+        "Só leitura sob a raiz: nada é criado, alterado ou apagado nela; o banco de cada configuração fica na pasta temporária do motor e sai no cleanup."
+    )
     if changed:
         report.line(f"variáveis acertadas por prepare_environment: {', '.join(sorted(changed))}")
 
@@ -721,9 +967,31 @@ def main(argv: list[str]) -> int:
     if machine is None:
         return report.finish()
     values, reference, default_threads = machine
-    measurements = guarded(report, single_table_section, values, reference, default_threads, inputs,
-                           arguments.repetitions, storage.uri) or []
-    measurements += guarded(report, many_tables_section, values, reference, inputs, arguments.repetitions, storage.uri) or []
+    measurements = (
+        guarded(
+            report,
+            single_table_section,
+            values,
+            reference,
+            default_threads,
+            inputs,
+            arguments.repetitions,
+            storage.uri,
+        )
+        or []
+    )
+    measurements += (
+        guarded(
+            report,
+            many_tables_section,
+            values,
+            reference,
+            inputs,
+            arguments.repetitions,
+            storage.uri,
+        )
+        or []
+    )
     guarded(report, measurement_checks, measurements, inputs)
     return report.finish()
 

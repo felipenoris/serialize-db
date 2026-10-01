@@ -1088,6 +1088,11 @@ Issue do botocore que pede a expiração da credencial na interface pública, co
 2026-09-27 para `credential_expiry` de `probes/probelib.py`:
 <https://github.com/boto/botocore/issues/2694>.
 
+Documentação do Ruff, consultada em 2026-10-01 para a seção `[tool.ruff]` de `pyproject.toml` (as
+regras que a versão 0.16.9 liga por padrão e o formatador, com a vírgula final mágica e os blocos
+de código em Markdown): <https://docs.astral.sh/ruff/default-rules/> e
+<https://docs.astral.sh/ruff/formatter/>.
+
 ## Delta Lake
 
 Documentação do delta-rs e repositórios:

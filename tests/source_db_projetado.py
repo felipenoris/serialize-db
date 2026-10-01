@@ -347,7 +347,27 @@ RATE_ORIGIN_ACCOUNTS = (10, 106, 31, 8, 34, 9, 4, 47, 103, 20, 5, 19, 43)
 RATE_DESTINATION_ACCOUNTS = (22, 25, 99, 24, 98, 50, 26, 21)
 RATE_FACTORS = (0.66, 0.55, -0.15, 1.0, 0.59895, -0.0465, -1.0, -0.0925, 0.0465)
 UPDATE_STATUS_IDS = (
-    1, 2, 5, 6, 7, 49, 50, 51, 52, 53, 127, 128, 129, 130, 151, 152, 178, 179, 180, 181, 182
+    1,
+    2,
+    5,
+    6,
+    7,
+    49,
+    50,
+    51,
+    52,
+    53,
+    127,
+    128,
+    129,
+    130,
+    151,
+    152,
+    178,
+    179,
+    180,
+    181,
+    182,
 )
 
 
@@ -362,7 +382,9 @@ class SourceBase:
     partition_rows: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
-def month_ends_after(date: datetime.date) -> list[datetime.date]:
+def month_ends_after(
+    date: datetime.date,
+) -> list[datetime.date]:
     """Os fins de mês depois de ``date`` até ``PROJECTION_HORIZON``: os meses que um lançamento de
     ``data_base = date`` projeta."""
     ends = []
@@ -380,7 +402,9 @@ def month_ends_after(date: datetime.date) -> list[datetime.date]:
         ends.append(month_end)
 
 
-def apportionment(count: int) -> list[float]:
+def apportionment(
+    count: int,
+) -> list[float]:
     """``count`` fatores de rateio iguais, que somam exatamente 1.
 
     Um contrato está em uma ou duas operações: os fatores 1 e 1/2 são frações diádicas, exatas em
@@ -389,13 +413,18 @@ def apportionment(count: int) -> list[float]:
     return [1.0 / count] * count
 
 
-def as_pandas_wrote(table: pa.Table) -> pa.Table:
+def as_pandas_wrote(
+    table: pa.Table,
+) -> pa.Table:
     """A tabela como a origem a gravou: pelo pandas, sem índice, com o esquema explícito, e a chave
     ``pandas`` no rodapé."""
     return pa.Table.from_pandas(table.to_pandas(), schema=table.schema, preserve_index=False)
 
 
-def written_by_pandas(table_name: str, value: str | None = None) -> bool:
+def written_by_pandas(
+    table_name: str,
+    value: str | None = None,
+) -> bool:
     """Se o arquivo da tabela, ou da partição ``value``, leva a chave ``pandas`` no rodapé.
 
     A base de produção tem a chave em parte dos arquivos das tabelas particionadas e em nenhum de
@@ -411,7 +440,10 @@ def written_by_pandas(table_name: str, value: str | None = None) -> bool:
 
 
 def write_chunks(
-    folder: Path, table: pa.Table, pandas_key: bool, chunk_rows: int = CHUNK_ROWS
+    folder: Path,
+    table: pa.Table,
+    pandas_key: bool,
+    chunk_rows: int = CHUNK_ROWS,
 ) -> list[Path]:
     """Grava ``table`` em ``folder`` como ``chunk_0.parquet``, ``chunk_1.parquet``, ...,
     ``chunk_rows`` linhas por arquivo."""
@@ -472,7 +504,9 @@ def build_cad_contas() -> pa.Table:
     return pa.Table.from_pylist(rows, schema=SCHEMAS["cad_contas"])
 
 
-def build_rel_contas_hierarquias(accounts: pa.Table) -> pa.Table:
+def build_rel_contas_hierarquias(
+    accounts: pa.Table,
+) -> pa.Table:
     """A hierarquia 1, uma árvore de contas contábeis: 93 relações, 93 filhos distintos e 32 pais
     distintos, nenhuma conta pai de si mesma.
 
@@ -490,7 +524,7 @@ def build_rel_contas_hierarquias(accounts: pa.Table) -> pa.Table:
     for account in ids:
         if account != root:
             ordered.append(account)
-    children = ordered[1:relation_count + 1]
+    children = ordered[1 : relation_count + 1]
     parents = []
     for position in range(relation_count):
         # O filho está na posição position + 1 da ordem, e o pai numa posição anterior.
@@ -604,7 +638,9 @@ def build_meta_update_status() -> pa.Table:
 # As tabelas particionadas: uma tabela Arrow por partição
 
 
-def operation_rates(position: int) -> dict[str, float | None]:
+def operation_rates(
+    position: int,
+) -> dict[str, float | None]:
     """As taxas da operação na posição ``position`` de uma data, por coluna.
 
     Uma operação em 40 sai sem taxa alguma, e com ``custo_adicional`` só quando ``position`` é
@@ -637,13 +673,19 @@ def operation_rates(position: int) -> dict[str, float | None]:
     }
 
 
-def disbursement_code(value: str, position: int) -> str:
+def disbursement_code(
+    value: str,
+    position: int,
+) -> str:
     """O código ``desemb-<data>-<n>`` da linha na posição ``position`` da partição ``value``."""
     return f"desemb-{value}-{position:06d}"
 
 
 def operation_row(
-    operation_id: int, month_index: int, value: str, position: int
+    operation_id: int,
+    month_index: int,
+    value: str,
+    position: int,
 ) -> dict[str, object]:
     """A linha na posição ``position`` de ``cad_operacoes`` na partição ``value``.
 
@@ -684,7 +726,11 @@ def build_cad_operacoes() -> dict[str, pa.Table]:
 
 
 def contract_row(
-    rng: random.Random, contract_id: int, month_index: int, value: str, position: int
+    rng: random.Random,
+    contract_id: int,
+    month_index: int,
+    value: str,
+    position: int,
 ) -> dict[str, object]:
     """A linha na posição ``position`` de ``cad_contratos`` na partição ``value``.
 
@@ -730,7 +776,9 @@ def contract_row(
     }
 
 
-def build_cad_contratos(rng: random.Random) -> dict[str, pa.Table]:
+def build_cad_contratos(
+    rng: random.Random,
+) -> dict[str, pa.Table]:
     """Os contratos de cada data: ``data`` igual à partição, ``data_assinatura`` nula em 7 de cada
     13 linhas."""
     tables = {}
@@ -746,7 +794,8 @@ def build_cad_contratos(rng: random.Random) -> dict[str, pa.Table]:
 
 
 def contract_operation_links(
-    contracts: list[dict[str, object]], operation_names: list[str]
+    contracts: list[dict[str, object]],
+    operation_names: list[str],
 ) -> list[tuple[dict[str, object], str, float]]:
     """Os pares contrato e operação de uma data, com o fator de rateio, agrupados por contrato.
 
@@ -765,7 +814,8 @@ def contract_operation_links(
 
 
 def build_rel_contrato_operacao(
-    contracts: dict[str, pa.Table], operations: dict[str, pa.Table]
+    contracts: dict[str, pa.Table],
+    operations: dict[str, pa.Table],
 ) -> dict[str, pa.Table]:
     """A relação N×N de cada data: todo contrato numa operação, um em quatro também na seguinte, e
     os fatores somando 1.
@@ -796,7 +846,10 @@ def build_rel_contrato_operacao(
     return tables
 
 
-def evenly_spaced_ids(count: int, largest: int) -> list[int]:
+def evenly_spaced_ids(
+    count: int,
+    largest: int,
+) -> list[int]:
     """``count`` ids crescentes de 1 a ``largest``, espaçados por igual."""
     span = largest - 1
     intervals = count - 1
@@ -806,7 +859,9 @@ def evenly_spaced_ids(count: int, largest: int) -> list[int]:
     return ids
 
 
-def postable_account_ids(accounts: pa.Table) -> list[int]:
+def postable_account_ids(
+    accounts: pa.Table,
+) -> list[int]:
     """Os ids das contas que aceitam lançamento, a partir da conta 8."""
     ids = []
     for row in accounts.to_pylist():
@@ -815,7 +870,11 @@ def postable_account_ids(accounts: pa.Table) -> list[int]:
     return ids
 
 
-def entry_amount(rng: random.Random, partition_index: int, position: int) -> float:
+def entry_amount(
+    rng: random.Random,
+    partition_index: int,
+    position: int,
+) -> float:
     """O ``valor`` de um lançamento: o par extremo nas duas primeiras linhas da primeira data, e um
     sorteio com três casas nas outras."""
     if partition_index == 0 and position == 0:
@@ -826,7 +885,9 @@ def entry_amount(rng: random.Random, partition_index: int, position: int) -> flo
 
 
 def build_cad_lancamentos(
-    rng: random.Random, contracts: dict[str, pa.Table], accounts: pa.Table
+    rng: random.Random,
+    contracts: dict[str, pa.Table],
+    accounts: pa.Table,
 ) -> dict[str, pa.Table]:
     """Os lançamentos projetados de cada ``data_base``: ``data`` posterior à base, ``valor`` com
     três casas, ids esparsos.
@@ -900,7 +961,9 @@ def build_tables() -> dict[str, pa.Table | dict[str, pa.Table]]:
     return tables
 
 
-def write_source(root: Path) -> SourceBase:
+def write_source(
+    root: Path,
+) -> SourceBase:
     """Grava a base sob ``root``: uma pasta por tabela, as partições Hive, os chunks e o
     ``schema.json`` solto na raiz."""
     root.mkdir(parents=True, exist_ok=True)

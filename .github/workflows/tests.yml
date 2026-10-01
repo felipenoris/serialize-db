@@ -4,7 +4,9 @@
 # o grupo dev e cada módulo dele é importado, porque um projeto cliente recebe só as dependências de
 # execução. As extensões delta e httpfs do DuckDB, que os testes da migração leem pelo delta_scan e
 # os do secret do S3 carregam, são instaladas em .duckdb/ na raiz do repositório, a pasta que os
-# testes procuram. Os passos rodam no bash nos dois sistemas; no Windows, o Git Bash do runner.
+# testes procuram. Com o grupo dev instalado, o Ruff confere o código (ruff check) e a formatação
+# (ruff format --check) antes dos testes. Os passos rodam no bash nos dois sistemas; no Windows, o
+# Git Bash do runner.
 name: Testes do pacote
 
 on:
@@ -54,6 +56,11 @@ jobs:
 
       - name: Instalar o pacote e as dependências de teste
         run: uv sync
+
+      - name: Conferir o código e a formatação com o Ruff
+        run: |
+          uv run ruff check
+          uv run ruff format --check
 
       - name: Instalar as extensões delta e httpfs do DuckDB em .duckdb/
         run: >-

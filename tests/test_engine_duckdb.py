@@ -72,9 +72,13 @@ class Conta(Base):
     numero: Mapped[str] = mapped_column(sa.String(20), unique=True)
 
 
-LANCAMENTO_INFO = {"serialize_db": {"partition_by": ["data_base_str"],
-                                    "partition_source": "data_base",
-                                    "sort_key": ["data_base", "id_lancamento"]}}
+LANCAMENTO_INFO = {
+    "serialize_db": {
+        "partition_by": ["data_base_str"],
+        "partition_source": "data_base",
+        "sort_key": ["data_base", "id_lancamento"],
+    }
+}
 
 
 class Lancamento(Base):
@@ -123,7 +127,10 @@ class Setup:
     engine: DuckDBEngine
     folder: Path
 
-    def uri(self, table: sa.Table) -> str:
+    def uri(
+        self,
+        table: sa.Table,
+    ) -> str:
         """A pasta da tabela no ambiente ``prd``."""
         return self.storage.uri_of(f"prd/{table.name}")
 
@@ -133,7 +140,9 @@ class Setup:
 
 
 @pytest.fixture
-def setup(local_location: LocalLocation) -> Iterator[Setup]:
+def setup(
+    local_location: LocalLocation,
+) -> Iterator[Setup]:
     """Uma pasta nova com a raiz Delta e a pasta do sandbox, e o motor sobre ela."""
     folder = Path(local_location.child(f"engine/{uuid.uuid4().hex[:8]}"))
     storage = Storage.for_uri(str(folder / "delta"))
@@ -143,34 +152,50 @@ def setup(local_location: LocalLocation) -> Iterator[Setup]:
     engine.cleanup()
 
 
-def account_of(entry_id: int) -> int:
+def account_of(
+    entry_id: int,
+) -> int:
     """A conta do lançamento ``entry_id`` em ``entry_rows``: 1, 2 e 3 em rodízio."""
     return 1 + entry_id % 3
 
 
-def entry_rows(value: str, start: int, count: int, table: sa.Table = ENTRIES,
-               valor: list[float] | None = None, area: str | None = "TI") -> pa.Table:
+def entry_rows(
+    value: str,
+    start: int,
+    count: int,
+    table: sa.Table = ENTRIES,
+    valor: list[float] | None = None,
+    area: str | None = "TI",
+) -> pa.Table:
     """``count`` lançamentos da partição ``value`` com ids a partir de ``start``, no contrato."""
     ids = list(range(start, start + count))
     if valor is None:
         valor = [entry_id / 4 for entry_id in ids]
-    data = pa.table({
-        "id_lancamento": pa.array(ids, pa.int64()),
-        "id_conta": pa.array([account_of(entry_id) for entry_id in ids], pa.int64()),
-        "data_base": pa.array([datetime.date.fromisoformat(value)] * count, pa.date32()),
-        "valor": pa.array(valor, pa.float64()),
-        "preco": pa.array([decimal.Decimal(entry_id) / 100 for entry_id in ids],
-                          pa.decimal128(18, 2)),
-        "area": pa.array([area] * count, pa.string()),
-        "meta": pa.array([json.dumps({"k": entry_id}) for entry_id in ids]),
-        "to": pa.array(["SP"] * count),
-        "codigo": pa.array([f"L{entry_id:06d}" for entry_id in ids]),
-        "data_base_str": pa.array([value] * count),
-    })
+    data = pa.table(
+        {
+            "id_lancamento": pa.array(ids, pa.int64()),
+            "id_conta": pa.array([account_of(entry_id) for entry_id in ids], pa.int64()),
+            "data_base": pa.array([datetime.date.fromisoformat(value)] * count, pa.date32()),
+            "valor": pa.array(valor, pa.float64()),
+            "preco": pa.array(
+                [decimal.Decimal(entry_id) / 100 for entry_id in ids], pa.decimal128(18, 2)
+            ),
+            "area": pa.array([area] * count, pa.string()),
+            "meta": pa.array([json.dumps({"k": entry_id}) for entry_id in ids]),
+            "to": pa.array(["SP"] * count),
+            "codigo": pa.array([f"L{entry_id:06d}" for entry_id in ids]),
+            "data_base_str": pa.array([value] * count),
+        }
+    )
     return schema.cast(data, table)
 
 
-def published_table(setup: Setup, table: sa.Table, months: list[str], rows: int = 100) -> int:
+def published_table(
+    setup: Setup,
+    table: sa.Table,
+    months: list[str],
+    rows: int = 100,
+) -> int:
     """A tabela Delta com ``rows`` linhas por mês e ids contíguos a partir de 1; devolve a última
     versão."""
     uri = setup.uri(table)
@@ -182,7 +207,10 @@ def published_table(setup: Setup, table: sa.Table, months: list[str], rows: int 
     return version
 
 
-def published_accounts(setup: Setup, numbers: list[str]) -> int:
+def published_accounts(
+    setup: Setup,
+    numbers: list[str],
+) -> int:
     """``cad_contas`` publicada com uma conta por número, ids a partir de 1; devolve a versão."""
     uri = setup.uri(ACCOUNTS)
     delta.create_table(uri, ACCOUNTS, setup.storage)
@@ -191,37 +219,57 @@ def published_accounts(setup: Setup, numbers: list[str]) -> int:
     return delta.publish_partition(uri, ACCOUNTS, None, accounts, METADATA, setup.storage)
 
 
-def count_of(engine: DuckDBEngine, name: str) -> int:
+def count_of(
+    engine: DuckDBEngine,
+    name: str,
+) -> int:
     """As linhas da tabela ou view ``name`` do sandbox."""
     return engine.query(f'SELECT count(*) AS n FROM "{name}"').column("n")[0].as_py()
 
 
-def totals_of(engine: DuckDBEngine, name: str) -> dict:
+def totals_of(
+    engine: DuckDBEngine,
+    name: str,
+) -> dict:
     """As linhas, os ids distintos e a soma de ``valor`` da tabela ``name`` do sandbox."""
-    totals = engine.query(f'SELECT count(*) AS linhas, count(DISTINCT id_lancamento) AS ids, '
-                          f'sum(valor) AS soma FROM "{name}"')
+    totals = engine.query(
+        f"SELECT count(*) AS linhas, count(DISTINCT id_lancamento) AS ids, "
+        f'sum(valor) AS soma FROM "{name}"'
+    )
     return totals.to_pylist()[0]
 
 
-def create_and_append(engine: DuckDBEngine, table: sa.Table, data: object) -> int:
+def create_and_append(
+    engine: DuckDBEngine,
+    table: sa.Table,
+    data: object,
+) -> int:
     """A tabela criada vazia por ``create_table`` e os lotes acrescentados por ``append``; devolve
     as linhas acrescentadas."""
     engine.create_table(table)
     return engine.append(table, data)
 
 
-def spool_files(engine: DuckDBEngine) -> list[Path]:
+def spool_files(
+    engine: DuckDBEngine,
+) -> list[Path]:
     """Os arquivos na pasta de transbordo do motor."""
     return list(Path(engine._spool_folder).iterdir())
 
 
-def scan(storage: Storage, text: str) -> list[tuple]:
+def scan(
+    storage: Storage,
+    text: str,
+) -> list[tuple]:
     """As linhas de uma consulta numa conexão DuckDB própria, fora do motor."""
     with storage.duckdb_connect() as connection:
         return connection.execute(text).fetchall()
 
 
-def result_of(report: AuditReport, name: str) -> CheckResult:
+def result_of(
+    report: AuditReport,
+    name: str,
+) -> CheckResult:
     """A verificação ``name`` do relatório."""
     for result in report.results:
         if result.name == name:
@@ -232,15 +280,20 @@ def result_of(report: AuditReport, name: str) -> CheckResult:
 # ---------------------------------------------------------------- a sessão
 
 
-def test_engine_config_and_single_session(setup: Setup, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_engine_config_and_single_session(
+    setup: Setup,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """As configurações pedidas, os limites lidos do ambiente quando a configuração os omite e o
     banco em arquivo dentro da pasta; três threads usam a mesma sessão, a tabela temporária de uma
     vale para as outras, uma primitiva dentro de ``session()`` não trava, e ``cleanup`` apaga o
     banco e o transbordo."""
     engine = setup.engine
     assert isinstance(engine, Engine)
-    settings_query = ("SELECT name, value FROM duckdb_settings() "
-                      "WHERE name IN ('threads', 'preserve_insertion_order')")
+    settings_query = (
+        "SELECT name, value FROM duckdb_settings() "
+        "WHERE name IN ('threads', 'preserve_insertion_order')"
+    )
     rows = engine.query(settings_query).to_pylist()
     settings = {row["name"]: row["value"] for row in rows}
     assert settings == {"threads": "2", "preserve_insertion_order": "false"}
@@ -248,7 +301,9 @@ def test_engine_config_and_single_session(setup: Setup, monkeypatch: pytest.Monk
     assert database.exists()
 
     # Três threads usam a mesma sessão.
-    def create(number: int) -> None:
+    def create(
+        number: int,
+    ) -> None:
         engine.query(f"CREATE TABLE t{number} AS SELECT {number} AS k")
 
     threads = [threading.Thread(target=create, args=(number,)) for number in range(3)]
@@ -285,8 +340,9 @@ def test_engine_config_and_single_session(setup: Setup, monkeypatch: pytest.Monk
     monkeypatch.setattr(resources, "_CGROUP_ROOT", machine / "cgroup")
     limits_query = "SELECT current_setting('memory_limit') AS m, current_setting('threads') AS t"
     for memory_limit, expected in [(None, "1.0 GiB"), ("768MiB", "768.0 MiB")]:
-        other_config = DuckDBConfig(memory_limit=memory_limit,
-                                    temp_directory=str(setup.folder / "outro"))
+        other_config = DuckDBConfig(
+            memory_limit=memory_limit, temp_directory=str(setup.folder / "outro")
+        )
         other = DuckDBEngine(other_config, "exec-2026-09-06", setup.storage)
         limits = other.query(limits_query).to_pylist()[0]
         other.cleanup()
@@ -302,8 +358,10 @@ def test_engine_config_and_single_session(setup: Setup, monkeypatch: pytest.Monk
         engine.query("SELECT 1")
 
 
-def test_temporary_folder_is_created_and_removed(local_location: LocalLocation,
-                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+def test_temporary_folder_is_created_and_removed(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Sem ``temp_directory``, o motor cria uma pasta nova e a apaga inteira no ``cleanup``."""
     # A pasta temporária do processo aponta para a raiz local: a suíte só grava sob ela.
     temporary = Path(local_location.child(f"engine_tmp/{uuid.uuid4().hex[:8]}"))
@@ -318,8 +376,10 @@ def test_temporary_folder_is_created_and_removed(local_location: LocalLocation,
     assert not folder.exists()
 
 
-def test_failed_opening_removes_what_the_engine_created(local_location: LocalLocation,
-                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_opening_removes_what_the_engine_created(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A abertura que falha, pela extensão ``delta`` ausente da pasta de extensões, apaga a pasta
     nova que o motor criou; com ``temp_directory``, apaga o banco e a pasta de transbordo e deixa
     a pasta informada."""
@@ -347,7 +407,9 @@ def test_failed_opening_removes_what_the_engine_created(local_location: LocalLoc
     assert list(sandbox.iterdir()) == []
 
 
-def test_new_session_runs_beside_the_main_one(setup: Setup) -> None:
+def test_new_session_runs_beside_the_main_one(
+    setup: Setup,
+) -> None:
     """A sessão a mais vê o que a principal confirmou e não a temporária dela, roda enquanto a
     principal está num bloco ``session()``, e a principal vê o que ela confirma; o ``with`` fecha só
     o cursor."""
@@ -369,20 +431,29 @@ def test_new_session_runs_beside_the_main_one(setup: Setup) -> None:
 # ---------------------------------------------------------------- o secret do S3
 
 
-def stored_key(connection: duckdb.DuckDBPyConnection) -> str:
+def stored_key(
+    connection: duckdb.DuckDBPyConnection,
+) -> str:
     """A chave que o secret do S3 guarda, do ``secret_string`` de ``duckdb_secrets()``."""
     rows = connection.execute(
-        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'").fetchall()
+        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'"
+    ).fetchall()
     return re.search(r"(?:^|;)key_id=([^;]*)", rows[0][0]).group(1)
 
 
-def renewals(caplog: pytest.LogCaptureFixture) -> int:
+def renewals(
+    caplog: pytest.LogCaptureFixture,
+) -> int:
     """Quantas vezes o motor recriou o secret do S3, pelo log."""
     return sum(1 for entry in caplog.records if "secret do S3 recriado" in entry.getMessage())
 
 
-def engine_over_s3(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch,
-                   opening: object, held: object) -> DuckDBEngine:
+def engine_over_s3(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+    opening: object,
+    held: object,
+) -> DuckDBEngine:
     """O motor sobre uma raiz S3 que o teste não lê, com o sandbox na raiz local: ``opening`` é a
     credencial da cadeia na abertura da conexão, e ``held`` a que o motor segura."""
     require_duckdb_extension("httpfs")
@@ -395,8 +466,10 @@ def engine_over_s3(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatc
 
 
 def test_session_recreates_the_s3_secret_when_the_key_changes(
-        local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture) -> None:
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Numa raiz S3, a entrada da sessão recria o secret quando a chave da credencial troca, uma
     vez só entre sessões concorrentes; a entrada reentrante não o toca, e a do ``stream``, na
     thread auxiliar, também o recria."""
@@ -440,19 +513,28 @@ def test_session_recreates_the_s3_secret_when_the_key_changes(
 def unreachable_endpoint() -> dict[str, str]:
     """O endpoint de credenciais que não responde, pedido pela credencial vencida."""
     raise botocore.exceptions.CredentialRetrievalError(
-        provider="container-role", error_msg="o endpoint de credenciais não respondeu")
+        provider="container-role", error_msg="o endpoint de credenciais não respondeu"
+    )
 
 
-def test_stream_raises_the_error_of_the_session_entry(local_location: LocalLocation,
-                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stream_raises_the_error_of_the_session_entry(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A credencial vencida cujo endpoint não responde faz a entrada da sessão falhar: ``query``
     levanta o erro, e o ``stream``, cuja sessão entra na thread auxiliar, o levanta na construção
     em vez de esperar pelo primeiro lote."""
     opening = botocore.credentials.Credentials("AKIAABERTURA", "segredo", "token")
     expired = botocore.credentials.RefreshableCredentials.create_from_metadata(
-        metadata={"access_key": "AKIAVENCIDA", "secret_key": "segredo", "token": "token",
-                  "expiry_time": "2026-01-01T00:00:00+00:00"},
-        refresh_using=unreachable_endpoint, method="container-role")
+        metadata={
+            "access_key": "AKIAVENCIDA",
+            "secret_key": "segredo",
+            "token": "token",
+            "expiry_time": "2026-01-01T00:00:00+00:00",
+        },
+        refresh_using=unreachable_endpoint,
+        method="container-role",
+    )
     with engine_over_s3(local_location, monkeypatch, opening, expired) as engine:
         with pytest.raises(botocore.exceptions.CredentialRetrievalError):
             engine.query("SELECT 1")
@@ -476,8 +558,10 @@ def test_stream_raises_the_error_of_the_session_entry(local_location: LocalLocat
 
 @pytest.mark.s3
 def test_delta_scan_reads_after_the_secret_holds_a_stale_key(
-        local_location: LocalLocation, s3_location: S3Location,
-        monkeypatch: pytest.MonkeyPatch) -> None:
+    local_location: LocalLocation,
+    s3_location: S3Location,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """No bucket, um secret com uma chave que o S3 não conhece faz o papel da chave vencida: a
     entrada da sessão seguinte o recria com a chave da credencial do ``boto3``, e o ``delta_scan``
     lê a tabela; no ambiente alvo, sem a recriação, o S3 recusaria a chave."""
@@ -505,7 +589,9 @@ def test_delta_scan_reads_after_the_secret_holds_a_stale_key(
 # ---------------------------------------------------------------- a leitura do Delta
 
 
-def test_ingest_pins_the_version(setup: Setup) -> None:
+def test_ingest_pins_the_version(
+    setup: Setup,
+) -> None:
     """Um commit depois da abertura não aparece na view nem na tabela materializada; o nome ocupado
     é ``SandboxError``, e a versão ausente também."""
     version = published_table(setup, ENTRIES, MONTHS[:2])
@@ -524,12 +610,20 @@ def test_ingest_pins_the_version(setup: Setup) -> None:
         engine.ingest(PROJECTED, setup.uri(PROJECTED), None)
 
 
-@pytest.mark.parametrize(("name", "wanted", "opened_months"), [
-    ("contiguas", MONTHS[1:3], MONTHS[1:3]),
-    ("salteadas", [MONTHS[1], MONTHS[3]], MONTHS[1:4]),
-], ids=["contiguas", "salteadas"])
-def test_ingest_opens_only_the_range_of_partitions(setup: Setup, name: str, wanted: list[str],
-                                                   opened_months: list[str]) -> None:
+@pytest.mark.parametrize(
+    ("name", "wanted", "opened_months"),
+    [
+        ("contiguas", MONTHS[1:3], MONTHS[1:3]),
+        ("salteadas", [MONTHS[1], MONTHS[3]], MONTHS[1:4]),
+    ],
+    ids=["contiguas", "salteadas"],
+)
+def test_ingest_opens_only_the_range_of_partitions(
+    setup: Setup,
+    name: str,
+    wanted: list[str],
+    opened_months: list[str],
+) -> None:
     """A ingestão de partições contíguas e de uma lista salteada abre só os arquivos do intervalo,
     pelo log ``FileSystem`` do DuckDB, e traz só as linhas pedidas."""
     version = published_table(setup, ENTRIES, MONTHS, rows=10)
@@ -547,7 +641,9 @@ def test_ingest_opens_only_the_range_of_partitions(setup: Setup, name: str, want
     assert opened == {f"data_base_str={month}" for month in opened_months}
 
 
-def test_materialized_ingest_applies_the_contract(setup: Setup) -> None:
+def test_materialized_ingest_applies_the_contract(
+    setup: Setup,
+) -> None:
     """A tabela do ``ingest`` materializado tem os tipos e o ``NOT NULL`` do DDL, e a view os tipos
     do ``delta_scan``; uma partição com JSON malformado não entra na tabela, e o nome fica livre;
     ``partitions=[]`` cria a tabela vazia."""
@@ -563,13 +659,19 @@ def test_materialized_ingest_applies_the_contract(setup: Setup) -> None:
     assert viewed.num_rows == 10
     types = engine.query(
         "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns "
-        "WHERE column_name IN ('meta', 'valor', 'preco') ORDER BY 1, 2").to_pylist()
+        "WHERE column_name IN ('meta', 'valor', 'preco') ORDER BY 1, 2"
+    ).to_pylist()
     by_table = {}
     for row in types:
-        by_table.setdefault(row["table_name"], {})[row["column_name"]] = (row["data_type"],
-                                                                          row["is_nullable"])
-    assert by_table[ENTRIES.name] == {"meta": ("JSON", "YES"), "preco": ("DECIMAL(18,2)", "YES"),
-                                      "valor": ("DOUBLE", "NO")}
+        by_table.setdefault(row["table_name"], {})[row["column_name"]] = (
+            row["data_type"],
+            row["is_nullable"],
+        )
+    assert by_table[ENTRIES.name] == {
+        "meta": ("JSON", "YES"),
+        "preco": ("DECIMAL(18,2)", "YES"),
+        "valor": ("DOUBLE", "NO"),
+    }
     assert by_table["cad_view"]["meta"] == ("VARCHAR", "YES")
     assert by_table["cad_view"]["valor"] == ("DOUBLE", "YES")
     assert materialized.column("meta").to_pylist() == viewed.column("meta").to_pylist()
@@ -587,7 +689,9 @@ def test_materialized_ingest_applies_the_contract(setup: Setup) -> None:
     assert count_of(engine, "cad_malformada") == 0
 
 
-def test_client_transaction_with_materialized_ingest_and_create_table(setup: Setup) -> None:
+def test_client_transaction_with_materialized_ingest_and_create_table(
+    setup: Setup,
+) -> None:
     """Numa transação que o cliente abriu em ``session()``, o ``ingest`` com ``materialize=True``
     levanta o ``BEGIN`` recusado e desfaz a transação do cliente, cujo ``COMMIT`` falha em vez de
     voltar sem erro com a tabela do cliente perdida; a tabela que ``create_table`` cria depois do
@@ -629,7 +733,9 @@ def test_client_transaction_with_materialized_ingest_and_create_table(setup: Set
     assert counted == [(0,)]
 
 
-def test_pinned_delta_reads_the_version_without_a_sandbox_name(setup: Setup) -> None:
+def test_pinned_delta_reads_the_version_without_a_sandbox_name(
+    setup: Setup,
+) -> None:
     """``pinned_delta`` lê a versão fixada sem criar objeto no sandbox, e ``create_table`` da mesma
     tabela fica com o nome do modelo; sem versão, ``SandboxError``."""
     version = published_table(setup, PROJECTED, MONTHS[:2])
@@ -651,16 +757,21 @@ def test_pinned_delta_reads_the_version_without_a_sandbox_name(setup: Setup) -> 
 # ---------------------------------------------------------------- consulta e parâmetros
 
 
-def test_statement_parameters_expand_in_lists(setup: Setup) -> None:
+def test_statement_parameters_expand_in_lists(
+    setup: Setup,
+) -> None:
     """Um statement com ``IN`` de lista, ``NOT IN`` e ``bindparam`` expansível roda por ``query`` e
     por ``stream``; um nome a mais ou a menos é ``SqlError`` antes de rodar."""
     engine = setup.engine
     create_and_append(engine, ENTRIES, entry_rows(MONTHS[0], 1, 30))
     statement = (
         sa.select(ENTRIES.c.id_lancamento)
-        .where(ENTRIES.c.id_conta.in_([1, 2]), ENTRIES.c.id_lancamento.notin_([1, 4]),
-               ENTRIES.c.area.in_(sa.bindparam("areas", expanding=True)),
-               ENTRIES.c.data_base_str == sa.bindparam("particao"))
+        .where(
+            ENTRIES.c.id_conta.in_([1, 2]),
+            ENTRIES.c.id_lancamento.notin_([1, 4]),
+            ENTRIES.c.area.in_(sa.bindparam("areas", expanding=True)),
+            ENTRIES.c.data_base_str == sa.bindparam("particao"),
+        )
         .order_by(ENTRIES.c.id_lancamento)
     )
     params = {"areas": ["TI", "RH"], "particao": MONTHS[0]}
@@ -678,7 +789,9 @@ def test_statement_parameters_expand_in_lists(setup: Setup) -> None:
         engine.query(statement, {**params, "sobra": 1})
 
 
-def test_query_keeps_percent_literals(setup: Setup) -> None:
+def test_query_keeps_percent_literals(
+    setup: Setup,
+) -> None:
     """``LIKE 'A%'`` num statement e num texto pronto chega ao DuckDB como está, e o texto pronto
     recebe os parâmetros por ``:nome``."""
     engine = setup.engine
@@ -687,21 +800,28 @@ def test_query_keeps_percent_literals(setup: Setup) -> None:
     create_and_append(engine, ENTRIES, pa.concat_tables([abc, xyz]))
     statement = sa.select(sa.func.count().label("n")).where(ENTRIES.c.area.like("A%"))
     assert engine.query(statement).column("n")[0].as_py() == 3
-    text = ('SELECT count(*) AS n FROM "cad_lancamentos" '
-            'WHERE "area" LIKE \'X%\' AND "id_lancamento" > :minimo')
+    text = (
+        'SELECT count(*) AS n FROM "cad_lancamentos" '
+        'WHERE "area" LIKE \'X%\' AND "id_lancamento" > :minimo'
+    )
     assert engine.query(text, {"minimo": 10}).column("n")[0].as_py() == 1
 
 
 # ---------------------------------------------------------------- o stream
 
 
-def create_numbers(engine: DuckDBEngine) -> None:
+def create_numbers(
+    engine: DuckDBEngine,
+) -> None:
     """Cria ``numeros`` no sandbox: ``id`` de 0 a 2.999.999 e o texto ``s``."""
-    engine.query("CREATE TABLE numeros AS "
-                 "SELECT range AS id, 'x' || range AS s FROM range(3_000_000)")
+    engine.query(
+        "CREATE TABLE numeros AS SELECT range AS id, 'x' || range AS s FROM range(3_000_000)"
+    )
 
 
-def test_stream_delivers_each_batch_while_the_query_runs(setup: Setup) -> None:
+def test_stream_delivers_each_batch_while_the_query_runs(
+    setup: Setup,
+) -> None:
     """O primeiro lote com a consulta rodando, sem arquivo com o cliente acompanhando; um
     comando no meio da leitura roda depois da consulta; a tabela temporária e o stream dentro de
     ``session()``; o abandono para a consulta e apaga o arquivo; o erro chega na construção ou na
@@ -765,22 +885,27 @@ def test_stream_delivers_each_batch_while_the_query_runs(setup: Setup) -> None:
     # A consulta que falha no meio roda num motor de uma thread: com duas, o DuckDB 1.5.5 entregou
     # INTERRUPT Error: Interrupted! no lugar do erro de conversão em 3 de 21 execuções de
     # 2026-09-28 (plan/POC.md).
-    failing = ("SELECT CAST(CASE WHEN id = 2_900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END "
-               "AS INTEGER) AS n FROM numeros")
+    failing = (
+        "SELECT CAST(CASE WHEN id = 2_900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END "
+        "AS INTEGER) AS n FROM numeros"
+    )
     one_thread_config = DuckDBConfig(threads=1, temp_directory=str(setup.folder / "uma_thread"))
     with DuckDBEngine(one_thread_config, EXECUTION_ID, setup.storage) as one_thread:
         threads = one_thread.query("SELECT current_setting('threads') AS t").to_pylist()
         assert threads == [{"t": 1}]
         create_numbers(one_thread)
         for budget in (64 * 2**20, 10_000):
-            with (pytest.raises(OSError, match="Could not convert string 'x' to INT32"),
-                  DuckDBStream(one_thread, failing, [], batch_size=100_000,
-                               budget=budget) as stream):
+            with (
+                pytest.raises(OSError, match="Could not convert string 'x' to INT32"),
+                DuckDBStream(one_thread, failing, [], batch_size=100_000, budget=budget) as stream,
+            ):
                 stream.read_all()
             assert spool_files(one_thread) == []
 
 
-def test_stream_spills_after_the_budget_and_keeps_the_order(setup: Setup) -> None:
+def test_stream_spills_after_the_budget_and_keeps_the_order(
+    setup: Setup,
+) -> None:
     """Com o cliente lento e um orçamento de dois lotes, a memória para no orçamento, o resto vai
     para o arquivo, as linhas saem todas e na ordem, e o ``close`` apaga o arquivo."""
     engine = setup.engine
@@ -801,18 +926,26 @@ def test_stream_spills_after_the_budget_and_keeps_the_order(setup: Setup) -> Non
     assert spool_files(engine) == []
 
     # Os lotes que foram ao arquivo e o pico em memória vão para o relatório.
-    record("engine.stream.spilled_batches",
-           f"{spilled} de 30 lotes no arquivo, com {peak / 1e6:.1f} MB de pico em memória")
+    record(
+        "engine.stream.spilled_batches",
+        f"{spilled} de 30 lotes no arquivo, com {peak / 1e6:.1f} MB de pico em memória",
+    )
 
 
-def sorting(observer: DuckDBEngine) -> bool:
+def sorting(
+    observer: DuckDBEngine,
+) -> bool:
     """Se alguma consulta do banco ordena agora: memória ``ORDER_BY`` em ``duckdb_memory()``."""
-    query = ("SELECT count(*) AS n FROM duckdb_memory() "
-             "WHERE tag = 'ORDER_BY' AND memory_usage_bytes > 0")
+    query = (
+        "SELECT count(*) AS n FROM duckdb_memory() "
+        "WHERE tag = 'ORDER_BY' AND memory_usage_bytes > 0"
+    )
     return observer.query(query).column("n")[0].as_py() > 0
 
 
-def wait_for_the_sort(engine: DuckDBEngine) -> None:
+def wait_for_the_sort(
+    engine: DuckDBEngine,
+) -> None:
     """Espera, com prazo de 10 s, uma ordenação no banco do motor, lida numa sessão a mais."""
     deadline = time.monotonic() + 10
     with engine.new_session() as observer:
@@ -821,7 +954,9 @@ def wait_for_the_sort(engine: DuckDBEngine) -> None:
         assert sorting(observer), "a ordenação não começou em 10 s"
 
 
-def test_close_and_cleanup_interrupt_the_running_query(setup: Setup) -> None:
+def test_close_and_cleanup_interrupt_the_running_query(
+    setup: Setup,
+) -> None:
     """O ``close`` depois do primeiro lote de uma varredura longa cancela a consulta, e a sessão
     continua usável; o ``cleanup`` cancela a ordenação de um stream que outra thread ainda
     constrói."""
@@ -865,7 +1000,9 @@ def test_close_and_cleanup_interrupt_the_running_query(setup: Setup) -> None:
 # ---------------------------------------------------------------- create_table e o appender
 
 
-def test_create_table_creates_the_empty_table_of_the_model(setup: Setup) -> None:
+def test_create_table_creates_the_empty_table_of_the_model(
+    setup: Setup,
+) -> None:
     """``create_table`` cria a tabela vazia com o DDL do modelo, os tipos e o ``NOT NULL`` do
     contrato; o nome de uma view interna do catálogo do DuckDB está livre; o nome ocupado, por ela,
     pela view ou pela tabela do ``ingest``, é ``SandboxError`` e o objeto não muda."""
@@ -876,7 +1013,8 @@ def test_create_table_creates_the_empty_table_of_the_model(setup: Setup) -> None
     assert count_of(engine, PROJECTED.name) == 0
     columns = engine.query(
         "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-        f"WHERE table_name = '{PROJECTED.name}' ORDER BY ordinal_position").to_pylist()
+        f"WHERE table_name = '{PROJECTED.name}' ORDER BY ordinal_position"
+    ).to_pylist()
     by_name = {row["column_name"]: (row["data_type"], row["is_nullable"]) for row in columns}
     assert by_name["preco"] == ("DECIMAL(18,2)", "YES")
     assert by_name["meta"] == ("JSON", "YES")
@@ -899,7 +1037,9 @@ def test_create_table_creates_the_empty_table_of_the_model(setup: Setup) -> None
     assert [count_of(engine, name) for name in names] == [0, 10, 10]
 
 
-def test_appender_inserts_in_one_statement_on_close(setup: Setup) -> None:
+def test_appender_inserts_in_one_statement_on_close(
+    setup: Setup,
+) -> None:
     """A tabela não muda antes do ``close``; a exceção do cliente, o lote recusado pelo ``cast`` e
     o erro do ``INSERT`` não deixam linha; ``rows`` conta as linhas; o appender sem lote não muda a
     tabela, e o segundo appender acrescenta ao que o primeiro inseriu."""
@@ -959,7 +1099,9 @@ def test_appender_inserts_in_one_statement_on_close(setup: Setup) -> None:
     assert count_of(engine, "cad_segunda") == 15
 
 
-def test_appender_second_close_does_nothing(setup: Setup) -> None:
+def test_appender_second_close_does_nothing(
+    setup: Setup,
+) -> None:
     """O ``close`` explícito dentro do ``with`` insere os lotes, e o ``close`` da saída do ``with``
     não faz nada: as linhas entram uma vez, sem erro."""
     engine = setup.engine
@@ -973,7 +1115,9 @@ def test_appender_second_close_does_nothing(setup: Setup) -> None:
     assert spool_files(engine) == []
 
 
-def test_appender_write_refusals(setup: Setup) -> None:
+def test_appender_write_refusals(
+    setup: Setup,
+) -> None:
     """O lote que o ``cast`` recusa, com a recusa pega pelo cliente dentro do ``with``, sobe de
     novo no ``close``, e nenhum lote entra, nem os aceitos antes e depois dele; o lote com colunas
     diferentes das do primeiro é ``ContractError``, e nada é inserido."""
@@ -1004,7 +1148,8 @@ def test_appender_write_refusals(setup: Setup) -> None:
 
 
 def test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query(
-        setup: Setup) -> None:
+    setup: Setup,
+) -> None:
     """Com ``stream`` e depois ``appender`` no mesmo ``with``, o primeiro lote chega com a consulta
     rodando; ``create_table`` de outra tabela dentro do ``with`` volta com a consulta ainda
     rodando; a tabela tem todas as linhas no fim."""
@@ -1012,7 +1157,8 @@ def test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query(
     engine.query(
         "CREATE TABLE fonte AS SELECT range AS id_lancamento, 1 AS id_conta, "
         "DATE '2026-08-31' AS data_base, range / 4 AS valor, 'L' || range AS codigo, "
-        "'2026-08-31' AS data_base_str FROM range(3_000_000)")
+        "'2026-08-31' AS data_base_str FROM range(3_000_000)"
+    )
     engine.create_table(PROJECTED)
     other = PROJECTED.to_metadata(sa.MetaData(), name="cad_segunda")
     with engine.stream("SELECT * FROM fonte") as stream, engine.appender(PROJECTED) as appender:
@@ -1029,10 +1175,13 @@ def test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query(
     assert count_of(engine, PROJECTED.name) == 3_000_000
 
 
-def pipeline_table(name: str) -> sa.Table:
+def pipeline_table(
+    name: str,
+) -> sa.Table:
     """A saída do pipeline de três estágios: as colunas da fonte e o ``dobro`` do valor."""
     return sa.Table(
-        name, sa.MetaData(),
+        name,
+        sa.MetaData(),
         sa.Column("id", sa.BigInteger),
         sa.Column("valor", sa.Numeric(18, 2)),
         sa.Column("s", sa.String(20)),
@@ -1040,7 +1189,9 @@ def pipeline_table(name: str) -> sa.Table:
     )
 
 
-def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None:
+def test_three_stage_pipeline_overlaps_read_work_and_write(
+    setup: Setup,
+) -> None:
     """Leitura por ``stream``, trabalho do cliente por lote e escrita por ``appender`` numa sessão
     única, sobre um banco em arquivo, produzem as mesmas linhas que a versão por lote sem threads e
     que a versão por ``pa.Table``; os tempos são leituras do relatório."""
@@ -1048,13 +1199,22 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
     engine.query(
         "CREATE TABLE fonte AS SELECT range AS id, "
         "CAST(((range * 7) % 1000) / 100.0 AS DECIMAL(18, 2)) AS valor, "
-        "'x' || range AS s FROM range(3_000_000)")
-    target = pa.schema([("id", pa.int64()), ("valor", pa.decimal128(18, 2)), ("s", pa.string()),
-                        ("dobro", pa.float64())])
+        "'x' || range AS s FROM range(3_000_000)"
+    )
+    target = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("valor", pa.decimal128(18, 2)),
+            ("s", pa.string()),
+            ("dobro", pa.float64()),
+        ]
+    )
     engine.query(schema.ddl(pipeline_table("sequencial"), "duckdb"))
     sql = "SELECT id, valor, s FROM fonte"
 
-    def work(data: pa.RecordBatch | pa.Table) -> pa.RecordBatch | pa.Table:
+    def work(
+        data: pa.RecordBatch | pa.Table,
+    ) -> pa.RecordBatch | pa.Table:
         """O trabalho do cliente: o ``dobro`` do valor, calculado no pandas."""
         frame = data.to_pandas(types_mapper=pd.ArrowDtype)
         frame["dobro"] = (frame["valor"] * 2).astype("double[pyarrow]")
@@ -1062,7 +1222,10 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
             return pa.Table.from_pandas(frame, preserve_index=False).cast(target)
         return pa.RecordBatch.from_pandas(frame, preserve_index=False).cast(target)
 
-    def insert(name: str, data: pa.RecordBatch) -> None:
+    def insert(
+        name: str,
+        data: pa.RecordBatch,
+    ) -> None:
         """Um ``INSERT ... BY NAME`` do lote na tabela ``name``, sob o lock da sessão."""
         with engine.session() as connection:
             connection.register("lote", data)
@@ -1088,8 +1251,10 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
     # do cliente, a escrita do arquivo na thread do appender, e o INSERT único no close.
     started = time.perf_counter()
     engine.create_table(pipeline_table("encadeado"))
-    with (engine.stream(sql, batch_size=200_000) as stream,
-          engine.appender(pipeline_table("encadeado")) as appender):
+    with (
+        engine.stream(sql, batch_size=200_000) as stream,
+        engine.appender(pipeline_table("encadeado")) as appender,
+    ):
         for batch in stream:
             appender.write(work(batch))
     timings["encadeado"] = time.perf_counter() - started
@@ -1097,8 +1262,9 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
     # As três versões dão as mesmas linhas e somas; os tempos vão para o relatório.
     totals = {}
     for name in ("por_tabela", "sequencial", "encadeado"):
-        query = (f"SELECT count(*) AS n, sum(valor) AS v, sum(dobro::DECIMAL(18, 2)) AS d "
-                 f"FROM {name}")
+        query = (
+            f"SELECT count(*) AS n, sum(valor) AS v, sum(dobro::DECIMAL(18, 2)) AS d FROM {name}"
+        )
         totals[name] = engine.query(query).to_pylist()[0]
     assert totals["por_tabela"] == totals["sequencial"] == totals["encadeado"]
     assert totals["encadeado"]["n"] == 3_000_000
@@ -1108,7 +1274,9 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(setup: Setup) -> None
     record("engine.timing.three_stage_pipeline_3M_rows", ", ".join(readings))
 
 
-def test_appender_refuses_the_view_and_the_missing_table(setup: Setup) -> None:
+def test_appender_refuses_the_view_and_the_missing_table(
+    setup: Setup,
+) -> None:
     """O ``appender`` sobre a view do ``ingest`` e sobre uma tabela que não existe no sandbox
     levanta ``SandboxError`` antes do primeiro lote, apontando ``materialize=True`` e
     ``create_table``; a tabela do ``ingest`` materializado recebe os lotes."""
@@ -1127,7 +1295,8 @@ def test_appender_refuses_the_view_and_the_missing_table(setup: Setup) -> None:
 
 
 def test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows(
-        setup: Setup) -> None:
+    setup: Setup,
+) -> None:
     """Um ``append`` disparado numa thread sem ``result()`` deixa a leitura ver a tabela como
     estava: as linhas novas só entram no ``close`` do ``appender``, de uma vez, na sessão
     principal e numa sessão a mais."""
@@ -1158,7 +1327,9 @@ def test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows(
     assert count_of(engine, PROJECTED.name) == 1010
 
 
-def test_two_writers_on_the_same_table_both_enter(setup: Setup) -> None:
+def test_two_writers_on_the_same_table_both_enter(
+    setup: Setup,
+) -> None:
     """Dois appenders na mesma tabela, com os ``close`` ao mesmo tempo, entram os dois com todas
     as suas linhas: em duas sessões de ``new_session()``, com os dois ``INSERT ... BY NAME``
     juntos, e na sessão principal, um depois do outro sob o lock. Um appender numa sessão a mais e
@@ -1171,22 +1342,34 @@ def test_two_writers_on_the_same_table_both_enter(setup: Setup) -> None:
     both = {"linhas": 40_000, "ids": 40_000, "soma": both_sum}
     barrier = threading.Barrier(2)
 
-    def write(session: DuckDBEngine, table: sa.Table, rows: pa.Table) -> None:
+    def write(
+        session: DuckDBEngine,
+        table: sa.Table,
+        rows: pa.Table,
+    ) -> None:
         # A saída do with roda o close logo depois da barreira, junto com o outro escritor.
         with session.appender(table) as appender:
             appender.write(rows)
             barrier.wait(timeout=10)
 
-    def write_in_a_new_session(table: sa.Table, rows: pa.Table) -> None:
+    def write_in_a_new_session(
+        table: sa.Table,
+        rows: pa.Table,
+    ) -> None:
         with engine.new_session() as session:
             write(session, table, rows)
 
-    def update_first_half(table: sa.Table) -> None:
+    def update_first_half(
+        table: sa.Table,
+    ) -> None:
         barrier.wait(timeout=10)
-        engine.query(sa.update(table).where(table.c.id_lancamento <= 10_000)
-                     .values(valor=table.c.valor + 1))
+        engine.query(
+            sa.update(table).where(table.c.id_lancamento <= 10_000).values(valor=table.c.valor + 1)
+        )
 
-    def run_together(*tasks: tuple) -> None:
+    def run_together(
+        *tasks: tuple,
+    ) -> None:
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = [pool.submit(*task) for task in tasks]
             for future in futures:
@@ -1195,8 +1378,9 @@ def test_two_writers_on_the_same_table_both_enter(setup: Setup) -> None:
     # Dois appenders, cada um numa sessão a mais.
     sessions = PROJECTED.to_metadata(sa.MetaData(), name="escritores_sessoes")
     engine.create_table(sessions)
-    run_together((write_in_a_new_session, sessions, first),
-                 (write_in_a_new_session, sessions, second))
+    run_together(
+        (write_in_a_new_session, sessions, first), (write_in_a_new_session, sessions, second)
+    )
     assert totals_of(engine, sessions.name) == both
 
     # Dois appenders na sessão principal.
@@ -1209,11 +1393,16 @@ def test_two_writers_on_the_same_table_both_enter(setup: Setup) -> None:
     updated = PROJECTED.to_metadata(sa.MetaData(), name="escritores_update")
     create_and_append(engine, updated, first)
     run_together((write_in_a_new_session, updated, second), (update_first_half, updated))
-    assert totals_of(engine, updated.name) == {"linhas": 40_000, "ids": 40_000,
-                                               "soma": both_sum + 10_000}
+    assert totals_of(engine, updated.name) == {
+        "linhas": 40_000,
+        "ids": 40_000,
+        "soma": both_sum + 10_000,
+    }
 
 
-def test_query_and_append_match_stream_and_appender(setup: Setup) -> None:
+def test_query_and_append_match_stream_and_appender(
+    setup: Setup,
+) -> None:
     """``query`` é ``stream(...).read_all()``; ``append`` de ``pa.Table``, lote, leitor e iterável
     dá o mesmo resultado; o DataFrame é recusado com a mensagem que aponta ``from_pandas``."""
     engine = setup.engine
@@ -1248,7 +1437,9 @@ def test_query_and_append_match_stream_and_appender(setup: Setup) -> None:
         engine.append(PROJECTED, "texto")
 
 
-def test_pandas_round_trip_keeps_contract_types(setup: Setup) -> None:
+def test_pandas_round_trip_keeps_contract_types(
+    setup: Setup,
+) -> None:
     """``to_pandas(types_mapper=pd.ArrowDtype)`` e ``from_pandas`` mantêm ``decimal128(18, 2)`` e
     ``date32`` no caminho ``query``, lógica em pandas e ``append``."""
     engine = setup.engine
@@ -1269,7 +1460,9 @@ def test_pandas_round_trip_keeps_contract_types(setup: Setup) -> None:
 # ---------------------------------------------------------------- a auditoria
 
 
-def test_audit_finds_each_defect(setup: Setup) -> None:
+def test_audit_finds_each_defect(
+    setup: Setup,
+) -> None:
     """Nulo, texto acima do ``String(n)`` em bytes e dentro dele em caracteres, partição fora da
     origem, valor de partição fora da regra, JSON inválido, documento JSON acima de 65.535 bytes,
     chave repetida na partição e contra a versão fixada, e chave única repetida contra ela."""
@@ -1294,7 +1487,8 @@ def test_audit_finds_each_defect(setup: Setup) -> None:
         connection.execute(
             'INSERT INTO "cad_lancamentos_projetados" BY NAME SELECT 999 AS id_lancamento, '
             "9 AS id_conta, DATE '2026-05-31' AS data_base, 1.0 AS valor, 'L999' AS codigo, "
-            "'d''agua' AS data_base_str")
+            "'d''agua' AS data_base_str"
+        )
     report = engine.audit(PROJECTED, [MONTHS[2]], setup.uri(PROJECTED), version)
     counters = report.totals[MONTHS[2]]
     assert counters["texto_area"] == 1
@@ -1314,11 +1508,14 @@ def test_audit_finds_each_defect(setup: Setup) -> None:
     engine.query(
         'INSERT INTO "cad_lancamentos_projetados" BY NAME SELECT 1000 AS id_lancamento, '
         "9 AS id_conta, DATE '2026-05-31' AS data_base, 1.0 AS valor, 'L1000' AS codigo, "
-        "NULL AS data_base_str")
+        "NULL AS data_base_str"
+    )
     assert engine.audit(PROJECTED, None).totals[None]["nulo_data_base_str"] == 1
 
 
-def test_audit_unique_key_against_the_pinned_version(setup: Setup) -> None:
+def test_audit_unique_key_against_the_pinned_version(
+    setup: Setup,
+) -> None:
     """A chave única sem a coluna de partição, repetida entre a execução e a versão fixada,
     reprova pela consulta contra ``pinned``."""
     uri = setup.uri(PROJECTED)
@@ -1327,8 +1524,9 @@ def test_audit_unique_key_against_the_pinned_version(setup: Setup) -> None:
     version = delta.publish_partition(uri, PROJECTED, MONTHS[0], published, METADATA, setup.storage)
     repeated = entry_rows(MONTHS[1], 100, 1, PROJECTED).to_pylist()[0]
     repeated["codigo"] = published.column("codigo")[0].as_py()
-    create_and_append(setup.engine, PROJECTED,
-                      pa.Table.from_pylist([repeated], schema=published.schema))
+    create_and_append(
+        setup.engine, PROJECTED, pa.Table.from_pylist([repeated], schema=published.schema)
+    )
     report = setup.engine.audit(PROJECTED, [MONTHS[1]], uri, version)
     sample = result_of(report, "chave_codigo_tabela").sample
     assert sample.column("codigo").to_pylist() == ["L000001"]
@@ -1336,7 +1534,9 @@ def test_audit_unique_key_against_the_pinned_version(setup: Setup) -> None:
     assert not report.passed
 
 
-def test_audit_skips_the_pinned_join_above_max_key(setup: Setup) -> None:
+def test_audit_skips_the_pinned_join_above_max_key(
+    setup: Setup,
+) -> None:
     """Com as chaves da execução acima do ``max_key`` da versão fixada, a junção não roda e o
     relatório diz por quê; com uma chave abaixo dele, a junção roda e acha a repetição."""
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
@@ -1358,7 +1558,9 @@ def test_audit_skips_the_pinned_join_above_max_key(setup: Setup) -> None:
     assert joined.defects == 5
 
 
-def test_audit_report_samples_failing_rows(setup: Setup) -> None:
+def test_audit_report_samples_failing_rows(
+    setup: Setup,
+) -> None:
     """Até 20 linhas inteiras por verificação reprovada; a de linhas busca as suas por contador, e a
     aprovada não traz amostra; ``sql()`` junta os textos; os não finitos entram sem reprovar."""
     engine = setup.engine
@@ -1384,7 +1586,9 @@ def test_audit_report_samples_failing_rows(setup: Setup) -> None:
     assert "-- chave_id_lancamento" in report.sql()
 
 
-def test_audit_orphan_against_a_referenced_table_outside_the_sandbox(setup: Setup) -> None:
+def test_audit_orphan_against_a_referenced_table_outside_the_sandbox(
+    setup: Setup,
+) -> None:
     """Com ``foreign_keys=True``, a tabela referenciada fora do sandbox entra pela versão fixada de
     ``referenced``, e o órfão aparece; sem o argumento, a verificação fica em ``not_run``."""
     accounts_version = published_accounts(setup, ["A", "B"])
@@ -1403,16 +1607,23 @@ def test_audit_orphan_against_a_referenced_table_outside_the_sandbox(setup: Setu
 # ---------------------------------------------------------------- a exportação
 
 
-def exported_totals(storage: Storage, uri: str) -> list[tuple]:
+def exported_totals(
+    storage: Storage,
+    uri: str,
+) -> list[tuple]:
     """Linhas, somas de ``preco`` e de ``id_lancamento`` e linhas com ``NaN`` em ``valor`` da tabela
     Delta."""
-    query = ("SELECT count(*), sum(preco), sum(id_lancamento), "
-             "count(*) FILTER (WHERE isnan(valor)) "
-             f"FROM delta_scan('{uri}')")
+    query = (
+        "SELECT count(*), sum(preco), sum(id_lancamento), "
+        "count(*) FILTER (WHERE isnan(valor)) "
+        f"FROM delta_scan('{uri}')"
+    )
     return scan(storage, query)
 
 
-def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
+def test_export_partition_registers_the_copy_file(
+    setup: Setup,
+) -> None:
     """A partição sai pelo ``COPY ... RETURN_STATS`` e entra no log com as linhas e as somas do
     sandbox, sem o mínimo e o máximo da coluna com ``NaN``; o Delta poda pela estatística da
     chave, o arquivo leva o ``execution_id`` no nome, ``expected_rows`` diferente recusa sem
@@ -1422,8 +1633,9 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
     create_and_append(engine, PROJECTED, entry_rows(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
     uri = setup.uri(PROJECTED)
     delta.create_table(uri, PROJECTED, setup.storage)
-    version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000,
-                                      columns_without_min_max=["valor"])
+    version = engine.export_partition(
+        PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000, columns_without_min_max=["valor"]
+    )
     assert version == 1
     assert exported_totals(setup.storage, uri) == [(1000, decimal.Decimal("5005.00"), 500500, 1)]
     stats = pa.table(delta.open_table(uri, setup.storage).get_add_actions(flatten=True))
@@ -1431,8 +1643,7 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
     assert stats.column("max.id_lancamento").to_pylist() == [1000]
 
     # A poda pela estatística da chave, e o arquivo com o execution_id no nome.
-    query = (f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') "
-             "WHERE id_lancamento > 5000")
+    query = f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') WHERE id_lancamento > 5000"
     # O EXPLAIN ANALYZE devolve uma linha, com o plano na segunda coluna.
     plan = scan(setup.storage, query)[0][1]
     assert "Scanning Files: 0/1" in plan
@@ -1449,15 +1660,16 @@ def test_export_partition_registers_the_copy_file(setup: Setup) -> None:
 
     # O valor numa tabela sem partição recusa antes do COPY, sem arquivo na pasta da tabela.
     accounts_uri = setup.uri(ACCOUNTS)
-    engine.ingest(ACCOUNTS, accounts_uri, published_accounts(setup, ["A", "B"]),
-                  materialize=True)
+    engine.ingest(ACCOUNTS, accounts_uri, published_accounts(setup, ["A", "B"]), materialize=True)
     with pytest.raises(ContractError, match="tabela sem partição recebeu o valor"):
         engine.export_partition(ACCOUNTS, accounts_uri, MONTHS[1], METADATA)
     account_files = setup.storage.list_files(setup.storage.relative(accounts_uri), ".parquet")
     assert len(account_files) == 1
 
 
-def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
+def test_example_pipeline_in_a_file_backed_database(
+    setup: Setup,
+) -> None:
     """O pipeline de exemplo: seis partições materializadas e a dimensão em view, um ``select`` com
     ``join`` em lotes para o ``appender``, auditoria com a versão fixada, exportação; ``cleanup``
     apaga o arquivo do banco."""
@@ -1477,17 +1689,24 @@ def test_example_pipeline_in_a_file_backed_database(setup: Setup) -> None:
         .where(ENTRIES.c.data_base_str == sa.bindparam("particao"), ACCOUNTS.c.numero != "C")
     )
     params = {"particao": MONTHS[-1]}
-    with (engine.stream(statement, params, batch_size=50) as stream,
-          engine.appender(PROJECTED) as appender):
+    with (
+        engine.stream(statement, params, batch_size=50) as stream,
+        engine.appender(PROJECTED) as appender,
+    ):
         for batch in stream:
             appender.write(batch)
     report = engine.audit(PROJECTED, [MONTHS[-1]], projected_uri, 0, foreign_keys=True)
     assert report.passed, report.results
     expected_rows = report.rows(MONTHS[-1])
     nonfinite = report.nonfinite_columns.get(MONTHS[-1], ())
-    version = engine.export_partition(PROJECTED, projected_uri, MONTHS[-1], METADATA,
-                                      expected_rows=expected_rows,
-                                      columns_without_min_max=nonfinite)
+    version = engine.export_partition(
+        PROJECTED,
+        projected_uri,
+        MONTHS[-1],
+        METADATA,
+        expected_rows=expected_rows,
+        columns_without_min_max=nonfinite,
+    )
     assert version == 1
 
     # O join deixa de fora os lançamentos da conta 3, a de número "C".

@@ -135,7 +135,10 @@ def test_engine_protocol_and_config_dataclass() -> None:
     assert isinstance(FakeEngine(), ExampleEngine)
 
     class Incomplete:
-        def ingest(self, *args: object) -> None: ...
+        def ingest(
+            self,
+            *args: object,
+        ) -> None: ...
 
     assert not isinstance(Incomplete(), ExampleEngine)  # sem cleanup não é um ExampleEngine
 
@@ -186,7 +189,9 @@ def test_frozen_dataclass_derives_an_attribute_by_cached_property() -> None:
 
 
 @contextlib.contextmanager
-def execution(engine: FakeEngine) -> Iterator[FakeEngine]:
+def execution(
+    engine: FakeEngine,
+) -> Iterator[FakeEngine]:
     """O ciclo de uma execução: abre, entrega o motor ao pipeline e descarta o sandbox aconteça o
     que acontecer."""
     # A abertura fica dentro do try: uma ingestão que falha também descarta o sandbox.
@@ -240,7 +245,9 @@ def test_entry_point_by_import_string() -> None:
         pkgutil.resolve_name("json:inexistente")
 
 
-def partition_argument(text: str) -> str:
+def partition_argument(
+    text: str,
+) -> str:
     """Confere o valor de partição da linha de comando; ``argparse`` transforma a exceção em
     mensagem e saída 2.
 
@@ -255,7 +262,9 @@ def partition_argument(text: str) -> str:
     return text
 
 
-def build_parser(environ: Mapping[str, str]) -> argparse.ArgumentParser:
+def build_parser(
+    environ: Mapping[str, str],
+) -> argparse.ArgumentParser:
     """Um parser na forma de ``serialize-db run`` e ``serialize-db schema write|check``, com as
     variáveis de ambiente como padrão dos argumentos; a variável vazia conta como ausente."""
     parser = argparse.ArgumentParser(prog="serialize-db")
@@ -345,7 +354,9 @@ def test_command_line_parsing() -> None:
     assert exit_info.value.code == 2
 
 
-def test_execution_log(caplog: pytest.LogCaptureFixture) -> None:
+def test_execution_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """O resumo da execução vai para o ``logging`` padrão, com os campos formatados na hora e os
     tempos por passo."""
     logger = logging.getLogger("serialize_db.execution")
@@ -367,7 +378,9 @@ def test_execution_log(caplog: pytest.LogCaptureFixture) -> None:
     assert caplog.records[-1].execution_id == "exec-2026-09-05"  # type: ignore[attr-defined]
 
 
-def test_prepare_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prepare_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``os.environ`` é o dicionário do processo; ``monkeypatch`` o altera e devolve ao fim do
     teste, e ``prepare_environment`` grava nele."""
     # delenv de uma variável ausente não guarda nada, e o que prepare_environment gravasse nela
@@ -432,7 +445,9 @@ def test_storage_uris() -> None:
     assert Path(urllib.parse.urlparse("file:///dados/prd").path) == Path("/dados/prd")
 
 
-def partition_of(file_action: dict) -> str:
+def partition_of(
+    file_action: dict,
+) -> str:
     """O valor de partição de uma ação ``add`` ou ``remove`` do log."""
     return file_action["partitionValues"]["data_str"]
 
@@ -531,7 +546,9 @@ def test_generated_files_diff() -> None:
 
 
 @pytest.mark.local
-def test_exclusive_create_atomic_replace_and_fingerprint(local_location: LocalLocation) -> None:
+def test_exclusive_create_atomic_replace_and_fingerprint(
+    local_location: LocalLocation,
+) -> None:
     """Em disco, ``O_EXCL`` cria só se não existe, ``os.replace`` troca de uma vez, e um hash faz as
     vezes do ETag."""
     folder = Path(local_location.child("stdlib"))
@@ -547,10 +564,16 @@ def test_exclusive_create_atomic_replace_and_fingerprint(local_location: LocalLo
 
     # A impressão digital do conteúdo atual, conferida antes de substituir: o IfMatch da pasta
     # local.
-    def fingerprint(path: Path) -> str:
+    def fingerprint(
+        path: Path,
+    ) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
-    def replace_if_match(path: Path, text: str, expected: str) -> None:
+    def replace_if_match(
+        path: Path,
+        text: str,
+        expected: str,
+    ) -> None:
         if fingerprint(path) != expected:
             raise RuntimeError("o arquivo mudou desde a leitura")
         with tempfile.NamedTemporaryFile(

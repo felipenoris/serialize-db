@@ -48,13 +48,17 @@ PARTITION_VALUES = list(source.PARTITION_VALUES)
 
 
 @pytest.fixture(scope="module")
-def base(local_location: LocalLocation) -> source.SourceBase:
+def base(
+    local_location: LocalLocation,
+) -> source.SourceBase:
     """A base fictícia gravada uma vez por módulo sob a pasta da sessão."""
     return source.write_source(Path(local_location.child("carga-origem")))
 
 
 @pytest.fixture
-def folder(local_location: LocalLocation) -> Path:
+def folder(
+    local_location: LocalLocation,
+) -> Path:
     """Uma pasta nova por teste sob a raiz da sessão."""
     path = Path(local_location.child(f"carga/{uuid.uuid4().hex[:8]}"))
     path.mkdir(parents=True)
@@ -62,29 +66,40 @@ def folder(local_location: LocalLocation) -> Path:
 
 
 @pytest.fixture
-def db(folder: Path) -> Database:
+def db(
+    folder: Path,
+) -> Database:
     """O banco do teste, numa raiz Delta nova, no ambiente ``prd``."""
     return Database(str(folder / "delta"), "prd", Base.metadata)
 
 
 @pytest.fixture
-def config(folder: Path) -> DuckDBConfig:
+def config(
+    folder: Path,
+) -> DuckDBConfig:
     """O motor DuckDB da carga com o banco e o transbordo na pasta do teste."""
     return DuckDBConfig(temp_directory=str(folder / "sandbox"))
 
 
-def origin_of(base: source.SourceBase) -> str:
+def origin_of(
+    base: source.SourceBase,
+) -> str:
     """A raiz da base fictícia como a carga a recebe."""
     return str(base.root)
 
 
-def add_actions(db: Database, name: str) -> list[dict]:
+def add_actions(
+    db: Database,
+    name: str,
+) -> list[dict]:
     """As ações ``add`` da versão atual da tabela, achatadas."""
     dt = delta.open_table(db.uri(TABLES[name]), db.storage)
     return pa.table(dt.get_add_actions(flatten=True)).to_pylist()
 
 
-def physical_types(path: str) -> dict[str, str]:
+def physical_types(
+    path: str,
+) -> dict[str, str]:
     """O tipo físico de cada coluna do arquivo Parquet."""
     parquet_schema = pq.ParquetFile(path).schema
     types = {}
@@ -94,7 +109,10 @@ def physical_types(path: str) -> dict[str, str]:
     return types
 
 
-def key_values(row: dict[str, object], key: list[str]) -> tuple[object, ...]:
+def key_values(
+    row: dict[str, object],
+    key: list[str],
+) -> tuple[object, ...]:
     """Os valores das colunas de ``key`` numa linha, na ordem de ``key``."""
     return tuple(row[name] for name in key)
 
@@ -102,7 +120,10 @@ def key_values(row: dict[str, object], key: list[str]) -> tuple[object, ...]:
 # ---------------------------------------------------------------- a origem
 
 
-def test_discover_partitions_and_skipped_entries(base: source.SourceBase, folder: Path) -> None:
+def test_discover_partitions_and_skipped_entries(
+    base: source.SourceBase,
+    folder: Path,
+) -> None:
     """As quatro tabelas particionadas dão os valores do caminho, as oito sem partição dão
     ``None``; um arquivo solto e uma pasta com valor fora da regra da partição vão para a lista,
     uma pasta com valor que não é data é partição; a raiz tem três entradas fora do modelo; a
@@ -149,21 +170,29 @@ def test_discover_partitions_and_skipped_entries(base: source.SourceBase, folder
 def test_load_order_puts_unpartitioned_tables_first() -> None:
     """As tabelas sem partição vêm antes das particionadas, cada grupo na ordem dada."""
     ordered = [table.name for table in load.load_order(list(TABLES.values()))]
-    assert ordered[-4:] == ["cad_operacoes", "rel_contrato_operacao", "cad_contratos",
-                            "cad_lancamentos"]
+    assert ordered[-4:] == [
+        "cad_operacoes",
+        "rel_contrato_operacao",
+        "cad_contratos",
+        "cad_lancamentos",
+    ]
     assert all(table_options(TABLES[name]).partition_by is None for name in ordered[:-4])
 
 
-def test_partition_query_casts_to_the_contract(base: source.SourceBase, db: Database,
-                                               config: DuckDBConfig) -> None:
+def test_partition_query_casts_to_the_contract(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
     """O esquema Arrow do ``SELECT`` é o do contrato: as chaves em ``int64``, o ``timestamp`` em
     microssegundos, a coluna de partição no fim com o valor do caminho; a consulta de
     ``cad_contratos`` roda com ``to`` entre aspas."""
     table = TABLES["cad_lancamentos"]
     folder_uri = f"{base.root}/cad_lancamentos/data_base_str=2026-01-31"
     query = load.partition_query(folder_uri, table, "2026-01-31")
-    contracts_query = load.partition_query(f"{base.root}/cad_contratos/data_str=2026-02-28",
-                                           TABLES["cad_contratos"], "2026-02-28")
+    contracts_query = load.partition_query(
+        f"{base.root}/cad_contratos/data_str=2026-02-28", TABLES["cad_contratos"], "2026-02-28"
+    )
     with DuckDBEngine(config, "consulta", db.storage) as engine, engine.session() as connection:
         query_schema = connection.execute(query).to_arrow_table().schema
         path_values = connection.execute(f"SELECT DISTINCT data_base_str FROM ({query})").fetchall()
@@ -182,8 +211,11 @@ def test_partition_query_casts_to_the_contract(base: source.SourceBase, db: Data
 # ---------------------------------------------------------------- a carga
 
 
-def test_initial_load_loads_every_partition_once(base: source.SourceBase, db: Database,
-                                                 config: DuckDBConfig) -> None:
+def test_initial_load_loads_every_partition_once(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
     """A primeira passagem grava toda partição num commit cada, com o nome, a partição, as
     retenções e o ``execution_id`` da carga no log; a segunda não grava nada; uma tabela sem
     partição carrega uma vez, com o valor ``None``; ``partitions`` filtra as partições
@@ -199,8 +231,10 @@ def test_initial_load_loads_every_partition_once(base: source.SourceBase, db: Da
     assert metadata.description == table.comment
     assert metadata.configuration == delta.RETENTION
     assert dt.history(limit=1)[0]["serialize_db_execution_id"].startswith("carga-")
-    rows_by_value = {action["partition.data_str"]: action["num_records"]
-                     for action in add_actions(db, "cad_contratos")}
+    rows_by_value = {
+        action["partition.data_str"]: action["num_records"]
+        for action in add_actions(db, "cad_contratos")
+    }
     assert rows_by_value == base.partition_rows["cad_contratos"]
 
     # A segunda carga não grava nada.
@@ -225,8 +259,12 @@ def test_initial_load_loads_every_partition_once(base: source.SourceBase, db: Da
     assert rest == ["2026-01-31", "2026-03-31", "2026-06-30"]
 
 
-def test_interrupted_load_resumes(base: source.SourceBase, db: Database, config: DuckDBConfig,
-                                  monkeypatch: pytest.MonkeyPatch) -> None:
+def test_interrupted_load_resumes(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Uma exceção no registro da terceira partição deixa duas no log; a chamada seguinte carrega
     só as duas restantes."""
     origin = origin_of(base)
@@ -234,8 +272,14 @@ def test_interrupted_load_resumes(base: source.SourceBase, db: Database, config:
     original = delta.register_files
     attempts: list[str | None] = []
 
-    def failing_on_the_third(uri: str, registered: object, files: list, value: str | None,
-                             *arguments: object, **options: object) -> int:
+    def failing_on_the_third(
+        uri: str,
+        registered: object,
+        files: list,
+        value: str | None,
+        *arguments: object,
+        **options: object,
+    ) -> int:
         attempts.append(value)
         if len(attempts) == 3:
             raise RuntimeError("interrompida")
@@ -252,8 +296,11 @@ def test_interrupted_load_resumes(base: source.SourceBase, db: Database, config:
     assert delta.open_table(db.uri(table), db.storage).version() == 4
 
 
-def test_keys_are_int64_and_timestamps_are_microseconds(base: source.SourceBase, db: Database,
-                                                        config: DuckDBConfig) -> None:
+def test_keys_are_int64_and_timestamps_are_microseconds(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
     """O Delta lê ``int64`` e ``timestamp[us]``, e o arquivo gravado tem ``INT64`` onde a origem
     tinha ``INT32`` e ``INT96``, sem a coluna de partição, com o ``execution_id`` no nome."""
     table = TABLES["cad_lancamentos"]
@@ -265,19 +312,22 @@ def test_keys_are_int64_and_timestamps_are_microseconds(base: source.SourceBase,
 
     # O arquivo gravado: o execution_id no nome e os tipos físicos contra os da origem.
     (written,) = dt.file_uris()
-    assert re.search(r"/data_base_str=2026-02-28/carga-[0-9a-f]{8}_[0-9a-f]{32}\.parquet$",
-                     written)
+    assert re.search(r"/data_base_str=2026-02-28/carga-[0-9a-f]{8}_[0-9a-f]{32}\.parquet$", written)
     types = physical_types(written)
     assert types["id_lancamento"] == "INT64"
     assert types["timestamp"] == "INT64"
     assert "data_base_str" not in types
     source_types = physical_types(
-        str(base.root / "cad_lancamentos" / "data_base_str=2026-02-28" / "chunk_0.parquet"))
+        str(base.root / "cad_lancamentos" / "data_base_str=2026-02-28" / "chunk_0.parquet")
+    )
     assert (source_types["id_lancamento"], source_types["timestamp"]) == ("INT32", "INT96")
 
 
-def test_rows_are_written_in_sort_key_order(base: source.SourceBase, db: Database,
-                                            config: DuckDBConfig) -> None:
+def test_rows_are_written_in_sort_key_order(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
     """As linhas da partição saem na ordem da ``sort_key`` do modelo, que não é a da origem."""
     table = TABLES["cad_lancamentos"]
     sort_columns = list(table_options(table).sort_key)
@@ -294,14 +344,19 @@ def test_rows_are_written_in_sort_key_order(base: source.SourceBase, db: Databas
     partition_folder = base.root / "cad_lancamentos" / "data_base_str=2026-01-31"
     chunks = sorted(partition_folder.glob("*.parquet"))
     source_rows = pa.concat_tables(
-        [pq.read_table(chunk, columns=sort_columns) for chunk in chunks]).to_pylist()
+        [pq.read_table(chunk, columns=sort_columns) for chunk in chunks]
+    ).to_pylist()
     assert [key_values(row, sort_columns) for row in source_rows] != written_keys
 
 
 # ---------------------------------------------------------------- as recusas
 
 
-def replace_first_value(chunk: pa.Table, column: str, value: object) -> pa.Table:
+def replace_first_value(
+    chunk: pa.Table,
+    column: str,
+    value: object,
+) -> pa.Table:
     """A tabela com ``value`` na primeira linha de ``column``, no campo do arquivo: mesmo tipo e
     mesma nulidade."""
     values = chunk.column(column).to_pylist()
@@ -311,17 +366,27 @@ def replace_first_value(chunk: pa.Table, column: str, value: object) -> pa.Table
     return chunk.set_column(index, field, pa.array(values, field.type))
 
 
-def rewrite_first_chunk(folder: Path, column: str, value: object) -> None:
+def rewrite_first_chunk(
+    folder: Path,
+    column: str,
+    value: object,
+) -> None:
     """Regrava ``chunk_0.parquet`` de ``folder`` com ``value`` na primeira linha de ``column``, no
     layout da origem."""
     path = folder / "chunk_0.parquet"
     altered = replace_first_value(pq.read_table(path), column, value)
-    pq.write_table(altered, path, version="1.0", use_dictionary=False,
-                   use_deprecated_int96_timestamps=True)
+    pq.write_table(
+        altered, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
+    )
 
 
-def source_with_defect(folder: Path, base: source.SourceBase, table: str, column: str,
-                       value: object) -> str:
+def source_with_defect(
+    folder: Path,
+    base: source.SourceBase,
+    table: str,
+    column: str,
+    value: object,
+) -> str:
     """Uma origem nova só com a partição 2026-02-28 da tabela, com ``value`` na primeira linha de
     ``column`` do primeiro chunk."""
     folder_name = f"{source.PARTITIONS[table].column}=2026-02-28"
@@ -332,8 +397,13 @@ def source_with_defect(folder: Path, base: source.SourceBase, table: str, column
     return str(new_root)
 
 
-def assert_refused_without_commit(db: Database, config: DuckDBConfig, origin: str, table: str,
-                                  fragment: str) -> None:
+def assert_refused_without_commit(
+    db: Database,
+    config: DuckDBConfig,
+    origin: str,
+    table: str,
+    fragment: str,
+) -> None:
     """A carga é ``ContractError`` com a tabela, a partição e ``fragment``, antes de qualquer
     gravação: a versão fica em 0 e a pasta da tabela não tem arquivo Parquet."""
     with pytest.raises(ContractError, match=re.escape(fragment)) as refusal:
@@ -347,15 +417,27 @@ def assert_refused_without_commit(db: Database, config: DuckDBConfig, origin: st
 @pytest.mark.parametrize(
     ("table", "column", "value", "fragment"),
     [
-        pytest.param("cad_operacoes", "data", datetime.date(2026, 3, 31),
-                     "1 linhas com data diferente de 2026-02-28", id="off_the_path"),
-        pytest.param("cad_contratos", "to", "ABC", "1 textos acima de String(2) em to",
-                     id="above_the_length"),
+        pytest.param(
+            "cad_operacoes",
+            "data",
+            datetime.date(2026, 3, 31),
+            "1 linhas com data diferente de 2026-02-28",
+            id="off_the_path",
+        ),
+        pytest.param(
+            "cad_contratos", "to", "ABC", "1 textos acima de String(2) em to", id="above_the_length"
+        ),
     ],
 )
 def test_source_value_different_from_the_path_aborts(
-    base: source.SourceBase, db: Database, config: DuckDBConfig, folder: Path, table: str,
-    column: str, value: object, fragment: str,
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+    table: str,
+    column: str,
+    value: object,
+    fragment: str,
 ) -> None:
     """``data`` fora do valor do caminho da partição, e ``to`` de três bytes numa coluna
     ``String(2)``, abortam a partição sem commit."""
@@ -364,47 +446,70 @@ def test_source_value_different_from_the_path_aborts(
 
 
 @pytest.mark.parametrize("column", source.MODEL_NOT_NULL_DECLARED_NULLABLE["cad_contratos"])
-def test_null_in_not_null_column_is_refused(base: source.SourceBase, db: Database,
-                                            config: DuckDBConfig, folder: Path,
-                                            column: str) -> None:
+def test_null_in_not_null_column_is_refused(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+    column: str,
+) -> None:
     """Um nulo plantado em cada uma das sete colunas de ``cad_contratos`` que o modelo declara
     ``NOT NULL`` e os arquivos declaram anuláveis é recusado com a coluna e a partição."""
     assert not TABLES["cad_contratos"].c[column].nullable
     origin = source_with_defect(folder, base, "cad_contratos", column, None)
-    assert_refused_without_commit(db, config, origin, "cad_contratos",
-                                  f"1 nulos na coluna NOT NULL {column}")
+    assert_refused_without_commit(
+        db, config, origin, "cad_contratos", f"1 nulos na coluna NOT NULL {column}"
+    )
 
 
-def write_chunks(origin: Path, chunks: dict[str, pa.Table]) -> None:
+def write_chunks(
+    origin: Path,
+    chunks: dict[str, pa.Table],
+) -> None:
     """Grava cada tabela Arrow como ``chunk_0.parquet`` na pasta de ``chunks`` sob ``origin``."""
     for relative, rows in chunks.items():
         (origin / relative).mkdir(parents=True)
         pq.write_table(rows, origin / relative / "chunk_0.parquet")
 
 
-def test_text_is_measured_as_in_cast_and_the_audit(folder: Path, config: DuckDBConfig) -> None:
+def test_text_is_measured_as_in_cast_and_the_audit(
+    folder: Path,
+    config: DuckDBConfig,
+) -> None:
     """A carga mede o texto pelos limites de ``cast`` e da auditoria: acima dos 36 bytes numa
     coluna ``Uuid`` e acima dos 65.535 bytes numa coluna JSON ou ``Text`` a partição é recusada
     sem commit; o ``n`` de ``Text(n)`` é ignorado, como no DDL, e 10 bytes numa coluna ``Text(5)``
     entram."""
     metadata = sa.MetaData()
     documents = sa.Table(
-        "cad_documentos", metadata,
+        "cad_documentos",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-        sa.Column("chave", sa.Uuid), sa.Column("documento", sa.JSON), sa.Column("nota", sa.Text),
+        sa.Column("chave", sa.Uuid),
+        sa.Column("documento", sa.JSON),
+        sa.Column("nota", sa.Text),
     )
     notes = sa.Table(
-        "cad_notas", metadata,
+        "cad_notas",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
         sa.Column("nota", sa.Text(5)),
     )
     origin = folder / "origem"
-    write_chunks(origin, {
-        "cad_documentos": pa.table({"id": [1], "chave": ["x" * 40],
-                                    "documento": [json.dumps({"k": "z" * 70000})],
-                                    "nota": ["y" * 70000]}),
-        "cad_notas": pa.table({"id": [1], "nota": ["0123456789"]}),
-    })
+    write_chunks(
+        origin,
+        {
+            "cad_documentos": pa.table(
+                {
+                    "id": [1],
+                    "chave": ["x" * 40],
+                    "documento": [json.dumps({"k": "z" * 70000})],
+                    "nota": ["y" * 70000],
+                }
+            ),
+            "cad_notas": pa.table({"id": [1], "nota": ["0123456789"]}),
+        },
+    )
     db = Database(str(folder / "delta"), "prd", metadata)
 
     # Os três textos acima do limite do contrato, recusados sem commit.
@@ -426,7 +531,10 @@ def test_text_is_measured_as_in_cast_and_the_audit(folder: Path, config: DuckDBC
 # ---------------------------------------------------------------- o Double não finito
 
 
-def source_with_nonfinite(folder: Path, base: source.SourceBase) -> str:
+def source_with_nonfinite(
+    folder: Path,
+    base: source.SourceBase,
+) -> str:
     """Uma origem nova com ``cad_lancamentos`` inteira, um ``NaN`` no primeiro chunk da partição
     2026-02-28 e um infinito no da 2026-03-31."""
     new_root = folder / "origem"
@@ -434,12 +542,16 @@ def source_with_nonfinite(folder: Path, base: source.SourceBase) -> str:
     partition_column = source.PARTITIONS["cad_lancamentos"].column
     nonfinite_values = {"2026-02-28": float("nan"), "2026-03-31": float("inf")}
     for value, number in nonfinite_values.items():
-        rewrite_first_chunk(new_root / "cad_lancamentos" / f"{partition_column}={value}",
-                            "valor", number)
+        rewrite_first_chunk(
+            new_root / "cad_lancamentos" / f"{partition_column}={value}", "valor", number
+        )
     return str(new_root)
 
 
-def has_min_max(path: str, column: str) -> bool:
+def has_min_max(
+    path: str,
+    column: str,
+) -> bool:
     """Verdadeiro quando algum grupo de linhas do arquivo tem mínimo e máximo de ``column``."""
     parquet_file = pq.ParquetFile(path)
     index = parquet_file.schema_arrow.get_field_index(column)
@@ -451,7 +563,10 @@ def has_min_max(path: str, column: str) -> bool:
 
 
 def test_nonfinite_double_leaves_min_max_out_of_its_partition(
-    base: source.SourceBase, db: Database, config: DuckDBConfig, folder: Path
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
 ) -> None:
     """As partições com ``NaN`` ou infinito em ``valor`` gravam a coluna sem mínimo e máximo no
     log, e as outras ficam com os dois; o relatório soma só os finitos e conta os não finitos nos
@@ -495,8 +610,11 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
 # ---------------------------------------------------------------- o relatório e a auditoria
 
 
-def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, db: Database,
-                                                      config: DuckDBConfig) -> None:
+def test_load_report_matches_and_detects_a_difference(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
     """O relatório confere contagem e somas por partição, ``None`` numa tabela sem partição, com
     as conversões de tipo; uma linha apagada do Delta aparece como diferença na partição dela."""
     origin = origin_of(base)
@@ -511,8 +629,11 @@ def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, d
     assert [partition.value for partition in rates_report.partitions] == [None]
     assert rates_report.partitions[0].source_rows == base.rows["cad_aliquotas"]
     assert rates_report.partitions[0].source_sums.keys() == {"fator"}
-    assert rates_report.conversions == ("id: int32 -> int64", "id_conta_origem: int32 -> int64",
-                                        "id_conta_destino: int32 -> int64")
+    assert rates_report.conversions == (
+        "id: int32 -> int64",
+        "id_conta_origem: int32 -> int64",
+        "id_conta_destino: int32 -> int64",
+    )
     entries_report = load.load_report(db, TABLES["cad_lancamentos"], origin, config=config)
     assert not entries_report.matches
     assert all(partition.delta_rows is None for partition in entries_report.partitions)
@@ -525,7 +646,8 @@ def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, d
             f"SELECT min(id_operacao) FROM delta_scan('{uri}') WHERE data_str = '2026-03-31'"
         ).fetchone()[0]
     delta.open_table(uri, db.storage).delete(
-        f"data_str = '2026-03-31' AND id_operacao = {deleted_id}")
+        f"data_str = '2026-03-31' AND id_operacao = {deleted_id}"
+    )
     report = load.load_report(db, TABLES["cad_operacoes"], origin, config=config)
     assert not report.matches
     differing = [partition for partition in report.partitions if not partition.matches]
@@ -533,8 +655,11 @@ def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, d
     assert differing[0].delta_rows == differing[0].source_rows - 1
 
 
-def test_load_report_confers_only_the_requested_partitions(base: source.SourceBase, db: Database,
-                                                            config: DuckDBConfig) -> None:
+def test_load_report_confers_only_the_requested_partitions(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
     """Com ``partitions``, o relatório confere só as partições pedidas, as que ``initial_load``
     grava: as outras da origem ficam de fora, uma linha apagada numa pedida continua acusada, e a
     tabela sem partição fica de fora."""
@@ -556,7 +681,8 @@ def test_load_report_confers_only_the_requested_partitions(base: source.SourceBa
             f"SELECT min(id_operacao) FROM delta_scan('{uri}') WHERE data_str = '2026-02-28'"
         ).fetchone()[0]
     delta.open_table(uri, db.storage).delete(
-        f"data_str = '2026-02-28' AND id_operacao = {deleted_id}")
+        f"data_str = '2026-02-28' AND id_operacao = {deleted_id}"
+    )
     report = load.load_report(db, operations, origin, partitions=only, config=config)
     assert not report.matches
     assert [partition.value for partition in report.partitions] == only
@@ -567,7 +693,10 @@ def test_load_report_confers_only_the_requested_partitions(base: source.SourceBa
     assert rates.matches
 
 
-def test_load_report_reads_only_what_the_load_reads(folder: Path, config: DuckDBConfig) -> None:
+def test_load_report_reads_only_what_the_load_reads(
+    folder: Path,
+    config: DuckDBConfig,
+) -> None:
     """O relatório lê na origem só as pastas que a carga lê: a pasta de partição com valor fora
     da regra e a pasta fora do padrão ficam em ``skipped``, fora das contas e das conversões, e o
     relatório confere; na tabela sem partição, a subpasta fica fora das conversões. O
@@ -575,14 +704,16 @@ def test_load_report_reads_only_what_the_load_reads(folder: Path, config: DuckDB
     padrão como ``backup/`` com ``Hive partition mismatch`` (leitura de 2026-09-28)."""
     metadata = sa.MetaData()
     parts = sa.Table(
-        "cad_partes", metadata,
+        "cad_partes",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
         sa.Column("valor", sa.Double),
         sa.Column("data_str", sa.String(10), nullable=False),
         info={"serialize_db": {"partition_by": ["data_str"]}},
     )
     whole = sa.Table(
-        "cad_inteira", metadata,
+        "cad_inteira",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
         sa.Column("valor", sa.Double),
     )
@@ -590,13 +721,16 @@ def test_load_report_reads_only_what_the_load_reads(folder: Path, config: DuckDB
     contract_rows = pa.table({"id": pa.array([1], pa.int64()), "valor": [1.5]})
     other_rows = pa.table({"id": pa.array([2], pa.int32()), "valor": [2.5]})
     origin = folder / "origem"
-    write_chunks(origin, {
-        "cad_partes/data_str=2026-01-31": contract_rows,
-        "cad_partes/data_str=2026 Q1": other_rows,
-        "cad_partes/backup": other_rows,
-        "cad_inteira": contract_rows,
-        "cad_inteira/backup": other_rows,
-    })
+    write_chunks(
+        origin,
+        {
+            "cad_partes/data_str=2026-01-31": contract_rows,
+            "cad_partes/data_str=2026 Q1": other_rows,
+            "cad_partes/backup": other_rows,
+            "cad_inteira": contract_rows,
+            "cad_inteira/backup": other_rows,
+        },
+    )
     db = Database(str(folder / "delta"), "prd", metadata)
 
     # A tabela particionada: só a partição da regra, carregada e conferida.
@@ -616,8 +750,11 @@ def test_load_report_reads_only_what_the_load_reads(folder: Path, config: DuckDB
     assert report.conversions == ()
 
 
-def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, db: Database,
-                                                       config: DuckDBConfig) -> None:
+def test_foreign_key_orphans_are_reported_not_blocking(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
     """A carga da base inteira não confere chave estrangeira: uma conta apagada depois da carga
     deixa lançamentos órfãos, que a auditoria de chave estrangeira do motor DuckDB registra em
     ``orfao_id_conta`` sobre a versão fixada de ``cad_contas``, e as outras chaves passam."""
@@ -633,7 +770,8 @@ def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, 
     with db.storage.duckdb_connect() as connection:
         orphaned_account = connection.execute(
             f"SELECT min(id_conta) FROM delta_scan('{entries_uri}') "
-            "WHERE data_base_str = '2026-01-31'").fetchone()[0]
+            "WHERE data_base_str = '2026-01-31'"
+        ).fetchone()[0]
     delta.open_table(accounts_uri, db.storage).delete(f"id_conta = {orphaned_account}")
 
     # A auditoria das chaves estrangeiras sobre a versão fixada de cada tabela referenciada.
@@ -645,8 +783,9 @@ def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, 
     version = delta.open_table(entries_uri, db.storage).version()
     with DuckDBEngine(config, "auditoria", db.storage) as engine:
         engine.ingest(entries, entries_uri, version, ["2026-01-31"])
-        report = engine.audit(entries, ["2026-01-31"], entries_uri, version, foreign_keys=True,
-                              referenced=referenced)
+        report = engine.audit(
+            entries, ["2026-01-31"], entries_uri, version, foreign_keys=True, referenced=referenced
+        )
     assert not report.passed
     by_name = {result.name: result for result in report.results}
     assert by_name["orfao_id_conta"].defects >= 1
@@ -659,20 +798,29 @@ def test_foreign_key_orphans_are_reported_not_blocking(base: source.SourceBase, 
 # ---------------------------------------------------------------- a linha de comando
 
 
-def conflicting_load(*args: object, **options: object) -> list[str | None]:
+def conflicting_load(
+    *args: object,
+    **options: object,
+) -> list[str | None]:
     """Um ``initial_load`` que encontra outro registro da mesma partição."""
     raise ExecutionConflict("outro registro de cad_contas")
 
 
-def unpartitioned_difference(*args: object, **options: object) -> load.LoadReport:
+def unpartitioned_difference(
+    *args: object,
+    **options: object,
+) -> load.LoadReport:
     """Um ``load_report`` de ``cad_contas`` com uma linha a mais na origem."""
     partition = load.PartitionReport(None, 5, 4, {}, {}, {}, {})
     return load.LoadReport("cad_contas", (partition,), (), ())
 
 
-def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Path,
-                                             monkeypatch: pytest.MonkeyPatch,
-                                             capsys: pytest.CaptureFixture) -> None:
+def test_cli_load_loads_the_base_and_reports(
+    base: source.SourceBase,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``serialize-db load`` sobre a base inteira: as tabelas sem partição antes das
     particionadas, as três entradas fora do modelo, saída 0; a segunda execução não grava nada;
     uma partição só, gravada e conferida sozinha, saída 0; 1 na partição fora do contrato; 2 no
@@ -681,8 +829,15 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
-    common = ["load", "--metadata", "client_model:Base.metadata", "--source", origin_of(base),
-              "--environment", "prd"]
+    common = [
+        "load",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        origin_of(base),
+        "--environment",
+        "prd",
+    ]
     assert cli.main([*common, "--root", root]) == 0
     printed = capsys.readouterr().out
     assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
@@ -701,8 +856,15 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     # Uma partição só de uma tabela: o relatório confere só a pedida, e as outras da origem, fora
     # do Delta, não contam como diferença.
     partial_root = str(folder / "parcial")
-    partial = [*common, "--root", partial_root, "--tables", "cad_contratos",
-               "--partitions", "2026-02-28"]
+    partial = [
+        *common,
+        "--root",
+        partial_root,
+        "--tables",
+        "cad_contratos",
+        "--partitions",
+        "2026-02-28",
+    ]
     assert cli.main(partial) == 0
     printed = capsys.readouterr().out
     assert "cad_contratos: 1 partição(ões) gravada(s): 2026-02-28" in printed
@@ -713,8 +875,17 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     # A partição fora do contrato: saída 1 com a mensagem, sem traceback.
     off_the_path = datetime.date(2026, 3, 31)
     defective = source_with_defect(folder, base, "cad_operacoes", "data", off_the_path)
-    refused = ["load", "--metadata", "client_model:Base.metadata", "--source", defective,
-               "--root", str(folder / "recusada"), "--tables", "cad_operacoes"]
+    refused = [
+        "load",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        defective,
+        "--root",
+        str(folder / "recusada"),
+        "--tables",
+        "cad_operacoes",
+    ]
     assert cli.main(refused) == 1
     printed_errors = capsys.readouterr().err
     refusal = "serialize-db load: cad_operacoes partição 2026-02-28: 1 linhas com data"
@@ -722,8 +893,15 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
 
     # Os erros de uso: o modelo de referência viola o contrato, a tabela fora do modelo e a
     # origem sem a pasta da tabela.
-    reference = ["load", "--metadata", "reference_model.model_db_projetado:Base.metadata",
-                 "--source", origin_of(base), "--root", str(folder / "nunca-gravada")]
+    reference = [
+        "load",
+        "--metadata",
+        "reference_model.model_db_projetado:Base.metadata",
+        "--source",
+        origin_of(base),
+        "--root",
+        str(folder / "nunca-gravada"),
+    ]
     assert cli.main(reference) == 2
     assert "modelo fora do contrato" in capsys.readouterr().err
     assert not Path(folder, "nunca-gravada").exists()
@@ -746,16 +924,30 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     assert "Traceback" not in printed_errors
 
 
-def test_cli_load_names_the_unpartitioned_table(base: source.SourceBase, folder: Path,
-                                                monkeypatch: pytest.MonkeyPatch,
-                                                capsys: pytest.CaptureFixture) -> None:
+def test_cli_load_names_the_unpartitioned_table(
+    base: source.SourceBase,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """A tabela sem partição aparece como tabela inteira na linha da carga e na diferença, que
     sai com 1."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     monkeypatch.setattr(load, "load_report", unpartitioned_difference)
-    arguments = ["load", "--metadata", "client_model:Base.metadata", "--source", origin_of(base),
-                 "--root", str(folder / "delta"), "--environment", "prd", "--tables", "cad_contas"]
+    arguments = [
+        "load",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        origin_of(base),
+        "--root",
+        str(folder / "delta"),
+        "--environment",
+        "prd",
+        "--tables",
+        "cad_contas",
+    ]
     assert cli.main(arguments) == 1
     printed = capsys.readouterr().out
     assert "cad_contas: 1 partição(ões) gravada(s): tabela inteira" in printed

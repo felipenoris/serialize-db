@@ -95,7 +95,11 @@ class TableReport:
 # ---------------------------------------------------------------- a carga
 
 
-def partition_rows(db: Database, table: sa.Table, value: str | None) -> int:
+def partition_rows(
+    db: Database,
+    table: sa.Table,
+    value: str | None,
+) -> int:
     """As linhas da partição na versão atual da tabela Delta, pelas ações ``add`` do log."""
     dt = delta.open_table(db.uri(table), db.storage)
     actions = pa.table(dt.get_add_actions(flatten=True)).to_pylist()
@@ -129,16 +133,22 @@ def load_table(
         rows = partition_rows(db, table, value)
         item = PartitionLoad(value, rows, time.perf_counter() - started, peak_rss_mb())
         label = "tabela inteira" if value is None else value
-        print(f"  {label}: {rows} linhas em {item.seconds:.1f} s; "
-              f"RSS máximo do processo {item.peak_rss_mb:.0f} MB")
+        print(
+            f"  {label}: {rows} linhas em {item.seconds:.1f} s; "
+            f"RSS máximo do processo {item.peak_rss_mb:.0f} MB"
+        )
         loaded.append(item)
         if progress is not None:
             progress(loaded)
     return loaded
 
 
-def side_text(side: str, rows: int | None, sums: Mapping[str, object],
-              nonfinite: Mapping[str, int]) -> str:
+def side_text(
+    side: str,
+    rows: int | None,
+    sums: Mapping[str, object],
+    nonfinite: Mapping[str, int],
+) -> str:
     """Um lado da diferença: as linhas, as somas e os não finitos, ou ``ausente`` quando a
     partição falta nele."""
     if rows is None:
@@ -146,15 +156,19 @@ def side_text(side: str, rows: int | None, sums: Mapping[str, object],
     return f"{side} {rows} linhas {dict(sums)} não finitos {dict(nonfinite)}"
 
 
-def print_report(report: LoadReport) -> None:
+def print_report(
+    report: LoadReport,
+) -> None:
     """As linhas do relatório de uma tabela, depois das partições gravadas."""
     for partition in report.partitions:
         if not partition.matches:
             where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
-            source = side_text("origem", partition.source_rows, partition.source_sums,
-                               partition.source_nonfinite)
-            in_delta = side_text("Delta", partition.delta_rows, partition.delta_sums,
-                                 partition.delta_nonfinite)
+            source = side_text(
+                "origem", partition.source_rows, partition.source_sums, partition.source_nonfinite
+            )
+            in_delta = side_text(
+                "Delta", partition.delta_rows, partition.delta_sums, partition.delta_nonfinite
+            )
             print(f"  DIFERENÇA {where}: {source}, {in_delta}")
     verdict = "contagens e somas iguais" if report.matches else "com diferenças"
     print(f"  relatório: {len(report.partitions)} partições conferidas, {verdict}")
@@ -167,7 +181,9 @@ def print_report(report: LoadReport) -> None:
 # ---------------------------------------------------------------- o JSON da execução
 
 
-def describe_environment(arguments: argparse.Namespace) -> dict[str, object]:
+def describe_environment(
+    arguments: argparse.Namespace,
+) -> dict[str, object]:
     """A máquina, as versões, os limites do DuckDB lidos do ambiente e os parâmetros da execução,
     que o relatório leva: a memória e os núcleos mudam com a instância."""
     packages = ("duckdb", "deltalake", "pyarrow")
@@ -191,8 +207,13 @@ def describe_environment(arguments: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def write_progress(path: str, reports: list[TableReport], environment: dict[str, object],
-                   table: str, loaded: list[PartitionLoad]) -> None:
+def write_progress(
+    path: str,
+    reports: list[TableReport],
+    environment: dict[str, object],
+    table: str,
+    loaded: list[PartitionLoad],
+) -> None:
     """O relatório parcial, regravado depois de cada partição gravada: as tabelas já conferidas
     e, em ``in_progress``, as partições gravadas da tabela da vez. O relatório final o
     substitui."""
@@ -204,8 +225,12 @@ def write_progress(path: str, reports: list[TableReport], environment: dict[str,
     Path(path).write_text(json.dumps(document, indent=2, ensure_ascii=False, default=str))
 
 
-def write_report(path: str, reports: list[TableReport], outside: Sequence[str],
-                 environment: dict[str, object]) -> None:
+def write_report(
+    path: str,
+    reports: list[TableReport],
+    outside: Sequence[str],
+    environment: dict[str, object],
+) -> None:
     """O relatório da execução em JSON, com as somas como texto e o ambiente que a rodou."""
     document = {
         "environment": environment,
@@ -218,7 +243,9 @@ def write_report(path: str, reports: list[TableReport], outside: Sequence[str],
 # ---------------------------------------------------------------- a linha de comando
 
 
-def resolve_metadata(spec: str) -> sa.MetaData:
+def resolve_metadata(
+    spec: str,
+) -> sa.MetaData:
     """O ``MetaData`` de ``modulo:atributo``, como ``client_model:Base.metadata``, pelo
     ``pkgutil.resolve_name`` da biblioteca padrão, como o ``--metadata`` de ``serialize-db``.
 
@@ -243,28 +270,44 @@ def build_parser() -> argparse.ArgumentParser:
         description="Migra a base Parquet particionada de origem para tabelas Delta, uma "
         "partição por commit, e confere contagens e somas."
     )
-    parser.add_argument("--metadata", required=True, type=resolve_metadata,
-                        help="o MetaData do modelo, como client_model:Base.metadata")
-    parser.add_argument("--source", required=True,
-                        help="a raiz da origem, pasta local ou s3://bucket/prefixo")
-    parser.add_argument("--root", required=True,
-                        help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo")
+    parser.add_argument(
+        "--metadata",
+        required=True,
+        type=resolve_metadata,
+        help="o MetaData do modelo, como client_model:Base.metadata",
+    )
+    parser.add_argument(
+        "--source", required=True, help="a raiz da origem, pasta local ou s3://bucket/prefixo"
+    )
+    parser.add_argument(
+        "--root", required=True, help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo"
+    )
     # A variável vazia conta como ausente, como nos subcomandos de serialize-db.
     environment_default = os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv"
-    parser.add_argument("--environment", default=environment_default,
-                        help="o ambiente sob a raiz, a pasta das tabelas (padrão: "
-                             "SERIALIZE_DB_ENVIRONMENT, senão dsv; a variável vazia conta como "
-                             "ausente)")
+    parser.add_argument(
+        "--environment",
+        default=environment_default,
+        help="o ambiente sob a raiz, a pasta das tabelas (padrão: "
+        "SERIALIZE_DB_ENVIRONMENT, senão dsv; a variável vazia conta como "
+        "ausente)",
+    )
     parser.add_argument("--tables", nargs="+", metavar="TABELA", help="só estas tabelas do modelo")
-    parser.add_argument("--partitions", nargs="+", metavar="AAAA-MM-DD", default=None,
-                        help="só estas partições, gravadas e conferidas; as tabelas sem "
-                             "partição ficam de fora")
-    parser.add_argument("--report", metavar="ARQUIVO.json",
-                        help="grava o relatório da execução em JSON")
+    parser.add_argument(
+        "--partitions",
+        nargs="+",
+        metavar="AAAA-MM-DD",
+        default=None,
+        help="só estas partições, gravadas e conferidas; as tabelas sem partição ficam de fora",
+    )
+    parser.add_argument(
+        "--report", metavar="ARQUIVO.json", help="grava o relatório da execução em JSON"
+    )
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+) -> int:
     """Roda a migração com os argumentos de ``argv``, ou os do processo, e devolve o código de
     saída."""
     parser = build_parser()
@@ -282,9 +325,11 @@ def main(argv: list[str] | None = None) -> int:
     # A máquina e os limites do DuckDB, impressos antes da carga e levados no relatório.
     environment = describe_environment(arguments)
     limits = environment["duckdb_limits"]
-    print(f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória, "
-          f"{environment['memory_available_mb']} MB disponíveis; DuckDB com "
-          f"{limits['threads']} threads e memory_limit {limits['memory_limit']}")
+    print(
+        f"{environment['cpus']} CPUs, {environment['memory_total_mb']} MB de memória, "
+        f"{environment['memory_available_mb']} MB disponíveis; DuckDB com "
+        f"{limits['threads']} threads e memory_limit {limits['memory_limit']}"
+    )
     tables = list(metadata.tables.values())
     if arguments.tables:
         tables = [table for table in tables if table.name in arguments.tables]
@@ -296,8 +341,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{table.name}:")
             progress = None
             if arguments.report:
-                progress = functools.partial(write_progress, arguments.report, reports,
-                                             environment, table.name)
+                progress = functools.partial(
+                    write_progress, arguments.report, reports, environment, table.name
+                )
                 progress([])
             loaded = load_table(db, table, arguments.source, arguments.partitions, progress)
             report = load.load_report(db, table, arguments.source, arguments.partitions)
@@ -316,8 +362,10 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.report:
         write_report(arguments.report, reports, outside, environment)
     matches = all(item.report.matches for item in reports)
-    print(f"{len(reports)} tabelas conferidas, "
-          f"{'contagens e somas iguais' if matches else 'com diferenças'}")
+    print(
+        f"{len(reports)} tabelas conferidas, "
+        f"{'contagens e somas iguais' if matches else 'com diferenças'}"
+    )
     return 0 if matches else 1
 
 

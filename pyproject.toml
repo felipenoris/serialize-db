@@ -38,6 +38,7 @@ dev = [
     "pyarrow==25.0.1",
     "pytest>=8.4",
     "redshift-connector>=2.1",
+    "ruff==0.16.9",
     "sqlalchemy==2.0.54",
     "sqlglot==30.19.0",
 ]
@@ -67,6 +68,31 @@ markers = [
     "s3: escreve sob SERIALIZE_DB_TEST_S3_ROOT; pulado sem ela, falha sem acesso",
     "redshift: cria tabelas no esquema SERIALIZE_DB_TEST_REDSHIFT_SCHEMA; pulado sem ela, falha sem conexão",
 ]
+
+# O ruff do grupo dev lê esta configuração: `uv run ruff check` e `uv run ruff format --check`,
+# que a esteira roda antes dos testes.
+[tool.ruff]
+line-length = 100
+# Só os arquivos Python: o padrão do Ruff 0.16 inclui `*.md`, e formataria os blocos de código de
+# plan/ e de docs/, que são registros.
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+# Os scripts que o usuário rodou no ambiente alvo ficam como rodaram, e o modelo de referência
+# fica como está (decisões do usuário de 2026-09-20 e de 2026-09-21).
+extend-exclude = ["examples", "tests/reference_model"]
+
+[tool.ruff.format]
+# A vírgula final depois do último parâmetro mantém um parâmetro por linha e o `) -> T:` em linha
+# própria, o padrão das assinaturas do repositório (decisão do usuário de 2026-10-01).
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint]
+# Os erros do pyflakes e do pycodestyle, e o limite de 100 caracteres por linha; o estilo continua
+# conferido pela leitura, pelas regras de CLAUDE.md.
+select = ["E4", "E7", "E9", "F", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Os probes usam linhas mais largas.
+"probes/**" = ["E501"]
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]

@@ -54,7 +54,9 @@ def contract_schema() -> pa.Schema:
     )
 
 
-def addresses(column: pa.ChunkedArray | pa.Array) -> set[int]:
+def addresses(
+    column: pa.ChunkedArray | pa.Array,
+) -> set[int]:
     """Os endereços dos buffers de uma coluna: iguais dos dois lados quando a conversão não
     copiou."""
     chunks = column.chunks if isinstance(column, pa.ChunkedArray) else [column]
@@ -170,18 +172,23 @@ def test_safe_cast_refuses_data_loss() -> None:
 def test_arrow_table_round_trips_through_pandas_without_copy() -> None:
     """``to_pandas(types_mapper=pd.ArrowDtype)`` e ``from_pandas`` compartilham os buffers e mantêm
     os tipos do contrato; o backend numpy os perde."""
-    schema = pa.schema([
-        pa.field("id_operacao", pa.int64(), nullable=False),
-        pa.field("data_ref", pa.date32(), nullable=False),
-        pa.field("valor", pa.decimal128(18, 2), nullable=False),
-        pa.field("descricao", pa.string()),
-    ])
-    table = pa.table({
-        "id_operacao": [1, 2],
-        "data_ref": [dt.date(2026, 8, 1), dt.date(2026, 8, 2)],
-        "valor": [decimal.Decimal("10.50"), decimal.Decimal("99999.99")],
-        "descricao": ["a", None],
-    }, schema=schema)
+    schema = pa.schema(
+        [
+            pa.field("id_operacao", pa.int64(), nullable=False),
+            pa.field("data_ref", pa.date32(), nullable=False),
+            pa.field("valor", pa.decimal128(18, 2), nullable=False),
+            pa.field("descricao", pa.string()),
+        ]
+    )
+    table = pa.table(
+        {
+            "id_operacao": [1, 2],
+            "data_ref": [dt.date(2026, 8, 1), dt.date(2026, 8, 2)],
+            "valor": [decimal.Decimal("10.50"), decimal.Decimal("99999.99")],
+            "descricao": ["a", None],
+        },
+        schema=schema,
+    )
 
     # A ida com ArrowDtype não copia: os buffers do DataFrame são os da tabela, e os tipos são os do
     # contrato.
@@ -328,7 +335,9 @@ def test_record_batch_reader_from_batches_trusts_the_batches() -> None:
 
 
 @pytest.mark.local
-def test_parquet_writer_row_groups_and_footer(local_location: LocalLocation) -> None:
+def test_parquet_writer_row_groups_and_footer(
+    local_location: LocalLocation,
+) -> None:
     """``ParquetWriter`` grava um row group por lote; o rodapé traz tipos físicos, obrigatoriedade,
     ids e estatísticas."""
     folder = Path(local_location.child("pyarrow"))
@@ -379,7 +388,9 @@ def test_parquet_writer_row_groups_and_footer(local_location: LocalLocation) -> 
 
 
 @pytest.mark.local
-def test_hive_partitioned_dataset(local_location: LocalLocation) -> None:
+def test_hive_partitioned_dataset(
+    local_location: LocalLocation,
+) -> None:
     """``write_to_dataset`` grava ``mes=.../`` sem a coluna no arquivo; ``dataset`` a lê de volta e
     poda pelo filtro."""
     root = Path(local_location.child("pyarrow/dataset"))
@@ -398,7 +409,9 @@ def test_hive_partitioned_dataset(local_location: LocalLocation) -> None:
 
 
 @pytest.mark.local
-def test_parquet_streaming_read_filters_and_pandas(local_location: LocalLocation) -> None:
+def test_parquet_streaming_read_filters_and_pandas(
+    local_location: LocalLocation,
+) -> None:
     """``iter_batches`` lê por lotes sem carregar o arquivo; ``filters`` e ``columns`` reduzem a
     leitura; pandas recebe tipos Arrow."""
     folder = Path(local_location.child("pyarrow"))

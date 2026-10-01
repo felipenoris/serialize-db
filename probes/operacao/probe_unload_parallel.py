@@ -28,6 +28,7 @@ Exemplo:
     export SERIALIZE_DB_REDSHIFT_WORKGROUP=workgroup SERIALIZE_DB_REDSHIFT_SCHEMA=esquema
     .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -65,24 +66,32 @@ class Unloaded:
     footer_seconds: float
 
 
-def export_select(engine: RedshiftEngine, name: str) -> str:
+def export_select(
+    engine: RedshiftEngine,
+    name: str,
+) -> str:
     """O ``select`` da exportação sobre a tabela ``name`` do sandbox, como o do motor para
     ``cad_lancamentos``, que não tem coluna JSON: as colunas sem a de partição, na ordem da
     ``sort_key``."""
     columns = [quoted(column.name) for column in columns_without_partition(lib.TABLE)]
     order = [quoted(column) for column in table_options(lib.TABLE).sort_key]
-    return (f"SELECT {', '.join(columns)} FROM {engine.qualified(name)} "
-            f"ORDER BY {', '.join(order)}")
+    return f"SELECT {', '.join(columns)} FROM {engine.qualified(name)} ORDER BY {', '.join(order)}"
 
 
-def unload(engine: RedshiftEngine, db: Database, select: str, prefix: str,
-           parallel: bool) -> Unloaded:
+def unload(
+    engine: RedshiftEngine,
+    db: Database,
+    select: str,
+    prefix: str,
+    parallel: bool,
+) -> Unloaded:
     """O ``UNLOAD`` do ``select`` para o prefixo, cronometrado, e a leitura dos rodapés dos
     arquivos do manifesto."""
     storage = db.storage
     started = time.perf_counter()
-    engine.execute(unload_text(select, storage.uri_of(prefix), credentials_clause(engine.config),
-                               parallel))
+    engine.execute(
+        unload_text(select, storage.uri_of(prefix), credentials_clause(engine.config), parallel)
+    )
     seconds = time.perf_counter() - started
     paths = engine.unloaded_paths(prefix)
     sizes = [storage.size(path) for path in paths]
@@ -93,26 +102,39 @@ def unload(engine: RedshiftEngine, db: Database, select: str, prefix: str,
     return Unloaded(seconds, sizes, rows, time.perf_counter() - started)
 
 
-def mode_label(parallel: bool) -> str:
+def mode_label(
+    parallel: bool,
+) -> str:
     """O modo como a linha do relatório o escreve."""
     return "paralelo" if parallel else "PARALLEL OFF"
 
 
-def sized_table(engine: RedshiftEngine, rows: int, total: int) -> str:
+def sized_table(
+    engine: RedshiftEngine,
+    rows: int,
+    total: int,
+) -> str:
     """A tabela do sandbox com ``rows`` linhas da partição: a do ``ingest`` para a partição
     inteira, ou uma nova por ``CREATE TABLE AS ... LIMIT``, que o ``cleanup`` apaga."""
     ingested = engine.prefix + lib.TABLE.name
     if rows == total:
         return ingested
     name = f"{engine.prefix}linhas_{rows}"
-    engine.execute(f"CREATE TABLE {engine.qualified(name)} AS SELECT * FROM "
-                   f"{engine.qualified(ingested)} LIMIT {rows}")
+    engine.execute(
+        f"CREATE TABLE {engine.qualified(name)} AS SELECT * FROM "
+        f"{engine.qualified(ingested)} LIMIT {rows}"
+    )
     engine.register_created(name)
     return name
 
 
-def measure(engine: RedshiftEngine, db: Database, rows: int, total: int,
-            problems: list[str]) -> dict[bool, list[Unloaded]]:
+def measure(
+    engine: RedshiftEngine,
+    db: Database,
+    rows: int,
+    total: int,
+    problems: list[str],
+) -> dict[bool, list[Unloaded]]:
     """Os ``UNLOAD`` de uma tabela de ``rows`` linhas nos dois modos, ``REPETITIONS`` vezes cada,
     com a ordem alternada; anota em ``problems`` as linhas e os arquivos fora do esperado."""
     select = export_select(engine, sized_table(engine, rows, total))
@@ -124,10 +146,12 @@ def measure(engine: RedshiftEngine, db: Database, rows: int, total: int,
             prefix = db.storage.join(db.environment, "unload", f"{rows}-{label}-{repetition}")
             run = unload(engine, db, select, prefix, parallel)
             runs[parallel].append(run)
-            print(f"{rows} linhas, {mode_label(parallel)}, repetição {repetition + 1}: "
-                  f"{run.seconds:.1f} s, {len(run.sizes)} arquivo(s), "
-                  f"{sum(run.sizes) / 2**20:.1f} MB, maior {max(run.sizes) / 2**20:.1f} MB, "
-                  f"rodapés em {run.footer_seconds:.2f} s")
+            print(
+                f"{rows} linhas, {mode_label(parallel)}, repetição {repetition + 1}: "
+                f"{run.seconds:.1f} s, {len(run.sizes)} arquivo(s), "
+                f"{sum(run.sizes) / 2**20:.1f} MB, maior {max(run.sizes) / 2**20:.1f} MB, "
+                f"rodapés em {run.footer_seconds:.2f} s"
+            )
             if run.rows != rows:
                 problems.append(f"{rows} linhas, {mode_label(parallel)}: {run.rows} nos rodapés")
             if not parallel and len(run.sizes) != 1:
@@ -135,17 +159,21 @@ def measure(engine: RedshiftEngine, db: Database, rows: int, total: int,
     return runs
 
 
-def print_summary(results: dict[int, dict[bool, list[Unloaded]]]) -> None:
+def print_summary(
+    results: dict[int, dict[bool, list[Unloaded]]],
+) -> None:
     """O menor tempo de cada tamanho e modo, com os arquivos e a razão entre os modos."""
     print("resumo, o menor tempo de cada modo:")
     for rows, runs in results.items():
         serial = min(runs[False], key=lambda run: run.seconds)
         parallel = min(runs[True], key=lambda run: run.seconds)
-        print(f"  {rows} linhas: PARALLEL OFF {serial.seconds:.1f} s, 1 arquivo de "
-              f"{sum(serial.sizes) / 2**20:.1f} MB; paralelo {parallel.seconds:.1f} s, "
-              f"{len(parallel.sizes)} arquivo(s), maior {max(parallel.sizes) / 2**20:.1f} MB; "
-              f"razão {serial.seconds / parallel.seconds:.2f}; rodapés "
-              f"{serial.footer_seconds:.2f} s e {parallel.footer_seconds:.2f} s")
+        print(
+            f"  {rows} linhas: PARALLEL OFF {serial.seconds:.1f} s, 1 arquivo de "
+            f"{sum(serial.sizes) / 2**20:.1f} MB; paralelo {parallel.seconds:.1f} s, "
+            f"{len(parallel.sizes)} arquivo(s), maior {max(parallel.sizes) / 2**20:.1f} MB; "
+            f"razão {serial.seconds / parallel.seconds:.2f}; rodapés "
+            f"{serial.footer_seconds:.2f} s e {parallel.footer_seconds:.2f} s"
+        )
 
 
 def main() -> None:

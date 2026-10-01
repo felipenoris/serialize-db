@@ -167,7 +167,10 @@ class LoadReport:
 # ---------------------------------------------------------------- a origem
 
 
-def _entries(storage: Storage, prefix: str) -> list[pafs.FileInfo]:
+def _entries(
+    storage: Storage,
+    prefix: str,
+) -> list[pafs.FileInfo]:
     """As entradas diretas de uma pasta, em ordem de nome; a pasta ausente dá a lista vazia."""
     path = f"{storage.path}/{prefix}" if prefix else storage.path
     selector = pafs.FileSelector(path, allow_not_found=True)
@@ -175,21 +178,28 @@ def _entries(storage: Storage, prefix: str) -> list[pafs.FileInfo]:
     return sorted(found, key=_base_name)
 
 
-def _base_name(info: pafs.FileInfo) -> str:
+def _base_name(
+    info: pafs.FileInfo,
+) -> str:
     """O nome da entrada, a chave da ordenação de ``_entries``."""
     return info.base_name
 
 
-def _table_folder(storage: Storage, table: sa.Table) -> str:
+def _table_folder(
+    storage: Storage,
+    table: sa.Table,
+) -> str:
     """A pasta da tabela na origem, relativa à raiz dela; ausente é ``FileNotFoundError``."""
     if not storage.exists(table.name):
-        raise FileNotFoundError(f"{storage.uri_of(table.name)}: a pasta da tabela não existe na "
-                                "origem")
+        raise FileNotFoundError(
+            f"{storage.uri_of(table.name)}: a pasta da tabela não existe na origem"
+        )
     return table.name
 
 
 def discover_partitions(
-    source: str, table: sa.Table
+    source: str,
+    table: sa.Table,
 ) -> tuple[dict[str | None, str], tuple[str, ...]]:
     """As partições da pasta da tabela na origem e as entradas fora do padrão.
 
@@ -228,7 +238,10 @@ def discover_partitions(
     return found, tuple(skipped)
 
 
-def entries_outside_the_model(source: str, metadata: sa.MetaData) -> tuple[str, ...]:
+def entries_outside_the_model(
+    source: str,
+    metadata: sa.MetaData,
+) -> tuple[str, ...]:
     """As entradas da raiz da origem que não são pasta de uma tabela do modelo; protegida, para a
     linha de comando e o script de migração."""
     storage = Storage.for_uri(source)
@@ -237,7 +250,9 @@ def entries_outside_the_model(source: str, metadata: sa.MetaData) -> tuple[str, 
     return tuple(outside)
 
 
-def load_order(tables: Sequence[sa.Table]) -> list[sa.Table]:
+def load_order(
+    tables: Sequence[sa.Table],
+) -> list[sa.Table]:
     """As tabelas na ordem da carga.
 
     Exemplo:
@@ -262,14 +277,20 @@ def load_order(tables: Sequence[sa.Table]) -> list[sa.Table]:
 # ---------------------------------------------------------------- a consulta da partição
 
 
-def _read_folder(folder: str) -> str:
+def _read_folder(
+    folder: str,
+) -> str:
     """A leitura de uma pasta da origem, a mesma na carga e no relatório: os arquivos ``.parquet``
     diretos da pasta, sem ``hive_partitioning``."""
     files = literal(f"{folder}/*.parquet")
     return f"read_parquet({files}, hive_partitioning = false)"
 
 
-def partition_query(folder: str, table: sa.Table, value: str | None) -> str:
+def partition_query(
+    folder: str,
+    table: sa.Table,
+    value: str | None,
+) -> str:
     """O ``SELECT`` do DuckDB que leva a partição ao contrato.
 
     A pasta inteira por ``read_parquet`` sem ``hive_partitioning`` e cada coluna em ``CAST`` para
@@ -305,12 +326,14 @@ def partition_query(folder: str, table: sa.Table, value: str | None) -> str:
     return f"SELECT {', '.join(selected)} FROM {_read_folder(folder)}"
 
 
-def _ordered_select(query: str, table: sa.Table) -> str:
+def _ordered_select(
+    query: str,
+    table: sa.Table,
+) -> str:
     """As colunas do arquivo sobre a consulta da partição, sem a coluna de partição, que o
     caminho leva, na ordem da ``sort_key`` quando há uma."""
     options = table_options(table)
-    names = [quoted(column.name) for column in table.columns
-             if column.name != options.partition_by]
+    names = [quoted(column.name) for column in table.columns if column.name != options.partition_by]
     text = f"SELECT {', '.join(names)} FROM ({query})"
     if options.sort_key:
         text += " ORDER BY " + ", ".join(quoted(name) for name in options.sort_key)
@@ -329,7 +352,9 @@ class _PartitionCheck:
     nonfinite_columns: tuple[str, ...]
 
 
-def _text_limit(kind: sa.types.TypeEngine) -> tuple[int, str] | None:
+def _text_limit(
+    kind: sa.types.TypeEngine,
+) -> tuple[int, str] | None:
     """O limite em bytes do texto de uma coluna, o de ``cast`` e da auditoria, e o rótulo da
     contagem acima dele; ``None`` no tipo sem limite de texto.
 
@@ -347,8 +372,12 @@ def _text_limit(kind: sa.types.TypeEngine) -> tuple[int, str] | None:
     return None
 
 
-def _check_partition(connection: duckdb.DuckDBPyConnection, query: str, table: sa.Table,
-                     value: str | None) -> _PartitionCheck:
+def _check_partition(
+    connection: duckdb.DuckDBPyConnection,
+    query: str,
+    table: sa.Table,
+    value: str | None,
+) -> _PartitionCheck:
     """A conferência da partição, numa consulta só: as linhas, o que está fora do contrato e as
     colunas ``Double`` com ``NaN`` ou infinito, que o contrato aceita e ficam sem mínimo e máximo.
 
@@ -386,8 +415,8 @@ def _check_partition(connection: duckdb.DuckDBPyConnection, query: str, table: s
     # finitos.
     counts = connection.execute(f"SELECT {', '.join(measures)} FROM ({query})").fetchone()
     rows = counts[0]
-    contract_counts = counts[1:1 + len(labels)]
-    nonfinite_counts = counts[1 + len(labels):]
+    contract_counts = counts[1 : 1 + len(labels)]
+    nonfinite_counts = counts[1 + len(labels) :]
     problems = [f"{count} {label}" for count, label in zip(contract_counts, labels) if count]
     nonfinite = [name for name, count in zip(doubles, nonfinite_counts) if count]
     return _PartitionCheck(rows, tuple(problems), tuple(nonfinite))
@@ -396,9 +425,15 @@ def _check_partition(connection: duckdb.DuckDBPyConnection, query: str, table: s
 # ---------------------------------------------------------------- a gravação
 
 
-def _copy_partition(connection: duckdb.DuckDBPyConnection, storage: Storage, table: sa.Table,
-                    uri: str, value: str | None, query: str,
-                    execution_id: str) -> delta.RegisteredFile:
+def _copy_partition(
+    connection: duckdb.DuckDBPyConnection,
+    storage: Storage,
+    table: sa.Table,
+    uri: str,
+    value: str | None,
+    query: str,
+    execution_id: str,
+) -> delta.RegisteredFile:
     """``COPY ... RETURN_STATS`` da partição para um arquivo novo dentro da pasta dela, com o
     ``execution_id`` no nome; devolve o arquivo como ``register_files`` o recebe."""
     partition_by = table_options(table).partition_by
@@ -410,13 +445,18 @@ def _copy_partition(connection: duckdb.DuckDBPyConnection, storage: Storage, tab
     target = storage.uri_of(storage.join(table_path, relative))
     select = _ordered_select(query, table)
     cursor = connection.execute(
-        f"COPY ({select}) TO {literal(target)} (FORMAT parquet, RETURN_STATS)")
+        f"COPY ({select}) TO {literal(target)} (FORMAT parquet, RETURN_STATS)"
+    )
     names = [column[0] for column in cursor.description]
     row = dict(zip(names, cursor.fetchone()))
     return delta.file_from_return_stats(row, table, uri)
 
 
-def _source_setup(connection: duckdb.DuckDBPyConnection, db: Database, source: str) -> None:
+def _source_setup(
+    connection: duckdb.DuckDBPyConnection,
+    db: Database,
+    source: str,
+) -> None:
     """As extensões e o secret da origem no S3 quando a raiz Delta é uma pasta local; com a raiz no
     S3, a conexão do motor já os tem."""
     source_storage = Storage.for_uri(source)
@@ -424,8 +464,10 @@ def _source_setup(connection: duckdb.DuckDBPyConnection, db: Database, source: s
         source_storage.duckdb_setup(connection)
 
 
-def _wanted_values(found: Mapping[str | None, object],
-                   partitions: Sequence[str] | None) -> list[str | None]:
+def _wanted_values(
+    found: Mapping[str | None, object],
+    partitions: Sequence[str] | None,
+) -> list[str | None]:
     """Os valores de partição de ``found`` que o chamador pediu; todos sem ``partitions``, e
     nenhum numa tabela sem partição com ``partitions``."""
     if partitions is None:
@@ -433,8 +475,15 @@ def _wanted_values(found: Mapping[str | None, object],
     return [value for value in found if value in partitions]
 
 
-def _load_partition(engine: DuckDBEngine, storage: Storage, table: sa.Table, uri: str,
-                    value: str | None, folder: str, metadata: Mapping[str, str]) -> None:
+def _load_partition(
+    engine: DuckDBEngine,
+    storage: Storage,
+    table: sa.Table,
+    uri: str,
+    value: str | None,
+    folder: str,
+    metadata: Mapping[str, str],
+) -> None:
     """Grava uma partição no Delta: a conferência da consulta, o ``COPY`` para um arquivo novo e
     o registro dele, com o tempo no log. Uma partição fora do contrato é ``ContractError`` antes
     de qualquer gravação."""
@@ -446,18 +495,35 @@ def _load_partition(engine: DuckDBEngine, storage: Storage, table: sa.Table, uri
         if check.problems:
             raise ContractError(f"{table.name} {label}: {'; '.join(check.problems)}")
         file = _copy_partition(connection, storage, table, uri, value, query, engine.execution_id)
-    delta.register_files(uri, table, [file], value, metadata, storage, expected_rows=check.rows,
-                         columns_without_min_max=check.nonfinite_columns)
-    log.info("%s %s: %d linhas em %.1f s", table.name, label, check.rows,
-             time.perf_counter() - started)
+    delta.register_files(
+        uri,
+        table,
+        [file],
+        value,
+        metadata,
+        storage,
+        expected_rows=check.rows,
+        columns_without_min_max=check.nonfinite_columns,
+    )
+    log.info(
+        "%s %s: %d linhas em %.1f s", table.name, label, check.rows, time.perf_counter() - started
+    )
     if check.nonfinite_columns:
-        log.info("%s %s: sem mínimo e máximo em %s", table.name, label,
-                 ", ".join(check.nonfinite_columns))
+        log.info(
+            "%s %s: sem mínimo e máximo em %s",
+            table.name,
+            label,
+            ", ".join(check.nonfinite_columns),
+        )
 
 
-def initial_load(db: Database, table: sa.Table, source: str,
-                 partitions: Sequence[str] | None = None,
-                 config: DuckDBConfig | None = None) -> list[str | None]:
+def initial_load(
+    db: Database,
+    table: sa.Table,
+    source: str,
+    partitions: Sequence[str] | None = None,
+    config: DuckDBConfig | None = None,
+) -> list[str | None]:
     """Grava no Delta cada partição da tabela ainda fora do log.
 
     A tabela nasce por ``create_table`` quando não existe. A segunda chamada não grava nada.
@@ -525,7 +591,10 @@ class _Totals:
     nonfinite: dict[str, int]
 
 
-def _total_measures(sums: list[str], doubles: list[str]) -> list[str]:
+def _total_measures(
+    sums: list[str],
+    doubles: list[str],
+) -> list[str]:
     """As agregações de uma partição: a contagem, a soma de cada coluna de ``sums`` como
     ``DECIMAL(38, 6)``, só dos valores finitos numa ``Double``, e a contagem dos não finitos de
     cada coluna de ``doubles``."""
@@ -541,15 +610,24 @@ def _total_measures(sums: list[str], doubles: list[str]) -> list[str]:
     return measures
 
 
-def _totals_from_row(row: tuple, sums: list[str], doubles: list[str]) -> _Totals:
+def _totals_from_row(
+    row: tuple,
+    sums: list[str],
+    doubles: list[str],
+) -> _Totals:
     """As medidas de uma linha da agregação, na ordem de ``_total_measures``."""
-    sum_values = row[1:1 + len(sums)]
-    nonfinite_values = row[1 + len(sums):]
+    sum_values = row[1 : 1 + len(sums)]
+    nonfinite_values = row[1 + len(sums) :]
     return _Totals(row[0], dict(zip(sums, sum_values)), dict(zip(doubles, nonfinite_values)))
 
 
-def _aggregate(connection: duckdb.DuckDBPyConnection, relation: str, partition_by: str | None,
-               sums: list[str], doubles: list[str]) -> dict[str | None, _Totals]:
+def _aggregate(
+    connection: duckdb.DuckDBPyConnection,
+    relation: str,
+    partition_by: str | None,
+    sums: list[str],
+    doubles: list[str],
+) -> dict[str | None, _Totals]:
     """Contagem, somas e não finitos por partição de ``relation``: ``{valor: totais}``."""
     measures = ", ".join(_total_measures(sums, doubles))
     if partition_by is None:
@@ -561,8 +639,12 @@ def _aggregate(connection: duckdb.DuckDBPyConnection, relation: str, partition_b
     return {row[0]: _totals_from_row(row[1:], sums, doubles) for row in rows}
 
 
-def _source_totals(connection: duckdb.DuckDBPyConnection, found: Mapping[str | None, str],
-                   sums: list[str], doubles: list[str]) -> dict[str | None, _Totals]:
+def _source_totals(
+    connection: duckdb.DuckDBPyConnection,
+    found: Mapping[str | None, str],
+    sums: list[str],
+    doubles: list[str],
+) -> dict[str | None, _Totals]:
     """Contagem, somas e não finitos de cada pasta que ``discover_partitions`` achou na origem,
     lida como a carga a lê; as outras entradas da pasta da tabela ficam fora, como na carga."""
     totals = {}
@@ -571,8 +653,13 @@ def _source_totals(connection: duckdb.DuckDBPyConnection, found: Mapping[str | N
     return totals
 
 
-def _delta_totals(connection: duckdb.DuckDBPyConnection, db: Database, table: sa.Table,
-                  sums: list[str], doubles: list[str]) -> dict[str | None, _Totals]:
+def _delta_totals(
+    connection: duckdb.DuckDBPyConnection,
+    db: Database,
+    table: sa.Table,
+    sums: list[str],
+    doubles: list[str],
+) -> dict[str | None, _Totals]:
     """Contagem, somas e não finitos por partição no Delta; vazio na tabela ainda fora dele, que
     tem toda partição só na origem."""
     uri = db.uri(table)
@@ -583,7 +670,8 @@ def _delta_totals(connection: duckdb.DuckDBPyConnection, db: Database, table: sa
 
 
 def _partition_reports(
-    in_source: Mapping[str | None, _Totals], in_delta: Mapping[str | None, _Totals],
+    in_source: Mapping[str | None, _Totals],
+    in_delta: Mapping[str | None, _Totals],
 ) -> tuple[PartitionReport, ...]:
     """Uma conferência por partição presente num dos lados, em ordem de texto do valor; o lado
     em que a partição falta fica com ``None`` nas linhas."""
@@ -592,19 +680,24 @@ def _partition_reports(
     for value in sorted(set(in_source) | set(in_delta), key=str):
         source_totals = in_source.get(value, absent)
         delta_totals = in_delta.get(value, absent)
-        reports.append(PartitionReport(
-            value=value,
-            source_rows=source_totals.rows,
-            delta_rows=delta_totals.rows,
-            source_sums=source_totals.sums,
-            delta_sums=delta_totals.sums,
-            source_nonfinite=source_totals.nonfinite,
-            delta_nonfinite=delta_totals.nonfinite,
-        ))
+        reports.append(
+            PartitionReport(
+                value=value,
+                source_rows=source_totals.rows,
+                delta_rows=delta_totals.rows,
+                source_sums=source_totals.sums,
+                delta_sums=delta_totals.sums,
+                source_nonfinite=source_totals.nonfinite,
+                delta_nonfinite=delta_totals.nonfinite,
+            )
+        )
     return tuple(reports)
 
 
-def _direct_parquet_files(storage: Storage, prefix: str) -> list[str]:
+def _direct_parquet_files(
+    storage: Storage,
+    prefix: str,
+) -> list[str]:
     """Os arquivos ``.parquet`` diretos de uma pasta da origem, os que ``_read_folder`` lê, em
     ordem de nome e relativos à raiz."""
     files = []
@@ -614,7 +707,10 @@ def _direct_parquet_files(storage: Storage, prefix: str) -> list[str]:
     return files
 
 
-def _first_source_file(storage: Storage, found: Mapping[str | None, str]) -> str | None:
+def _first_source_file(
+    storage: Storage,
+    found: Mapping[str | None, str],
+) -> str | None:
     """O primeiro arquivo que a carga lê, na primeira pasta de ``found`` que tem algum; ``None``
     quando nenhuma tem."""
     for folder in found.values():
@@ -624,8 +720,11 @@ def _first_source_file(storage: Storage, found: Mapping[str | None, str]) -> str
     return None
 
 
-def _conversions(source: str, found: Mapping[str | None, str],
-                 table: sa.Table) -> tuple[str, ...]:
+def _conversions(
+    source: str,
+    found: Mapping[str | None, str],
+    table: sa.Table,
+) -> tuple[str, ...]:
     """As conversões de tipo da origem para o contrato, lidas no rodapé do primeiro arquivo que a
     carga lê: ``"id_contrato: int32 -> int64"``, ``"carimbo: INT96 -> timestamp[us]"``."""
     storage = Storage.for_uri(source)
@@ -648,9 +747,13 @@ def _conversions(source: str, found: Mapping[str | None, str],
     return tuple(found)
 
 
-def load_report(db: Database, table: sa.Table, source: str,
-                partitions: Sequence[str] | None = None,
-                config: DuckDBConfig | None = None) -> LoadReport:
+def load_report(
+    db: Database,
+    table: sa.Table,
+    source: str,
+    partitions: Sequence[str] | None = None,
+    config: DuckDBConfig | None = None,
+) -> LoadReport:
     """Contagem e somas por partição na origem e no Delta, e o veredito.
 
     A origem é lida como ``initial_load`` a lê: só as pastas que ``discover_partitions`` acha, uma

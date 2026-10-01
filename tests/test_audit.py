@@ -76,18 +76,24 @@ FUNCTION_TEXTS = {
 }
 
 
-def pinned_source(table: sa.Table) -> sa.FromClause:
+def pinned_source(
+    table: sa.Table,
+) -> sa.FromClause:
     """Uma origem com as colunas da tabela, no papel da versão fixada."""
     columns = [sa.column(column.name, column.type) for column in table.columns]
     return sa.table("fixada", *columns).alias("versao")
 
 
-def partitions_of(table: sa.Table) -> list[str] | None:
+def partitions_of(
+    table: sa.Table,
+) -> list[str] | None:
     """Uma partição para a tabela particionada, nenhuma para a sem partição."""
     return PARTITIONS if schema.table_options(table).partition_by else None
 
 
-def names_of(found: list[audit.Check]) -> list[str]:
+def names_of(
+    found: list[audit.Check],
+) -> list[str]:
     """Os nomes das verificações, na ordem."""
     return [check.name for check in found]
 
@@ -132,7 +138,8 @@ def test_rows_check_measures_uuid_text() -> None:
     texto de 37 bytes, e sobre a coluna ``UUID`` nativa de uma tabela criada por SQL, que o
     ``strlen`` sem o ``CAST`` recusa com ``Binder Error`` (leitura de 2026-09-25)."""
     table = sa.Table(
-        "cad_chaves", sa.MetaData(),
+        "cad_chaves",
+        sa.MetaData(),
         sa.Column("id_chave", sa.BigInteger, primary_key=True, autoincrement=False),
         sa.Column("chave", sa.Uuid),
     )
@@ -145,8 +152,9 @@ def test_rows_check_measures_uuid_text() -> None:
     canonical = str(uuid.UUID(int=1))
     connection = duckdb.connect()
     connection.execute(schema.ddl(table, "duckdb"))
-    connection.execute("INSERT INTO cad_chaves VALUES (1, ?), (2, NULL), (3, ?)",
-                       [canonical, canonical + "x"])
+    connection.execute(
+        "INSERT INTO cad_chaves VALUES (1, ?), (2, NULL), (3, ?)", [canonical, canonical + "x"]
+    )
     counters = connection.execute(duckdb_text).to_arrow_table()
     assert counters.column("linhas").to_pylist() == [3]
     assert counters.column("texto_chave").to_pylist() == [1]
@@ -154,7 +162,8 @@ def test_rows_check_measures_uuid_text() -> None:
     # O mesmo texto sobre a coluna UUID nativa, que a exportação converte em VARCHAR(36).
     connection.execute("DROP TABLE cad_chaves")
     connection.execute(
-        "CREATE TABLE cad_chaves AS SELECT 1::BIGINT AS id_chave, gen_random_uuid() AS chave")
+        "CREATE TABLE cad_chaves AS SELECT 1::BIGINT AS id_chave, gen_random_uuid() AS chave"
+    )
     native = connection.execute(duckdb_text).to_arrow_table()
     connection.close()
     assert native.column("texto_chave").to_pylist() == [0]
@@ -187,8 +196,14 @@ def test_key_scope_follows_the_partition_column() -> None:
 
     # O escopo padrão: a chave primária contra a versão fixada, com o skip_when do max_key.
     found, not_run = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope=None, pinned=pinned,
-        referenced=None, pinned_max_key=500)
+        contracts,
+        PARTITIONS,
+        foreign_keys=False,
+        key_scope=None,
+        pinned=pinned,
+        referenced=None,
+        pinned_max_key=500,
+    )
     assert names_of(found) == [
         "linhas",
         "chave_id_contrato",
@@ -203,16 +218,28 @@ def test_key_scope_follows_the_partition_column() -> None:
 
     # key_scope="partition": a consulta contra a versão fixada sai e fica registrada.
     found, not_run = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope="partition", pinned=pinned,
-        referenced=None, pinned_max_key=500)
+        contracts,
+        PARTITIONS,
+        foreign_keys=False,
+        key_scope="partition",
+        pinned=pinned,
+        referenced=None,
+        pinned_max_key=500,
+    )
     assert "chave_id_contrato_tabela" not in names_of(found)
     assert not_run == ["chave_id_contrato_tabela (key_scope=partition)"]
 
     # key_scope="table": a consulta se estende à chave com a coluna de partition_source; sem
     # pinned_max_key, nenhuma verificação tem skip_when.
     found, _ = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope="table", pinned=pinned,
-        referenced=None, pinned_max_key=None)
+        contracts,
+        PARTITIONS,
+        foreign_keys=False,
+        key_scope="table",
+        pinned=pinned,
+        referenced=None,
+        pinned_max_key=None,
+    )
     against_pinned = [name for name in names_of(found) if name.endswith("_tabela")]
     assert against_pinned == [
         "chave_id_contrato_tabela",
@@ -223,14 +250,19 @@ def test_key_scope_follows_the_partition_column() -> None:
 
     # Sem versão fixada, a tabela nova: a consulta não roda, e o relatório diz por quê.
     _, not_run = audit.checks_and_not_run(
-        contracts, PARTITIONS, foreign_keys=False, key_scope=None, pinned=None,
-        referenced=None, pinned_max_key=None)
+        contracts,
+        PARTITIONS,
+        foreign_keys=False,
+        key_scope=None,
+        pinned=None,
+        referenced=None,
+        pinned_max_key=None,
+    )
     assert not_run == ["chave_id_contrato_tabela (sem versão fixada)"]
 
     # A tabela sem partição, que a execução substitui inteira, não compara com as demais partições.
     accounts = CLIENT_TABLES["cad_contas"]
-    account_checks = audit.checks(accounts, partitions=None,
-                                  pinned=pinned_source(accounts))
+    account_checks = audit.checks(accounts, partitions=None, pinned=pinned_source(accounts))
     assert names_of(account_checks) == ["linhas", "chave_id_conta", "chave_numero"]
 
     # A auditoria da tabela inteira também não compara com as demais partições.
@@ -246,8 +278,14 @@ def test_foreign_key_check_only_on_request() -> None:
 
     # Sem foreign_keys=True: nenhuma verificação de órfão, e cada chave estrangeira em not_run.
     found, not_run = audit.checks_and_not_run(
-        entries, PARTITIONS, foreign_keys=False, key_scope=None, pinned=None,
-        referenced=None, pinned_max_key=None)
+        entries,
+        PARTITIONS,
+        foreign_keys=False,
+        key_scope=None,
+        pinned=None,
+        referenced=None,
+        pinned_max_key=None,
+    )
     assert not [check for check in found if check.name.startswith("orfao_")]
     orphan_reasons = [reason for reason in not_run if reason.startswith("orfao_")]
     assert orphan_reasons == [
@@ -265,15 +303,22 @@ def test_foreign_key_check_only_on_request() -> None:
         "dom_veiculos": CLIENT_TABLES["dom_veiculos"],
     }
     found, not_run = audit.checks_and_not_run(
-        entries, PARTITIONS, foreign_keys=True, key_scope=None, pinned=None,
-        referenced=referenced, pinned_max_key=None)
+        entries,
+        PARTITIONS,
+        foreign_keys=True,
+        key_scope=None,
+        pinned=None,
+        referenced=referenced,
+        pinned_max_key=None,
+    )
     orphans = [check.name for check in found if check.name.startswith("orfao_")]
     assert orphans == ["orfao_id_conta", "orfao_id_veiculo"]
     assert "orfao_id_mensuracao (dom_mensuracoes fora do sandbox e sem versão fixada)" in not_run
 
     # O texto do anti-join no DuckDB.
-    texts = audit.audit_sql(entries, "duckdb", PARTITIONS, foreign_keys=True,
-                            referenced=referenced, prefix="")
+    texts = audit.audit_sql(
+        entries, "duckdb", PARTITIONS, foreign_keys=True, referenced=referenced, prefix=""
+    )
     orphan_text = texts["orfao_id_conta"]
     assert "NOT (EXISTS (SELECT 1" in orphan_text
     assert '"cad_contas"."id_conta" = "cad_lancamentos"."id_conta"' in orphan_text

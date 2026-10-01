@@ -30,7 +30,10 @@ pytestmark = pytest.mark.local
 GIB = 2**30
 
 
-def fabricate(folder: Path, files: dict[str, str]) -> None:
+def fabricate(
+    folder: Path,
+    files: dict[str, str],
+) -> None:
     """Grava cada arquivo de ``files`` pelo caminho relativo a ``folder``."""
     for relative, text in files.items():
         path = folder / relative
@@ -38,13 +41,18 @@ def fabricate(folder: Path, files: dict[str, str]) -> None:
         path.write_text(text)
 
 
-def meminfo(available: int) -> str:
+def meminfo(
+    available: int,
+) -> str:
     """O ``/proc/meminfo`` com ``MemAvailable`` de ``available`` bytes."""
     return f"MemTotal:       16000000 kB\nMemAvailable:   {available // 1024} kB\n"
 
 
 @pytest.fixture
-def machine(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Path:
+def machine(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
     """Uma pasta nova com ``proc/`` e ``cgroup/`` no lugar das do sistema e 8 CPUs na afinidade."""
     folder = Path(local_location.child(f"recursos/{uuid.uuid4().hex[:8]}"))
     (folder / "proc").mkdir(parents=True)
@@ -55,17 +63,22 @@ def machine(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> P
     return folder
 
 
-def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(machine: Path) -> None:
+def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(
+    machine: Path,
+) -> None:
     """A folga do cgroup v2 é o limite menos o uso, com o cache de arquivos de volta; a cota de
     1,5 CPU dá 2. Um ``MemAvailable`` menor que a folga ganha dela."""
-    fabricate(machine, {
-        "proc/meminfo": meminfo(10 * GIB),
-        "proc/self/cgroup": "0::/app\n",
-        "cgroup/app/memory.max": f"{4 * GIB}\n",
-        "cgroup/app/memory.current": f"{3 * GIB // 2}\n",
-        "cgroup/app/memory.stat": f"anon {GIB // 2}\nfile {GIB}\n",
-        "cgroup/app/cpu.max": "150000 100000\n",
-    })
+    fabricate(
+        machine,
+        {
+            "proc/meminfo": meminfo(10 * GIB),
+            "proc/self/cgroup": "0::/app\n",
+            "cgroup/app/memory.max": f"{4 * GIB}\n",
+            "cgroup/app/memory.current": f"{3 * GIB // 2}\n",
+            "cgroup/app/memory.stat": f"anon {GIB // 2}\nfile {GIB}\n",
+            "cgroup/app/cpu.max": "150000 100000\n",
+        },
+    )
     # O limite de 4 GiB menos o uso de 1,5 GiB, com 1 GiB de cache de arquivos de volta.
     assert resources.available_memory() == 4 * GIB - 3 * GIB // 2 + GIB
     assert resources.available_cpus() == 2
@@ -75,63 +88,88 @@ def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(machine: Pa
     assert resources.available_memory() == GIB
 
 
-def test_the_tightest_ancestor_wins(machine: Path) -> None:
+def test_the_tightest_ancestor_wins(
+    machine: Path,
+) -> None:
     """O limite de um ancestral vale para o cgroup do processo: o pai limita a memória, e o filho,
     sem limite de memória, limita a CPU a meia, que arredonda para 1."""
-    fabricate(machine, {
-        "proc/meminfo": meminfo(10 * GIB),
-        "proc/self/cgroup": "0::/pai/filho\n",
-        "cgroup/pai/memory.max": f"{2 * GIB}\n",
-        "cgroup/pai/memory.current": f"{GIB // 2}\n",
-        "cgroup/pai/cpu.max": "max 100000\n",
-        "cgroup/pai/filho/memory.max": "max\n",
-        "cgroup/pai/filho/memory.current": f"{GIB // 4}\n",
-        "cgroup/pai/filho/cpu.max": "50000 100000\n",
-    })
+    fabricate(
+        machine,
+        {
+            "proc/meminfo": meminfo(10 * GIB),
+            "proc/self/cgroup": "0::/pai/filho\n",
+            "cgroup/pai/memory.max": f"{2 * GIB}\n",
+            "cgroup/pai/memory.current": f"{GIB // 2}\n",
+            "cgroup/pai/cpu.max": "max 100000\n",
+            "cgroup/pai/filho/memory.max": "max\n",
+            "cgroup/pai/filho/memory.current": f"{GIB // 4}\n",
+            "cgroup/pai/filho/cpu.max": "50000 100000\n",
+        },
+    )
     # O limite de 2 GiB do pai menos o uso de 0,5 GiB.
     assert resources.available_memory() == 2 * GIB - GIB // 2
     assert resources.available_cpus() == 1
 
 
-def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(machine: Path) -> None:
+def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(
+    machine: Path,
+) -> None:
     """No v1, a memória lê a pasta do processo e as ancestrais até a montagem, e a mais apertada é
     a montagem; a CPU não acha a pasta do processo, como no contêiner que monta o próprio cgroup, e
     lê a cota da montagem: 2,5 CPUs dão 3. A linha do v2 sem controlador não limita nada."""
-    fabricate(machine, {
-        "proc/meminfo": meminfo(10 * GIB),
-        "proc/self/cgroup": (
-            "4:memory:/docker/abc\n3:cpu,cpuacct:/docker/abc\n1:name=systemd:/docker/abc\n0::/\n"
-        ),
-        "cgroup/memory/docker/abc/memory.limit_in_bytes": "9223372036854771712\n",
-        "cgroup/memory/docker/abc/memory.usage_in_bytes": f"{GIB}\n",
-        "cgroup/memory/docker/abc/memory.stat": f"cache {GIB // 2}\ntotal_cache {GIB // 2}\n",
-        "cgroup/memory/memory.limit_in_bytes": f"{3 * GIB}\n",
-        "cgroup/memory/memory.usage_in_bytes": f"{GIB}\n",
-        "cgroup/memory/memory.stat": f"cache {GIB // 2}\ntotal_cache {GIB // 2}\n",
-        "cgroup/cpu/cpu.cfs_quota_us": "250000\n",
-        "cgroup/cpu/cpu.cfs_period_us": "100000\n",
-    })
+    fabricate(
+        machine,
+        {
+            "proc/meminfo": meminfo(10 * GIB),
+            "proc/self/cgroup": (
+                "4:memory:/docker/abc\n3:cpu,cpuacct:/docker/abc\n"
+                "1:name=systemd:/docker/abc\n0::/\n"
+            ),
+            "cgroup/memory/docker/abc/memory.limit_in_bytes": "9223372036854771712\n",
+            "cgroup/memory/docker/abc/memory.usage_in_bytes": f"{GIB}\n",
+            "cgroup/memory/docker/abc/memory.stat": f"cache {GIB // 2}\ntotal_cache {GIB // 2}\n",
+            "cgroup/memory/memory.limit_in_bytes": f"{3 * GIB}\n",
+            "cgroup/memory/memory.usage_in_bytes": f"{GIB}\n",
+            "cgroup/memory/memory.stat": f"cache {GIB // 2}\ntotal_cache {GIB // 2}\n",
+            "cgroup/cpu/cpu.cfs_quota_us": "250000\n",
+            "cgroup/cpu/cpu.cfs_period_us": "100000\n",
+        },
+    )
     # O limite de 3 GiB da montagem menos o uso de 1 GiB, com 0,5 GiB de total_cache de volta.
     assert resources.available_memory() == 3 * GIB - GIB + GIB // 2
     assert resources.available_cpus() == 3
 
 
-@pytest.mark.parametrize(("cgroup", "files"), [
-    ("0::/app\n", {
-        "cgroup/app/memory.max": f"{4 * GIB}\n",
-        "cgroup/app/memory.current": f"{3 * GIB}\n",
-        "cgroup/app/memory.stat": f"anon {2 * GIB}\nfile {GIB}\nshmem {3 * GIB // 4}\n",
-    }),
-    ("4:memory:/app\n", {
-        "cgroup/memory/app/memory.limit_in_bytes": f"{4 * GIB}\n",
-        "cgroup/memory/app/memory.usage_in_bytes": f"{3 * GIB}\n",
-        "cgroup/memory/app/memory.stat": (
-            f"cache {GIB // 2}\nshmem {GIB // 2}\ntotal_cache {GIB}\ntotal_shmem {3 * GIB // 4}\n"
+@pytest.mark.parametrize(
+    ("cgroup", "files"),
+    [
+        (
+            "0::/app\n",
+            {
+                "cgroup/app/memory.max": f"{4 * GIB}\n",
+                "cgroup/app/memory.current": f"{3 * GIB}\n",
+                "cgroup/app/memory.stat": f"anon {2 * GIB}\nfile {GIB}\nshmem {3 * GIB // 4}\n",
+            },
         ),
-    }),
-], ids=["v2", "v1"])
-def test_shared_memory_stays_in_the_cgroup_usage(machine: Path, cgroup: str,
-                                                 files: dict[str, str]) -> None:
+        (
+            "4:memory:/app\n",
+            {
+                "cgroup/memory/app/memory.limit_in_bytes": f"{4 * GIB}\n",
+                "cgroup/memory/app/memory.usage_in_bytes": f"{3 * GIB}\n",
+                "cgroup/memory/app/memory.stat": (
+                    f"cache {GIB // 2}\nshmem {GIB // 2}\n"
+                    f"total_cache {GIB}\ntotal_shmem {3 * GIB // 4}\n"
+                ),
+            },
+        ),
+    ],
+    ids=["v2", "v1"],
+)
+def test_shared_memory_stays_in_the_cgroup_usage(
+    machine: Path,
+    cgroup: str,
+    files: dict[str, str],
+) -> None:
     """A memória compartilhada (tmpfs, ``/dev/shm``, mmap compartilhado) entra no cache de arquivos
     do ``memory.stat``, em ``file`` no v2 e em ``total_cache`` no v1, e o kernel sem swap não a
     devolve: a folga devolve o cache menos ela, ``shmem`` no v2 e ``total_shmem`` no v1. No v1, as
@@ -159,8 +197,12 @@ def test_without_proc_windows_reads_the_memory_from_the_system() -> None:
     ``GlobalMemoryStatusEx``, positiva e abaixo da física, e a física é a que o WMI informa em
     ``Win32_ComputerSystem``."""
     command = "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"
-    completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], check=True,
-                               capture_output=True, text=True)
+    completed = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     assert resources.physical_memory() == int(completed.stdout)
     available = resources.available_memory()
     assert available > 0
@@ -168,13 +210,18 @@ def test_without_proc_windows_reads_the_memory_from_the_system() -> None:
     assert resources.available_cpus() == 8
 
 
-def test_peak_rss_mb_reads_vmhwm_from_the_process_status(machine: Path) -> None:
+def test_peak_rss_mb_reads_vmhwm_from_the_process_status(
+    machine: Path,
+) -> None:
     """O pico de memória residente é o ``VmHWM`` de ``/proc/self/status``, em KB, convertido em
     MB; sem o arquivo, fora do Linux, é o pico que o sistema informa, positivo: o ``ru_maxrss`` do
     processo nos Unix e o ``PeakWorkingSetSize`` no Windows."""
-    fabricate(machine, {
-        "proc/self/status": "Name:\tpython\nVmHWM:\t 1234567 kB\nVmRSS:\t   4096 kB\n",
-    })
+    fabricate(
+        machine,
+        {
+            "proc/self/status": "Name:\tpython\nVmHWM:\t 1234567 kB\nVmRSS:\t   4096 kB\n",
+        },
+    )
     assert resources.peak_rss_mb() == pytest.approx(1234567 / 1024)
     (machine / "proc" / "self" / "status").unlink()
     assert resources.peak_rss_mb() > 0
@@ -191,7 +238,8 @@ def test_peak_rss_mb_is_the_peak_of_the_process_itself() -> None:
             buffer[offset] = 1
         print(before, peak_rss_mb())
     """)
-    completed = subprocess.run([sys.executable, "-c", program], check=True,
-                               capture_output=True, text=True)
+    completed = subprocess.run(
+        [sys.executable, "-c", program], check=True, capture_output=True, text=True
+    )
     before, after = (float(value) for value in completed.stdout.split())
     assert after - before >= 48
