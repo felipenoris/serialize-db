@@ -5608,3 +5608,97 @@ saiu com 0 no lugar de 2, porque ele volta por `--snapshot`.
 **Consequências**: a volta pelo canal e a correção que continua na versão atual do Delta têm um
 caso, que entra no alvo na próxima bateria pelo comando da suíte da publicação de `SUITE.md`, sem
 comando novo.
+
+## O que a bateria de 2026-09-30 às 14:58 mostrou no ambiente alvo
+
+Em 2026-09-30, das 14:58 às 15:42 UTC, o usuário rodou no ambiente alvo o bloco "Probes e Testes -
+BN" de `SUITE.md`, os cinco probes e as sete sessões do pytest, sobre a `main` com os PRs #109, #110
+e #111 [inferido: cada sessão coletou os casos que essa `main` coleta, 614, 54, 11 e 11], numa
+máquina de 8 vCPUs e 15,3 GiB, com as versões das baterias de 2026-09-29. Os relatórios ficam fora
+de `plan/`, com os achados aqui. Nenhum caso e nenhuma checagem falharam, e as leituras repetem as
+da bateria de 2026-09-29 às 17:04 ("O que a bateria de 2026-09-29 às 17:04 mostrou no ambiente
+alvo"), salvo:
+
+- **O runbook de refazer um snapshot passou no alvo.**
+  `test_redo_a_snapshot_and_revert_by_the_channel` passou nas quatro sessões que o coletam, as duas
+  da suíte Redshift e as duas da publicação, com o banco Delta sob a raiz S3 da suíte e as tabelas
+  publicadas no esquema do alvo ("O que o caso do runbook de refazer um snapshot mostrou"). A suíte
+  Redshift aprovou 54 casos em 748,9 s e em 674,3 s, e a da publicação 11 em 248,1 s e em 236,7 s,
+  um a mais que em 2026-09-29 em cada.
+- **Os casos novos da sessão `-m "not redshift"` rodam sem rede.** A sessão aprovou 614 casos em
+  274,9 s, três a mais que em 2026-09-29: os de `tests/test_storage.py` que dão a `ConflictError` ao
+  412 e ao 409 da escrita condicional e deixam subir os outros erros, pelo cliente dublê, sem ler o
+  S3 do alvo. A suíte do motor aprovou 11 casos em 168,4 s e em 169,1 s; o `COPY ... MANIFEST` do
+  arquivo obrigatório ausente falhou de novo com `Spectrum Scan Error: File not found`, e o `append`
+  de 10 linhas levou 1,66 s e 1,50 s na suíte Redshift e 1,67 s e 1,39 s na do motor.
+- **A listagem repete a de 2026-09-29 às 17:04.** O `svv_all_tables` das 14:58 listou as mesmas 16
+  tabelas, sem `exec_`, e o `RS-8` leu 1 de 16: nenhuma sessão entre as duas listagens, as de
+  2026-09-29 das 17:07 às 17:45 entre elas, deixou tabela do sandbox. As sessões desta bateria
+  rodaram depois do probe, e só a listagem da próxima diz se deixaram alguma.
+- **O `RS-12` contou 112 erros de carga em 30 dias**, contra 100 às 17:04, e o `BK-14` parou de novo
+  no limite da listagem, com 10.460 versões não correntes (283.526.691 bytes) e 9.539 marcadores de
+  exclusão.
+
+**Consequências**: o caso do runbook de refazer um snapshot, com a volta pelo canal, sai dos que
+esperam o alvo em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). A sobra de tabela do sandbox não se
+repetiu desde a rodada interrompida de 2026-09-29 às 00:29.
+
+## O que as sondas da operação mostraram na pasta local e no substituto
+
+Em 2026-09-30, neste contêiner (Linux x86_64, 4 vCPUs, 13,2 GiB disponíveis, Python 3.13.12,
+deltalake 1.6.6, DuckDB 1.5.5, PyArrow 25.0.1), as sondas de `probes/operacao/`, escritas a pedido
+do usuário para as leituras que [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) espera no alvo, rodaram
+sobre `cad_lancamentos` da base fictícia de `tests/source_db_projetado.py`, repetida com os ids
+deslocados: quatro partições de 3.008.000, 3.000.000, 3.000.000 e 60 linhas, as três primeiras num
+arquivo de cerca de 12 MB cada. As quatro que não pedem o Redshift rodaram na pasta local, e as
+cinco no substituto, com o moto no lugar do S3 e `tests/emulator.py` no lugar do Redshift; as da
+carga e do `archive` rodaram duas vezes em cada lugar. Todas as checagens passaram.
+
+- **A carga parada deixa na pasta o arquivo da partição interrompida.** Na pasta local, o arquivo
+  da segunda partição apareceu 0,2 s depois da linha da primeira no log, o `SIGKILL` que veio em
+  seguida chegou antes do commit dela, e o arquivo ficou fora do log nas duas rodadas. No moto, onde
+  o objeto só aparece quando o envio termina, 0,8 s e 0,9 s depois da linha, o commit da segunda
+  partição chegou ao log antes do sinal nas duas. A repetição do comando gravou só as partições
+  ausentes do log, numa execução nova, com um arquivo por partição no log. A pasta temporária do
+  motor DuckDB, `serialize_db_*` em `tempfile.gettempdir()` com o `<execution_id>.duckdb`, ficou
+  para trás em todas as rodadas, com 0,0 MB: o `cleanup` não roda depois do `SIGKILL`.
+- **`serialize-db load --partitions` conferia a origem inteira.** A repetição de três das quatro
+  partições imprimiu `DIFERENÇA em 2026-06-30: origem 60 linhas {...}, Delta ausente` e o veredito
+  `com diferenças`, e saiu com 1, com as três pedidas iguais nos dois lados: `_load` chamava
+  `load_report(db, table, args.source)`, que não recebia as partições pedidas.
+- **O `archive` copia as partições na ordem das ações do log, e a repetição continua a cópia.** A
+  primeira copiada foi a 2026-03-31, a última gravada, e depois a 2026-02-28 e a 2026-01-31. O
+  `SIGKILL` depois da linha da primeira deixou o snapshot em `snapshots`, e na pasta local a cópia
+  da seguinte já tinha começado: dois arquivos na pasta da cópia, contra um no moto. A repetição
+  imprimiu `partição 2026-03-31 já no destino`, copiou as outras duas, gravou a versão 3 no arquivo
+  e moveu o snapshot para `archived`, com os arquivos de cada partição iguais aos da versão e nenhum
+  órfão, em 0,2 s e com o pico de RSS de 242 MB e 243 MB na pasta local, e em 0,7 s e com 280 MB no
+  moto.
+- **O `vacuum --full` só lista o arquivo fora do log mais velho que a retenção.** Com a retenção
+  padrão de 9.600 horas, os 400 dias, os dois órfãos recém-gravados, um na pasta da partição e outro
+  num prefixo dentro dela, ficaram fora da lista; com `--retention-hours 0` os dois foram listados,
+  e só eles; com `--apply` os dois foram apagados, a tabela ganhou os commits `VACUUM START` e
+  `VACUUM END`, da versão 1 à 3, e as linhas e a soma de `id_lancamento` pelo `delta_scan` não
+  mudaram. Sem `--apply`, a versão não mudou.
+- **O `compact` juntou a partição repartida num arquivo em ZSTD.** A partição de 3.008.000 linhas,
+  14,5 MB no arquivo da carga, repartida pelo `COPY ... FILE_SIZE_BYTES` do DuckDB em 24 arquivos de
+  até 1,2 MB, virou um arquivo de 6,7 MB num commit `OPTIMIZE`, com as mesmas linhas e soma: em
+  0,6 s e com o pico de RSS de 295 MB na pasta local, e em 0,8 s e com 312 MB no moto, com 13,0 GiB
+  a 13,1 GiB disponíveis antes. O arquivo da carga, do `COPY` do DuckDB, sai em SNAPPY, e o do
+  `compact`, `part-00000-<uuid>-c000.zstd.parquet` com o `created_by` `delta-rs version py-1.6.6`,
+  em ZSTD, o padrão do `optimize.compact`, que `delta.compact` chama sem `writer_properties`. O
+  `COPY` da publicação de um arquivo ZSTD não rodou no alvo; a página dos arquivos do Redshift
+  Spectrum, que o `COPY` de Parquet usa, diz que o Redshift lê o zstd no Parquet.
+- **O `UNLOAD` do substituto grava um arquivo nos dois modos.** O substituto traduz o `UNLOAD` num
+  `COPY` do DuckDB, com um arquivo com `PARALLEL OFF` e sem ele: as checagens de linhas e de arquivo
+  único passaram, e os tempos, 0,4 s para 1.000.000 de linhas e de 1,3 s a 1,4 s para as 3.008.000
+  nos dois modos, não medem o Redshift.
+
+**Consequências**: as cinco sondas esperam a rodada no alvo, pelos comandos de `SUITE.md`, seção
+"Sondas da operação", e o `COPY` de uma partição compactada entra no item da operação no alvo de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O usuário decidiu em 2026-10-01 que o relatório de
+`serialize-db load --partitions` confere só as partições pedidas: `load_report` recebe
+`partitions`, que o subcomando e o script passam, e a sonda da carga exige da repetição a saída 0
+e a linha `3 partição(ões) conferida(s), contagens e somas iguais`. Em 2026-10-01 a sonda passou
+assim na pasta local e no substituto, e reprovou contra o subcomando anterior, com a
+`DIFERENÇA em 2026-06-30` e a saída 1 ([etapa 7](PLAN-STAGE-7.md)).

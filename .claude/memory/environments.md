@@ -213,6 +213,16 @@ tables, no `exec_` table), `RS-12` (100 load errors in 30 days) and `BK-14` (10,
 versions, 283,880,162 bytes, and 9,518 delete markers, the listing again at its limit).
 `plan/POC.md`
 
+The battery of 2026-09-30 from 14:58 UTC (from `main` with PRs #109, #110 and #111, inferred from
+the sessions' counts) repeated the "Probes e Testes - BN" block on 8 vCPUs and 15.3 GiB with the
+same versions. Every case and check passed: S3 614 in 274.9 s (the three `ConflictError` cases of
+`tests/test_storage.py` new), Redshift 54 twice (748.9 s, 674.3 s), engine 11 twice (168.4 s,
+169.1 s) and publication 11 twice (248.1 s, 236.7 s), the Redshift and publication sessions with
+`test_redo_a_snapshot_and_revert_by_the_channel`, its first target run. The probes differed from
+17:04 in `RS-12` (112 load errors in 30 days) and `BK-14` (10,460 non-current versions, 283,526,691
+bytes, and 9,539 delete markers, the listing again at its limit); the `RS-8` listing held the same
+16 tables, no `exec_` table. `plan/POC.md`
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

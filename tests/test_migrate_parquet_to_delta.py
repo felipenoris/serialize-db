@@ -4,12 +4,13 @@ Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a 
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
 teste, com a pasta temporária do processo apontada para a pasta do teste, onde o motor DuckDB de
 cada chamada de ``initial_load`` abre o banco. Eles conferem a linha de comando sobre a base
-inteira, duas vezes, com o ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; o
-relatório parcial de uma carga interrompida numa partição fora do contrato; a recusa de um modelo
-que viola o contrato, sem ler a origem, e de um ``--metadata`` que não importa; o ambiente ``dsv``
-com ``SERIALIZE_DB_ENVIRONMENT`` vazia; a diferença na tabela sem partição, impressa como tabela
-inteira; e o lado em que a partição falta, impresso como ausente. A carga em si e o relatório de
-contagens e somas são de ``serialize_db.load``, cobertos por ``tests/test_load.py``.
+inteira, duas vezes, com o ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; a
+carga e o relatório só nas partições de ``--partitions``; o relatório parcial de uma carga
+interrompida numa partição fora do contrato; a recusa de um modelo que viola o contrato, sem ler a
+origem, e de um ``--metadata`` que não importa; o ambiente ``dsv`` com ``SERIALIZE_DB_ENVIRONMENT``
+vazia; a diferença na tabela sem partição, impressa como tabela inteira; e o lado em que a partição
+falta, impresso como ausente. A carga em si e o relatório de contagens e somas são de
+``serialize_db.load``, cobertos por ``tests/test_load.py``.
 """
 
 from __future__ import annotations
@@ -124,6 +125,23 @@ def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
     document = json.loads(report_path.read_text())
     assert all(table["loaded"] == [] for table in document["tables"])
     assert "in_progress" not in document
+
+
+def test_main_confers_only_the_requested_partitions(base: source.SourceBase, folder: Path,
+                                                    capsys: pytest.CaptureFixture) -> None:
+    """Com ``--partitions``, a carga e o relatório ficam nas partições pedidas: as outras da
+    origem, fora do Delta, não contam como diferença, e a saída é 0."""
+    report_path = folder / "relatorio.json"
+    arguments = ["--metadata", "client_model:Base.metadata", "--source", str(base.root),
+                 "--root", str(folder / "delta"), "--tables", "cad_contratos",
+                 "--partitions", "2026-02-28", "--report", str(report_path)]
+    assert migrate.main(arguments) == 0
+    printed = capsys.readouterr().out
+    assert "relatório: 1 partições conferidas, contagens e somas iguais" in printed
+    assert "DIFERENÇA" not in printed
+    document = json.loads(report_path.read_text())
+    conferred = [partition["value"] for partition in document["tables"][0]["partitions"]]
+    assert conferred == ["2026-02-28"]
 
 
 def test_report_keeps_the_progress_of_an_interrupted_load(base: source.SourceBase, folder: Path,

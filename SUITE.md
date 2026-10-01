@@ -241,6 +241,43 @@ SERIALIZE_DB_TEST_REPORT=probes/output/consistencia_redshift.json .venv/bin/pyth
 SERIALIZE_DB_TEST_REPORT=probes/output/consistencia_append_redshift.json .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_append_test.py 2>&1 | tee probes/output/consistencia_append_redshift.txt
 ```
 
+# Sondas da operação
+
+```
+cd ~/work/projects/serialize-db
+
+export AWS_DEFAULT_REGION=sa-east-1
+export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
+export SERIALIZE_DB_TEST_S3_ROOT=s3://awsds-sandbox-smus-projects/dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/shared/serialize-db-tests
+export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
+export SERIALIZE_DB_REDSHIFT_DATABASE=dev
+export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
+export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
+
+# Cada sonda lê cad_lancamentos em $SOURCE_PATH, grava sob
+# $SERIALIZE_DB_TEST_S3_ROOT/serialize-db-operacao/<sonda>-<id>/, que apaga no fim, e imprime o
+# relatório no terminal e em probes/output/operacao_<sonda>_<data-hora>.txt; código de saída 1
+# quando alguma checagem reprova.
+
+# A carga das três primeiras partições, encerrada por SIGKILL quando o arquivo da segunda aparece,
+# e o mesmo comando de novo.
+.venv/bin/python probes/operacao/probe_load_resume.py $SOURCE_PATH
+
+# O archive de um snapshot das três partições, encerrado por SIGKILL depois da primeira partição
+# copiada, e o mesmo comando de novo.
+.venv/bin/python probes/operacao/probe_archive_resume.py $SOURCE_PATH
+
+# O vacuum --full de dois órfãos com a retenção padrão, com --retention-hours 0 e com --apply.
+.venv/bin/python probes/operacao/probe_vacuum_orphans.py $SOURCE_PATH
+
+# O compact da primeira partição repartida em cerca de 32 arquivos, com o tempo e o pico de RSS.
+.venv/bin/python probes/operacao/probe_compact_memory.py $SOURCE_PATH
+
+# O UNLOAD da exportação com PARALLEL OFF e em paralelo, de 1, 5, 10 e 20 milhões de linhas e da
+# primeira partição inteira, três vezes cada; as tabelas exec_operacao_<id>_* saem no fim.
+.venv/bin/python probes/operacao/probe_unload_parallel.py $SOURCE_PATH
+```
+
 # Resultados
 
 ```

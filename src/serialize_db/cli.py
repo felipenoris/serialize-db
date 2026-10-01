@@ -259,7 +259,8 @@ def _add_load_parser(commands: argparse._SubParsersAction) -> None:
                               help="só estas tabelas do modelo; sem elas, todas, as sem partição "
                                    "antes das particionadas")
     load_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None,
-                              help="só estas partições; as tabelas sem partição ficam de fora")
+                              help="só estas partições, gravadas e conferidas; as tabelas "
+                                   "sem partição ficam de fora")
     load_command.set_defaults(handler=_load)
 
 
@@ -741,7 +742,7 @@ def _load(args: argparse.Namespace) -> int:
         tables = load.load_order(_selected_tables(args.metadata, args.tables))
         for table in tables:
             loaded = load.initial_load(db, table, args.source, args.partitions)
-            report = load.load_report(db, table, args.source)
+            report = load.load_report(db, table, args.source, args.partitions)
             _print_load_report(report, loaded)
             matches = matches and report.matches
     except (argparse.ArgumentTypeError, FileNotFoundError) as error:

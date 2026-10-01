@@ -43,10 +43,15 @@ foi medido em [`POC.md`](POC.md).
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
   queda do servidor, que nenhum teste provoca lá ([etapa 5](PLAN-STAGE-5.md)).
+  `probes/operacao/probe_unload_parallel.py` mede o primeiro, o `UNLOAD` da exportação com
+  `PARALLEL OFF` e em paralelo de 1 a 20 milhões de linhas, e espera a rodada no alvo pelos
+  comandos de `SUITE.md`, seção "Sondas da operação".
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
   cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
+  `probes/operacao/probe_compact_memory.py` a mede na primeira partição da origem repartida em
+  cerca de 32 arquivos, e espera a rodada no alvo.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -89,22 +94,26 @@ foi medido em [`POC.md`](POC.md).
   carga parou em `cad_lancamentos` 2026-07-31 com o `RegistrationRefused` de uma origem que mudava
   durante a leitura, e em 2026-09-29, com a origem estável, passou inteira numa raiz recarregada
   ([`POC.md`](POC.md)): a continuação de uma carga parada, que `tests/test_load.py` cobre na pasta
-  local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo.
+  local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo. As sondas de
+  `probes/operacao/` rodam essas leituras sobre as primeiras partições de `cad_lancamentos` da
+  origem, a continuação do `archive` inclusive, e passaram na pasta local e no substituto em
+  2026-09-30 ([`POC.md`](POC.md)); esperam a rodada no alvo, pelos comandos de `SUITE.md`, seção
+  "Sondas da operação". O `COPY` da publicação de uma partição compactada, que o `compact`
+  regrava em ZSTD, também não rodou lá.
 
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
   baterias de 2026-09-25, de 2026-09-26, de 2026-09-27 e de 2026-09-28 às 23:09
   ([`POC.md`](POC.md)): o leitor Delta abriu as 12 views da raiz carregada em 0,645 s, em 0,582 s,
   em 0,571 s e em 0,556 s; as suítes passaram a publicação por canal e por snapshot, com a volta a
   um snapshot anterior, e a comparação dos dois leitores, com o `stream` do leitor Redshift pelo
-  `UNLOAD`; e em 2026-09-26 a base inteira foi publicada por `--channel default`, `cad_lancamentos`
-  em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, e em
+  `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a volta pelo canal; e
+  em 2026-09-26 a base inteira foi publicada por `--channel default`, `cad_lancamentos` em 295,1 s
+  com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, e em
   2026-09-29, em 335,2 s com 286 MB. Esperam: a volta a um snapshot anterior ao publicado sobre a
   base, com o tempo e o pico de RSS por tabela, que pede um commit depois do snapshot, fora do fluxo
-  de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão já estava publicada; o caso do
-  runbook de refazer um snapshot em `tests/test_publication.py`, com a volta pelo canal, que rodou
-  só no substituto, em 2026-09-30, e entra na próxima bateria pelo comando da suíte da publicação
-  em `SUITE.md`; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio, com o
-  caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
+  de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão já estava publicada; e o `UNLOAD`
+  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
+  serve a ele, que precisa de um papel de cliente no alvo.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25 ([`POC.md`](POC.md)), e o pino fica em 2.0.54. O `params()` novo guarda os

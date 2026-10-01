@@ -1484,3 +1484,17 @@ object runs during the upload, with the instruction to re-read the ETag and retr
 `_put_s3` converted only the 412; the user chose "Converter" (04:08 UTC): `_put_s3` turns
 `ConditionalRequestConflict` and `409` into `ConflictError`, tested by a `boto3` client double.
 `src/serialize_db/storage.py`, `src/serialize_db/errors.py`, `plan/PLAN-STAGE-3.md`
+
+## The load report of the requested partitions (2026-10-01)
+
+The load resume probe of `probes/operacao/` read, on 2026-09-30 in the local folder and on the
+stand-in, that `serialize-db load --partitions` ran `load_report` over the whole source: each
+partition outside the request printed `DIFERENÇA em <valor>: ..., Delta ausente` and the command
+exited 1 with the requested partitions equal on both sides. Offered the choice on a decision card,
+the user chose "Só as pedidas" (00:33 UTC): `load_report(db, table, source, partitions=None,
+config=None)` filters the source folders and the Delta totals as `initial_load` does, leaving an
+unpartitioned table out, and `serialize-db load` passes `--partitions` to both, exiting 0 when
+the requested partitions match. The migration script passes its `--partitions` the same way, an
+extension the assistant named in its report. The Delta side still aggregates the whole table and
+drops the other partitions after the query. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
+`scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
