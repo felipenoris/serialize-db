@@ -248,7 +248,7 @@ cd ~/work/projects/serialize-db
 
 export AWS_DEFAULT_REGION=sa-east-1
 export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
-export SERIALIZE_DB_TEST_S3_ROOT=s3://awsds-sandbox-smus-projects/dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/shared/serialize-db-tests
+export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
 export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
 export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
