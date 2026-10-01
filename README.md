@@ -101,6 +101,15 @@ os testes do secret do S3 são pulados. `prepare_offline.sh` as instala lá, e c
 uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL delta').execute('INSTALL httpfs')"
 ```
 
+Antes dos testes, a esteira confere o código e a formatação com o Ruff do grupo `dev`, sobre a
+configuração `[tool.ruff]` de [`pyproject.toml`](pyproject.toml); os dois comandos passam no
+repositório inteiro, e `uv run ruff format` aplica a formatação:
+
+```
+uv run ruff check
+uv run ruff format --check
+```
+
 ## Testes no substituto local
 
 `SERIALIZE_DB_TEST_EMULATOR` roda as suítes que só rodam no ambiente alvo sobre o substituto de
