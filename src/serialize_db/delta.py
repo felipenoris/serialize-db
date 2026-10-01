@@ -807,10 +807,10 @@ def _check_footer_schema(
 
     Nenhuma coluna do contrato ausente, porque o leitor a leria nula sem erro; o tipo físico entre
     os que os leitores leem como o lógico; a coluna de partição fora do arquivo, porque ela vive na
-    ação, e o ``COPY`` do Redshift, que lista as colunas do rodapé, a mandaria para a staging, que
-    não a tem; e as colunas do contrato na ordem dele, que nenhum leitor do pacote exige: os dois
-    leitores e o ``COPY`` ligam cada coluna do arquivo à de mesmo nome. Uma coluna fora do
-    contrato passa, porque os leitores a ignoram.
+    ação, e nenhuma coluna fora do contrato, porque o ``COPY`` do Redshift, que lista as colunas do
+    rodapé, mandaria uma e outra para a staging, que não as tem; e as colunas do contrato na ordem
+    dele, que nenhum leitor do pacote exige: os dois leitores e o ``COPY`` ligam cada coluna do
+    arquivo à de mesmo nome.
     """
     physical = {}
     order = []
@@ -823,6 +823,9 @@ def _check_footer_schema(
         raise RegistrationRefused(
             f"{file.path}: a coluna de partição {partition_by} está dentro do arquivo"
         )
+    for name in physical:
+        if name not in contract.names:
+            raise RegistrationRefused(f"{file.path}: coluna {name} fora do contrato")
     expected = []
     for field in contract:
         if field.name == partition_by:
@@ -971,9 +974,9 @@ def register_files(
     ``create_write_transaction`` grava a ação como a recebe, e os leitores obedecem à ação, não ao
     arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo: o
     arquivo existe com o tamanho declarado; o esquema do rodapé tem cada coluna do contrato, na
-    ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição;
-    as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está na pasta da
-    partição; as linhas do rodapé são as declaradas.
+    ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição
+    nem coluna fora do contrato; as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o
+    caminho está na pasta da partição; as linhas do rodapé são as declaradas.
 
     A ação leva ``numRecords``, o ``nullCount`` e o mínimo e o máximo das colunas inteiras, de data,
     ``Double`` e texto. Depois do commit, ``read_back`` relê a versão pelos dois leitores e a

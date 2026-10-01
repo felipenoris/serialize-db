@@ -205,14 +205,6 @@ A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões 
 suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; cada item abaixo espera
 o usuário.
 
-- **A coluna fora do contrato no registro e a lista de colunas do `COPY`.** `_check_footer_schema`
-  de `serialize_db.delta` aceita um arquivo com uma coluna fora do contrato, porque os leitores a
-  ignoram, e recusa a coluna de partição dentro dele, porque o `COPY` do Redshift, que lista as
-  colunas do rodapé, a mandaria à staging; desde 2026-09-28 o `COPY` lista toda coluna do rodapé,
-  e um arquivo registrado com coluna a mais faz o `COPY` da publicação e do `ingest` do motor
-  Redshift nomear uma coluna que a staging não tem. Nenhum escritor do pacote grava coluna a mais;
-  o caso chega por `register_files` com um arquivo do cliente. Opções: recusar no registro, como a
-  coluna de partição, ou documentar a recusa no `COPY`.
 - **`ingest(materialize=True)` e a coluna do Delta que o modelo não tem.** Desde 2026-09-28 a
   materialização roda a DDL do modelo e `INSERT ... BY NAME` do `delta_scan`, e o `BY NAME` exige
   cada coluna da origem na tabela: uma versão do Delta com coluna fora do modelo, o caso de um
@@ -248,6 +240,6 @@ texto, o que recusaria um destino com `\` no Windows, não lido lá.
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
 escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
-etapas [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md) e [6](PLAN-STAGE-6.md) esperam as decisões dos
-achados da revisão de 2026-10-01, a seção acima; as demais etapas não têm
-decisão pendente, e os demais itens que esperam o usuário estão na lista do início.
+etapas [4](PLAN-STAGE-4.md) e [6](PLAN-STAGE-6.md) esperam as decisões dos achados da revisão de
+2026-10-01, a seção acima; as demais etapas não têm decisão pendente, e os demais itens que esperam
+o usuário estão na lista do início.

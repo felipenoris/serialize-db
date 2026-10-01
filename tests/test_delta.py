@@ -525,7 +525,14 @@ Registration = tuple[list[RegisteredFile], str, int | None]
 REGISTRATION_DEFECTS = ["tamanho", "linhas", "partição do caminho", "esperadas", "caminho absoluto"]
 
 # Os defeitos do próprio arquivo, que só o rodapé mostra.
-FILE_DEFECTS = ["coluna ausente", "tipo físico", "partição dentro", "ordem", "nulo em not null"]
+FILE_DEFECTS = [
+    "coluna ausente",
+    "tipo físico",
+    "partição dentro",
+    "coluna a mais",
+    "ordem",
+    "nulo em not null",
+]
 
 # Um trecho da mensagem da conferência de cada defeito: o caso reprova quando outra conferência
 # recusa antes da dele.
@@ -538,6 +545,7 @@ DEFECT_MESSAGES = {
     "coluna ausente": "coluna descricao do contrato ausente",
     "tipo físico": "valor em BYTE_ARRAY",
     "partição dentro": "a coluna de partição data_str está dentro do arquivo",
+    "coluna a mais": "coluna extra fora do contrato",
     "ordem": "colunas na ordem",
     "nulo em not null": "nulos na coluna NOT NULL data",
 }
@@ -572,6 +580,8 @@ def defective_data(
         return data.set_column(index, "valor", pa.array(["x"] * 20))
     if name == "partição dentro":
         return data.append_column("data_str", pa.array(["2026-09-30"] * 20))
+    if name == "coluna a mais":
+        return data.append_column("extra", pa.array([0] * 20))
     if name == "ordem":
         reordered = ["data", "id_operacao", "valor", "preco", "carimbo", "to", "descricao"]
         return data.select(reordered)

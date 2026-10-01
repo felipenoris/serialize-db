@@ -81,12 +81,12 @@ o rodapé de cada arquivo, um GET por arquivo:
 2. O esquema do rodapé contra o da tabela, nome a nome: nenhuma coluna do contrato ausente, e o tipo
    físico entre os admitidos para o lógico (`INT96` e `INT64` para `timestamp_ntz`,
    `FIXED_LEN_BYTE_ARRAY`, `INT64` e `INT32` para `decimal`, `INT32` para `long`); a coluna de
-   partição fora do arquivo, porque ela vive na ação e o `COPY` do Redshift, que lista as colunas
-   do rodapé, a mandaria para a staging, que não a tem; e as colunas do contrato na ordem dele, que
-   nenhum leitor exige desde a lista de colunas do `COPY` (2026-09-28). Uma coluna fora do contrato
-   passa, porque os leitores a ignoram. Nenhum nulo numa coluna `NOT NULL`, pela contagem de nulos
-   de cada grupo de linhas do rodapé: o DuckDB grava toda coluna como `optional`, e o leitor
-   devolveria o nulo que o `write_deltalake` recusa.
+   partição fora do arquivo, porque ela vive na ação, e nenhuma coluna fora do contrato (decisão
+   do usuário de 2026-10-01), porque o `COPY` do Redshift, que lista as colunas do rodapé desde
+   2026-09-28, mandaria uma e outra para a staging, que não as tem; e as colunas do contrato na
+   ordem dele, que nenhum leitor exige desde a lista de colunas do `COPY`. Nenhum nulo numa coluna
+   `NOT NULL`, pela contagem de nulos de cada grupo de linhas do rodapé: o DuckDB grava toda
+   coluna como `optional`, e o leitor devolveria o nulo que o `write_deltalake` recusa.
 3. O valor de partição do caminho Hive igual ao de `value`.
 4. A soma de `num_records` dos rodapés igual à que `files` declara e a `expected_rows`, quando o
    chamador tem a contagem da fonte.
@@ -374,7 +374,7 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Tabela inteira nas mensagens | `test_messages_of_a_table_without_partition_name_the_whole_table` | Numa tabela sem partição, o conflito por `publish_partition` e por `register_files` e a releitura que desfaz o commit começam por `dom_canais tabela inteira:`, e não por uma `partição None`. |
 | Registro | `test_register_files_registers_an_unload_like_file` | Um arquivo `INT96` e `FIXED_LEN_BYTE_ARRAY` registrado; os dois leitores devolvem as linhas e `timestamp[us]`; o mínimo e o máximo da chave na ação. |
 | Contagem de nulos do rodapé | `test_file_from_footer_leaves_out_the_null_count_the_footer_lacks` | A coluna sem estatística no rodapé, o timestamp `INT96`, fica fora do `null_count` de `file_from_footer` e do `nullCount` do log, e o `IS NULL` pelo `DeltaTable.scan` lê os nulos dela; a chave entra com o zero. |
-| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, linhas, partição do caminho, `expected_rows` diferente, caminho absoluto, coluna do contrato ausente, tipo físico fora dos admitidos, coluna de partição dentro do arquivo, colunas fora de ordem e nulo numa coluna `NOT NULL`, cada recusa conferida por um trecho da mensagem da sua conferência (`DEFECT_MESSAGES`), para que o caso reprove quando outra conferência recusa antes; a versão não muda e o arquivo fica órfão. |
+| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, linhas, partição do caminho, `expected_rows` diferente, caminho absoluto, coluna do contrato ausente, tipo físico fora dos admitidos, coluna de partição dentro do arquivo, coluna fora do contrato, colunas fora de ordem e nulo numa coluna `NOT NULL`, cada recusa conferida por um trecho da mensagem da sua conferência (`DEFECT_MESSAGES`), para que o caso reprove quando outra conferência recusa antes; a versão não muda e o arquivo fica órfão. |
 | Releitura | `test_read_back_restores_on_a_difference` | Um máximo falso da chave, abaixo do real, faz `read_back` voltar a versão por `restore`. |
 | `Double` não finito | `test_nonfinite_double_columns_leave_min_max_out` | Uma coluna em `columns_without_min_max` numa partição: `publish_partition` grava o rodapé e o log sem o mínimo e o máximo dela, `register_files` grava o log sem os dois (o infinito inclusive), a outra partição sai com eles, e o `delta_scan` devolve as linhas do `NaN` e do infinito num filtro por intervalo e não abre o arquivo da outra partição. |
 | Estatísticas | `test_file_from_return_stats_and_registered_stats_prune` | O arquivo do `COPY ... RETURN_STATS` do DuckDB entra com o mínimo e o máximo dos tipos exatos; `EXPLAIN ANALYZE` mostra `Scanning Files: 0/n` para uma chave acima do máximo e um texto acima do máximo; as colunas `decimal` e `timestamp` entram sem mínimo e máximo. |
@@ -410,14 +410,17 @@ compactação de um arquivo que não commita, o tipo Delta que `add_columns` rec
 implementação mostrou estão em [`POC.md`](POC.md), seções "O que os rascunhos das etapas
 mostraram" e "O que a implementação da etapa 3 mostrou".
 
+Desde a decisão do usuário de 2026-10-01, a conferência 2 também recusa a coluna fora do contrato,
+que o `COPY` do Redshift, listando as colunas do rodapé desde 2026-09-28, mandaria para a staging,
+que não a tem; antes ela passava, porque os leitores a ignoram. O caso `coluna a mais` de
+`test_register_files_refuses_each_defect` a cobre, e reprova no código anterior.
+
 ## Decisões pendentes
 
-A coluna fora do contrato no registro espera o usuário: `_check_footer_schema` a aceita, e desde
-2026-09-28 o `COPY` do Redshift lista toda coluna do rodapé e a recusaria na staging
-([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), achados da revisão de 2026-10-01). A renovação do
-secret do DuckDB, decidida pelo usuário em 2026-09-25, está na descrição de `duckdb_setup`, e o
-409 do S3 como `ConflictError`, decidido pelo usuário em 2026-09-30, na de `create_text` e
-`write_text`.
+Nenhuma. A recusa da coluna fora do contrato no registro, decidida pelo usuário em 2026-10-01, está
+na conferência 2 e em "A implementação". A renovação do secret do DuckDB, decidida pelo usuário em
+2026-09-25, está na descrição de `duckdb_setup`, e o 409 do S3 como `ConflictError`, decidido pelo
+usuário em 2026-09-30, na de `create_text` e `write_text`.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a

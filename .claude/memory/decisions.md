@@ -1514,6 +1514,21 @@ table, partitions)` lets `serialize-db load` and the script check every table be
 partition, exiting 1. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
 `scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
 
+## The column outside the contract at the registration (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `_check_footer_schema` of
+`serialize_db.delta` accepted a file with a column outside the contract, because the readers
+ignore it, while since 2026-09-28 the Redshift `COPY` of the publication and of the engine's
+`ingest` lists every column of the footer and would name a column the staging does not have; no
+writer of the package writes such a column, and the case comes through `register_files` with a
+client's file. Asked whether the registration should refuse it, like the partition column, or the
+`COPY` refusal should be documented, the user adopted the refusal in the registration in the thread
+(13:42 UTC): `register_files` raises `RegistrationRefused` with `<arquivo>: coluna <nome> fora do
+contrato`, the first such column in footer order, right after the partition-column check, and the
+file stays orphaned as in every refusal. Schema evolution is unaffected, as the user asked in the
+same message: the model changes first and `reconcile` adds the column to the log before any file
+carries it. `src/serialize_db/delta.py`, `plan/PLAN-STAGE-3.md`
+
 ## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
 
 The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review
