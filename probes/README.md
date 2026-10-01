@@ -215,7 +215,7 @@ ambiente alvo estão em `SUITE.md`, seção "Sondas da operação".
 
 | Sonda | O que roda |
 | --- | --- |
-| `probe_load_resume.py` | `serialize-db load` de três partições encerrado quando o arquivo da segunda aparece na pasta dela, e o mesmo comando de novo: a repetição grava só o que o log não tinha; os arquivos fora do log e a pasta temporária do motor DuckDB que o processo encerrado deixou são leituras, e a sonda apaga a pasta. |
+| `probe_load_resume.py` | `serialize-db load` de três partições encerrado quando o arquivo da segunda aparece na pasta dela, e o mesmo comando de novo: a repetição grava só o que o log não tinha e confere as três pedidas sem diferença, com a saída 0; os arquivos fora do log e a pasta temporária do motor DuckDB que o processo encerrado deixou são leituras, e a sonda apaga a pasta. |
 | `probe_archive_resume.py` | `serialize-db archive` de um snapshot das três partições encerrado depois da primeira partição copiada, e o mesmo comando de novo: a repetição pula o que a cópia registrava, e a cópia fica com os arquivos da versão, uma versão por partição, sem órfão. |
 | `probe_vacuum_orphans.py` | `serialize-db vacuum --full` de dois órfãos, cópias do arquivo registrado na pasta da partição e num prefixo dentro dela, com a retenção padrão (nada listado), com `--retention-hours 0` (os dois) e com `--apply` (os dois apagados, a tabela intacta). |
 | `probe_compact_memory.py` | `serialize-db compact` da partição repartida em cerca de 32 arquivos pelo `COPY ... FILE_SIZE_BYTES` do DuckDB e registrada: os arquivos juntados, as mesmas linhas e o tempo e o pico de RSS do processo. |

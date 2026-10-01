@@ -381,8 +381,8 @@ coluna `DateTime` sem fuso entra na hora do `TimeZone` da conexão, o fuso da m�
 `load_report` mostra o arredondamento quando ele muda a soma da coluna, e não vê a hora, o fuso nem
 os nanossegundos. A linha `conversões` do relatório lista cada coluna cujo tipo no arquivo difere do
 contrato, como `carimbo: INT96 -> timestamp[us]`, lida no rodapé do primeiro arquivo da primeira
-partição: ela não diz quais conversões perdem dado nem se algum valor perdeu, e não vê o tipo de
-outro arquivo. Na linha de comando:
+partição conferida: ela não diz quais conversões perdem dado nem se algum valor perdeu, e não vê o
+tipo de outro arquivo. Na linha de comando:
 
 ```shell
 serialize-db load --root s3://bucket/projeto/delta --environment prd \

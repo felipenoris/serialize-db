@@ -100,14 +100,6 @@ foi medido em [`POC.md`](POC.md).
   2026-09-30 ([`POC.md`](POC.md)); esperam a rodada no alvo, pelos comandos de `SUITE.md`, seção
   "Sondas da operação". O `COPY` da publicação de uma partição compactada, que o `compact`
   regrava em ZSTD, também não rodou lá.
-- **O relatório de `serialize-db load --partitions`.** `serialize-db load` confere cada tabela
-  por `load_report`, que soma a origem inteira: com `--partitions` de parte da origem, cada
-  partição fora do pedido sai como `DIFERENÇA em <valor>: ..., Delta ausente`, o veredito como
-  `com diferenças` e o comando com 1, com as pedidas iguais nos dois lados, como a sonda da carga
-  parada leu em 2026-09-30 na pasta local e no substituto ([`POC.md`](POC.md)). As saídas são
-  conferir só as partições pedidas, por um argumento `partitions` de `load_report`, ou manter o
-  comportamento de hoje e descrevê-lo em `docs/operacao.md`; a escolha espera o usuário
-  ([etapa 7](PLAN-STAGE-7.md)).
 
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
   baterias de 2026-09-25, de 2026-09-26, de 2026-09-27 e de 2026-09-28 às 23:09
@@ -201,7 +193,7 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
-tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 7](PLAN-STAGE-7.md) espera a
-escolha do relatório de `serialize-db load --partitions`, e a [etapa 9](PLAN-STAGE-9.md) a da
-issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, os itens acima; as outras
-etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista acima.
+tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
+escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
+outras etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista
+acima.

@@ -10,9 +10,10 @@ commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``,
 uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, e o texto
 acima dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado); a coluna
 ``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o relatório que soma só
-os finitos; o relatório que acusa uma linha apagada e que lê na origem só as pastas da carga; a
-auditoria de chave estrangeira que registra o órfão sem barrar a carga; ``serialize-db load`` sobre
-a base inteira, duas vezes; e a tabela sem partição impressa como tabela inteira.
+os finitos; o relatório que acusa uma linha apagada, que confere só as partições pedidas e que lê
+na origem só as pastas da carga; a auditoria de chave estrangeira que registra o órfão sem barrar
+a carga; ``serialize-db load`` sobre a base inteira, duas vezes, e sobre uma partição só; e a
+tabela sem partição impressa como tabela inteira.
 """
 
 from __future__ import annotations
@@ -531,6 +532,40 @@ def test_load_report_matches_and_detects_a_difference(base: source.SourceBase, d
     assert differing[0].delta_rows == differing[0].source_rows - 1
 
 
+def test_load_report_confers_only_the_requested_partitions(base: source.SourceBase, db: Database,
+                                                            config: DuckDBConfig) -> None:
+    """Com ``partitions``, o relatório confere só as partições pedidas, as que ``initial_load``
+    grava: as outras da origem ficam de fora, uma linha apagada numa pedida continua acusada, e a
+    tabela sem partição fica de fora."""
+    origin = origin_of(base)
+    operations = TABLES["cad_operacoes"]
+    only = ["2026-02-28"]
+    load.initial_load(db, operations, origin, partitions=only, config=config)
+
+    # A origem inteira acusa as partições fora do log; a pedida confere.
+    assert not load.load_report(db, operations, origin, config=config).matches
+    report = load.load_report(db, operations, origin, partitions=only, config=config)
+    assert report.matches
+    assert [partition.value for partition in report.partitions] == only
+
+    # Uma linha apagada do Delta na partição pedida continua acusada.
+    uri = db.uri(operations)
+    with db.storage.duckdb_connect() as connection:
+        deleted_id = connection.execute(
+            f"SELECT min(id_operacao) FROM delta_scan('{uri}') WHERE data_str = '2026-02-28'"
+        ).fetchone()[0]
+    delta.open_table(uri, db.storage).delete(
+        f"data_str = '2026-02-28' AND id_operacao = {deleted_id}")
+    report = load.load_report(db, operations, origin, partitions=only, config=config)
+    assert not report.matches
+    assert [partition.value for partition in report.partitions] == only
+
+    # A tabela sem partição fica de fora, como na carga.
+    rates = load.load_report(db, TABLES["cad_aliquotas"], origin, partitions=only, config=config)
+    assert rates.partitions == ()
+    assert rates.matches
+
+
 def test_load_report_reads_only_what_the_load_reads(folder: Path, config: DuckDBConfig) -> None:
     """O relatório lê na origem só as pastas que a carga lê: a pasta de partição com valor fora
     da regra e a pasta fora do padrão ficam em ``skipped``, fora das contas e das conversões, e o
@@ -639,9 +674,9 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
                                              capsys: pytest.CaptureFixture) -> None:
     """``serialize-db load`` sobre a base inteira: as tabelas sem partição antes das
     particionadas, as três entradas fora do modelo, saída 0; a segunda execução não grava nada;
-    1 na partição fora do contrato e no relatório com diferença; 2 no modelo fora do contrato, na
-    tabela fora do modelo, na origem ausente ou num esquema que a biblioteca não lê e no conflito,
-    sem traceback."""
+    uma partição só, gravada e conferida sozinha, saída 0; 1 na partição fora do contrato; 2 no
+    modelo fora do contrato, na tabela fora do modelo, na origem ausente ou num esquema que a
+    biblioteca não lê e no conflito, sem traceback."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
@@ -662,15 +697,17 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
     printed = capsys.readouterr().out
     assert printed.count("0 partição(ões) gravada(s)") == 12
 
-    # Uma partição só de uma tabela: as outras faltam no Delta, e o relatório acusa.
+    # Uma partição só de uma tabela: o relatório confere só a pedida, e as outras da origem, fora
+    # do Delta, não contam como diferença.
     partial_root = str(folder / "parcial")
     partial = [*common, "--root", partial_root, "--tables", "cad_contratos",
                "--partitions", "2026-02-28"]
-    assert cli.main(partial) == 1
+    assert cli.main(partial) == 0
     printed = capsys.readouterr().out
     assert "cad_contratos: 1 partição(ões) gravada(s): 2026-02-28" in printed
-    assert "DIFERENÇA em 2026-01-31: origem 38 linhas" in printed
-    assert "1 tabela(s) conferida(s), com diferenças" in printed
+    assert "1 partição(ões) conferida(s), contagens e somas iguais" in printed
+    assert "DIFERENÇA" not in printed
+    assert "1 tabela(s) conferida(s), contagens e somas iguais" in printed
 
     # A partição fora do contrato: saída 1 com a mensagem, sem traceback.
     off_the_path = datetime.date(2026, 3, 31)
@@ -711,7 +748,8 @@ def test_cli_load_loads_the_base_and_reports(base: source.SourceBase, folder: Pa
 def test_cli_load_names_the_unpartitioned_table(base: source.SourceBase, folder: Path,
                                                 monkeypatch: pytest.MonkeyPatch,
                                                 capsys: pytest.CaptureFixture) -> None:
-    """A tabela sem partição aparece como tabela inteira na linha da carga e na diferença."""
+    """A tabela sem partição aparece como tabela inteira na linha da carga e na diferença, que
+    sai com 1."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     monkeypatch.setattr(load, "load_report", unpartitioned_difference)

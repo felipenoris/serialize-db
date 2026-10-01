@@ -28,8 +28,8 @@ ficam fora da carga e entram no relatório.
 carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e as ``Double`` da
 mesma forma só nos valores finitos, com os não finitos contados à parte, porque a soma em ponto
 flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um infinito para ``DECIMAL`` falha. A
-carga só termina quando ``matches`` é verdadeiro; ``serialize-db load`` roda as duas e sai com 1 na
-diferença.
+carga só termina quando ``matches`` é verdadeiro; ``serialize-db load`` roda as duas, com as mesmas
+partições quando ``--partitions`` as pede, e sai com 1 na diferença.
 
 Exemplo:
 
@@ -149,7 +149,8 @@ class LoadReport:
     """O nome da tabela."""
     partitions: tuple[PartitionReport, ...]
     """Uma conferência por partição que ``discover_partitions`` acha na origem ou que está no
-    Delta, em ordem de texto do valor."""
+    Delta, só as pedidas quando ``load_report`` recebe ``partitions``, em ordem de texto do
+    valor."""
     skipped: tuple[str, ...]
     """As entradas da pasta da tabela na origem que não são pasta de partição, fora das contas;
     vazio numa tabela sem partição."""
@@ -423,10 +424,10 @@ def _source_setup(connection: duckdb.DuckDBPyConnection, db: Database, source: s
         source_storage.duckdb_setup(connection)
 
 
-def _wanted_values(found: Mapping[str | None, str],
+def _wanted_values(found: Mapping[str | None, object],
                    partitions: Sequence[str] | None) -> list[str | None]:
-    """Os valores encontrados que o chamador pediu; todos sem ``partitions``, e nenhum numa tabela
-    sem partição com ``partitions``."""
+    """Os valores de partição de ``found`` que o chamador pediu; todos sem ``partitions``, e
+    nenhum numa tabela sem partição com ``partitions``."""
     if partitions is None:
         return list(found)
     return [value for value in found if value in partitions]
@@ -648,6 +649,7 @@ def _conversions(source: str, found: Mapping[str | None, str],
 
 
 def load_report(db: Database, table: sa.Table, source: str,
+                partitions: Sequence[str] | None = None,
                 config: DuckDBConfig | None = None) -> LoadReport:
     """Contagem e somas por partição na origem e no Delta, e o veredito.
 
@@ -664,12 +666,16 @@ def load_report(db: Database, table: sa.Table, source: str,
         report = load_report(db, Operacao.__table__, "/dados/db_projetado")
         report.matches                          # True
         report.partitions[0].source_sums        # {"valor": Decimal("45.150000")}
+        only = load_report(db, Operacao.__table__, "/dados/db_projetado", ["2026-02-28"])
+        [partition.value for partition in only.partitions]   # ["2026-02-28"]
 
     :param db: o banco, com a raiz Delta e o ambiente; a tabela Delta fica em
         ``<raiz>/<ambiente>/<tabela>``.
     :param table: a tabela do modelo.
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
+    :param partitions: os valores a conferir, que filtram as partições da origem e do Delta e
+        deixam de fora uma tabela sem partição, como em ``initial_load``; ``None`` confere todas.
     :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
         sistema e os limites lidos do ambiente.
     :return: o relatório, com o veredito em ``matches``; uma partição presente num lado só tem
@@ -680,13 +686,17 @@ def load_report(db: Database, table: sa.Table, source: str,
     # As colunas somadas são as Numeric, as Double inclusive, porque Double deriva de Numeric.
     sums = [column.name for column in table.columns if isinstance(column.type, sa.Numeric)]
     doubles = double_columns(table)
+    # As pastas da origem que a carga lê: as pedidas em partitions, ou todas sem elas.
     found, skipped = discover_partitions(source, table)
+    wanted = {value: found[value] for value in _wanted_values(found, partitions)}
     execution_id = f"relatorio-{uuid.uuid4().hex[:8]}"
     # A origem e o Delta agregados na mesma sessão, com o secret da origem quando ela está no S3.
     with DuckDBEngine(config or DuckDBConfig(), execution_id, db.storage) as engine:
         with engine.session() as connection:
             _source_setup(connection, db, source)
-            in_source = _source_totals(connection, found, sums, doubles)
-            in_delta = _delta_totals(connection, db, table, sums, doubles)
-    partitions = _partition_reports(in_source, in_delta)
-    return LoadReport(table.name, partitions, skipped, _conversions(source, found, table))
+            in_source = _source_totals(connection, wanted, sums, doubles)
+            whole_delta = _delta_totals(connection, db, table, sums, doubles)
+    # Do Delta, só as partições pedidas, filtradas depois da agregação da tabela inteira.
+    in_delta = {value: whole_delta[value] for value in _wanted_values(whole_delta, partitions)}
+    reports = _partition_reports(in_source, in_delta)
+    return LoadReport(table.name, reports, skipped, _conversions(source, wanted, table))

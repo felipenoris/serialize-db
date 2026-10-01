@@ -13,7 +13,7 @@ falta de memória por exemplo, deixa o que já conferiu e gravou. O relatório f
 versões, os limites do DuckDB lidos do ambiente e os argumentos, cada tabela com o relatório de
 ``load_report`` e as partições gravadas agora, e o que a raiz da origem tem fora do modelo. A raiz
 Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``, e a origem fica
-intocada.
+intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas.
 
 Uma partição fora do contrato interrompe a execução sem commit, com a tabela, a partição e a
 coluna na mensagem, e a execução seguinte recomeça dela; o script sai com 1 nesse caso e quando o
@@ -258,7 +258,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "ausente)")
     parser.add_argument("--tables", nargs="+", metavar="TABELA", help="só estas tabelas do modelo")
     parser.add_argument("--partitions", nargs="+", metavar="AAAA-MM-DD", default=None,
-                        help="só estas partições; as tabelas sem partição ficam de fora")
+                        help="só estas partições, gravadas e conferidas; as tabelas sem "
+                             "partição ficam de fora")
     parser.add_argument("--report", metavar="ARQUIVO.json",
                         help="grava o relatório da execução em JSON")
     return parser
@@ -300,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
                                              environment, table.name)
                 progress([])
             loaded = load_table(db, table, arguments.source, arguments.partitions, progress)
-            report = load.load_report(db, table, arguments.source)
+            report = load.load_report(db, table, arguments.source, arguments.partitions)
             print_report(report)
             reports.append(TableReport(report, tuple(loaded)))
     except ContractError as error:

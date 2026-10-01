@@ -260,8 +260,7 @@ export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
 # quando alguma checagem reprova.
 
 # A carga das três primeiras partições, encerrada por SIGKILL quando o arquivo da segunda aparece,
-# e o mesmo comando de novo; a repetição sai com 1 porque o relatório de load mostra as partições
-# fora do pedido como diferença.
+# e o mesmo comando de novo.
 .venv/bin/python probes/operacao/probe_load_resume.py $SOURCE_PATH
 
 # O archive de um snapshot das três partições, encerrado por SIGKILL depois da primeira partição

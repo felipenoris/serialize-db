@@ -9,15 +9,14 @@ repete o comando.
 Checagens:
 
 - o processo encerrado com a primeira partição no log e a terceira fora dele;
-- a repetição grava as partições que o log não tinha, e só elas, sem diferença nas pedidas;
+- a repetição grava as partições que o log não tinha, e só elas, e confere as pedidas sem
+  diferença, com a saída 0;
 - o log com um arquivo por partição pedida;
 - os arquivos fora do log todos da execução encerrada.
 
 Leituras: o momento do sinal, se a segunda partição chegou ao log antes dele, a duração da
 repetição, os arquivos fora do log, que ``probe_vacuum_orphans.py`` mostra como apagar, e a pasta
-temporária do motor DuckDB que o processo encerrado deixou, com o tamanho, que a sonda apaga. A
-repetição sai com o código 1 quando a origem tem partições fora do pedido: o relatório de
-``serialize-db load`` soma a origem inteira e mostra cada uma como diferença.
+temporária do motor DuckDB que o processo encerrado deixou, com o tamanho, que a sonda apaga.
 
 Exemplo:
 
@@ -91,21 +90,23 @@ def check_killed(killed: lib.Finished, after_kill: dict[str, list[str]],
 
 
 def check_rerun(rerun: lib.Finished, missing: list[str], values: list[str]) -> None:
-    """A repetição gravou as partições ausentes do log, e só elas, sem diferença nas pedidas."""
+    """A repetição gravou só as partições ausentes do log e conferiu só as pedidas, sem
+    diferença, com a saída 0."""
     problems = []
     written = f"{lib.TABLE.name}: {len(missing)} partição(ões) gravada(s)"
     if missing:
         written += ": " + ", ".join(missing)
     if written not in rerun.lines:
         problems.append(f"sem a linha {written!r}")
+    conferred = f"  {len(values)} partição(ões) conferida(s), contagens e somas iguais"
+    if conferred not in rerun.lines:
+        problems.append(f"sem a linha {conferred.strip()!r}")
     for line in rerun.lines:
-        for value in values:
-            if line.strip().startswith(f"DIFERENÇA em {value}:"):
-                problems.append(line.strip())
-    if rerun.code == 2:
-        problems.append("a repetição saiu com o código 2")
-    lib.check("a repetição grava só as partições ausentes do log, sem diferença nas pedidas",
-              problems)
+        if line.strip().startswith("DIFERENÇA"):
+            problems.append(line.strip())
+    if rerun.code != 0:
+        problems.append(f"a repetição saiu com o código {rerun.code}")
+    lib.check("a repetição grava só as partições ausentes do log e confere as pedidas", problems)
 
 
 def main() -> None:

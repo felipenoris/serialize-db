@@ -5662,10 +5662,10 @@ carga e do `archive` rodaram duas vezes em cada lugar. Todas as checagens passar
   ausentes do log, numa execução nova, com um arquivo por partição no log. A pasta temporária do
   motor DuckDB, `serialize_db_*` em `tempfile.gettempdir()` com o `<execution_id>.duckdb`, ficou
   para trás em todas as rodadas, com 0,0 MB: o `cleanup` não roda depois do `SIGKILL`.
-- **`serialize-db load --partitions` confere a origem inteira.** A repetição de três das quatro
+- **`serialize-db load --partitions` conferia a origem inteira.** A repetição de três das quatro
   partições imprimiu `DIFERENÇA em 2026-06-30: origem 60 linhas {...}, Delta ausente` e o veredito
-  `com diferenças`, e saiu com 1, com as três pedidas iguais nos dois lados: `_load` chama
-  `load_report(db, table, args.source)`, que não recebe as partições pedidas.
+  `com diferenças`, e saiu com 1, com as três pedidas iguais nos dois lados: `_load` chamava
+  `load_report(db, table, args.source)`, que não recebia as partições pedidas.
 - **O `archive` copia as partições na ordem das ações do log, e a repetição continua a cópia.** A
   primeira copiada foi a 2026-03-31, a última gravada, e depois a 2026-02-28 e a 2026-01-31. O
   `SIGKILL` depois da linha da primeira deixou o snapshot em `snapshots`, e na pasta local a cópia
@@ -5695,6 +5695,10 @@ carga e do `archive` rodaram duas vezes em cada lugar. Todas as checagens passar
   nos dois modos, não medem o Redshift.
 
 **Consequências**: as cinco sondas esperam a rodada no alvo, pelos comandos de `SUITE.md`, seção
-"Sondas da operação". O relatório de `serialize-db load --partitions` entra em
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) e nas decisões pendentes da [etapa 7](PLAN-STAGE-7.md), à
-espera do usuário, e o `COPY` de uma partição compactada no item da operação no alvo.
+"Sondas da operação", e o `COPY` de uma partição compactada entra no item da operação no alvo de
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O usuário decidiu em 2026-10-01 que o relatório de
+`serialize-db load --partitions` confere só as partições pedidas: `load_report` recebe
+`partitions`, que o subcomando e o script passam, e a sonda da carga exige da repetição a saída 0
+e a linha `3 partição(ões) conferida(s), contagens e somas iguais`. Em 2026-10-01 a sonda passou
+assim na pasta local e no substituto, e reprovou contra o subcomando anterior, com a
+`DIFERENÇA em 2026-06-30` e a saída 1 ([etapa 7](PLAN-STAGE-7.md)).

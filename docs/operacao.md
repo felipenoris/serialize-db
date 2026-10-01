@@ -290,7 +290,7 @@ recebem só `--metadata`.
 | --- | --- | --- |
 | `--source` | obrigatória | A raiz da base Parquet de origem, pasta local ou `s3://bucket/prefixo`. |
 | `--tables` | todas do modelo | As tabelas carregadas, na ordem da carga: as sem partição antes das particionadas. |
-| `--partitions` | todas | As partições carregadas; com ela, as tabelas sem partição ficam de fora. |
+| `--partitions` | todas | As partições carregadas e conferidas no relatório; com ela, as tabelas sem partição ficam de fora. |
 
 ### `publish_redshift`
 
