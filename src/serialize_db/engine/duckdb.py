@@ -8,7 +8,8 @@ código do cliente com o lock tomado. ``session()`` dá a conexão crua ao bloco
 reentrante na mesma thread; ``new_session()`` abre um motor sobre ``cursor()`` da conexão, uma
 sessão a mais sobre o mesmo banco, com o seu lock. Os limites da instância saem do ambiente na
 abertura, quando a configuração os omite (``environment_limits``): ``threads`` são as CPUs que o
-processo pode usar, e ``memory_limit`` é metade da memória que ele ainda pode usar.
+processo pode usar, e ``memory_limit`` é metade da memória que ele ainda pode usar, recusada com
+``SandboxError`` quando não dá 1 MiB.
 
 No S3, o motor segura a credencial do ``boto3`` e, na entrada de cada sessão, recria o secret do
 S3 quando a chave dela trocou: o secret guarda a chave da criação, e o ``delta_scan`` não o
@@ -73,7 +74,7 @@ from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
 from serialize_db.engine import batches_of, checked_batches, take
 from serialize_db.errors import ContractError, SandboxError
-from serialize_db.resources import environment_limits
+from serialize_db.resources import available_cpus, environment_limits, memory_limit_setting
 from serialize_db.schema import (
     cast,
     check_partition_value,
@@ -659,7 +660,8 @@ class DuckDBConfig:
     (``environment_limits``)."""
     memory_limit: str | None = None
     """Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode usar na
-    abertura (``environment_limits``). O valor aplicado vai para o log."""
+    abertura (``environment_limits``), recusada com ``SandboxError`` quando não dá 1 MiB. O valor
+    aplicado vai para o log."""
     temp_directory: str | None = None
     """A pasta do banco, do transbordo do DuckDB e dos arquivos de ``stream`` e ``appender``;
     ``None`` é uma pasta nova de ``tempfile.mkdtemp``, apagada em ``cleanup``."""
@@ -671,13 +673,17 @@ def _connection_settings(
     config: DuckDBConfig,
     folder: str,
 ) -> dict[str, object]:
-    """As opções da abertura da conexão: as fixas do motor, os limites lidos do ambiente e, no
-    lugar deles, os que a configuração informa."""
+    """As opções da abertura da conexão: as fixas do motor e, em ``threads`` e ``memory_limit``,
+    o que a configuração informa ou, no lugar, o lido do ambiente; a memória só é lida quando a
+    configuração omite o ``memory_limit``."""
     settings: dict[str, object] = {"temp_directory": folder, "preserve_insertion_order": False}
-    settings.update(environment_limits())
-    if config.threads is not None:
+    if config.threads is None:
+        settings["threads"] = available_cpus()
+    else:
         settings["threads"] = config.threads
-    if config.memory_limit is not None:
+    if config.memory_limit is None:
+        settings["memory_limit"] = memory_limit_setting()
+    else:
         settings["memory_limit"] = config.memory_limit
     if config.extension_directory is not None:
         settings["extension_directory"] = config.extension_directory
@@ -720,6 +726,9 @@ class DuckDBEngine:
             ``new_session``; a sessão abre sobre ``cursor()`` da conexão dele, com o seu lock, e
             o seu ``cleanup`` fecha só o cursor. ``None`` abre o banco.
         :raises ContractError: ``execution_id`` fora da regra da partição.
+        :raises SandboxError: sem ``memory_limit`` na configuração, a memória que o processo ainda
+            pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de ``memory_limit`` ao
+            DuckDB; a mensagem traz a memória lida, e nada do que o motor criou fica.
         :raises duckdb.Error: uma extensão ausente da pasta configurada ou o secret recusado, na
             abertura da conexão.
         :raises botocore.exceptions.NoCredentialsError: no S3, a cadeia do ``boto3`` não achou

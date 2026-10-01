@@ -208,14 +208,9 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
 ## Achados da revisão das alterações de 2026-09-28 a 2026-10-01
 
 A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões e os planos, rodou as
-suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; cada item abaixo espera
-o usuário.
-
-- **O piso de `memory_limit`.** `environment_limits` de `serialize_db.resources` dá ao DuckDB a
-  metade da folga do cgroup sem piso: uma folga abaixo de 2 MiB dá `0MiB`, que o DuckDB recusa na
-  abertura com `OutOfMemoryException`, e o uso acima do limite, que o kernel permite pelo cache a
-  recuperar, dá um valor negativo, que o DuckDB aceita como ilimitado. Opções: um piso em MiB, ou
-  `SandboxError` com a folga lida.
+suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; os seis itens que
+pediam decisão foram decididos pelo usuário no mesmo dia, e cada decisão está na etapa que a
+descreve e em `.claude/memory/decisions.md`.
 
 Notas anteriores à janela, sem decisão pedida: `publish_delta(tabela, partitions=[])` reconcilia
 sem exportar e `audit(tabela, [])` aprova sem auditar; `run.snapshot` chamado duas vezes grava só o
@@ -230,7 +225,6 @@ texto, o que recusaria um destino com `\` no Windows, não lido lá.
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
-escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; a
-etapa [4](PLAN-STAGE-4.md) espera a decisão sobre o piso do `memory_limit`, o achado da revisão de
-2026-10-01 na seção acima; as demais etapas não têm decisão pendente, e os demais itens que esperam
-o usuário estão na lista do início.
+escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
+demais etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista do
+início.

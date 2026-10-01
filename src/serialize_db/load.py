@@ -606,6 +606,9 @@ def initial_load(
     :raises ExecutionConflict: outro registro da mesma partição a partir da mesma versão.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
+    :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que o
+        processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
+        (``environment_limits``).
     """
     options = table_options(table)
     # A partição pedida que a origem não tem recusa a carga antes de criar a tabela.
@@ -841,6 +844,9 @@ def load_report(
     :raises ContractError: um valor de ``partitions`` que a origem não tem.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
+    :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que o
+        processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
+        (``environment_limits``).
     """
     # As colunas somadas são as Numeric, as Double inclusive, porque Double deriva de Numeric.
     sums = [column.name for column in table.columns if isinstance(column.type, sa.Numeric)]

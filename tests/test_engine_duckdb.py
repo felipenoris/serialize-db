@@ -349,6 +349,22 @@ def test_engine_config_and_single_session(
         assert limits == {"m": expected, "t": 1}
     assert not (setup.folder / "outro" / "exec-2026-09-06.duckdb").exists()
 
+    # Com 1,5 MiB disponíveis, a abertura sem memory_limit é recusada nomeando a leitura, sem
+    # deixar banco nem transbordo; o memory_limit informado abre sem ler a memória.
+    (machine / "proc" / "meminfo").write_text("MemAvailable:   1536 kB\n")
+    starved_config = DuckDBConfig(temp_directory=str(setup.folder / "outro"))
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        DuckDBEngine(starved_config, "exec-2026-09-07", setup.storage)
+    assert not (setup.folder / "outro" / "exec-2026-09-07.duckdb").exists()
+    assert not (setup.folder / "outro" / "exec-2026-09-07_transbordo").exists()
+    informed_config = DuckDBConfig(
+        memory_limit="768MiB", temp_directory=str(setup.folder / "outro")
+    )
+    informed = DuckDBEngine(informed_config, "exec-2026-09-07", setup.storage)
+    limits = informed.query(limits_query).to_pylist()[0]
+    informed.cleanup()
+    assert limits == {"m": "768.0 MiB", "t": 1}
+
     # O cleanup apaga o banco e o transbordo e fecha a sessão.
     engine.cleanup()
     engine.cleanup()  # a segunda chamada não faz nada

@@ -2294,7 +2294,9 @@ class RedshiftEngine:
         :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
         :raises SandboxError: sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
-            ``UNLOAD``.
+            ``UNLOAD``; ou, na troca dos arquivos pelo ``Double`` não finito, a memória que o
+            processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
+            (``environment_limits``).
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         # O valor conferido antes do UNLOAD: os arquivos de um valor recusado no registro

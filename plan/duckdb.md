@@ -760,8 +760,10 @@ lê do ambiente na abertura, nunca de um valor fixo (instrução do usuário de 
 `environment_limits()`, de `serialize_db.resources`, que `serialize_db.engine.duckdb` publica, dá
 `threads` igual às CPUs que o processo pode usar e `memory_limit` igual a metade da memória que ele
 ainda pode usar, pelas leituras do mesmo módulo ([etapa 4](PLAN-STAGE-4.md)); o motor e as
-conexões do DuckDB de `serialize_db.delta` a aplicam. Num contêiner Linux de 4 vCPUs com limite
-de cgroup de 13,4 GiB (2026-09-24):
+conexões do DuckDB de `serialize_db.delta` a aplicam, e a memória lida abaixo de 2 MiB, ou
+negativa, é recusada com `SandboxError`, porque o DuckDB 1.5.5 não abre com `0MiB` e lê um valor
+negativo como o padrão dele, 80% da memória da máquina (sonda de 2026-10-01). Num contêiner Linux
+de 4 vCPUs com limite de cgroup de 13,4 GiB (2026-09-24):
 
 ```python
 # Memória, threads e pasta de transbordo definidos na abertura da conexão e conferidos no catálogo.

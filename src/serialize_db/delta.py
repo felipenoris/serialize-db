@@ -1212,6 +1212,8 @@ def read_back(
     :param storage: o armazenamento da raiz do banco.
     :raises RegistrationRefused: uma diferença entre os leitores, o log e ``expected_rows``,
         depois de ``restore(version - 1)``; a mensagem traz as leituras.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
     """
     dt = open_table(uri, storage)
     version = dt.version()
@@ -1548,6 +1550,8 @@ def rewrite(
     :raises RegistrationRefused: uma conferência de ``register_files`` reprovou um arquivo novo,
         sem commit; ou a releitura reprovou e desfez o commit.
     :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
     """
     expressions = dict(expressions or {})
     _check_expressions(table, expressions)
@@ -2296,6 +2300,8 @@ def deep_copy(
         escrita.
     :raises ExecutionConflict: o commit de uma partição falhou no delta-rs com
         ``CommitFailedError``.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
     """
     # Os dois caminhos conferidos antes de gravar: a criação do destino e as cópias gravam onde
     # recebem, fora da raiz também.
@@ -2434,6 +2440,9 @@ def export_snapshot(
     :return: as URIs dos arquivos gravados, em ordem.
     :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``, nos dois modos,
         antes de qualquer escrita.
+    :raises serialize_db.errors.SandboxError: no modo ``rewrite``, a memória que o processo ainda
+        pode usar abaixo de 2 MiB, ou negativa, na abertura da conexão do DuckDB
+        (``environment_limits``).
     """
     # Os dois caminhos conferidos antes de gravar: o COPY particionado do DuckDB grava onde
     # recebe, fora da raiz também.

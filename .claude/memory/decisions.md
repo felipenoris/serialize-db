@@ -1562,6 +1562,25 @@ look there, so the unpartitioned table is audited with `None`;
 `test_audit_with_partitions_on_a_table_without_partition_audits_it_whole` asserts it.
 `src/serialize_db/execution.py`, `plan/PLAN-STAGE-6.md`
 
+## The floor of `memory_limit` (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `environment_limits` of
+`serialize_db.resources` gives DuckDB half the memory the process can still use with no floor, and
+a probe of the same day (DuckDB 1.5.5, the session's container) showed both outcomes: a reading
+under 2 MiB gives `0MiB`, which DuckDB refuses at open with `OutOfMemoryException` (`failed to
+allocate data of size 32.0 KiB (8.0 KiB/0 bytes used)`), and a negative reading, which only the
+cgroup usage read above its limit gives, DuckDB reads as its own default, 80% of the machine's
+memory (`10.6 GiB` there), the default the instruction of 2026-09-24 replaced; the open-questions
+note had said "unlimited", and the probe corrected it. Offered on a decision card the refusal with
+`SandboxError` naming the reading (recommended), a floor in MiB, or documenting, the user chose
+"Recusar com SandboxError" (23:00 UTC): `memory_limit_setting`, protected in
+`serialize_db.resources`, raises `SandboxError` with the reading when the half is under 1 MiB or
+negative, `environment_limits` is built on it, the DuckDB engine reads the memory only when the
+configuration omits `memory_limit`, so an informed `memory_limit` opens without the reading, and
+`test_environment_limits_refuses_the_memory_under_two_mib` and the starved case of
+`test_engine_config_and_single_session` assert it.
+`src/serialize_db/resources.py`, `src/serialize_db/engine/duckdb.py`, `plan/PLAN-STAGE-4.md`
+
 ## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
 
 The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review

@@ -2279,6 +2279,19 @@ esquema do primeiro lote no `loader` e o `CAST` de cada coluna na exportação. 
 Redshift, `x NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)`, espera uma execução
 no ambiente alvo ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)).
 
+**O `memory_limit` de `0MiB` e o negativo no DuckDB 1.5.5** (2026-10-01, o contêiner da sessão,
+15,72 GiB físicos): `duckdb.connect(config={"memory_limit": "0MiB"})` recusa com
+`OutOfMemoryException` (`failed to allocate data of size 32.0 KiB (8.0 KiB/0 bytes used)`), e no
+motor a recusa vinha na primeira consulta, a do log da abertura, fora do `try` que apaga o que o
+motor criou; `-5MiB` e `-1` abrem com `current_setting('memory_limit')` em `10.6 GiB`, o padrão do
+DuckDB, 80% da memória que ele lê da máquina, e `1MiB` abre e conta `range(1000000)`. Pelas
+leituras de `environment_limits` num `/proc` e num cgroup fabricados: `MemAvailable` de 1,5 MiB dá
+`0MiB`, de 3 MiB dá `1MiB`, o uso do cgroup 100 MiB acima do limite dele dá `-50MiB`, e o uso igual
+ao limite, sem cache, dá `0MiB`. **Consequência**: a memória lida abaixo de 2 MiB, ou negativa, é
+recusada com `SandboxError` nomeando a leitura, antes da abertura, pela decisão do usuário do mesmo
+dia ([`PLAN-STAGE-4.md`](PLAN-STAGE-4.md)), e o motor lê a memória só sem `memory_limit` na
+configuração.
+
 ## O que a implementação da etapa 6 mostrou
 
 Em 2026-09-23, no mesmo macOS (DuckDB 1.5.5, deltalake 1.6.4, Python 3.13), a implementação de

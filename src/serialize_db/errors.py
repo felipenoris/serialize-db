@@ -140,13 +140,17 @@ class LogUnavailable(Exception):
 
 
 class SandboxError(ValueError):
-    """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, ou o
-    motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem.
+    """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, o
+    motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem, ou a memória lida do
+    ambiente que não dá 1 MiB de ``memory_limit`` ao DuckDB.
 
     A mensagem nomeia o objeto: o nome que ``create_table`` achou ocupado, a tabela que o
     ``appender`` não achou no sandbox, ou a view do ``ingest``, que não recebe lotes; o cliente lê
     a versão fixada por ``run.pinned_delta(table)`` sem ocupar nome. Sem ``iam_role`` na
-    configuração, as credenciais vêm da sessão ``boto3``, e a mensagem diz onde ela procurou.
+    configuração, as credenciais vêm da sessão ``boto3``, e a mensagem diz onde ela procurou. A
+    memória é a que o processo ainda pode usar, de ``serialize_db.resources``, abaixo de 2 MiB ou
+    negativa, quando a configuração do DuckDB não informa o ``memory_limit``; a mensagem traz a
+    leitura.
 
     Exemplo:
 
