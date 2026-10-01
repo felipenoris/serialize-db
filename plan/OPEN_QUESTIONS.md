@@ -221,10 +221,6 @@ o usuário.
   abertura com `OutOfMemoryException`, e o uso acima do limite, que o kernel permite pelo cache a
   recuperar, dá um valor negativo, que o DuckDB aceita como ilimitado. Opções: um piso em MiB, ou
   `SandboxError` com a folga lida.
-- **`SUITE.md`, seção "Sondas da operação".** A seção exporta `SERIALIZE_DB_TEST_S3_ROOT` com a
-  raiz do laboratório, a da seção "Probes e Testes - Lab" (`AWS_REGION=us-west-2`), ao lado de
-  `SOURCE_PATH`, `AWS_DEFAULT_REGION=sa-east-1` e das variáveis do Redshift da BN; as outras seções
-  da BN usam a raiz da BN, e `probe_unload_parallel.py` faz o `UNLOAD` do Redshift para essa raiz.
 
 Notas anteriores à janela, sem decisão pedida: `publish_delta(tabela, partitions=[])` reconcilia
 sem exportar e `audit(tabela, [])` aprova sem auditar; `run.snapshot` chamado duas vezes grava só o
