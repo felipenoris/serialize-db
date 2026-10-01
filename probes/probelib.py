@@ -97,15 +97,11 @@ class Tee:
         self.file.flush()
         return len(text)
 
-    def flush(
-        self,
-    ) -> None:
+    def flush(self) -> None:
         self.terminal.flush()
         self.file.flush()
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         self.file.close()
 
 
@@ -715,9 +711,7 @@ class Report:
         """Leitura registrada sem veredito: o ausente, o negado, o que só a próxima etapa decide."""
         self.checks.append(("note", check_id, what, detail))
 
-    def finish(
-        self,
-    ) -> int:
+    def finish(self) -> int:
         """Imprime as checagens e as chamadas que falharam e devolve o código de saída.
 
         O arquivo do relatório é fechado no fim.

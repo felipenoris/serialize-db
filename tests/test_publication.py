@@ -95,9 +95,7 @@ class FakeCursor:
         self._rows, self.rowcount = self.connection.answer(text)
         return self
 
-    def fetchall(
-        self,
-    ) -> list:
+    def fetchall(self) -> list:
         return list(self._rows)
 
 
@@ -123,14 +121,10 @@ class FakeConnection:
         self.autocommit = False
         self.closed = False
 
-    def cursor(
-        self,
-    ) -> FakeCursor:
+    def cursor(self) -> FakeCursor:
         return FakeCursor(self)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         self.closed = True
 
     def answer(
@@ -594,9 +588,7 @@ class Target:
     folder: Path
 
     @property
-    def environment(
-        self,
-    ) -> str:
+    def environment(self) -> str:
         return self.db.environment
 
     def published(
@@ -605,9 +597,7 @@ class Target:
     ) -> str:
         return f'"{self.config.schema}"."{self.environment}_{table.name}"'
 
-    def control(
-        self,
-    ) -> str:
+    def control(self) -> str:
         return f'"{self.config.schema}"."{publication.CONTROL_TABLE}"'
 
 
@@ -849,9 +839,7 @@ class PausingCursor:
         self.resume = resume
 
     @property
-    def rowcount(
-        self,
-    ) -> int:
+    def rowcount(self) -> int:
         return self.cursor.rowcount
 
     def execute(
@@ -865,9 +853,7 @@ class PausingCursor:
             self.resume.wait(timeout=120)
         return self
 
-    def fetchall(
-        self,
-    ) -> list:
+    def fetchall(self) -> list:
         return self.cursor.fetchall()
 
 
@@ -886,9 +872,7 @@ class PausingConnection:
         self.resume = resume
 
     @property
-    def autocommit(
-        self,
-    ) -> bool:
+    def autocommit(self) -> bool:
         return self.connection.autocommit
 
     @autocommit.setter
@@ -898,14 +882,10 @@ class PausingConnection:
     ) -> None:
         self.connection.autocommit = value
 
-    def cursor(
-        self,
-    ) -> PausingCursor:
+    def cursor(self) -> PausingCursor:
         return PausingCursor(self.connection.cursor(), self.read_done, self.resume)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         self.connection.close()
 
 

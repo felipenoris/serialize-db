@@ -381,9 +381,7 @@ class SessionRoot:
     keep: bool = False
 
     @property
-    def uri(
-        self,
-    ) -> str:
+    def uri(self) -> str:
         raise NotImplementedError
 
     def child(
@@ -419,9 +417,7 @@ class S3Location(SessionRoot):
     prefix: str
 
     @property
-    def uri(
-        self,
-    ) -> str:
+    def uri(self) -> str:
         return f"s3://{self.bucket}/{self.prefix}"
 
     def data_files(
@@ -453,9 +449,7 @@ class LocalLocation(SessionRoot):
     path: Path
 
     @property
-    def uri(
-        self,
-    ) -> str:
+    def uri(self) -> str:
         return str(self.path)
 
     def data_files(
@@ -690,9 +684,7 @@ class RedshiftSession:
         parts = [part for part in (self.share_database, self.schema, name) if part]
         return ".".join(parts)
 
-    def credentials_clause(
-        self,
-    ) -> str:
+    def credentials_clause(self) -> str:
         """Como o ``COPY`` e o ``UNLOAD`` alcançam o S3: o papel IAM configurado, ou as credenciais
         de quem chama.
 

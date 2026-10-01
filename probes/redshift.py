@@ -173,9 +173,7 @@ class Target:
         """O nome em três partes de uma sessão aberta em outro banco: ``banco.esquema.tabela``."""
         return ".".join(part for part in (self.schema_database(), self.schema, name) if part)
 
-    def schema_database(
-        self,
-    ) -> str | None:
+    def schema_database(self) -> str | None:
         """O banco que guarda o esquema do projeto: o do datashare, ou o da conexão."""
         return self.share_database or self.database
 

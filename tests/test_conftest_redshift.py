@@ -59,9 +59,7 @@ class FakeConnection:
         self.autocommit = False
         self.statements: list[tuple[str, bool]] = []
 
-    def cursor(
-        self,
-    ) -> FakeCursor:
+    def cursor(self) -> FakeCursor:
         return FakeCursor(self)
 
 

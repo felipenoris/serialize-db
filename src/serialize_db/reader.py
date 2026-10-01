@@ -191,21 +191,15 @@ class _ReaderStream:
         self._stream = stream
         self.schema = stream.schema
 
-    def read_next_batch(
-        self,
-    ) -> pa.RecordBatch:
+    def read_next_batch(self) -> pa.RecordBatch:
         """O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último lote."""
         return self._stream.read_next_batch()
 
-    def __iter__(
-        self,
-    ) -> Iterator[pa.RecordBatch]:
+    def __iter__(self) -> Iterator[pa.RecordBatch]:
         # O gerador segura este stream, e com ele o leitor, enquanto o laço o percorre.
         yield from self._stream
 
-    def read_all(
-        self,
-    ) -> pa.Table:
+    def read_all(self) -> pa.Table:
         """Os lotes que faltam numa ``pa.Table``."""
         return self._stream.read_all()
 
@@ -217,17 +211,13 @@ class _ReaderStream:
         batches = pa.RecordBatchReader.from_batches(self.schema, iter(self))
         return batches.__arrow_c_stream__(requested_schema)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
         segura."""
         self._stream.close()
         self._reader = None
 
-    def __enter__(
-        self,
-    ) -> _ReaderStream:
+    def __enter__(self) -> _ReaderStream:
         return self
 
     def __exit__(
@@ -313,9 +303,7 @@ class DeltaReader:
         with self._engine.new_session() as session:
             session.ingest(table, self._uris[table.name], self.versions[table.name])
 
-    def _open_views(
-        self,
-    ) -> None:
+    def _open_views(self) -> None:
         """Uma view por tabela do modelo presente nas versões, as tabelas em paralelo."""
         tasks = []
         for table in self._db.tables():
@@ -492,9 +480,7 @@ class DeltaReader:
         return _ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))
 
     @contextlib.contextmanager
-    def session(
-        self,
-    ) -> Iterator[duckdb.DuckDBPyConnection]:
+    def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
         """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
         é consulta, como uma tabela temporária ao lado das views.
 
@@ -516,9 +502,7 @@ class DeltaReader:
 
     # ------------------------------------------------------------ o encerramento
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco temporário,
         com as tabelas materializadas, e a pasta de transbordo. O DuckDB só devolve a memória
         aqui: num caderno, o leitor sem ``with`` segura a memória até esta chamada. A segunda
@@ -534,9 +518,7 @@ class DeltaReader:
         """
         self._finalizer()
 
-    def __enter__(
-        self,
-    ) -> DeltaReader:
+    def __enter__(self) -> DeltaReader:
         return self
 
     def __exit__(
@@ -682,9 +664,7 @@ class RedshiftReader:
         _check_select(statement_or_sql)
         return self._engine.stream(statement_or_sql, params, batch_size)
 
-    def session(
-        self,
-    ) -> contextlib.AbstractContextManager[object]:
+    def session(self) -> contextlib.AbstractContextManager[object]:
         """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
         é consulta, como uma tabela temporária.
 
@@ -700,9 +680,7 @@ class RedshiftReader:
         """
         return self._engine.session()
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Fecha a sessão e esvazia a pasta ``<unload_to>/<id do leitor>/``, nada fora dela; sem
         ``unload_to``, só fecha a sessão. A segunda chamada não faz nada.
 
@@ -716,9 +694,7 @@ class RedshiftReader:
         """
         self._engine.cleanup()
 
-    def __enter__(
-        self,
-    ) -> RedshiftReader:
+    def __enter__(self) -> RedshiftReader:
         return self
 
     def __exit__(

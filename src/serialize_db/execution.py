@@ -113,18 +113,14 @@ class Database:
     metadata: sa.MetaData
     """O ``MetaData`` dos modelos do cliente: as tabelas que a execução abre e reconcilia."""
 
-    def __post_init__(
-        self,
-    ) -> None:
+    def __post_init__(self) -> None:
         check_partition_value(self.environment)
         changed = prepare_environment()
         if changed:
             log.info("variáveis do ambiente acertadas para o delta-rs: %s", sorted(changed))
 
     @functools.cached_property
-    def storage(
-        self,
-    ) -> Storage:
+    def storage(self) -> Storage:
         """O armazenamento da raiz, criado no primeiro uso, sem tocar a rede."""
         return Storage.for_uri(self.root)
 
@@ -145,9 +141,7 @@ class Database:
         """
         return self.storage.uri_of(self.storage.join(self.environment, table.name))
 
-    def control_path(
-        self,
-    ) -> str:
+    def control_path(self) -> str:
         """O arquivo de controle dos snapshots do ambiente.
 
         Exemplo:
@@ -211,9 +205,7 @@ class Database:
         """
         return self.storage.join(self.environment, "arquivo", name)
 
-    def tables(
-        self,
-    ) -> list[sa.Table]:
+    def tables(self) -> list[sa.Table]:
         """As tabelas dos modelos.
 
         Exemplo:
@@ -454,9 +446,7 @@ class Execution:
             with self._lock:
                 self._timings[name] = self._timings.get(name, 0.0) + time.perf_counter() - started
 
-    def _open_tables(
-        self,
-    ) -> None:
+    def _open_tables(self) -> None:
         """Abre toda tabela do ambiente que existe e fixa a versão; a ausente fica ``None``."""
         storage = self.db.storage
         for table in self.db.tables():
@@ -469,9 +459,7 @@ class Execution:
             self.versions[table.name] = dt.version()
             self._read[table.name] = dt.version()
 
-    def _build_engine(
-        self,
-    ) -> Engine:
+    def _build_engine(self) -> Engine:
         """O motor pelo nome, ou o motor recebido."""
         if not isinstance(self._engine, str):
             return self._engine
@@ -487,9 +475,7 @@ class Execution:
                                   self.db.staging_prefix(self.execution_id))
         raise ContractError(f"motor {self._engine!r}: use 'duckdb' ou 'redshift'")
 
-    def __enter__(
-        self,
-    ) -> Execution:
+    def __enter__(self) -> Execution:
         with self._step("abertura"):
             self._open_tables()
             self.sandbox = self._build_engine()
@@ -519,9 +505,7 @@ class Execution:
                      self.execution_id, outcome, _partition_text(self.partition), self._read,
                      self._written, timings)
 
-    def _write_snapshot(
-        self,
-    ) -> None:
+    def _write_snapshot(self) -> None:
         """A entrada do snapshot marcado, com a versão de toda tabela do ambiente."""
         versions = {}
         for name, version in self.versions.items():

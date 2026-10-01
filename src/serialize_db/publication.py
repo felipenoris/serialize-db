@@ -530,18 +530,14 @@ class _Connection:
         """As linhas de uma consulta."""
         return list(self.execute(text).fetchall())
 
-    def rollback(
-        self,
-    ) -> None:
+    def rollback(self) -> None:
         """O ``ROLLBACK``; o erro dele não esconde o que o causou."""
         try:
             self.execute("ROLLBACK")
         except redshift_connector.Error as error:
             log.warning("ROLLBACK recusado: %s", error)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         self.connection.close()
 
 

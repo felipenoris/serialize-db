@@ -64,9 +64,7 @@ def seed(
 class Readings:
     """O que as threads de leitura viram: as contagens, as somas por contagem e os erros."""
 
-    def __init__(
-        self,
-    ) -> None:
+    def __init__(self) -> None:
         self.counts: Counter = Counter()
         self.sums: set[tuple[int, int]] = set()
         self.errors: list[str] = []

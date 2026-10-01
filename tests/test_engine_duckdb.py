@@ -130,9 +130,7 @@ class Setup:
         """A pasta da tabela no ambiente ``prd``."""
         return self.storage.uri_of(f"prd/{table.name}")
 
-    def database_file(
-        self,
-    ) -> Path:
+    def database_file(self) -> Path:
         """O banco em arquivo do sandbox, que o ``cleanup`` apaga."""
         return self.folder / "sandbox" / f"{EXECUTION_ID}.duckdb"
 

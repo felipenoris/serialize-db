@@ -167,14 +167,10 @@ class FakeCursor:
         self._rows = rows
         return self
 
-    def fetchone(
-        self,
-    ) -> list | None:
+    def fetchone(self) -> list | None:
         return self._rows.pop(0) if self._rows else None
 
-    def fetchall(
-        self,
-    ) -> list:
+    def fetchall(self) -> list:
         rows, self._rows = self._rows, []
         return rows
 
@@ -215,14 +211,10 @@ class FakeConnection:
         self.autocommit = False
         self.closed = False
 
-    def cursor(
-        self,
-    ) -> FakeCursor:
+    def cursor(self) -> FakeCursor:
         return FakeCursor(self)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         self.closed = True
 
     def answer(
@@ -292,9 +284,7 @@ class FakeConnection:
         self.storage.write_text(self.storage.join(prefix, "manifest"),
                                 json.dumps({"entries": [entry]}))
 
-    def texts(
-        self,
-    ) -> list[str]:
+    def texts(self) -> list[str]:
         """Os comandos registrados, mascarados."""
         return [mask(command.text) for command in self.commands]
 

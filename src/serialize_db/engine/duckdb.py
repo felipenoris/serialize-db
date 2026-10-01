@@ -213,9 +213,7 @@ class _SpillFile:
             self.writer = pa.ipc.new_stream(self.sink, schema, options=_SPOOL_OPTIONS)
         self.writer.write_batch(batch)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Fecha o arquivo, quando algum lote o abriu."""
         if self.writer is not None:
             self.writer.close()
@@ -343,9 +341,7 @@ class DuckDBStream:
             raise self._spool.error
         self.schema = self._spool.schema
 
-    def _wait_for_batch(
-        self,
-    ) -> Literal["memory", "file"] | None:
+    def _wait_for_batch(self) -> Literal["memory", "file"] | None:
         """Espera um lote não lido, em memória ou no arquivo; devolve de onde ele vem, ou ``None``
         no fim. A espera tem prazo e confere o ``stop``: quem puxa o stream pode ser a thread de
         leitura antecipada de um leitor nativo, e ela não fica presa aqui depois de um ``close``."""
@@ -361,9 +357,7 @@ class DuckDBStream:
                 return "file"
             return None
 
-    def _next_batch(
-        self,
-    ) -> pa.RecordBatch | None:
+    def _next_batch(self) -> pa.RecordBatch | None:
         """O próximo lote na ordem da consulta: primeiro a fila em memória, depois o arquivo."""
         source = self._wait_for_batch()
         if source is None:
@@ -380,9 +374,7 @@ class DuckDBStream:
         self._read_from_file += 1
         return self._file_reader.read_next_batch()
 
-    def read_next_batch(
-        self,
-    ) -> pa.RecordBatch:
+    def read_next_batch(self) -> pa.RecordBatch:
         """O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último lote."""
         batch = self._next_batch()
         if batch is not None:
@@ -391,18 +383,14 @@ class DuckDBStream:
             raise self._spool.error
         raise StopIteration
 
-    def __iter__(
-        self,
-    ) -> Iterator[pa.RecordBatch]:
+    def __iter__(self) -> Iterator[pa.RecordBatch]:
         while True:
             try:
                 yield self.read_next_batch()
             except StopIteration:
                 return
 
-    def read_all(
-        self,
-    ) -> pa.Table:
+    def read_all(self) -> pa.Table:
         """Os lotes que faltam numa ``pa.Table``."""
         return pa.Table.from_batches(list(self), schema=self.schema)
 
@@ -413,9 +401,7 @@ class DuckDBStream:
         reader = pa.RecordBatchReader.from_batches(self.schema, iter(self))
         return reader.__arrow_c_stream__(requested_schema)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Cancela a consulta que ainda roda e apaga o arquivo; a sessão continua usável."""
         self._stop.set()
         # Sob a condition, a thread não marca o fim, e o interrupt alcança só a consulta deste
@@ -429,9 +415,7 @@ class DuckDBStream:
             self._source.close()
         Path(self._path).unlink(missing_ok=True)
 
-    def __enter__(
-        self,
-    ) -> DuckDBStream:
+    def __enter__(self) -> DuckDBStream:
         return self
 
     def __exit__(
@@ -440,9 +424,7 @@ class DuckDBStream:
     ) -> None:
         self.close()
 
-    def __del__(
-        self,
-    ) -> None:
+    def __del__(self) -> None:
         # O stream abandonado: a consulta para no lote seguinte, e o arquivo sai.
         self._stop.set()
         Path(self._path).unlink(missing_ok=True)
@@ -535,16 +517,12 @@ class DuckDBAppender:
         self._thread.start()
 
     @property
-    def rows(
-        self,
-    ) -> int:
+    def rows(self) -> int:
         """As linhas gravadas até agora."""
         return self._outcome["rows"]
 
     @property
-    def error(
-        self,
-    ) -> BaseException | None:
+    def error(self) -> BaseException | None:
         """O erro da thread auxiliar ou o do lote recusado, quando houve."""
         return self._refused or self._outcome["error"]
 
@@ -591,9 +569,7 @@ class DuckDBAppender:
                 raise self.error or RuntimeError(
                     "a thread do appender terminou antes do fim da fila")
 
-    def _insert_file(
-        self,
-    ) -> None:
+    def _insert_file(self) -> None:
         """O ``INSERT ... BY NAME`` do arquivo inteiro, pelo leitor nativo do Arrow IPC, sob o
         lock; o leitor registrado tem nome único e sai no mesmo bloco."""
         name = f"serialize_db_lote_{uuid.uuid4().hex[:8]}"
@@ -629,9 +605,7 @@ class DuckDBAppender:
         if error is None and self.error is not None:
             raise self.error
 
-    def __enter__(
-        self,
-    ) -> DuckDBAppender:
+    def __enter__(self) -> DuckDBAppender:
         return self
 
     def __exit__(
@@ -642,9 +616,7 @@ class DuckDBAppender:
     ) -> None:
         self.close(error=exc)
 
-    def __del__(
-        self,
-    ) -> None:
+    def __del__(self) -> None:
         self._closed.set()
 
 
@@ -775,9 +747,7 @@ class DuckDBEngine:
             raise
         self._log_opening()
 
-    def _log_opening(
-        self,
-    ) -> None:
+    def _log_opening(self) -> None:
         """O ``memory_limit`` e as ``threads`` aplicados e o espaço livre da pasta, para o log."""
         row = self._connection.execute(
             "SELECT current_setting('memory_limit'), current_setting('threads')").fetchone()
@@ -788,9 +758,7 @@ class DuckDBEngine:
     # ------------------------------------------------------------ a sessão
 
     @contextlib.contextmanager
-    def session(
-        self,
-    ) -> Iterator[duckdb.DuckDBPyConnection]:
+    def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava, e um ``stream`` aberto nele roda a consulta na thread
         do bloco.
@@ -825,9 +793,7 @@ class DuckDBEngine:
             finally:
                 self._owner = outer_owner
 
-    def _renew_secret(
-        self,
-    ) -> None:
+    def _renew_secret(self) -> None:
         """Recria o secret do S3 quando a chave da credencial do ``boto3`` trocou, sob o lock do
         secret, comum a todas as sessões do banco; na pasta local, nada."""
         if self._credentials is None:
@@ -838,9 +804,7 @@ class DuckDBEngine:
             log.info("sandbox %s: secret do S3 recriado com a chave nova do boto3",
                      self.execution_id)
 
-    def holds_session(
-        self,
-    ) -> bool:
+    def holds_session(self) -> bool:
         """Se a thread que chama está dentro de ``session()``.
 
         Exemplo:
@@ -855,9 +819,7 @@ class DuckDBEngine:
         """
         return self._owner == threading.get_ident()
 
-    def new_session(
-        self,
-    ) -> DuckDBEngine:
+    def new_session(self) -> DuckDBEngine:
         """Uma sessão a mais sobre o mesmo banco: vê o que a sessão principal confirmou e não as
         tabelas temporárias dela. O cursor nasce sem o lock da principal, porque ``cursor()`` não
         espera o comando em curso nela.
@@ -874,9 +836,7 @@ class DuckDBEngine:
         """
         return DuckDBEngine(self._config, self.execution_id, self._storage, parent=self)
 
-    def interrupt(
-        self,
-    ) -> None:
+    def interrupt(self) -> None:
         """Cancela o comando em curso na conexão; não toma o lock, que está com quem roda o
         comando.
 
@@ -1504,9 +1464,7 @@ class DuckDBEngine:
 
     # ------------------------------------------------------------ o encerramento
 
-    def cleanup(
-        self,
-    ) -> None:
+    def cleanup(self) -> None:
         """Cancela o comando em curso, fecha a conexão e apaga a pasta de transbordo, o banco
         temporário (``DuckDBConfig.database`` ``None``) e a pasta que o motor criou.
 
@@ -1533,9 +1491,7 @@ class DuckDBEngine:
             return
         self._remove_files()
 
-    def _remove_files(
-        self,
-    ) -> None:
+    def _remove_files(self) -> None:
         """Apaga a pasta de transbordo, o banco temporário (``DuckDBConfig.database`` ``None``) e
         a pasta que o motor criou."""
         shutil.rmtree(self._spool_folder, ignore_errors=True)
@@ -1545,9 +1501,7 @@ class DuckDBEngine:
         if self._owns_folder:
             shutil.rmtree(self._folder, ignore_errors=True)
 
-    def __enter__(
-        self,
-    ) -> DuckDBEngine:
+    def __enter__(self) -> DuckDBEngine:
         return self
 
     def __exit__(

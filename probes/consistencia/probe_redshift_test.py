@@ -53,9 +53,7 @@ class Target:
     ) -> str:
         return f'"{self.config.schema}"."{self.db.environment}_{table.name}"'
 
-    def control(
-        self,
-    ) -> str:
+    def control(self) -> str:
         return f'"{self.config.schema}"."{publication.CONTROL_TABLE}"'
 
 

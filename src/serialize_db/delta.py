@@ -194,9 +194,7 @@ class SchemaDiff:
     coluna nova) e mudança de tipo."""
 
     @property
-    def changes(
-        self,
-    ) -> bool:
+    def changes(self) -> bool:
         """Se o diff aditivo tem alguma coisa a aplicar."""
         additive = (self.add, self.relax, self.checks, self.comments)
         return any(additive) or self.description is not None

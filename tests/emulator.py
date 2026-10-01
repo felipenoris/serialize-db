@@ -383,9 +383,7 @@ class RedshiftDatabase:
         with self.lock:
             self.connections.pop(pid, None)
 
-    def all_super_columns(
-        self,
-    ) -> set[str]:
+    def all_super_columns(self) -> set[str]:
         """As colunas ``SUPER`` de todas as tabelas: um ``select`` não diz de que tabela vem cada
         nome."""
         columns = set()
@@ -426,9 +424,7 @@ class Cursor:
         self._cached_rows = collections.deque(result.rows)
         return self
 
-    def fetchone(
-        self,
-    ) -> list | None:
+    def fetchone(self) -> list | None:
         """A próxima linha, ou ``None`` no fim."""
         if not self._cached_rows:
             return None
@@ -445,17 +441,13 @@ class Cursor:
             rows.append(self._cached_rows.popleft())
         return tuple(rows)
 
-    def fetchall(
-        self,
-    ) -> tuple:
+    def fetchall(self) -> tuple:
         """As linhas que restam."""
         rows = tuple(self._cached_rows)
         self._cached_rows.clear()
         return rows
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Nada a liberar: o resultado já está na fila."""
 
 
@@ -479,21 +471,15 @@ class Connection:
         # O esquema em que um CREATE TABLE sem esquema cai: o de SET search_path.
         self.schema = "main"
 
-    def cursor(
-        self,
-    ) -> Cursor:
+    def cursor(self) -> Cursor:
         """Um cursor novo nesta conexão."""
         return Cursor(self)
 
-    def commit(
-        self,
-    ) -> None:
+    def commit(self) -> None:
         """Confirma a transação aberta."""
         self.end_transaction("COMMIT")
 
-    def rollback(
-        self,
-    ) -> None:
+    def rollback(self) -> None:
         """Desfaz a transação aberta."""
         self.end_transaction("ROLLBACK")
 
@@ -507,9 +493,7 @@ class Connection:
         self.duckdb_connection.execute(command)
         self.in_transaction = False
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Fecha a conexão do DuckDB e libera o pid."""
         self.database.unregister(self.pid)
         self.duckdb_connection.close()

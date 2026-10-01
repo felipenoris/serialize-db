@@ -172,8 +172,9 @@ Test: would a junior data scientist on the team understand this snippet in a sin
 - Prefer separate functions over one generic function controlled by boolean flags.
 - Do not use bare `except:` or generic `except Exception` without re-raising.
 - A function with at least one parameter declares one parameter per line, with a trailing comma, and
-  `) -> T:` on its own line; `uvx ruff format` keeps the layout through the trailing comma (user
-  decision of 2026-10-01). A function without parameters stays as it is.
+  `) -> T:` on its own line; `uvx ruff format` keeps the layout through the trailing comma. `self`
+  and `cls` do not count: a method with only `self` or `cls` stays on one line, like a function
+  without parameters (user decisions of 2026-10-01).
 
 ### Constructs to avoid
 - Comprehensions with more than one `for` or a complex condition → use an explicit loop.

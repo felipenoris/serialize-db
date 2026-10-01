@@ -1505,17 +1505,20 @@ drops the other partitions after the query. `src/serialize_db/load.py`, `src/ser
 The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review
 adopting one pattern in function declarations: one parameter per line, a trailing comma and the
 `) -> int:` on its own line. Asked on a decision card which declarations, the user chose "Todas"
-(02:24 UTC): every function with at least one parameter, `self`-only methods and `Protocol` stubs
-included; a function without parameters stays as it is. `[tool.ruff]` sets `line-length = 100`,
+(02:24 UTC): every function with at least one parameter, `Protocol` stubs included, and a function
+without parameters stays as it is; the user refined it in the project chat (02:40 UTC): `self` and
+`cls` do not count, so a method with only `self` or `cls` stays on one line, 140 methods in 28
+files. `[tool.ruff]` sets `line-length = 100`,
 `include` to the Python files (the Ruff 0.16 default includes `*.md`, which would format the code
 blocks of `plan/` and `docs/`), `extend-exclude` for `examples/` (kept as run) and
 `tests/reference_model/` (kept as it is), the formatter's `skip-magic-trailing-comma = false`, the
 mechanism of the pattern, and `select = ["E4", "E7", "E9", "F", "E501"]` with `probes/**` out of
 `E501`; Ruff stays out of the `dev` group and of the workflow, where the user refused it on
-2026-09-21, and runs by `uvx ruff` (0.16.9 on 2026-10-01). The 1,973 signatures with a parameter in
-`src/`, `tests/`, `probes/` and `scripts/` were rewritten by a trailing comma and
-`ruff format --range` over the header lines only, so the bodies kept their text, and every header
-equals what `ruff format` over the whole file produces (2,275 headers compared, 0 differences);
+2026-09-21, and runs by `uvx ruff` (0.16.9 on 2026-10-01). The 1,833 signatures with a parameter
+other than `self` or `cls` in `src/`, `tests/`, `probes/` and `scripts/` were rewritten by a
+trailing comma and `ruff format --range` over the header lines only, so the bodies kept their
+text, and every header equals what `ruff format` over the whole file produces (2,275 headers
+compared, 0 differences);
 `ruff check` passes after three unused imports left `probes/bucket.py`, `probes/duckdb_threads.py`
 and `probes/redshift.py` and the fixture parameter `target` of `tests/test_reader.py` got
 `# noqa: F811`, changes the assistant named in its report. Two questions await the user in

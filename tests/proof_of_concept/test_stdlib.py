@@ -94,9 +94,7 @@ class ExampleEngine(Protocol):
         materialize: bool = False,
     ) -> None: ...
 
-    def cleanup(
-        self,
-    ) -> None: ...
+    def cleanup(self) -> None: ...
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -113,9 +111,7 @@ class ExampleConfig:
 class FakeEngine:
     """Um motor de mentira que só registra o que a execução lhe pediu."""
 
-    def __init__(
-        self,
-    ) -> None:
+    def __init__(self) -> None:
         self.calls: list[tuple[str, str, int]] = []
         self.cleaned = False
 
@@ -129,9 +125,7 @@ class FakeEngine:
     ) -> None:
         self.calls.append((table, uri, version))
 
-    def cleanup(
-        self,
-    ) -> None:
+    def cleanup(self) -> None:
         self.cleaned = True
 
 
@@ -167,9 +161,7 @@ def test_frozen_dataclass_derives_an_attribute_by_cached_property() -> None:
         root: str
         storage: str = dataclasses.field(init=False)
 
-        def __post_init__(
-            self,
-        ) -> None:
+        def __post_init__(self) -> None:
             self.storage = f"Storage({self.root})"
 
     with pytest.raises(dataclasses.FrozenInstanceError, match="storage"):
@@ -182,9 +174,7 @@ def test_frozen_dataclass_derives_an_attribute_by_cached_property() -> None:
         root: str
 
         @functools.cached_property
-        def storage(
-            self,
-        ) -> str:
+        def storage(self) -> str:
             built.append(self.root)
             return f"Storage({self.root})"
 

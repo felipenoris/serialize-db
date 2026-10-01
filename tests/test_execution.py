@@ -190,20 +190,14 @@ class FakeEngine:
         self.exports: list[dict] = []
 
     @contextlib.contextmanager
-    def session(
-        self,
-    ) -> Iterator[None]:
+    def session(self) -> Iterator[None]:
         yield None
 
-    def new_session(
-        self,
-    ) -> FakeEngine:
+    def new_session(self) -> FakeEngine:
         self.calls.append("new_session")
         return self
 
-    def __enter__(
-        self,
-    ) -> FakeEngine:
+    def __enter__(self) -> FakeEngine:
         return self
 
     def __exit__(
@@ -256,9 +250,7 @@ class FakeEngine:
         data = rows(table, value, range(1, 4))
         return delta.publish_partition(uri, table, value, data, metadata, self.storage)
 
-    def cleanup(
-        self,
-    ) -> None:
+    def cleanup(self) -> None:
         self.calls.append("cleanup")
 
 
@@ -855,9 +847,7 @@ class IdleConnection:
 
     autocommit = False
 
-    def cursor(
-        self,
-    ) -> IdleConnection:
+    def cursor(self) -> IdleConnection:
         return self
 
     def execute(
@@ -867,9 +857,7 @@ class IdleConnection:
     ) -> None:
         return None
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         return None
 
 

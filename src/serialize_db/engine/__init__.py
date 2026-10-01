@@ -70,9 +70,7 @@ class BatchStream(Protocol):
     schema: pa.Schema
     """O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
 
-    def read_next_batch(
-        self,
-    ) -> pa.RecordBatch:
+    def read_next_batch(self) -> pa.RecordBatch:
         """O próximo lote, na ordem da consulta.
 
         O erro que a consulta ou a leitura encontra sobe depois do último lote entregue.
@@ -87,13 +85,9 @@ class BatchStream(Protocol):
         :raises StopIteration: no fim dos lotes.
         """
 
-    def __iter__(
-        self,
-    ) -> Iterator[pa.RecordBatch]: ...
+    def __iter__(self) -> Iterator[pa.RecordBatch]: ...
 
-    def read_all(
-        self,
-    ) -> pa.Table:
+    def read_all(self) -> pa.Table:
         """Os lotes que faltam numa ``pa.Table``.
 
         Exemplo:
@@ -105,9 +99,7 @@ class BatchStream(Protocol):
         :return: a tabela, no esquema ``schema``; vazia depois do último lote.
         """
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream; a sessão
         continua usável.
 
@@ -118,9 +110,7 @@ class BatchStream(Protocol):
             stream.close()   # o with do stream chama close na saída
         """
 
-    def __enter__(
-        self,
-    ) -> BatchStream: ...
+    def __enter__(self) -> BatchStream: ...
     def __exit__(
         self,
         *exc: object,
@@ -167,9 +157,7 @@ class Appender(Protocol):
             colunas diferentes das do primeiro lote, e então o appender não insere nada.
         """
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Insere na tabela os lotes gravados, numa transação: um erro não deixa linha. A segunda
         chamada não faz nada.
 
@@ -182,9 +170,7 @@ class Appender(Protocol):
         :raises ContractError: o lote que o ``write`` recusou; nada é inserido.
         """
 
-    def __enter__(
-        self,
-    ) -> Appender: ...
+    def __enter__(self) -> Appender: ...
     def __exit__(
         self,
         *exc: object,
@@ -214,9 +200,7 @@ class Engine(Protocol):
     execution_id: str
     """O identificador da execução, na regra da partição (``schema.PARTITION_VALUE``)."""
 
-    def session(
-        self,
-    ) -> contextlib.AbstractContextManager[object]:
+    def session(self) -> contextlib.AbstractContextManager[object]:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava.
 
@@ -230,9 +214,7 @@ class Engine(Protocol):
         :return: o gerenciador de contexto cujo ``with`` dá a conexão do driver.
         """
 
-    def new_session(
-        self,
-    ) -> Engine:
+    def new_session(self) -> Engine:
         """Uma sessão a mais sobre o mesmo banco, com o seu lock, para o que roda em paralelo:
         vê o que a sessão principal confirmou e não as tabelas temporárias dela.
 
@@ -247,9 +229,7 @@ class Engine(Protocol):
             essa sessão.
         """
 
-    def __enter__(
-        self,
-    ) -> Engine: ...
+    def __enter__(self) -> Engine: ...
     def __exit__(
         self,
         *exc: object,
@@ -506,9 +486,7 @@ class Engine(Protocol):
         :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
         """
 
-    def cleanup(
-        self,
-    ) -> None:
+    def cleanup(self) -> None:
         """Fecha a sessão e apaga o que a execução criou no sandbox; numa sessão a mais, fecha
         só ela. A segunda chamada não faz nada.
 

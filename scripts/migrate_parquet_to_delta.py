@@ -84,9 +84,7 @@ class TableReport:
     report: LoadReport
     loaded: tuple[PartitionLoad, ...]
 
-    def as_document(
-        self,
-    ) -> dict[str, object]:
+    def as_document(self) -> dict[str, object]:
         """A tabela como o JSON a leva: os campos do relatório, o veredito e as cargas."""
         document = dataclasses.asdict(self.report)
         document["matches"] = self.report.matches

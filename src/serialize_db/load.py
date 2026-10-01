@@ -124,9 +124,7 @@ class PartitionReport:
     """Os não finitos no Delta, na forma de ``source_nonfinite``."""
 
     @property
-    def matches(
-        self,
-    ) -> bool:
+    def matches(self) -> bool:
         """Se contagem, somas e não finitos coincidem nos dois lados."""
         same_rows = self.source_rows == self.delta_rows
         same_sums = self.source_sums == self.delta_sums
@@ -161,9 +159,7 @@ class LoadReport:
     difere do contrato, como ``"carimbo: INT96 -> timestamp[us]"``."""
 
     @property
-    def matches(
-        self,
-    ) -> bool:
+    def matches(self) -> bool:
         """Se toda partição coincide nos dois lados."""
         return all(partition.matches for partition in self.partitions)
 

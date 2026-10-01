@@ -292,9 +292,7 @@ class Storage:
         return _local_storage(uri)
 
     @property
-    def is_s3(
-        self,
-    ) -> bool:
+    def is_s3(self) -> bool:
         """Se a raiz está no S3."""
         return self.uri.startswith("s3://")
 
@@ -698,9 +696,7 @@ class Storage:
         bucket, _, key = self._full(path).partition("/")
         return bucket, key
 
-    def _s3_client(
-        self,
-    ) -> object:
+    def _s3_client(self) -> object:
         """O cliente S3 do ``boto3`` com a região e o endpoint do ambiente: o botocore não lê
         ``AWS_REGION`` e, sem região, iria ao endpoint global."""
         return boto3.client("s3", region_name=_region(), endpoint_url=_endpoint())
@@ -742,9 +738,7 @@ class Storage:
 
     # ------------------------------------------------------------ delta-rs e DuckDB
 
-    def storage_options(
-        self,
-    ) -> dict[str, str]:
+    def storage_options(self) -> dict[str, str]:
         """As opções do delta-rs, montadas a cada chamada.
 
         Nenhuma credencial: a cadeia padrão do delta-rs as resolve e as renova no ``DeltaTable``

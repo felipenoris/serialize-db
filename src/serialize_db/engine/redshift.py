@@ -794,9 +794,7 @@ class RedshiftStream:
             daemon=True)
         self._thread.start()
 
-    def read_next_batch(
-        self,
-    ) -> pa.RecordBatch:
+    def read_next_batch(self) -> pa.RecordBatch:
         """O próximo lote; ``StopIteration`` no fim, e o erro da leitura no lugar do lote em que
         ele aconteceu."""
         if self._finished:
@@ -810,18 +808,14 @@ class RedshiftStream:
             raise item
         return item
 
-    def __iter__(
-        self,
-    ) -> Iterator[pa.RecordBatch]:
+    def __iter__(self) -> Iterator[pa.RecordBatch]:
         while True:
             try:
                 yield self.read_next_batch()
             except StopIteration:
                 return
 
-    def read_all(
-        self,
-    ) -> pa.Table:
+    def read_all(self) -> pa.Table:
         """Os lotes que faltam numa ``pa.Table``."""
         return pa.Table.from_batches(list(self), schema=self.schema)
 
@@ -832,9 +826,7 @@ class RedshiftStream:
         reader = pa.RecordBatchReader.from_batches(self.schema, iter(self))
         return reader.__arrow_c_stream__(requested_schema)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Para a leitura e apaga os arquivos do ``UNLOAD`` deste stream."""
         self._stop.set()
         if self._thread is not None:
@@ -842,9 +834,7 @@ class RedshiftStream:
         storage = self._engine.storage
         storage.delete(storage.list_files(self._prefix))
 
-    def __enter__(
-        self,
-    ) -> RedshiftStream:
+    def __enter__(self) -> RedshiftStream:
         return self
 
     def __exit__(
@@ -853,9 +843,7 @@ class RedshiftStream:
     ) -> None:
         self.close()
 
-    def __del__(
-        self,
-    ) -> None:
+    def __del__(self) -> None:
         # O stream abandonado: a thread para no lote seguinte; os arquivos saem no cleanup.
         self._stop.set()
 
@@ -882,9 +870,7 @@ class _ParquetSink:
             self.writer = pq.ParquetWriter(self.stream, batch.schema)
         self.writer.write_batch(batch)
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Fecha o arquivo, quando algum lote o abriu: no S3, é o fim do upload."""
         if self.writer is not None:
             self.writer.close()
@@ -1004,16 +990,12 @@ class RedshiftAppender:
         self._thread.start()
 
     @property
-    def rows(
-        self,
-    ) -> int:
+    def rows(self) -> int:
         """As linhas gravadas até agora."""
         return self._outcome["rows"]
 
     @property
-    def error(
-        self,
-    ) -> BaseException | None:
+    def error(self) -> BaseException | None:
         """O erro da thread auxiliar ou o lote recusado, quando houve."""
         return self._refused or self._outcome["error"]
 
@@ -1106,9 +1088,7 @@ class RedshiftAppender:
         if error is None and self.error is not None:
             raise self.error
 
-    def __enter__(
-        self,
-    ) -> RedshiftAppender:
+    def __enter__(self) -> RedshiftAppender:
         return self
 
     def __exit__(
@@ -1119,9 +1099,7 @@ class RedshiftAppender:
     ) -> None:
         self.close(error=exc)
 
-    def __del__(
-        self,
-    ) -> None:
+    def __del__(self) -> None:
         self._closed.set()
 
 
@@ -1221,9 +1199,7 @@ class RedshiftEngine:
     # ------------------------------------------------------------ a sessão
 
     @contextlib.contextmanager
-    def session(
-        self,
-    ) -> Iterator[object]:
+    def session(self) -> Iterator[object]:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava.
 
@@ -1246,9 +1222,7 @@ class RedshiftEngine:
             finally:
                 self._owner = outer_owner
 
-    def holds_session(
-        self,
-    ) -> bool:
+    def holds_session(self) -> bool:
         """Se a thread que chama está dentro de ``session()``.
 
         Exemplo:
@@ -1263,9 +1237,7 @@ class RedshiftEngine:
         """
         return self._owner == threading.get_ident()
 
-    def new_session(
-        self,
-    ) -> RedshiftEngine:
+    def new_session(self) -> RedshiftEngine:
         """Uma sessão a mais: outra conexão pelo caminho de ``connect``, com credencial própria, o
         ``USE`` e o ``search_path``, e o seu lock; vê as tabelas ``exec_<id>_*`` que a principal
         confirmou e não as temporárias dela.
@@ -1283,9 +1255,7 @@ class RedshiftEngine:
         return RedshiftEngine(self.config, self.execution_id, self.storage, self.staging_prefix,
                               parent=self, prefix=self.prefix)
 
-    def _reconnect(
-        self,
-    ) -> None:
+    def _reconnect(self) -> None:
         """A conexão reaberta com credencial nova, no lugar da que o servidor derrubou."""
         # O close da conexão derrubada levanta o InterfaceError do driver ou o OSError do socket,
         # e a conexão já não serve.
@@ -1349,9 +1319,7 @@ class RedshiftEngine:
                 return self._run(text, params)
 
     @contextlib.contextmanager
-    def transaction(
-        self,
-    ) -> Iterator[None]:
+    def transaction(self) -> Iterator[None]:
         """``BEGIN`` e ``COMMIT`` em volta do bloco, sob o lock; uma exceção sai por ``ROLLBACK``.
         Protegida, para o appender.
 
@@ -2240,9 +2208,7 @@ class RedshiftEngine:
 
     # ------------------------------------------------------------ o encerramento
 
-    def cleanup(
-        self,
-    ) -> None:
+    def cleanup(self) -> None:
         """Apaga as tabelas ``exec_<id>_*`` que a execução criou, uma por comando, os objetos do
         ``staging_prefix`` (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/``
         sob o ``unload_to`` do leitor; nenhum sem armazenamento) e fecha a sessão; uma tabela que o
@@ -2270,9 +2236,7 @@ class RedshiftEngine:
         with self._lock:
             self._connection.close()
 
-    def _drop_created(
-        self,
-    ) -> None:
+    def _drop_created(self) -> None:
         """Apaga as tabelas que a execução criou, uma por comando; a que o ``DROP`` não alcança
         fica nomeada no log."""
         for name in list(self._created):
@@ -2281,9 +2245,7 @@ class RedshiftEngine:
             except redshift_connector.Error as error:
                 log.warning("sandbox %s: %s não apagada (%s)", self.execution_id, name, error)
 
-    def __enter__(
-        self,
-    ) -> RedshiftEngine:
+    def __enter__(self) -> RedshiftEngine:
         return self
 
     def __exit__(

@@ -116,9 +116,7 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
     # storage roda antes do boto3: pelo s3_location, proxy_environment exporta AWS_REGION e
     # NO_PROXY, e require_s3_access confere o acesso à raiz.
     @pytest.mark.usefixtures("storage")
-    def test_boto3_credential_source(
-        self,
-    ) -> None:
+    def test_boto3_credential_source(self) -> None:
         """Registra de onde o ``boto3`` obtém as credenciais e qual identidade assume."""
         session = boto3.Session()
 

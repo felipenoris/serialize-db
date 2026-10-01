@@ -68,9 +68,7 @@ class Step:
     rowcount: int | None = None
     result: list[tuple] | None = None
 
-    def describe(
-        self,
-    ) -> str:
+    def describe(self) -> str:
         """O desfecho numa linha: ``rótulo: 0.4 s, linhas afetadas: 2`` ou
         ``rótulo: erro em 12.1 s: ...``."""
         if self.seconds is None:
@@ -143,9 +141,7 @@ class Participant:
             if self.execute(step).error is not None:
                 self.failed = True
 
-    def end_transaction(
-        self,
-    ) -> None:
+    def end_transaction(self) -> None:
         """``COMMIT`` quando a sequência correu sem erro; senão ``ROLLBACK``, que solta os
         bloqueios da transação abortada antes de o cenário esperar pelo outro participante."""
         if self.failed:
@@ -163,16 +159,12 @@ class Participant:
         thread.start()
         return thread
 
-    def current(
-        self,
-    ) -> str:
+    def current(self) -> str:
         """O rótulo do comando em curso, ou do último que rodou."""
         return self.steps[-1].label if self.steps else "nenhum"
 
     @property
-    def committed(
-        self,
-    ) -> bool:
+    def committed(self) -> bool:
         """Verdadeiro quando o ``COMMIT`` rodou sem erro e nenhum comando antes dele falhou."""
         commits = [step for step in self.steps if step.label == "COMMIT"]
         return not self.failed and bool(commits) and commits[-1].error is None
@@ -184,15 +176,11 @@ class Participant:
         """Registra no relatório cada comando do participante, em ordem."""
         record(f"{prefix}.{self.name}", " | ".join(step.describe() for step in self.steps))
 
-    def close(
-        self,
-    ) -> None:
+    def close(self) -> None:
         """Fecha a conexão; o fim da sessão desfaz a transação que ficou aberta."""
         self.connection.close()
 
-    def __enter__(
-        self,
-    ) -> Participant:
+    def __enter__(self) -> Participant:
         return self
 
     def __exit__(

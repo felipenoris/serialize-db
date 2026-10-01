@@ -79,9 +79,7 @@ class Tee:
         self.file.flush()
         return len(text)
 
-    def flush(
-        self,
-    ) -> None:
+    def flush(self) -> None:
         self.terminal.flush()
         self.file.flush()
 

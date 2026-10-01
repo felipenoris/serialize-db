@@ -71,9 +71,7 @@ class _PoolState:
             future = self.pool.submit(action)
             self.running[future] = name
 
-    def collect(
-        self,
-    ) -> None:
+    def collect(self) -> None:
         """Espera a próxima tarefa terminar e guarda a primeira falha."""
         done, _ = wait(self.running, return_when=FIRST_COMPLETED)
         for future in done:

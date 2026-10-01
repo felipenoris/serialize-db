@@ -338,15 +338,11 @@ class AuditReport:
     de controle e os não finitos."""
 
     @property
-    def passed(
-        self,
-    ) -> bool:
+    def passed(self) -> bool:
         """Se todas as verificações que rodaram passaram."""
         return all(result.passed for result in self.results)
 
-    def sql(
-        self,
-    ) -> str:
+    def sql(self) -> str:
         """O texto de todas as verificações.
 
         Exemplo:
