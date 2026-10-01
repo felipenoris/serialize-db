@@ -53,11 +53,13 @@ Python, como no SageMaker Unified Studio.
 
 # Documentação
 
-A documentação do pacote é gerada pelo `pdoc` a partir das docstrings e de [`docs/index.md`](docs/index.md),
-a página principal, com o funcionamento geral, o tutorial, a retenção dos arquivos removidos e a
-tabela de mapeamento de tipos. Cada
-exemplo de docstring abre com `.. code-block:: python`, ou `.. code-block:: shell` no da linha de
-comando: o `pdoc` só destaca o código dessa diretiva, e um bloco apenas indentado sai sem destaque.
+A documentação do pacote é gerada pelo `pdoc` a partir das docstrings, de
+[`docs/index.md`](docs/index.md), a página principal, com o funcionamento geral, a instalação, o
+tutorial, a retenção dos arquivos removidos e a tabela de mapeamento de tipos, e de
+[`docs/operacao.md`](docs/operacao.md), o runbook da operação e as opções de cada subcomando de
+`serialize-db`, na página de `serialize_db.cli`. Cada exemplo de docstring abre com
+`.. code-block:: python`, ou `.. code-block:: shell` no da linha de comando: o `pdoc` só destaca o
+código dessa diretiva, e um bloco apenas indentado sai sem destaque.
 Cada função e método documenta os argumentos, o retorno e as exceções nos campos `:param nome:`,
 `:return:` e `:raises Excecao:` do fim da docstring, que o `pdoc` mostra nas seções "Parameters",
 "Returns" e "Raises"; o `pdoc` ignora `:returns:` e `:raise:`, e lê o nome de um campo `:param`
@@ -70,12 +72,13 @@ uv sync --group docs
 uv run pdoc serialize_db --docformat restructuredtext -o /pasta/da/documentacao
 ```
 
-A pasta é criada se não existir e recebe `index.html`, a página principal, `serialize_db.html`,
-`serialize_db/` com uma página por módulo e `search.js`; abra `index.html` no navegador. `site/`,
-a pasta que a esteira usa, fica fora do git. Sem `-o`, o `pdoc` serve a documentação em
-`http://localhost:8080` e a regenera a cada mudança. A esteira [`docs.yml`](.github/workflows/docs.yml) publica o mesmo
-resultado no GitHub Pages a cada push na `main`, em <https://felipenoris.github.io/serialize-db/>;
-a publicação exige o Pages do repositório com a origem "GitHub Actions".
+A pasta é criada se não existir e recebe `index.html`, que redireciona para `serialize_db.html`, a
+página principal, `serialize_db/` com uma página por módulo e `search.js`; abra `index.html` no
+navegador. `site/`, a pasta que a esteira usa, fica fora do git. Sem `-o`, o `pdoc` serve a
+documentação em `http://localhost:8080` e a regenera a cada mudança. A esteira
+[`docs.yml`](.github/workflows/docs.yml) publica o mesmo resultado no GitHub Pages a cada push na
+`main`, em <https://felipenoris.github.io/serialize-db/>; a publicação exige o Pages do repositório
+com a origem "GitHub Actions".
 
 # Testes
 
@@ -95,10 +98,10 @@ quando disparada à mão:
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py
 ```
 
-Os testes da migração leem o Delta pelo `delta_scan` e precisam da extensão `delta` do DuckDB, e
-os do secret do S3, da `httpfs`, em `.duckdb/` na raiz do repositório, ou na pasta de
-`SERIALIZE_DB_DUCKDB_EXTENSIONS`; sem a `httpfs`, estes são pulados. `prepare_offline.sh` as
-instala lá, e com internet basta:
+A biblioteca carrega a extensão `delta` do DuckDB em toda conexão que abre, e no S3 também a
+`httpfs`, de `.duckdb/` na raiz do repositório ou da pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`:
+sem a `delta`, todo teste que abre uma conexão do DuckDB pela biblioteca falha, e sem a `httpfs`,
+os testes do secret do S3 são pulados. `prepare_offline.sh` as instala lá, e com internet basta:
 
 ```
 uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '.duckdb'}).execute('INSTALL delta').execute('INSTALL httpfs')"
@@ -109,14 +112,14 @@ uv run python -c "import duckdb; duckdb.connect(config={'extension_directory': '
 `SERIALIZE_DB_TEST_EMULATOR` roda as suítes que só rodam no ambiente alvo sobre o substituto de
 [`tests/emulator.py`](tests/emulator.py): o moto no lugar do S3 e um DuckDB em memória no lugar do
 Redshift, sem credencial da AWS e sem gravar em disco. Os casos `redshift` do motor Redshift, da
-publicação e do leitor (`tests/test_engine_redshift.py`, `tests/test_publication.py`,
-`tests/test_reader.py`) rodam nele do mesmo jeito, com a conexão do substituto no lugar do
-driver. A sessão define as raízes das suítes S3 e
-Redshift. A esteira do GitHub não roda o substituto: ele roda na máquina de quem desenvolve, antes
-do push de uma mudança que toque o que essas suítes cobrem (`serialize_db.storage` e
-`serialize_db.delta` no S3, `serialize_db.audit`, `serialize_db.engine.redshift` e
-`serialize_db.publication` no Redshift, `tests/conftest.py`, `tests/emulator.py` e as próprias
-suítes).
+publicação, do leitor e da auditoria pela linha de comando (`tests/test_engine_redshift.py`,
+`tests/test_publication.py`, `tests/test_reader.py`, `tests/test_execution.py`) rodam nele do
+mesmo jeito, com a conexão do substituto no lugar do driver. A sessão define as raízes das suítes
+S3 e Redshift. A esteira do GitHub não roda o substituto: ele roda na máquina de quem desenvolve,
+antes do push de uma mudança que toque o que essas suítes cobrem (`serialize_db.storage` e
+`serialize_db.delta` no S3, `serialize_db.audit`, `serialize_db.engine.redshift`,
+`serialize_db.publication` e `serialize_db.reader` no Redshift, `tests/conftest.py`,
+`tests/emulator.py` e as próprias suítes).
 
 O moto e o `flask` vêm do grupo `emulator`, e `uv run --group emulator` os instala no `.venv/` antes
 de rodar; sem eles, a sessão para com a instrução. As extensões `httpfs` e `delta` do DuckDB
@@ -129,11 +132,11 @@ for extension in httpfs delta; do
 done
 ```
 
-As suítes do ambiente alvo no substituto, com a pasta local que os casos `redshift` da publicação
-e do leitor também usam:
+As suítes do ambiente alvo no substituto, com a pasta local que os casos `redshift` da publicação,
+do leitor e da auditoria também usam:
 
 ```
-SERIALIZE_DB_TEST_EMULATOR=1 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_publication.py tests/test_reader.py
+SERIALIZE_DB_TEST_EMULATOR=1 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run --group emulator pytest tests/proof_of_concept/test_s3.py tests/proof_of_concept/test_redshift.py tests/proof_of_concept/test_redshift_transactions.py tests/test_engine_redshift.py tests/test_execution.py tests/test_publication.py tests/test_reader.py
 ```
 
 Sem a lista de arquivos, a sessão roda todos os testes, e os testes `s3` do pacote passam pelo
@@ -196,11 +199,11 @@ arquivo de etapa depois que a segunda a repete.
 | --- | --- |
 | `SERIALIZE_DB_TEST_LOCAL_ROOT` | Pasta existente sob a qual a suíte local cria `serialize-db-poc/<id>/`. Sem ela, os testes `local` são pulados. |
 | `SERIALIZE_DB_TEST_S3_ROOT` | Raiz `s3://bucket/prefixo` sob a qual a suíte S3 cria `serialize-db-poc/<id>/`. Sem ela, os testes `s3` são pulados. |
-| `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` | Esquema do Redshift onde a suíte cria as tabelas `serialize_db_poc_<id>_*`. Sem ela, os testes `redshift` são pulados. A conexão vem de `SERIALIZE_DB_REDSHIFT_*` (a tabela está em [`probes/README.md`](probes/README.md)), e `SERIALIZE_DB_REDSHIFT_SHARE_DATABASE` é o banco do datashare em que cada conexão roda `USE`. `SERIALIZE_DB_REDSHIFT_IAM_ROLE` nomeia o papel do `COPY` e do `UNLOAD`, ou a palavra `default`; sem ela, os dois levam as credenciais de quem chama. |
+| `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA` | Esquema do Redshift onde as suítes criam as suas tabelas: `serialize_db_poc_<id>_*` nas provas de conceito, o sandbox `exec_<execução>_*` de cada motor Redshift e, nos casos da publicação e do leitor, as tabelas `poc<id>_*` de um ambiente próprio, com as linhas dele em `serialize_db_publications`, criada quando falta e apagada só nesse caso; tudo sai no fim. Sem ela, os testes `redshift` são pulados. A conexão vem de `SERIALIZE_DB_REDSHIFT_*` (a tabela está em [`probes/README.md`](probes/README.md)), e `SERIALIZE_DB_REDSHIFT_SHARE_DATABASE` é o banco do datashare em que cada conexão roda `USE`. `SERIALIZE_DB_REDSHIFT_IAM_ROLE` nomeia o papel do `COPY` e do `UNLOAD`, ou a palavra `default`; sem ela, os dois levam as credenciais de quem chama. |
 | `SERIALIZE_DB_TEST_EMULATOR` | Qualquer valor troca o S3 e o Redshift pelo substituto local de `tests/emulator.py` e define as raízes das suítes S3 e Redshift nele. |
 | `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` | Com o substituto, uma expressão regular: o comando que casa com ela recebe um erro do servidor, para provocar a falha que um tratamento corrige. |
 | `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` | Com o substituto, qualquer valor faz o `UNLOAD ... MANIFEST` passar sem gravar o manifesto. |
-| `SERIALIZE_DB_TEST_KEEP` | Qualquer valor mantém a pasta, os objetos e as tabelas criados pela sessão. |
+| `SERIALIZE_DB_TEST_KEEP` | Qualquer valor mantém a pasta, os objetos e as tabelas `serialize_db_poc_<id>_*` criados pela sessão; o sandbox dos motores e as tabelas publicadas pelos casos da publicação e do leitor saem mesmo assim. |
 | `SERIALIZE_DB_TEST_REPORT` | Caminho de um JSON onde o relatório da sessão é gravado, além de impresso. |
 | `SERIALIZE_DB_DUCKDB_EXTENSIONS` | Pasta de extensões do DuckDB, a única onde a suíte instala as que faltam. Sem ela, `.duckdb/` na raiz do repositório quando existir, senão a pasta padrão do DuckDB, e nada é instalado. A biblioteca carrega as extensões da mesma pasta, e sem ela de `.duckdb/` ao lado do ambiente virtual, sem instalar nada. |
 | `AWS_REGION`, `AWS_DEFAULT_REGION` | Região do bucket e do workgroup. O botocore lê `AWS_DEFAULT_REGION` ou o perfil, e o delta-rs lê as duas; sem uma delas, a suíte Redshift procura o workgroup na região errada. |
@@ -208,11 +211,13 @@ arquivo de etapa depois que a segunda a repete.
 # Probes
 
 Scripts só de leitura, em [`probes/`](probes/README.md), que fotografam o que o ambiente oferece à
-biblioteca, e as sondas de consistência de `probes/consistencia/`, que gravam sob as raízes das
-suítes (`SERIALIZE_DB_TEST_LOCAL_ROOT` e, a do Redshift, um ambiente `poc<id>` da suíte S3 e do
-esquema); o que cada um lê está no cabeçalho do próprio script e em `probes/README.md`. Cada um
-imprime o relatório e o grava em `probes/output/`, pasta fora do git, para ser colado na conversa
-com o assistente.
+biblioteca, e as sondas que gravam sob as raízes das suítes: as de consistência, em
+`probes/consistencia/`, sob `SERIALIZE_DB_TEST_LOCAL_ROOT` e, as do pytest com `-m redshift`, sob a
+raiz S3 e no esquema da suíte; e as da operação, em `probes/operacao/`, que rodam `serialize-db`
+sobre as primeiras partições de `cad_lancamentos` da base de origem, sob `SERIALIZE_DB_TEST_S3_ROOT`
+ou, sem ela, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`. O que cada um lê está no cabeçalho do próprio
+script e em `probes/README.md`. Cada um imprime o relatório e o grava em `probes/output/`, pasta
+fora do git, para ser colado na conversa com o assistente.
 
 ```
 .venv/bin/python probes/space.py
@@ -222,18 +227,30 @@ com o assistente.
 .venv/bin/python probes/catalog.py
 .venv/bin/python probes/parquet_source.py /caminho/da/base
 .venv/bin/python probes/parquet_source.py /caminho/da/base --text-bytes
-PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/delta/db_projetado
+PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/prd
+.venv/bin/python probes/credentials.py s3://bucket/prefixo/prd/cad_contas
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente .venv/bin/python probes/consistencia/probe_types.py
 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py
+SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m local -s probes/consistencia/probe_append_test.py
+PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_append_test.py
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_load_resume.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_archive_resume.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_vacuum_orphans.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_compact_memory.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem
 ```
 
-`duckdb_threads.py` lê as tabelas Delta que a migração gravou, no `--root` dela, e mede a ingestão
-pelo motor DuckDB com cada valor de `threads`, da metade das CPUs do processo a cinco vezes elas; o
-modelo é `client_model:Base.metadata`, com `tests` no `PYTHONPATH`, e `--threads`, `--partition`,
-`--tables` e `--repetitions` mudam o padrão. Ele roda
+`duckdb_threads.py` lê as tabelas Delta que a migração gravou, na pasta `<root>/<ambiente>` dela, e
+mede a ingestão pelo motor DuckDB com cada valor de `threads`, da metade das CPUs do processo a
+cinco vezes elas; o modelo é `client_model:Base.metadata`, com `tests` no `PYTHONPATH`, e
+`--metadata`, `--threads`, `--partition`, `--tables` e `--repetitions` mudam o padrão. Ele roda
 depois da migração, nunca ao mesmo tempo que ela, e levou cerca de 15 minutos no ambiente alvo em
 2026-09-23, com a partição 2026-02-28 de `cad_lancamentos`; no S3, pede a região em `AWS_REGION` ou
 `AWS_DEFAULT_REGION`.
+
+`credentials.py` abre sobre uma tabela Delta pequena os clientes que uma execução segura e os lê de
+novo a cada 5 minutos, até passar a expiração da credencial do contêiner e a da senha do Redshift,
+mais 3 minutos; levou 63 minutos no ambiente alvo, nas baterias de 2026-09-27 e de 2026-09-28.
 
 O argumento `s3://bucket/prefixo` é a raiz que o probe fotografa; sem ele valem `SERIALIZE_DB_ROOT`
 e `SERIALIZE_DB_TEST_S3_ROOT`, nessa ordem. `redshift.py` conecta pelas variáveis
@@ -277,10 +294,10 @@ export AWS_DEFAULT_REGION=sa-east-1
 PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --environment prd --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
 ```
 
-`--partitions AAAA-MM-DD` carrega e confere só as partições listadas, e `--tables` só as tabelas
-listadas, as sem partição antes das particionadas. A segunda execução não grava nada: a carga
-recomeça das partições fora do log. A auditoria de chaves estrangeiras vem depois da carga, por
-`serialize-db audit --foreign-keys`.
+`--partitions AAAA-MM-DD` carrega e confere só as partições listadas e deixa de fora as tabelas sem
+partição, e `--tables` só as tabelas listadas, as sem partição antes das particionadas. A segunda
+execução não grava nada: a carga recomeça das partições fora do log. A auditoria de chaves
+estrangeiras vem depois da carga, por `serialize-db audit --foreign-keys`.
 
 # Exemplos: conectividade com o Redshift
 
@@ -295,8 +312,8 @@ probe, a suíte e a etapa 5 repetem as chamadas que estão lá, e
 [`redshift_manifest.py`](examples/redshift_manifest.py) rodou em 2026-09-21: ele converte uma
 partição de `cad_contratos` de Parquet para Delta e roda os dois comandos com manifesto, o
 `COPY ... MANIFEST` e o `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` numa tabela do datashare, que
-são os pré-requisitos do `export_partition`. Os dois são aceitos, e o que o rodapé do `UNLOAD`
-respondeu está em [`plan/POC.md`](plan/POC.md).
+são os pré-requisitos do `export_partition` e do `COPY` da publicação. Os dois são aceitos, e o
+que o rodapé do `UNLOAD` respondeu está em [`plan/POC.md`](plan/POC.md).
 
 # Credenciais do delta-rs e proxy
 
