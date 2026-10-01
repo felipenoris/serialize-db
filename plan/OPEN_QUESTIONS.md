@@ -191,9 +191,6 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
   com uma execução por ambiente de cada vez.
 
 ## Decisões de API pendentes por etapa
-- **Os comandos do Ruff no `README.md`.** O usuário escolheu em 2026-10-01 o `ruff` no grupo `dev`
-  e a conferência na esteira; as linhas `uv run ruff check` e `uv run ruff format --check` entram
-  no `README.md` depois do PR #115, que o revisa, para não conflitar com ele.
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
