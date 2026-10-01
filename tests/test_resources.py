@@ -6,8 +6,9 @@ Eles conferem o cgroup v2 com a folga que devolve o cache de arquivos e a cota a
 cima, o ``MemAvailable`` menor que a folga, o ancestral mais apertado, o cgroup v1 com a pasta do
 processo e o contêiner que monta o próprio cgroup como raiz, a memória compartilhada que a folga
 não devolve, no v2 e no v1, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do
-Python. O pico de memória residente é lido de um ``/proc/self/status`` fabricado, sem ele, e num
-processo filho que toca 64 MiB.
+Python. O Windows pula esses casos, porque lê a memória pela API do sistema, e confere a física
+dessa leitura contra a do WMI. O pico de memória residente é lido de um ``/proc/self/status``
+fabricado, sem ele, e num processo filho que toca 64 MiB.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ from serialize_db import resources
 pytestmark = pytest.mark.local
 
 GIB = 2**30
+
+# Os casos da memória lida do /proc e do cgroup fabricados, ou do os.sysconf, que o Windows não
+# consulta: lá a memória vem da API do sistema.
+unix_only = pytest.mark.skipif(sys.platform == "win32", reason="o Windows lê a memória da API")
 
 
 def fabricate(folder: Path, files: dict[str, str]) -> None:
@@ -54,6 +59,7 @@ def machine(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> P
     return folder
 
 
+@unix_only
 def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(machine: Path) -> None:
     """A folga do cgroup v2 é o limite menos o uso, com o cache de arquivos de volta; a cota de
     1,5 CPU dá 2. Um ``MemAvailable`` menor que a folga ganha dela."""
@@ -74,6 +80,7 @@ def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(machine: Pa
     assert resources.available_memory() == GIB
 
 
+@unix_only
 def test_the_tightest_ancestor_wins(machine: Path) -> None:
     """O limite de um ancestral vale para o cgroup do processo: o pai limita a memória, e o filho,
     sem limite de memória, limita a CPU a meia, que arredonda para 1."""
@@ -92,6 +99,7 @@ def test_the_tightest_ancestor_wins(machine: Path) -> None:
     assert resources.available_cpus() == 1
 
 
+@unix_only
 def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(machine: Path) -> None:
     """No v1, a memória lê a pasta do processo e as ancestrais até a montagem, e a mais apertada é
     a montagem; a CPU não acha a pasta do processo, como no contêiner que monta o próprio cgroup, e
@@ -115,6 +123,7 @@ def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(machine: 
     assert resources.available_cpus() == 3
 
 
+@unix_only
 @pytest.mark.parametrize(("cgroup", "files"), [
     ("0::/app\n", {
         "cgroup/app/memory.max": f"{4 * GIB}\n",
@@ -141,6 +150,7 @@ def test_shared_memory_stays_in_the_cgroup_usage(machine: Path, cgroup: str,
     assert resources.available_memory() == 4 * GIB - 3 * GIB + GIB - 3 * GIB // 4
 
 
+@unix_only
 @pytest.mark.usefixtures("machine")
 def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
     """Sem ``/proc/meminfo`` nem ``/proc/self/cgroup``, como fora do Linux, a memória é a física e
@@ -150,9 +160,24 @@ def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
     assert resources.available_cpus() == 8
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="lê a memória pela API do Windows")
+def test_windows_reads_the_available_memory_from_the_system() -> None:
+    """No Windows, a memória é a disponível de ``GlobalMemoryStatusEx``, positiva e até a física
+    da mesma leitura, e essa física é a que o WMI informa em ``Win32_ComputerSystem``."""
+    status = resources._windows_memory_status()
+    command = "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"
+    completed = subprocess.run(["powershell", "-NoProfile", "-Command", command], check=True,
+                               capture_output=True, text=True)
+    assert status.ullTotalPhys == int(completed.stdout)
+    available = resources.available_memory()
+    assert available > 0
+    assert available <= status.ullTotalPhys
+
+
 def test_peak_rss_mb_reads_vmhwm_from_the_process_status(machine: Path) -> None:
     """O pico de memória residente é o ``VmHWM`` de ``/proc/self/status``, em KB, convertido em
-    MB; sem o arquivo, fora do Linux, é o ``ru_maxrss`` do processo, positivo."""
+    MB; sem o arquivo, fora do Linux, é o pico que o sistema informa, positivo: o ``ru_maxrss`` do
+    processo nos Unix e o ``PeakWorkingSetSize`` no Windows."""
     fabricate(machine, {
         "proc/self/status": "Name:\tpython\nVmHWM:\t 1234567 kB\nVmRSS:\t   4096 kB\n",
     })
