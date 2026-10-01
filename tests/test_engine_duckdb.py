@@ -689,6 +689,39 @@ def test_materialized_ingest_applies_the_contract(
     assert count_of(engine, "cad_malformada") == 0
 
 
+def test_materialized_ingest_refuses_a_delta_column_outside_the_model(
+    setup: Setup,
+) -> None:
+    """Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado, faz o ``INSERT ...
+    BY NAME`` da materialização falhar com ``BinderException``, a transação é desfeita e o nome
+    fica livre; a view a traz."""
+    # A tabela publicada por um modelo com a coluna a mais, lida pelo modelo sem ela.
+    wider = ENTRIES.to_metadata(sa.MetaData())
+    wider.append_column(sa.Column("extra", sa.Double))
+    uri = setup.uri(ENTRIES)
+    delta.create_table(uri, wider, setup.storage)
+    data = entry_rows(MONTHS[0], 1, 5).append_column("extra", pa.array([1.5] * 5))
+    version = delta.publish_partition(
+        uri, wider, MONTHS[0], schema.cast(data, wider), METADATA, setup.storage
+    )
+    engine = setup.engine
+    with pytest.raises(duckdb.BinderException, match="extra"):
+        engine.ingest(ENTRIES, uri, version, materialize=True)
+    assert not engine.name_in_use(ENTRIES.name)
+    engine.ingest(ENTRIES, uri, version)
+    names = (
+        engine.query(
+            "SELECT column_name FROM information_schema.columns "
+            f"WHERE table_name = '{ENTRIES.name}' ORDER BY ordinal_position"
+        )
+        .column("column_name")
+        .to_pylist()
+    )
+    assert "extra" in names
+    assert set(names) == {column.name for column in ENTRIES.columns} | {"extra"}
+    assert count_of(engine, ENTRIES.name) == 5
+
+
 def test_client_transaction_with_materialized_ingest_and_create_table(
     setup: Setup,
 ) -> None:

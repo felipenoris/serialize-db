@@ -46,6 +46,12 @@ foi medido em [`POC.md`](POC.md).
   `probes/operacao/probe_unload_parallel.py` mede o primeiro, o `UNLOAD` da exportação com
   `PARALLEL OFF` e em paralelo de 1 a 20 milhões de linhas, e espera a rodada no alvo pelos
   comandos de `SUITE.md`, seção "Sondas da operação".
+- **O `COPY` do `ingest` do motor Redshift com uma coluna do Delta que o modelo não tem.** A
+  docstring diz que o `COPY` é recusado, porque a lista de colunas do rodapé nomeia a coluna e a
+  staging, criada do modelo, não a tem (decisão do usuário de 2026-10-01: documentar, sem projeção
+  do modelo); o caso não rodou no alvo nem no substituto, e nenhum teste o cobre, porque a
+  mensagem do alvo não foi lida ([etapa 5](PLAN-STAGE-5.md)). No DuckDB, o caso tem teste
+  (`test_materialized_ingest_refuses_a_delta_column_outside_the_model`).
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
@@ -205,12 +211,6 @@ A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões 
 suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; cada item abaixo espera
 o usuário.
 
-- **`ingest(materialize=True)` e a coluna do Delta que o modelo não tem.** Desde 2026-09-28 a
-  materialização roda a DDL do modelo e `INSERT ... BY NAME` do `delta_scan`, e o `BY NAME` exige
-  cada coluna da origem na tabela: uma versão do Delta com coluna fora do modelo, o caso de um
-  modelo atrasado, é recusada com `duckdb.BinderException` e a transação desfeita; antes, o
-  `CREATE TABLE AS SELECT *` a trazia. A docstring não nomeia o caso. Opções: documentar a recusa,
-  ou projetar só as colunas do modelo no `SELECT`.
 - **`run.audit` com `partitions` numa tabela sem partição.** `Execution.audit` aceita a lista e
   audita a tabela inteira (`_scope` de `serialize_db.audit` devolve verdadeiro), e guarda a
   aprovação sob a chave `(tabela, partições)`, que `publish_delta` nunca pede; `ingest`,

@@ -1008,15 +1008,18 @@ class DuckDBEngine:
         :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
             nenhuma.
         :param materialize: ``True`` copia os dados para a tabela do modelo no sandbox; com
-            ``False``, a view lê o Delta no lugar, com os tipos do ``delta_scan``.
+            ``False``, a view lê o Delta no lugar, com os tipos do ``delta_scan`` e toda coluna
+            da versão, uma que o modelo não tem incluída.
         :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
             sem versão (``version=None``).
         :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
             da partição.
         :raises duckdb.Error: com ``materialize=True``, um valor do Delta que o tipo ou o
-            ``NOT NULL`` do contrato recusa, o JSON malformado incluído, e a transação é desfeita
-            com o nome livre; ou o ``BEGIN`` recusado dentro de uma transação que o cliente abriu
-            em ``session()``, e o ``ROLLBACK`` desfaz a transação do cliente.
+            ``NOT NULL`` do contrato recusa, o JSON malformado incluído, ou uma coluna da versão
+            que o modelo não tem, que o ``INSERT ... BY NAME`` recusa (``BinderException``), e a
+            transação é desfeita com o nome livre; ou o ``BEGIN`` recusado dentro de uma
+            transação que o cliente abriu em ``session()``, e o ``ROLLBACK`` desfaz a transação
+            do cliente.
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")

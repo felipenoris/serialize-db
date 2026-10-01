@@ -1586,6 +1586,9 @@ class RedshiftEngine:
             credenciais para o ``COPY``.
         :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
             da partição.
+        :raises redshift_connector.Error: o ``COPY`` recusado por uma coluna da versão que o
+            modelo não tem, porque a lista de colunas do rodapé a nomeia e a staging, criada do
+            modelo, não a tem; o modelo tem de acompanhar a tabela.
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")

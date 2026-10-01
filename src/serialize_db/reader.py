@@ -390,8 +390,9 @@ class DeltaReader:
             copia a tabela inteira.
         :raises ContractError: uma tabela sem view no leitor, ``partitions`` numa tabela sem
             partição ou um valor fora da regra da partição, antes de qualquer troca.
-        :raises duckdb.Error: a falha da cópia de uma tabela, que fica com o objeto anterior,
-            view ou tabela, enquanto as outras terminam.
+        :raises duckdb.Error: a falha da cópia de uma tabela, também por uma coluna da versão
+            que o modelo não tem; a tabela fica com o objeto anterior, view ou tabela, enquanto
+            as outras terminam.
         """
         filters = {}
         for table in tables:

@@ -249,6 +249,10 @@ class Engine(Protocol):
         """Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o nome do
         modelo.
 
+        Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado, é recusada na
+        carga por cada motor à sua maneira, e só a view do motor DuckDB a traz: o modelo tem de
+        acompanhar a tabela.
+
         Exemplo:
 
         .. code-block:: python

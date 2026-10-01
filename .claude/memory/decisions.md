@@ -1529,6 +1529,24 @@ file stays orphaned as in every refusal. Schema evolution is unaffected, as the 
 same message: the model changes first and `reconcile` adds the column to the log before any file
 carries it. `src/serialize_db/delta.py`, `plan/PLAN-STAGE-3.md`
 
+## The Delta column the model does not have, at the ingest (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that, since 2026-09-28, the DuckDB
+engine's `ingest(materialize=True)`, running the model's DDL and `INSERT ... BY NAME` from
+`delta_scan`, refuses a version with a column the model lacks (`duckdb.BinderException`, the
+transaction undone and the name free), where the earlier `CREATE TABLE AS SELECT *` brought it;
+the view without `materialize` brings the column, and the Redshift engine's `COPY`, listing the
+footer's columns, names a column the staging created from the model does not have. Offered on a
+decision card the refusal with `ContractError` in both engines (recommended), the projection of
+the model's columns, or documenting, the user chose "Só documentar" (15:40 UTC): no code change;
+the `ingest` docstrings of both engines, the `Engine` protocol and `DeltaReader.materialize` name
+the case (the model has to keep up with the table),
+`test_materialized_ingest_refuses_a_delta_column_outside_the_model` asserts the DuckDB behavior,
+and the Redshift sentence stays unread in the target (`plan/OPEN_QUESTIONS.md`).
+`src/serialize_db/engine/__init__.py`, `src/serialize_db/engine/duckdb.py`,
+`src/serialize_db/engine/redshift.py`, `src/serialize_db/reader.py`, `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-5.md`
+
 ## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
 
 The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review
