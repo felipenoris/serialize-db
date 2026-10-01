@@ -20,7 +20,14 @@ env:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
 
@@ -61,3 +68,4 @@ jobs:
           --ignore=tests/proof_of_concept
           --ignore=tests/test_probes.py
           -p no:cacheprovider
+          -rfE
