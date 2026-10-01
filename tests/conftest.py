@@ -22,8 +22,11 @@ Variáveis de ambiente lidas:
   ``serialize-db-poc/<id>/``.
 - ``SERIALIZE_DB_TEST_S3_ROOT``: raiz ``s3://bucket/prefixo`` sob a qual a suíte S3 cria
   ``serialize-db-poc/<id>/``.
-- ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``: esquema do Redshift onde a suíte cria as tabelas
-  ``serialize_db_poc_<id>_*``. A conexão vem de ``SERIALIZE_DB_REDSHIFT_*`` (as variáveis de
+- ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``: esquema do Redshift onde as suítes criam as suas
+  tabelas: ``serialize_db_poc_<id>_*`` nas provas de conceito, o sandbox ``exec_<execução>_*``
+  de cada motor Redshift e, nos casos da publicação e do leitor, as tabelas ``poc<id>_*`` de um
+  ambiente próprio, com as linhas dele em ``serialize_db_publications``, criada quando falta e
+  apagada só nesse caso. A conexão vem de ``SERIALIZE_DB_REDSHIFT_*`` (as variáveis de
   ``probes/redshift.py``) e o banco do datashare que guarda o esquema de
   ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``: com ela, cada conexão roda ``USE <banco>`` e as tabelas
   são citadas por ``esquema.tabela``, como em ``examples/redshift_copy_unload.py``.
@@ -35,7 +38,9 @@ Variáveis de ambiente lidas:
   sessão define as raízes delas e aponta as variáveis da AWS para o moto, em ``127.0.0.1``.
   ``SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL`` e ``SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST`` provocam
   falhas no substituto.
-- ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas criados.
+- ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas
+  ``serialize_db_poc_<id>_*`` criados; o sandbox dos motores e as tabelas publicadas pelos
+  casos da publicação e do leitor saem mesmo assim.
 - ``SERIALIZE_DB_TEST_REPORT``: caminho de um arquivo JSON onde o relatório da sessão é
   gravado; a pasta é criada, e cada teste reprovado entra com a mensagem do erro.
   O relatório abre com a sessão (``session.``: início, plataforma, Python, versões, marcadores e,
@@ -45,14 +50,16 @@ Variáveis de ambiente lidas:
 - ``SERIALIZE_DB_DUCKDB_EXTENSIONS``: pasta de extensões do DuckDB, a única onde a suíte instala as
   que faltam; sem ela, ``.duckdb/`` na raiz do repositório quando existir (criada por
   ``prepare_offline.sh``), senão o padrão do DuckDB, e nada é instalado. A instalação automática
-  do DuckDB, que no ``LOAD`` baixaria a extensão para ``~/.duckdb`` sem aviso, fica desligada, e o
-  teste cuja extensão falta é pulado.
+  do DuckDB, que no ``LOAD`` baixaria a extensão para ``~/.duckdb`` sem aviso, fica desligada, e a
+  prova de conceito cuja extensão falta é pulada. Nos testes do pacote, a biblioteca carrega a
+  ``delta`` em toda conexão do DuckDB: sem ela, todo teste que abre uma conexão pela biblioteca
+  falha, e sem a ``httpfs`` os testes do secret do S3 são pulados.
 
 As três variáveis de autorização se somam: informadas juntas, ``pytest`` sem ``-m`` roda tudo, e
 ``-m local``, ``-m s3`` e ``-m redshift`` selecionam uma suíte. Com a autorização dada, a raiz S3
 é sondada antes com tempos curtos (cerca de 11 s com um proxy que não responde, antes de o
-delta-rs tentar). As suítes criam ``serialize-db-poc/<id>/`` sob a raiz ou tabelas
-``serialize_db_poc_<id>_*`` no esquema, apagam tudo no fim da sessão e imprimem o relatório com os
+delta-rs tentar). As suítes criam ``serialize-db-poc/<id>/`` sob a raiz e, no esquema, as tabelas
+descritas acima, apagam tudo no fim da sessão e imprimem o relatório com os
 fatos e as medições, com as chaves prefixadas pelo alvo (``local.``, ``s3.``, ``redshift.``) ou
 pela biblioteca (``duckdb.``, ``sqlalchemy.``, ``pyarrow.``). Num bucket versionado, cada objeto
 que a limpeza apaga vira versão não corrente, invisível à listagem e cobrada até uma regra
@@ -313,7 +320,8 @@ USAGE = {
         "SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=banco_do_datashare "
         "SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo "
         "SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest -m redshift",
-        "cria só tabelas serialize_db_poc_<id>_* no esquema e as apaga no fim; com _WORKGROUP a "
+        "cria no esquema as tabelas serialize_db_poc_<id>_*, o sandbox exec_* dos motores e as "
+        "tabelas poc<id>_* da publicação e do leitor, e as apaga no fim; com _WORKGROUP a "
         "credencial é temporária (redshift-serverless:GetWorkgroup e GetCredentials, "
         "examples/redshift_native.py), e _HOST com _USER e _PASSWORD é o par informado na mesma "
         "chamada; _SHARE_DATABASE quando o esquema vem de um datashare (USE); "
