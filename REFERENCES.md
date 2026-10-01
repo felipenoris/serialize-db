@@ -990,6 +990,20 @@ As CPUs e a memória de um processo, consultadas em 2026-09-24:
 - <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-optimize-cpu.html> (cada vCPU é uma
   thread de um núcleo nas instâncias com SMT)
 
+## Windows
+
+A memória e o pico de um processo pela API do sistema, consultadas em 2026-10-01:
+
+- <https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex>
+  (`ullTotalPhys` e `ullAvailPhys`, com a lista de espera contada como disponível)
+- <https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-globalmemorystatusex>
+- <https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters>
+  (`PeakWorkingSetSize`)
+- <https://learn.microsoft.com/en-us/windows/win32/api/psapi/nf-psapi-getprocessmemoryinfo>
+  (`K32GetProcessMemoryInfo` na `kernel32.dll`)
+- <https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocess>
+  (o pseudo-handle `(HANDLE)-1`)
+
 ## Pacotes Python
 
 - <https://github.com/Mause/duckdb_engine>

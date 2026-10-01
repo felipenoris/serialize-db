@@ -13,6 +13,7 @@ sobre o DDL da etapa 1, e o statement com ``bindparam`` num ``sqlalchemy.Connect
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import duckdb
@@ -434,7 +435,7 @@ def test_check_sql_files_reports_stale_files_and_the_final_newline(
     path.write_text(versioned.removesuffix("\n"), encoding="utf-8")
     diff = sql.check_sql_files(STATEMENTS, ClientBase.metadata, directory)
     last_line = versioned.splitlines()[-1]
-    assert diff[0] == f"--- {path}"
+    assert diff[0] == f"--- {os.path.join(directory, 'saldos_por_conta.redshift.sql')}"
     assert diff[-3:] == [
         f"-{last_line}",
         "\\ Sem quebra de linha no fim do arquivo",
@@ -450,7 +451,7 @@ def test_check_sql_files_reports_stale_files_and_the_final_newline(
     stale = ["veiculos_novos.duckdb.sql", "veiculos_novos.redshift.sql"]
     diff = sql.check_sql_files(remaining, ClientBase.metadata, directory)
     assert [line for line in diff if line.startswith("--- ")] == [
-        f"--- {directory}/{name}" for name in stale
+        f"--- {os.path.join(directory, name)}" for name in stale
     ]
     added = [line for line in diff if line.startswith("+") and not line.startswith("+++ ")]
     assert added == []

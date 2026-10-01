@@ -46,6 +46,7 @@ import datetime
 import json
 import logging
 import math
+import sys
 import time
 import uuid
 from collections.abc import Callable, Collection, Mapping
@@ -538,15 +539,26 @@ def _stat_converter(
     return None
 
 
+def _return_stats_path(
+    filename: str,
+) -> str:
+    """O caminho de um arquivo que o ``RETURN_STATS`` do DuckDB devolve, com ``/``."""
+    # No Windows, o DuckDB junta a pasta da partição ao destino do COPY com \.
+    if sys.platform == "win32":
+        return filename.replace("\\", "/")
+    return filename
+
+
 def _relative_file(
     filename: str,
     uri: str,
 ) -> str:
-    """O caminho de um arquivo relativo à pasta da tabela, como o log o guarda."""
+    """O caminho de um arquivo relativo à pasta da tabela, como o log o guarda, com ``/``."""
+    path = _return_stats_path(filename)
     prefix = uri.rstrip("/") + "/"
-    if not filename.startswith(prefix):
+    if not path.startswith(prefix):
         raise RegistrationRefused(f"{filename}: fora da pasta da tabela {uri}")
-    return filename.removeprefix(prefix)
+    return path.removeprefix(prefix)
 
 
 def file_from_return_stats(
@@ -2386,7 +2398,7 @@ def _export_by_rewrite(
         rows = connection.execute(f"COPY ({select}) TO {literal(target)} ({options})").fetchall()
     finally:
         connection.close()
-    return sorted(str(row[0]) for row in rows)
+    return sorted(_return_stats_path(str(row[0])) for row in rows)
 
 
 def export_snapshot(

@@ -6,8 +6,9 @@ Eles conferem o cgroup v2 com a folga que devolve o cache de arquivos e a cota a
 cima, o ``MemAvailable`` menor que a folga, o ancestral mais apertado, o cgroup v1 com a pasta do
 processo e o contêiner que monta o próprio cgroup como raiz, a memória compartilhada que a folga
 não devolve, no v2 e no v1, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do
-Python. O pico de memória residente é lido de um ``/proc/self/status`` fabricado, sem ele, e num
-processo filho que toca 64 MiB.
+Python. No Windows, a memória sem ``/proc`` é a disponível que a API do sistema informa, e a física
+dessa leitura é conferida contra a do WMI. O pico de memória residente é lido de um
+``/proc/self/status`` fabricado, sem ele, e num processo filho que toca 64 MiB.
 """
 
 from __future__ import annotations
@@ -179,6 +180,7 @@ def test_shared_memory_stays_in_the_cgroup_usage(
     assert resources.available_memory() == 4 * GIB - 3 * GIB + GIB - 3 * GIB // 4
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no Windows, a memória é a disponível")
 @pytest.mark.usefixtures("machine")
 def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
     """Sem ``/proc/meminfo`` nem ``/proc/self/cgroup``, como fora do Linux, a memória é a física e
@@ -188,11 +190,32 @@ def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
     assert resources.available_cpus() == 8
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="lê a memória pela API do Windows")
+@pytest.mark.usefixtures("machine")
+def test_without_proc_windows_reads_the_memory_from_the_system() -> None:
+    """No Windows, sem ``/proc/meminfo`` nem ``/proc/self/cgroup``, a memória é a disponível de
+    ``GlobalMemoryStatusEx``, positiva e abaixo da física, e a física é a que o WMI informa em
+    ``Win32_ComputerSystem``."""
+    command = "(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory"
+    completed = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert resources.physical_memory() == int(completed.stdout)
+    available = resources.available_memory()
+    assert available > 0
+    assert available < resources.physical_memory()
+    assert resources.available_cpus() == 8
+
+
 def test_peak_rss_mb_reads_vmhwm_from_the_process_status(
     machine: Path,
 ) -> None:
     """O pico de memória residente é o ``VmHWM`` de ``/proc/self/status``, em KB, convertido em
-    MB; sem o arquivo, fora do Linux, é o ``ru_maxrss`` do processo, positivo."""
+    MB; sem o arquivo, fora do Linux, é o pico que o sistema informa, positivo: o ``ru_maxrss`` do
+    processo nos Unix e o ``PeakWorkingSetSize`` no Windows."""
     fabricate(
         machine,
         {

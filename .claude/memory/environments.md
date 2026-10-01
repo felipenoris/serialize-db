@@ -310,3 +310,19 @@ expired, since only `httpfs` triggers `REFRESH auto`. The user chose the same da
 of 2026-09-26 passed every suite case again (S3 531, the stale-key case among them), loaded the
 source's new month 2026-07-31 (`.claude/memory/source-base.md`), published the whole base by
 channel and read, in the probe, the engine's secret renewed before each expiry. `plan/POC.md`
+
+## The Windows runner (2026-10-01)
+
+- `tests.yml` runs on `ubuntu-latest` and `windows-latest` (Windows-2025Server-10.0.26100-SP0,
+  Python 3.13.15, the workspace at `D:\a\serialize-db\serialize-db`), every step in Git Bash
+  (`defaults.run.shell: bash`). The user ran a client project on Windows, where
+  `import serialize_db` failed on `import resource`; Windows has neither `resource` nor
+  `os.sysconf`, and `resources.py` reads `GlobalMemoryStatusEx` and `K32GetProcessMemoryInfo`
+  through `ctypes` there. The third run passed 354 cases with 75 skipped. `plan/POC.md`
+- What differs on Windows: PyArrow's `LocalFileSystem` lists with `/` (`D:/a/...`), so the local
+  root goes through `as_posix()`; DuckDB's partitioned `COPY ... RETURN_STATS` joins the partition
+  folders with `\` (`duckdb.md`); `Path.from_uri("file:///tmp/x")` raises `URI is not absolute`; a
+  new file's mode reads 0o666; `os.path.join` joins with `\`; and `os.environ` uppercases the
+  name, so the proxy's `username` variable reads the login's `USERNAME`
+  (`plan/OPEN_QUESTIONS.md`). The job log is the only reading: its download URL is refused by
+  this container's proxy (403), and `get_job_logs` with `tail_lines` returns the end of it.

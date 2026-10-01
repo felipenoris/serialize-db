@@ -85,8 +85,8 @@ imprime o comando que a autoriza.
 
 Os testes de `tests/`, sem `tests/proof_of_concept/` nem `tests/test_probes.py` (as funções puras
 dos probes), sobre o DuckDB em memória e arquivos locais, sem AWS. É o que a esteira
-[`tests.yml`](.github/workflows/tests.yml) roda a cada push no `main`, a cada pull request e
-quando disparada à mão:
+[`tests.yml`](.github/workflows/tests.yml) roda no Ubuntu e no Windows a cada push no `main`, a
+cada pull request e quando disparada à mão:
 
 ```
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py

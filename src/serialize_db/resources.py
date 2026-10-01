@@ -4,10 +4,11 @@ O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem d
 de um valor fixo no código: ``environment_limits``, que ``serialize_db.engine.duckdb`` publica, os
 monta para toda conexão do DuckDB do pacote, a do motor e as de ``serialize_db.delta``. No Linux, as
 leituras respeitam o cgroup do processo, v1 e v2, com que um contêiner limita as CPUs e a memória
-abaixo das da máquina, e o menor limite no caminho do cgroup até a raiz é o que vale. Fora do Linux,
-vale a memória física e as CPUs que o Python lê. ``peak_rss_mb`` lê o pico de memória residente do
-próprio processo, a medida que o script de migração, os subcomandos de operação e a publicação
-imprimem por tabela.
+abaixo das da máquina, e o menor limite no caminho do cgroup até a raiz é o que vale. No Windows,
+a memória é a disponível que a API do sistema informa, lida pelo ``ctypes``; nos outros sistemas
+fora do Linux, é a física. Fora do Linux, as CPUs são as que o Python lê. ``peak_rss_mb`` lê o
+pico de memória residente do próprio processo, a medida que o script de migração, os subcomandos
+de operação e a publicação imprimem por tabela.
 
 Exemplo:
 
@@ -20,12 +21,16 @@ Exemplo:
 
 from __future__ import annotations
 
+import ctypes
 import math
 import os
 import re
-import resource
 import sys
 from pathlib import Path
+
+# O módulo resource só existe nos Unix; no Windows, peak_rss_mb lê o pico pela API do sistema.
+if sys.platform != "win32":
+    import resource
 
 __all__ = ["available_cpus", "available_memory", "peak_rss_mb"]
 
@@ -79,12 +84,16 @@ def available_memory() -> int:
 
         available_memory() / 2**30   # 14.7 numa máquina de 16 GiB com pouco em uso
 
-    :return: em bytes, a menor entre a física, a disponível no sistema (``MemAvailable`` de
+    :return: em bytes, a menor entre a física, a disponível no sistema (no Windows,
+        ``ullAvailPhys`` de ``GlobalMemoryStatusEx``, que conta como livre a lista de espera, as
+        páginas em cache que o sistema reaproveita; no Linux, ``MemAvailable`` de
         ``/proc/meminfo``, que conta como livre o cache de arquivos que o kernel devolve) e a
         folga do cgroup (o limite menos o uso, com o cache de arquivos de volta, menos a memória
         compartilhada, ``shmem``, que o kernel conta no cache e não devolve sem swap).
     """
-    readings = [os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")]
+    readings = [physical_memory()]
+    if sys.platform == "win32":
+        readings.append(_windows_memory_status().ullAvailPhys)
     system = _meminfo_available()
     if system is not None:
         readings.append(system)
@@ -92,6 +101,15 @@ def available_memory() -> int:
     if room is not None:
         readings.append(room)
     return min(readings)
+
+
+def physical_memory() -> int:
+    """A memória física da máquina, em bytes: ``ullTotalPhys`` de ``GlobalMemoryStatusEx`` no
+    Windows e ``os.sysconf`` nos outros sistemas; protegida, para o relatório de
+    ``scripts/migrate_parquet_to_delta.py``."""
+    if sys.platform == "win32":
+        return _windows_memory_status().ullTotalPhys
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
 
 
 def environment_limits() -> dict[str, object]:
@@ -123,16 +141,78 @@ def peak_rss_mb() -> float:
 
         peak_rss_mb()   # 297.2 no script de migração, depois das importações
 
-    :return: o pico em MB. No Linux, lido do ``VmHWM`` de ``/proc/self/status``, em KB; fora
-        dele, do ``ru_maxrss`` do processo, em bytes no macOS e em KB nos outros Unix.
+    :return: o pico em MB. No Linux, lido do ``VmHWM`` de ``/proc/self/status``, em KB; no
+        Windows, do pico do conjunto de trabalho (``PeakWorkingSetSize``) de
+        ``K32GetProcessMemoryInfo``, em bytes; nos outros, do ``ru_maxrss`` do processo, em bytes
+        no macOS e em KB nos outros Unix.
     """
     status = _PROC / "self" / "status"
     if status.exists():
         found = re.search(r"^VmHWM:\s+(\d+)", status.read_text(), re.MULTILINE)
         return int(found.group(1)) / 1024
+    if sys.platform == "win32":
+        return _windows_peak_working_set() / 2**20
     maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     unit = 1024 * 1024 if sys.platform == "darwin" else 1024
     return maxrss / unit
+
+
+class _MemoryStatus(ctypes.Structure):
+    """O ``MEMORYSTATUSEX`` que ``GlobalMemoryStatusEx`` preenche no Windows."""
+
+    _fields_ = [
+        ("dwLength", ctypes.c_ulong),
+        ("dwMemoryLoad", ctypes.c_ulong),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+class _ProcessMemoryCounters(ctypes.Structure):
+    """O ``PROCESS_MEMORY_COUNTERS`` que ``K32GetProcessMemoryInfo`` preenche no Windows."""
+
+    _fields_ = [
+        ("cb", ctypes.c_ulong),
+        ("PageFaultCount", ctypes.c_ulong),
+        ("PeakWorkingSetSize", ctypes.c_size_t),
+        ("WorkingSetSize", ctypes.c_size_t),
+        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+        ("PagefileUsage", ctypes.c_size_t),
+        ("PeakPagefileUsage", ctypes.c_size_t),
+    ]
+
+
+def _windows_memory_status() -> _MemoryStatus:
+    """A memória física do Windows, a total e a disponível, de ``GlobalMemoryStatusEx``."""
+    status = _MemoryStatus()
+    status.dwLength = ctypes.sizeof(status)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if not kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return status
+
+
+def _windows_peak_working_set() -> int:
+    """O pico do conjunto de trabalho do processo no Windows, a memória residente dele, em bytes,
+    de ``K32GetProcessMemoryInfo``."""
+    counters = _ProcessMemoryCounters()
+    counters.cb = ctypes.sizeof(counters)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # O GetCurrentProcess devolve o pseudo-handle do processo, um ponteiro, que o tipo de retorno
+    # padrão do ctypes, int de 32 bits, cortaria.
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    process = ctypes.c_void_p(kernel32.GetCurrentProcess())
+    if not kernel32.K32GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return counters.PeakWorkingSetSize
 
 
 def _meminfo_available() -> int | None:
