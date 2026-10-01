@@ -171,9 +171,9 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
   local, `create_text` é `os.open(O_CREAT | O_EXCL)` no modo 0o666 menos a umask, sem execução,
   e `if_match` compara a impressão digital (`sha256` do conteúdo) antes de gravar num arquivo
   temporário `<nome>.<uuid>.tmp`, aberto do mesmo modo e com o modo do arquivo que substitui quando
-  ele existe, e trocar por `os.replace`; a comparação e a troca não são atômicas entre processos, o
-  que basta à pasta local, o ambiente dos testes e do desenvolvimento. O `NamedTemporaryFile` daria
-  0o600 ao arquivo novo e ao substituído.
+  ele existe, e trocar por `os.replace`, cuja falha apaga o temporário; a comparação e a troca não
+  são atômicas entre processos, o que basta à pasta local, o ambiente dos testes e do
+  desenvolvimento. O `NamedTemporaryFile` daria 0o600 ao arquivo novo e ao substituído.
   No S3, `put_object` do `boto3` com `IfNoneMatch="*"` (`create_text`) ou `IfMatch=<etag>`, atômico no servidor, e
   o 412 da condição e o 409 de outra operação no objeto durante a gravação
   (`ConditionalRequestConflict`) viram `ConflictError` (decisão do usuário de 2026-09-30): no
@@ -412,9 +412,12 @@ mostraram" e "O que a implementação da etapa 3 mostrou".
 
 ## Decisões pendentes
 
-Nenhuma. A renovação do secret do DuckDB, decidida pelo usuário em 2026-09-25, está na descrição
-de `duckdb_setup`, e o 409 do S3 como `ConflictError`, decidido pelo usuário em 2026-09-30, na
-de `create_text` e `write_text`.
+A coluna fora do contrato no registro espera o usuário: `_check_footer_schema` a aceita, e desde
+2026-09-28 o `COPY` do Redshift lista toda coluna do rodapé e a recusaria na staging
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), achados da revisão de 2026-10-01). A renovação do
+secret do DuckDB, decidida pelo usuário em 2026-09-25, está na descrição de `duckdb_setup`, e o
+409 do S3 como `ConflictError`, decidido pelo usuário em 2026-09-30, na de `create_text` e
+`write_text`.
 
 As seis decisões da etapa tomadas pelo usuário em 2026-09-22 estão escritas na seção que
 descreve cada uma: o comentário da tabela em `description`, com `reconcile` sincronizando a

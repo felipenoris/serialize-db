@@ -402,6 +402,19 @@ def test_local_files_get_the_mode_of_a_new_file(
     assert kept == 0o640
 
 
+@pytest.mark.local
+def test_local_replace_that_fails_leaves_no_temporary_file(
+    local_location: LocalLocation,
+) -> None:
+    """Na pasta local, ``write_text`` sobre um caminho ocupado por uma pasta falha no
+    ``os.replace`` e não deixa o arquivo temporário ao lado: a pasta fica como estava."""
+    storage = Storage.for_uri(local_location.child(f"storage/{uuid.uuid4().hex[:8]}"))
+    os.makedirs(f"{storage.path}/prd/controle.json")
+    with pytest.raises(OSError):
+        storage.write_text("prd/controle.json", "{}")
+    assert storage.list_files("prd") == []
+
+
 def test_list_copy_delete(
     storage: Storage,
 ) -> None:

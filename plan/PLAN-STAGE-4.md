@@ -437,8 +437,10 @@ implementação mostrou está em [`POC.md`](POC.md), seção
 
 ## Decisões pendentes
 
-Nenhuma. A decisão do usuário de 2026-09-24 que tirou o `rewrite` de `export_partition`, com a flag
-`export_mode`, está escrita na seção que a descreve. As decisões que o usuário tomou em 2026-09-23
+O `ingest(materialize=True)` diante de uma coluna do Delta fora do modelo, e o piso do
+`memory_limit` de `environment_limits`, esperam o usuário ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
+achados da revisão de 2026-10-01). A decisão do usuário de 2026-09-24 que tirou o `rewrite` de
+`export_partition`, com a flag `export_mode`, está escrita na seção que a descreve. As decisões que o usuário tomou em 2026-09-23
 sobre as propostas da revisão estão escritas nas seções que as descrevem: o estilo `qmark` no
 caminho do statement Core; o escopo das chaves da auditoria pela coluna de `partition_source` e pelo
 `skip_when` contra o `max_key` da versão fixada; a interface do motor, com `query(statement_or_sql,

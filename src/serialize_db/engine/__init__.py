@@ -155,8 +155,9 @@ class Appender(Protocol):
             appender.write(batch)
 
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
-        :raises ContractError: ``data`` de outro tipo; ou um lote que o ``cast`` recusa, ou com
-            colunas diferentes das do primeiro lote, e então o appender não insere nada.
+        :raises ContractError: ``data`` de outro tipo, recusado nessa chamada só; ou um lote que o
+            ``cast`` recusa, ou com colunas diferentes das do primeiro lote, e então o appender
+            não insere nada.
         """
 
     def close(self) -> None:

@@ -276,7 +276,9 @@ sobre o script (7), todos com o marcador `local`.
 
 ## Decisões pendentes
 
-Nenhuma. As decisões do usuário de 2026-09-24 sobre a carga estão escritas nas seções acima: a
+A partição pedida que a origem não tem, que `serialize-db load --partitions` deixa passar com a
+saída 0, espera o usuário ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), achados da revisão de
+2026-10-01). As decisões do usuário de 2026-09-24 sobre a carga estão escritas nas seções acima: a
 ordem pela `sort_key` e o registro do arquivo do `COPY`, com o `rewrite` fora das etapas 4 e 7,
 junto com a flag `export_mode` de `Execution`, de `serialize-db run` e de `SERIALIZE_DB_EXPORT_MODE`
 (o `publish_partition` fica para a troca da [etapa 5](PLAN-STAGE-5.md) na partição com `Double`

@@ -238,7 +238,10 @@ O módulo `serialize_db.execution` (`Database`, `Execution`), `AuditFailed` em
 
 ## Decisões pendentes
 
-Nenhuma. As decisões que o usuário tomou em 2026-09-23 estão escritas nas seções que as descrevem:
+O `run.audit` com `partitions` numa tabela sem partição, que audita a tabela inteira enquanto
+`ingest`, `publish_delta` e a linha de comando recusam, espera o usuário
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), achados da revisão de 2026-10-01). As decisões que o
+usuário tomou em 2026-09-23 estão escritas nas seções que as descrevem:
 `--metadata modulo:atributo` no `serialize-db run`, como em `schema` e `sql`; `next_ids` só na
 chave sequencial, a chave primária inteira de uma coluna, porque numa chave composta o cliente
 decide os ids; e a regra da partição, `[0-9A-Za-z][0-9A-Za-z_.-]*`, no valor da partição e no

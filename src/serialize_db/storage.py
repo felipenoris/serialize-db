@@ -629,8 +629,8 @@ class Storage:
         No S3, ``put_object``, com ``IfMatch=<etag>`` quando a condição vem, atômico no servidor.
         Na pasta local, a comparação da impressão digital seguida de ``os.replace`` de um arquivo
         temporário, que não é atômica entre processos e basta à pasta local, o ambiente dos testes
-        e do desenvolvimento; o arquivo substituído mantém o modo, e o novo nasce como em
-        ``create_text``.
+        e do desenvolvimento; o arquivo substituído mantém o modo, o novo nasce como em
+        ``create_text``, e a troca que falha não deixa o temporário na pasta.
 
         Exemplo:
 
@@ -688,9 +688,14 @@ class Storage:
         # arquivo novo e recebe o modo do arquivo que substitui, quando ele existe.
         temporary = full.with_name(f"{full.name}.{uuid.uuid4().hex}.tmp")
         _write_new_file(temporary, content)
-        if full.exists():
-            os.chmod(temporary, stat.S_IMODE(full.stat().st_mode))
-        os.replace(temporary, full)
+        # A troca que falha não deixa o temporário na pasta, onde list_files o listaria.
+        try:
+            if full.exists():
+                os.chmod(temporary, stat.S_IMODE(full.stat().st_mode))
+            os.replace(temporary, full)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
         return _fingerprint(content)
 
     def _bucket_and_key(

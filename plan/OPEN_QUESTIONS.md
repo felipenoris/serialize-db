@@ -199,10 +199,62 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
   próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
   com uma execução por ambiente de cada vez.
 
+## Achados da revisão das alterações de 2026-09-28 a 2026-10-01
+
+A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões e os planos, rodou as
+suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; cada item abaixo espera
+o usuário.
+
+- **A partição pedida que a origem não tem.** `serialize-db load --partitions 9999-12-31` numa
+  tabela cuja origem não tem a partição grava nada, imprime `0 partição(ões) conferida(s),
+  contagens e somas iguais` e sai com 0: `_wanted_values` de `serialize_db.load` descarta o valor
+  pedido que `discover_partitions` não acha, e `load_report` devolve `matches=True` sem partição. A
+  decisão de 2026-10-01 e a [etapa 7](PLAN-STAGE-7.md) não cobrem o caso. Opções: o relatório
+  lista a partição pedida ausente dos dois lados como diferença (`origem ausente, Delta ausente`),
+  e o subcomando e o script saem com 1; ou `initial_load` a recusa com `ContractError`.
+- **A coluna fora do contrato no registro e a lista de colunas do `COPY`.** `_check_footer_schema`
+  de `serialize_db.delta` aceita um arquivo com uma coluna fora do contrato, porque os leitores a
+  ignoram, e recusa a coluna de partição dentro dele, porque o `COPY` do Redshift, que lista as
+  colunas do rodapé, a mandaria à staging; desde 2026-09-28 o `COPY` lista toda coluna do rodapé,
+  e um arquivo registrado com coluna a mais faz o `COPY` da publicação e do `ingest` do motor
+  Redshift nomear uma coluna que a staging não tem. Nenhum escritor do pacote grava coluna a mais;
+  o caso chega por `register_files` com um arquivo do cliente. Opções: recusar no registro, como a
+  coluna de partição, ou documentar a recusa no `COPY`.
+- **`ingest(materialize=True)` e a coluna do Delta que o modelo não tem.** Desde 2026-09-28 a
+  materialização roda a DDL do modelo e `INSERT ... BY NAME` do `delta_scan`, e o `BY NAME` exige
+  cada coluna da origem na tabela: uma versão do Delta com coluna fora do modelo, o caso de um
+  modelo atrasado, é recusada com `duckdb.BinderException` e a transação desfeita; antes, o
+  `CREATE TABLE AS SELECT *` a trazia. A docstring não nomeia o caso. Opções: documentar a recusa,
+  ou projetar só as colunas do modelo no `SELECT`.
+- **`run.audit` com `partitions` numa tabela sem partição.** `Execution.audit` aceita a lista e
+  audita a tabela inteira (`_scope` de `serialize_db.audit` devolve verdadeiro), e guarda a
+  aprovação sob a chave `(tabela, partições)`, que `publish_delta` nunca pede; `ingest`,
+  `publish_delta` e `serialize-db audit` recusam a lista com `ContractError`. Opções: recusar como
+  os outros, ou documentar que ignora.
+- **O piso de `memory_limit`.** `environment_limits` de `serialize_db.resources` dá ao DuckDB a
+  metade da folga do cgroup sem piso: uma folga abaixo de 2 MiB dá `0MiB`, que o DuckDB recusa na
+  abertura com `OutOfMemoryException`, e o uso acima do limite, que o kernel permite pelo cache a
+  recuperar, dá um valor negativo, que o DuckDB aceita como ilimitado. Opções: um piso em MiB, ou
+  `SandboxError` com a folga lida.
+- **`SUITE.md`, seção "Sondas da operação".** A seção exporta `SERIALIZE_DB_TEST_S3_ROOT` com a
+  raiz do laboratório, a da seção "Probes e Testes - Lab" (`AWS_REGION=us-west-2`), ao lado de
+  `SOURCE_PATH`, `AWS_DEFAULT_REGION=sa-east-1` e das variáveis do Redshift da BN; as outras seções
+  da BN usam a raiz da BN, e `probe_unload_parallel.py` faz o `UNLOAD` do Redshift para essa raiz.
+
+Notas anteriores à janela, sem decisão pedida: `publish_delta(tabela, partitions=[])` reconcilia
+sem exportar e `audit(tabela, [])` aprova sem auditar; `run.snapshot` chamado duas vezes grava só o
+último nome; o `ingest` do motor Redshift carrega duas vezes uma partição repetida em `partitions`,
+e o do DuckDB não; a coluna de partição `Text` dá `TypeError` em `Execution`, que `check_models`
+acusa antes; `max_workers=0` sobe o `ValueError` do `ThreadPoolExecutor`; `transaction()` do motor
+Redshift não é reentrante, e a composição de `append` com um `BEGIN` do cliente em `session()` não
+está escrita; `Storage.for_uri("file:relativo")` vira uma pasta literal, e `relative` compara
+texto, o que recusaria um destino com `\` no Windows, não lido lá.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
 escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
-outras etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista
-acima.
+etapas [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md), [6](PLAN-STAGE-6.md) e [7](PLAN-STAGE-7.md)
+esperam as decisões dos achados da revisão de 2026-10-01, a seção acima; as demais etapas não têm
+decisão pendente, e os demais itens que esperam o usuário estão na lista do início.
