@@ -1526,10 +1526,11 @@ the user chose "Formatar tudo" (03:28 UTC), in a PR after #114: `ruff format .` 
 files (6,396 lines added, 2,603 removed), and three literals the reindentation pushed past 100
 characters were split into implicit concatenations, in `tests/test_resources.py` (two) and
 `tests/proof_of_concept/test_sqlalchemy.py` (one), the only edits by hand. The "Before a commit"
-rule of `CLAUDE.md` gained `uvx ruff check` and `uvx ruff format --check` clean, the consequence of
-that choice. Asked on a second card about the `dev` group, the workflow and `README.md`, the user
-chose "Grupo dev e esteira" (03:36 UTC), superseding the refusal of 2026-09-21: `ruff==0.16.9`
-enters the `dev` group, `tests.yml` runs `uv run ruff check` and `uv run ruff format --check`
-after `uv sync` and before the tests, and `README.md` gets the two commands after PR #115, which
-revises it, merges (`plan/OPEN_QUESTIONS.md`).
-`pyproject.toml`, `plan/CURRENT_STATE.md`, `plan/OPEN_QUESTIONS.md`
+rule of `CLAUDE.md` gained `uv run ruff check` and `uv run ruff format --check` clean, the
+consequence of that choice. Asked on a second card about the `dev` group, the workflow and
+`README.md`, the user chose "Grupo dev e esteira" (03:36 UTC), superseding the refusal of
+2026-09-21: `ruff==0.16.9` enters the `dev` group, `tests.yml` runs `uv run ruff check` and
+`uv run ruff format --check` after `uv sync` and before the tests, and `README.md` got the two
+commands in its "Testes do pacote" section once PR #115, which revised it, merged (03:51 UTC);
+the item left `plan/OPEN_QUESTIONS.md` with them.
+`pyproject.toml`, `plan/CURRENT_STATE.md`, `plan/OPEN_QUESTIONS.md`, `README.md`

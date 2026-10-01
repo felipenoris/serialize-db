@@ -2,9 +2,10 @@
 # sem tests/test_probes.py, sobre o DuckDB em memória e arquivos locais, sem S3 nem Redshift. As
 # provas de conceito, os exemplos e os probes ficam fora. Antes dos testes, o pacote é instalado sem
 # o grupo dev e cada módulo dele é importado, porque um projeto cliente recebe só as dependências de
-# execução. As extensões delta e httpfs do DuckDB, que os testes da migração leem pelo delta_scan e
-# os do secret do S3 carregam, são instaladas em .duckdb/ na raiz do repositório, a pasta que os
-# testes procuram. Com o grupo dev instalado, o Ruff confere o código (ruff check) e a formatação
+# execução. As extensões delta e httpfs do DuckDB, a delta que a biblioteca carrega em toda conexão
+# e a httpfs que os testes do secret do S3 carregam, são instaladas em .duckdb/ na raiz do
+# repositório, a pasta que os testes procuram.
+# Com o grupo dev instalado, o Ruff confere o código (ruff check) e a formatação
 # (ruff format --check) antes dos testes. Os passos rodam no bash nos dois sistemas; no Windows, o
 # Git Bash do runner.
 name: Testes do pacote
