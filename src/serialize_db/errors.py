@@ -99,7 +99,8 @@ class RegistrationRefused(Exception):
 
     A mensagem nomeia a conferência e, nas de cada arquivo, o arquivo; os arquivos ficam órfãos na
     pasta da tabela até um ``vacuum(full=True)``. ``deep_copy`` também a levanta, no destino que
-    registra um arquivo fora da versão copiada e na contagem da cópia diferente da soma das ações.
+    registra um arquivo fora da versão copiada, no destino cujo esquema difere do da versão sem
+    partição copiada que o trocasse, e na contagem da cópia diferente da soma das ações.
 
     Exemplo:
 
