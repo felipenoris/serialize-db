@@ -5,10 +5,11 @@ Os testes gravam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``) as pa
 Eles conferem o cgroup v2 com a folga que devolve o cache de arquivos e a cota arredondada para
 cima, o ``MemAvailable`` menor que a folga, o ancestral mais apertado, o cgroup v1 com a pasta do
 processo e o contêiner que monta o próprio cgroup como raiz, a memória compartilhada que a folga
-não devolve, no v2 e no v1, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do
-Python. No Windows, a memória sem ``/proc`` é a disponível que a API do sistema informa, e a física
-dessa leitura é conferida contra a do WMI. O pico de memória residente é lido de um
-``/proc/self/status`` fabricado, sem ele, e num processo filho que toca 64 MiB.
+não devolve, no v2 e no v1, a memória abaixo de 2 MiB ou negativa que ``environment_limits``
+recusa, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do Python. No Windows,
+a memória sem ``/proc`` é a disponível que a API do sistema informa, e a física dessa leitura é
+conferida contra a do WMI. O pico de memória residente é lido de um ``/proc/self/status``
+fabricado, sem ele, e num processo filho que toca 64 MiB.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import pytest
 
 from conftest import LocalLocation
 from serialize_db import resources
+from serialize_db.errors import SandboxError
 
 pytestmark = pytest.mark.local
 
@@ -178,6 +180,32 @@ def test_shared_memory_stays_in_the_cgroup_usage(
     # O limite de 4 GiB menos o uso de 3 GiB, com o cache de 1 GiB de volta menos os 0,75 GiB de
     # memória compartilhada contados nele.
     assert resources.available_memory() == 4 * GIB - 3 * GIB + GIB - 3 * GIB // 4
+
+
+def test_environment_limits_refuses_the_memory_under_two_mib(
+    machine: Path,
+) -> None:
+    """A memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa, é recusada com
+    ``SandboxError`` nomeando a leitura, porque o DuckDB não abre com ``0MiB`` e lê um valor
+    negativo como o padrão dele; 2 MiB dão o ``1MiB`` mínimo."""
+    fabricate(machine, {"proc/meminfo": meminfo(2 * 2**20)})
+    assert resources.environment_limits()["memory_limit"] == "1MiB"
+    fabricate(machine, {"proc/meminfo": meminfo(3 * 2**20 // 2)})
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        resources.environment_limits()
+    # O uso do cgroup lido acima do limite dele dá a folga negativa.
+    fabricate(
+        machine,
+        {
+            "proc/meminfo": meminfo(4 * GIB),
+            "proc/self/cgroup": "0::/\n",
+            "cgroup/memory.max": f"{8 * GIB}\n",
+            "cgroup/memory.current": f"{8 * GIB + 100 * 2**20}\n",
+            "cgroup/memory.stat": "file 0\nshmem 0\n",
+        },
+    )
+    with pytest.raises(SandboxError, match=r"-100\.0 MiB"):
+        resources.environment_limits()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="no Windows, a memória é a disponível")

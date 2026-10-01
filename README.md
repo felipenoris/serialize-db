@@ -298,7 +298,9 @@ PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata
 ```
 
 `--partitions AAAA-MM-DD` carrega e confere só as partições listadas e deixa de fora as tabelas sem
-partição, e `--tables` só as tabelas listadas, as sem partição antes das particionadas. A segunda
+partição; uma partição que a origem não tem, em qualquer tabela da carga, é recusada antes de
+qualquer gravação, com a saída 1. `--tables` carrega só as tabelas listadas, as sem partição antes
+das particionadas. A segunda
 execução não grava nada: a carga recomeça das partições fora do log. A auditoria de chaves
 estrangeiras vem depois da carga, por `serialize-db audit --foreign-keys`.
 

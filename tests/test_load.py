@@ -693,6 +693,38 @@ def test_load_report_confers_only_the_requested_partitions(
     assert rates.matches
 
 
+def test_requested_partition_absent_from_the_source_is_refused(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+) -> None:
+    """``initial_load`` e ``load_report`` recusam com ``ContractError`` um valor de ``partitions``
+    que a origem não tem, antes de criar a tabela, e ``check_requested_partitions`` o recusa sem
+    abrir um motor; a tabela sem partição fica de fora com qualquer pedido, sem recusa."""
+    origin = origin_of(base)
+    operations = TABLES["cad_operacoes"]
+    requested = ["2026-02-28", "9999-12-31"]
+    refusal = re.escape("cad_operacoes: partição(ões) pedida(s) que a origem não tem: 9999-12-31")
+    with pytest.raises(ContractError, match=refusal):
+        load.initial_load(db, operations, origin, partitions=requested, config=config)
+    assert not delta.table_exists(db.uri(operations), db.storage)
+    with pytest.raises(ContractError, match=refusal):
+        load.load_report(db, operations, origin, partitions=requested, config=config)
+    with pytest.raises(ContractError, match=refusal):
+        load.check_requested_partitions(origin, operations, requested)
+
+    # Sem partitions, ou com as que a origem tem, nada é recusado.
+    load.check_requested_partitions(origin, operations, None)
+    load.check_requested_partitions(origin, operations, ["2026-02-28"])
+
+    # A tabela sem partição fica de fora com qualquer pedido, como antes.
+    rates = TABLES["cad_aliquotas"]
+    load.check_requested_partitions(origin, rates, requested)
+    assert load.initial_load(db, rates, origin, partitions=requested, config=config) == []
+    rates_report = load.load_report(db, rates, origin, partitions=requested, config=config)
+    assert rates_report.partitions == ()
+
+
 def test_load_report_reads_only_what_the_load_reads(
     folder: Path,
     config: DuckDBConfig,
@@ -922,6 +954,41 @@ def test_cli_load_loads_the_base_and_reports(
     printed_errors += capsys.readouterr().err
     assert "serialize-db load: conflito: outro registro de cad_contas" in printed_errors
     assert "Traceback" not in printed_errors
+
+
+def test_cli_load_refuses_a_requested_partition_absent_from_the_source(
+    base: source.SourceBase,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """``serialize-db load --partitions`` com uma partição que a origem não tem sai com 1, com a
+    mensagem e sem traceback, antes de gravar qualquer partição: a outra partição pedida, que a
+    origem tem, fica fora do Delta em toda tabela."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+    root = folder / "delta"
+    arguments = [
+        "load",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        origin_of(base),
+        "--root",
+        str(root),
+        "--environment",
+        "prd",
+        "--partitions",
+        "2026-02-28",
+        "9999-12-31",
+    ]
+    assert cli.main(arguments) == 1
+    captured = capsys.readouterr()
+    refusal = r"serialize-db load: \w+: partição\(ões\) pedida\(s\) que a origem não tem: "
+    assert re.search(refusal + "9999-12-31", captured.err)
+    assert "Traceback" not in captured.err
+    assert "gravada(s)" not in captured.out
+    assert list(root.glob("**/_delta_log")) == []
 
 
 def test_cli_load_names_the_unpartitioned_table(

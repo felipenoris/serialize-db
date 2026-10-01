@@ -185,6 +185,38 @@ def test_main_confers_only_the_requested_partitions(
     assert conferred == ["2026-02-28"]
 
 
+def test_main_refuses_a_requested_partition_absent_from_the_source(
+    base: source.SourceBase,
+    folder: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Com uma partição de ``--partitions`` que a origem não tem, o script sai com 1, com a
+    mensagem e sem traceback, antes de gravar qualquer partição ou imprimir uma tabela."""
+    root = folder / "delta"
+    arguments = [
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        str(base.root),
+        "--root",
+        str(root),
+        "--tables",
+        "cad_contratos",
+        "--partitions",
+        "2026-02-28",
+        "9999-12-31",
+    ]
+    assert migrate.main(arguments) == 1
+    captured = capsys.readouterr()
+    refusal = (
+        "ContractError: cad_contratos: partição(ões) pedida(s) que a origem não tem: 9999-12-31"
+    )
+    assert refusal in captured.err
+    assert "Traceback" not in captured.err
+    assert "cad_contratos:" not in captured.out
+    assert list(root.glob("**/_delta_log")) == []
+
+
 def test_report_keeps_the_progress_of_an_interrupted_load(
     base: source.SourceBase,
     folder: Path,

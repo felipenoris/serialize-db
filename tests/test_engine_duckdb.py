@@ -349,6 +349,22 @@ def test_engine_config_and_single_session(
         assert limits == {"m": expected, "t": 1}
     assert not (setup.folder / "outro" / "exec-2026-09-06.duckdb").exists()
 
+    # Com 1,5 MiB disponíveis, a abertura sem memory_limit é recusada nomeando a leitura, sem
+    # deixar banco nem transbordo; o memory_limit informado abre sem ler a memória.
+    (machine / "proc" / "meminfo").write_text("MemAvailable:   1536 kB\n")
+    starved_config = DuckDBConfig(temp_directory=str(setup.folder / "outro"))
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        DuckDBEngine(starved_config, "exec-2026-09-07", setup.storage)
+    assert not (setup.folder / "outro" / "exec-2026-09-07.duckdb").exists()
+    assert not (setup.folder / "outro" / "exec-2026-09-07_transbordo").exists()
+    informed_config = DuckDBConfig(
+        memory_limit="768MiB", temp_directory=str(setup.folder / "outro")
+    )
+    informed = DuckDBEngine(informed_config, "exec-2026-09-07", setup.storage)
+    limits = informed.query(limits_query).to_pylist()[0]
+    informed.cleanup()
+    assert limits == {"m": "768.0 MiB", "t": 1}
+
     # O cleanup apaga o banco e o transbordo e fecha a sessão.
     engine.cleanup()
     engine.cleanup()  # a segunda chamada não faz nada
@@ -687,6 +703,39 @@ def test_materialized_ingest_applies_the_contract(
     assert not engine.name_in_use("cad_malformada")
     engine.ingest(other, uri, version, partitions=[], materialize=True)
     assert count_of(engine, "cad_malformada") == 0
+
+
+def test_materialized_ingest_refuses_a_delta_column_outside_the_model(
+    setup: Setup,
+) -> None:
+    """Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado, faz o ``INSERT ...
+    BY NAME`` da materialização falhar com ``BinderException``, a transação é desfeita e o nome
+    fica livre; a view a traz."""
+    # A tabela publicada por um modelo com a coluna a mais, lida pelo modelo sem ela.
+    wider = ENTRIES.to_metadata(sa.MetaData())
+    wider.append_column(sa.Column("extra", sa.Double))
+    uri = setup.uri(ENTRIES)
+    delta.create_table(uri, wider, setup.storage)
+    data = entry_rows(MONTHS[0], 1, 5).append_column("extra", pa.array([1.5] * 5))
+    version = delta.publish_partition(
+        uri, wider, MONTHS[0], schema.cast(data, wider), METADATA, setup.storage
+    )
+    engine = setup.engine
+    with pytest.raises(duckdb.BinderException, match="extra"):
+        engine.ingest(ENTRIES, uri, version, materialize=True)
+    assert not engine.name_in_use(ENTRIES.name)
+    engine.ingest(ENTRIES, uri, version)
+    names = (
+        engine.query(
+            "SELECT column_name FROM information_schema.columns "
+            f"WHERE table_name = '{ENTRIES.name}' ORDER BY ordinal_position"
+        )
+        .column("column_name")
+        .to_pylist()
+    )
+    assert "extra" in names
+    assert set(names) == {column.name for column in ENTRIES.columns} | {"extra"}
+    assert count_of(engine, ENTRIES.name) == 5
 
 
 def test_client_transaction_with_materialized_ingest_and_create_table(

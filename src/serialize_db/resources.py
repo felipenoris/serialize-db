@@ -2,13 +2,15 @@
 
 O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem destas leituras, não
 de um valor fixo no código: ``environment_limits``, que ``serialize_db.engine.duckdb`` publica, os
-monta para toda conexão do DuckDB do pacote, a do motor e as de ``serialize_db.delta``. No Linux, as
-leituras respeitam o cgroup do processo, v1 e v2, com que um contêiner limita as CPUs e a memória
-abaixo das da máquina, e o menor limite no caminho do cgroup até a raiz é o que vale. No Windows,
-a memória é a disponível que a API do sistema informa, lida pelo ``ctypes``; nos outros sistemas
-fora do Linux, é a física. Fora do Linux, as CPUs são as que o Python lê. ``peak_rss_mb`` lê o
-pico de memória residente do próprio processo, a medida que o script de migração, os subcomandos
-de operação e a publicação imprimem por tabela.
+monta para toda conexão do DuckDB do pacote, a do motor e as de ``serialize_db.delta``; a memória
+que o processo ainda pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de ``memory_limit``
+ao DuckDB, é recusada com ``SandboxError``. No Linux, as leituras respeitam o cgroup do processo,
+v1 e v2, com que um contêiner limita as CPUs e a memória abaixo das da máquina, e o menor limite
+no caminho do cgroup até a raiz é o que vale. No Windows, a memória é a disponível que a API do
+sistema informa, lida pelo ``ctypes``; nos outros sistemas fora do Linux, é a física. Fora do
+Linux, as CPUs são as que o Python lê. ``peak_rss_mb`` lê o pico de memória residente do próprio
+processo, a medida que o script de migração, os subcomandos de operação e a publicação imprimem
+por tabela.
 
 Exemplo:
 
@@ -27,6 +29,8 @@ import os
 import re
 import sys
 from pathlib import Path
+
+from serialize_db.errors import SandboxError
 
 # O módulo resource só existe nos Unix; no Windows, peak_rss_mb lê o pico pela API do sistema.
 if sys.platform != "win32":
@@ -126,9 +130,31 @@ def environment_limits() -> dict[str, object]:
 
     :return: as opções da conexão do DuckDB: em ``threads``, as CPUs que o processo pode usar;
         em ``memory_limit``, metade da memória que ele ainda pode usar, em MiB.
+    :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa,
+        que não dá 1 MiB de ``memory_limit`` ao DuckDB (``memory_limit_setting``).
     """
-    memory_limit = int(available_memory() * _MEMORY_FRACTION)
-    return {"threads": available_cpus(), "memory_limit": f"{memory_limit // 2**20}MiB"}
+    return {"threads": available_cpus(), "memory_limit": memory_limit_setting()}
+
+
+def memory_limit_setting() -> str:
+    """O ``memory_limit`` do DuckDB lido do ambiente, metade da memória que o processo ainda pode
+    usar, em MiB; protegida, para o motor DuckDB, que a lê só quando a configuração omite o
+    ``memory_limit``.
+
+    :return: o valor com unidade, ``"6761MiB"`` num contêiner com 13,2 GiB disponíveis.
+    :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, com a máquina
+        ou o contêiner no limite de memória, ou negativa, com o uso do cgroup lido acima do limite
+        dele, porque o DuckDB não abre com ``0MiB`` e lê um valor negativo como o padrão dele, 80%
+        da memória da máquina; a mensagem traz a memória lida.
+    """
+    available = available_memory()
+    memory_limit = int(available * _MEMORY_FRACTION) // 2**20
+    if memory_limit < 1:
+        raise SandboxError(
+            f"memória disponível de {available / 2**20:.1f} MiB: o DuckDB não abre com "
+            "memory_limit abaixo de 1 MiB"
+        )
+    return f"{memory_limit}MiB"
 
 
 def peak_rss_mb() -> float:

@@ -467,7 +467,8 @@ numa pasta nova de `tempfile.gettempdir()`, com uma sessão que várias threads 
 O fim da execução fecha a conexão, que só então devolve a memória, e apaga a pasta com o banco. Os
 limites do DuckDB saem da máquina na abertura: `threads` são as CPUs que o processo pode usar e
 `memory_limit` é metade da memória que ele ainda pode usar, lidas por `serialize_db.resources` com
-o limite do cgroup de um contêiner. A tabela Delta entra presa à versão fixada, e os dados saem e
+o limite do cgroup de um contêiner; a memória abaixo de 2 MiB, ou negativa, é recusada com
+`SandboxError` antes da abertura. A tabela Delta entra presa à versão fixada, e os dados saem e
 voltam em lotes Arrow:
 
 ```python

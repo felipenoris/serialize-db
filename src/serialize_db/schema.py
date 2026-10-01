@@ -1123,10 +1123,10 @@ def check_models(
     subclasses dela fora ``Text``, como ``Unicode``, ``VARCHAR`` e ``CHAR``; chave
     estrangeira ``DEFERRABLE``, ou cujas colunas apontadas não são a chave primária nem uma
     ``UniqueConstraint`` da tabela apontada, na mesma ordem (um índice único não serve no DuckDB
-    nem no Redshift); ``partition_by`` sem a coluna ou com a coluna fora de ``String(n)``, como
-    ``Text``, ``partition_source`` que a tabela não tem ou sem ``partition_by``; tabela sem chave
-    primária e sem ``keys``. O comentário de tabela e de coluna é opcional; o da coluna, quando
-    existe, vai para o esquema Arrow e para o Delta.
+    nem no Redshift); ``partition_by`` com mais de uma coluna, sem a coluna ou com a coluna fora
+    de ``String(n)``, como ``Text``, ``partition_source`` que a tabela não tem ou sem
+    ``partition_by``; tabela sem chave primária e sem ``keys``. O comentário de tabela e de coluna
+    é opcional; o da coluna, quando existe, vai para o esquema Arrow e para o Delta.
 
     Exemplo:
 

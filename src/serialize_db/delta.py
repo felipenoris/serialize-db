@@ -807,10 +807,10 @@ def _check_footer_schema(
 
     Nenhuma coluna do contrato ausente, porque o leitor a leria nula sem erro; o tipo físico entre
     os que os leitores leem como o lógico; a coluna de partição fora do arquivo, porque ela vive na
-    ação, e o ``COPY`` do Redshift, que lista as colunas do rodapé, a mandaria para a staging, que
-    não a tem; e as colunas do contrato na ordem dele, que nenhum leitor do pacote exige: os dois
-    leitores e o ``COPY`` ligam cada coluna do arquivo à de mesmo nome. Uma coluna fora do
-    contrato passa, porque os leitores a ignoram.
+    ação, e nenhuma coluna fora do contrato, porque o ``COPY`` do Redshift, que lista as colunas do
+    rodapé, mandaria uma e outra para a staging, que não as tem; e as colunas do contrato na ordem
+    dele, que nenhum leitor do pacote exige: os dois leitores e o ``COPY`` ligam cada coluna do
+    arquivo à de mesmo nome.
     """
     physical = {}
     order = []
@@ -823,6 +823,9 @@ def _check_footer_schema(
         raise RegistrationRefused(
             f"{file.path}: a coluna de partição {partition_by} está dentro do arquivo"
         )
+    for name in physical:
+        if name not in contract.names:
+            raise RegistrationRefused(f"{file.path}: coluna {name} fora do contrato")
     expected = []
     for field in contract:
         if field.name == partition_by:
@@ -971,9 +974,9 @@ def register_files(
     ``create_write_transaction`` grava a ação como a recebe, e os leitores obedecem à ação, não ao
     arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo: o
     arquivo existe com o tamanho declarado; o esquema do rodapé tem cada coluna do contrato, na
-    ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição;
-    as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está na pasta da
-    partição; as linhas do rodapé são as declaradas.
+    ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição
+    nem coluna fora do contrato; as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o
+    caminho está na pasta da partição; as linhas do rodapé são as declaradas.
 
     A ação leva ``numRecords``, o ``nullCount`` e o mínimo e o máximo das colunas inteiras, de data,
     ``Double`` e texto. Depois do commit, ``read_back`` relê a versão pelos dois leitores e a
@@ -1209,6 +1212,8 @@ def read_back(
     :param storage: o armazenamento da raiz do banco.
     :raises RegistrationRefused: uma diferença entre os leitores, o log e ``expected_rows``,
         depois de ``restore(version - 1)``; a mensagem traz as leituras.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
     """
     dt = open_table(uri, storage)
     version = dt.version()
@@ -1545,6 +1550,8 @@ def rewrite(
     :raises RegistrationRefused: uma conferência de ``register_files`` reprovou um arquivo novo,
         sem commit; ou a releitura reprovou e desfez o commit.
     :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
     """
     expressions = dict(expressions or {})
     _check_expressions(table, expressions)
@@ -2293,6 +2300,8 @@ def deep_copy(
         escrita.
     :raises ExecutionConflict: o commit de uma partição falhou no delta-rs com
         ``CommitFailedError``.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
     """
     # Os dois caminhos conferidos antes de gravar: a criação do destino e as cópias gravam onde
     # recebem, fora da raiz também.
@@ -2431,6 +2440,9 @@ def export_snapshot(
     :return: as URIs dos arquivos gravados, em ordem.
     :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``, nos dois modos,
         antes de qualquer escrita.
+    :raises serialize_db.errors.SandboxError: no modo ``rewrite``, a memória que o processo ainda
+        pode usar abaixo de 2 MiB, ou negativa, na abertura da conexão do DuckDB
+        (``environment_limits``).
     """
     # Os dois caminhos conferidos antes de gravar: o COPY particionado do DuckDB grava onde
     # recebe, fora da raiz também.

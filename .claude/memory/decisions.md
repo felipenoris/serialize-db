@@ -1500,6 +1500,87 @@ extension the assistant named in its report. The Delta side still aggregates the
 drops the other partitions after the query. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
 `scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
 
+## The requested partition the source does not have (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `serialize-db load --partitions
+9999-12-31` wrote nothing, printed `0 partição(ões) conferida(s), contagens e somas iguais` and
+exited 0, because `_wanted_values` dropped the requested value `discover_partitions` did not find;
+the migration script did the same. Offered on a decision card the difference in the report
+(recommended), the refusal at the load, or keeping it, the user chose "Recusar na carga"
+(11:55 UTC): `initial_load` and `load_report` raise `ContractError` for a value of `partitions`
+the source does not have in a partitioned table, before `create_table`, an unpartitioned table
+stays out of the request without refusal, and the public `check_requested_partitions(source,
+table, partitions)` lets `serialize-db load` and the script check every table before writing any
+partition, exiting 1. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
+`scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
+
+## The column outside the contract at the registration (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `_check_footer_schema` of
+`serialize_db.delta` accepted a file with a column outside the contract, because the readers
+ignore it, while since 2026-09-28 the Redshift `COPY` of the publication and of the engine's
+`ingest` lists every column of the footer and would name a column the staging does not have; no
+writer of the package writes such a column, and the case comes through `register_files` with a
+client's file. Asked whether the registration should refuse it, like the partition column, or the
+`COPY` refusal should be documented, the user adopted the refusal in the registration in the thread
+(13:42 UTC): `register_files` raises `RegistrationRefused` with `<arquivo>: coluna <nome> fora do
+contrato`, the first such column in footer order, right after the partition-column check, and the
+file stays orphaned as in every refusal. Schema evolution is unaffected, as the user asked in the
+same message: the model changes first and `reconcile` adds the column to the log before any file
+carries it. `src/serialize_db/delta.py`, `plan/PLAN-STAGE-3.md`
+
+## The Delta column the model does not have, at the ingest (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that, since 2026-09-28, the DuckDB
+engine's `ingest(materialize=True)`, running the model's DDL and `INSERT ... BY NAME` from
+`delta_scan`, refuses a version with a column the model lacks (`duckdb.BinderException`, the
+transaction undone and the name free), where the earlier `CREATE TABLE AS SELECT *` brought it;
+the view without `materialize` brings the column, and the Redshift engine's `COPY`, listing the
+footer's columns, names a column the staging created from the model does not have. Offered on a
+decision card the refusal with `ContractError` in both engines (recommended), the projection of
+the model's columns, or documenting, the user chose "Só documentar" (15:40 UTC): no code change;
+the `ingest` docstrings of both engines, the `Engine` protocol and `DeltaReader.materialize` name
+the case (the model has to keep up with the table),
+`test_materialized_ingest_refuses_a_delta_column_outside_the_model` asserts the DuckDB behavior,
+and the Redshift sentence stays unread in the target (`plan/OPEN_QUESTIONS.md`).
+`src/serialize_db/engine/__init__.py`, `src/serialize_db/engine/duckdb.py`,
+`src/serialize_db/engine/redshift.py`, `src/serialize_db/reader.py`, `plan/PLAN-STAGE-4.md`,
+`plan/PLAN-STAGE-5.md`
+
+## The audit of an unpartitioned table with a list of partitions (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `Execution.audit(table,
+["2026-08-31"])` on an unpartitioned table audits the whole table (`_scope` of
+`serialize_db.audit` returns true) and stores the approval under `(table, ("2026-08-31",))`,
+while `publish_delta` of that table accepts only `partitions=None` (the list is `ContractError`,
+as in `ingest` and `serialize-db audit`) and looks the approval up under `(table, None)`, so it
+refuses with `AuditFailed` although the audit passed. Offered on a decision card the refusal with
+`ContractError` (recommended), accepting the list as `None`, or documenting, the user chose "Só
+documentar" (17:26 UTC): no code change; the `partitions` field of `run.audit` says the list does
+not filter an unpartitioned table, the approval sits under the list and `publish_delta` does not
+look there, so the unpartitioned table is audited with `None`;
+`test_audit_with_partitions_on_a_table_without_partition_audits_it_whole` asserts it.
+`src/serialize_db/execution.py`, `plan/PLAN-STAGE-6.md`
+
+## The floor of `memory_limit` (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `environment_limits` of
+`serialize_db.resources` gives DuckDB half the memory the process can still use with no floor, and
+a probe of the same day (DuckDB 1.5.5, the session's container) showed both outcomes: a reading
+under 2 MiB gives `0MiB`, which DuckDB refuses at open with `OutOfMemoryException` (`failed to
+allocate data of size 32.0 KiB (8.0 KiB/0 bytes used)`), and a negative reading, which only the
+cgroup usage read above its limit gives, DuckDB reads as its own default, 80% of the machine's
+memory (`10.6 GiB` there), the default the instruction of 2026-09-24 replaced; the open-questions
+note had said "unlimited", and the probe corrected it. Offered on a decision card the refusal with
+`SandboxError` naming the reading (recommended), a floor in MiB, or documenting, the user chose
+"Recusar com SandboxError" (23:00 UTC): `memory_limit_setting`, protected in
+`serialize_db.resources`, raises `SandboxError` with the reading when the half is under 1 MiB or
+negative, `environment_limits` is built on it, the DuckDB engine reads the memory only when the
+configuration omits `memory_limit`, so an informed `memory_limit` opens without the reading, and
+`test_environment_limits_refuses_the_memory_under_two_mib` and the starved case of
+`test_engine_config_and_single_session` assert it.
+`src/serialize_db/resources.py`, `src/serialize_db/engine/duckdb.py`, `plan/PLAN-STAGE-4.md`
+
 ## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
 
 The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review

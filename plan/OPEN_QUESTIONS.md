@@ -46,6 +46,12 @@ foi medido em [`POC.md`](POC.md).
   `probes/operacao/probe_unload_parallel.py` mede o primeiro, o `UNLOAD` da exportação com
   `PARALLEL OFF` e em paralelo de 1 a 20 milhões de linhas, e espera a rodada no alvo pelos
   comandos de `SUITE.md`, seção "Sondas da operação".
+- **O `COPY` do `ingest` do motor Redshift com uma coluna do Delta que o modelo não tem.** A
+  docstring diz que o `COPY` é recusado, porque a lista de colunas do rodapé nomeia a coluna e a
+  staging, criada do modelo, não a tem (decisão do usuário de 2026-10-01: documentar, sem projeção
+  do modelo); o caso não rodou no alvo nem no substituto, e nenhum teste o cobre, porque a
+  mensagem do alvo não foi lida ([etapa 5](PLAN-STAGE-5.md)). No DuckDB, o caso tem teste
+  (`test_materialized_ingest_refuses_a_delta_column_outside_the_model`).
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
@@ -199,10 +205,26 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
   próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
   com uma execução por ambiente de cada vez.
 
+## Achados da revisão das alterações de 2026-09-28 a 2026-10-01
+
+A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões e os planos, rodou as
+suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; os seis itens que
+pediam decisão foram decididos pelo usuário no mesmo dia, e cada decisão está na etapa que a
+descreve e em `.claude/memory/decisions.md`.
+
+Notas anteriores à janela, sem decisão pedida: `publish_delta(tabela, partitions=[])` reconcilia
+sem exportar e `audit(tabela, [])` aprova sem auditar; `run.snapshot` chamado duas vezes grava só o
+último nome; o `ingest` do motor Redshift carrega duas vezes uma partição repetida em `partitions`,
+e o do DuckDB não; a coluna de partição `Text` dá `TypeError` em `Execution`, que `check_models`
+acusa antes; `max_workers=0` sobe o `ValueError` do `ThreadPoolExecutor`; `transaction()` do motor
+Redshift não é reentrante, e a composição de `append` com um `BEGIN` do cliente em `session()` não
+está escrita; `Storage.for_uri("file:relativo")` vira uma pasta literal, e `relative` compara
+texto, o que recusaria um destino com `\` no Windows, não lido lá.
+
 ## Decisões de API pendentes por etapa
 
 Cada arquivo de etapa fecha com a seção "Decisões pendentes"; a lista abaixo as reúne, e uma decisão
 tomada sai daqui e do arquivo da etapa no mesmo commit. A [etapa 9](PLAN-STAGE-9.md) espera a
 escolha da issue #85 para o `compact` das colunas `Double` sem mínimo e máximo, o item acima; as
-outras etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista
-acima.
+demais etapas não têm decisão pendente, e os demais itens que esperam o usuário estão na lista do
+início.

@@ -769,7 +769,10 @@ class Execution:
 
         :param table: a tabela do modelo, carregada no sandbox.
         :param partitions: as partições da execução, pela regra da partição;
-            ``partitions=None`` audita a tabela inteira do sandbox.
+            ``partitions=None`` audita a tabela inteira do sandbox. Numa tabela sem partição a
+            lista não filtra, a auditoria é da tabela inteira e a aprovação fica sob a lista, que
+            ``publish_delta``, que só aceita ``None`` nessa tabela, não procura: a tabela sem
+            partição é auditada com ``None``.
         :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
             chave estrangeira, a chave sem a linha referenciada, procurada na tabela do sandbox ou
             na versão fixada da referenciada.
