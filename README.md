@@ -1,12 +1,6 @@
 [![Testes do pacote](https://github.com/felipenoris/serialize-db/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/felipenoris/serialize-db/actions/workflows/tests.yml)
 [![Documentação do pacote](https://github.com/felipenoris/serialize-db/actions/workflows/docs.yml/badge.svg?branch=main)](https://felipenoris.github.io/serialize-db/)
 
-# Inicialização
-
-```
-uv init --python 3.13
-```
-
 # Ambiente de Desenvolvimento
 
 ## Instruções para VS Code windows
