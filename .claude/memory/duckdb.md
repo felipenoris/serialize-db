@@ -29,6 +29,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   plus `has_nan` on a float column holding one. A `DOUBLE` round-trips through `float`, a `VARCHAR`
   is not truncated (200 characters came back whole), and an all-null column carries no `min`/`max`.
   `plan/POC.md`, `scripts/migrate_parquet_to_delta.py`
+- On Windows, the `filename` of a `COPY ... PARTITION_BY ... RETURN_STATS` joins the partition
+  folders to the destination with `\` (`D:/.../reescrita\data_str=2026-07-31\data_0.parquet`,
+  DuckDB 1.5.5, 2026-10-01), while a `COPY` without partitions returns the destination as given;
+  `delta._return_stats_path` turns `\` into `/` for the registration and the export.
+  `plan/POC.md`
 
 - A view over `delta_scan(uri, version := v)` binds at `CREATE VIEW`: it read the log (one file
   open, 8.7 ms, no Parquet) and a missing version failed there with `IOException` (`LogSegment

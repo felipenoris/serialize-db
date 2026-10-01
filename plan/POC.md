@@ -5702,3 +5702,53 @@ carga e do `archive` rodaram duas vezes em cada lugar. Todas as checagens passar
 e a linha `3 partição(ões) conferida(s), contagens e somas iguais`. Em 2026-10-01 a sonda passou
 assim na pasta local e no substituto, e reprovou contra o subcomando anterior, com a
 `DIFERENÇA em 2026-06-30` e a saída 1 ([etapa 7](PLAN-STAGE-7.md)).
+
+## O que a suíte do pacote mostrou no Windows
+
+Em 2026-10-01, o usuário relatou o `import serialize_db` falhando no Windows, num projeto cliente,
+com `ModuleNotFoundError: No module named 'resource'` em `serialize_db/resources.py`. A esteira
+`tests.yml` ganhou um job `windows-latest` (Windows-2025Server-10.0.26100-SP0, Python 3.13.15,
+deltalake 1.6.6, DuckDB 1.5.5, PyArrow 25.0.1, com a raiz local sob
+`D:\a\serialize-db\serialize-db`), disparado à mão três vezes no ramo da correção; o job Ubuntu
+passou nas três.
+
+- **O Windows não tem o módulo `resource` nem o `os.sysconf`.** `resources.py` importava
+  `resource` no topo, para o `ru_maxrss` de `peak_rss_mb`, e `available_memory` e o relatório de
+  `scripts/migrate_parquet_to_delta.py` liam a memória física por `os.sysconf`; o import de
+  `serialize_db` passa por `cli.py`, `delta.py` e `resources.py` e falhava antes de qualquer uso.
+  No Windows, `resources.py` lê pelo `ctypes` a memória física e a disponível de
+  `GlobalMemoryStatusEx` (`ullTotalPhys` e `ullAvailPhys`, que conta como livre a lista de espera)
+  e o pico de `K32GetProcessMemoryInfo` (`PeakWorkingSetSize`). No runner, a física conferiu com o
+  `TotalPhysicalMemory` do WMI (`Win32_ComputerSystem`), e a disponível ficou positiva e abaixo
+  dela. A importação de cada módulo e o `serialize-db --help` passaram nas três rodadas.
+- **A primeira rodada teve 328 casos aprovados, 22 reprovados e 79 pulados.** A raiz local
+  guardava o caminho com `\` (`D:\a\...`), e o `LocalFileSystem` do PyArrow lista os arquivos com
+  `/`: `list_files` devolvia o caminho absoluto no lugar do relativo, que `join` juntava à raiz de
+  novo (`WinError 123` na cópia profunda, na leitura do Delta e na limpeza do `UNLOAD` do
+  substituto), e `relative` recusava a pasta de staging do leitor como fora da raiz.
+- **O `RETURN_STATS` do `COPY` particionado do DuckDB junta a pasta da partição ao destino com
+  `\`** (`.../reescrita\data_str=2026-07-31\data_0.parquet`), e o registro recusava o arquivo da
+  reescrita como fora da pasta da tabela (`RegistrationRefused`). O `COPY` sem partição devolve o
+  destino como o recebeu.
+- **As outras reprovações da primeira rodada.** Os quatro casos de
+  `scripts/migrate_parquet_to_delta.py` pararam no `os.sysconf` do relatório.
+  `test_engine_config_and_single_session` esperava 1,0 GiB do `/proc` fabricado e leu 6,5 GiB: no
+  Windows, `available_memory` devolvia a leitura da API sem ler o `/proc`, e os casos do `/proc`
+  fabricado de `tests/test_resources.py` estavam pulados lá. Nos testes, a URI
+  `file:///tmp/serialize-db/delta` não é absoluta no Windows (`URI is not absolute`), o arquivo
+  novo tem o modo 0o666 contra os 0o644 esperados, e o `os.path.join` monta o cabeçalho do diff dos
+  arquivos gerados com `\`.
+- **A segunda rodada teve 352 aprovados, 2 reprovados e 75 pulados.** A exportação por reescrita
+  devolvia o caminho do `RETURN_STATS` com `\`, e o teste da descoberta das partições esperava a
+  raiz com `\`. Os casos do `/proc` fabricado rodaram no Windows.
+- **A terceira rodada passou com 354 aprovados e 75 pulados, em 143,8 s.** Os pulados são os
+  casos `s3` e `redshift`, sem as variáveis, o do modo dos arquivos e o da memória física sem
+  `/proc`, que no Windows é a disponível.
+
+**Consequências**: no Windows, `resources.py` lê a memória e o pico pela API do sistema, e
+`physical_memory`, protegida, dá a memória física ao script de migração; `available_memory` fica
+com a menor das leituras, as do `/proc` e do cgroup também, quando existem. A raiz local passa pelo
+`as_posix`, e `delta._return_stats_path` troca `\` por `/` no caminho do `RETURN_STATS`, no registro
+e na exportação. A esteira roda no Ubuntu e no Windows. No Linux, os caminhos e as leituras não
+mudam. O S3, o Redshift, os probes, `prepare_offline.sh` e o projeto cliente não rodaram no
+Windows, e a variável `username` do proxy fica pendente em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

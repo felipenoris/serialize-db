@@ -296,3 +296,19 @@ workflow's command installed it (`duckdb.connect(config={'extension_directory': 
 passed and 94 skipped, and the stand-in with the local root 522 passed and 1 skipped; since the
 secret by `boto3`'s key of 2026-09-25 nothing loads `aws`, and on 2026-09-28 the stand-in passed
 with `delta` and `httpfs` only. `README.md`
+
+## The Windows runner (2026-10-01)
+
+- `tests.yml` runs on `ubuntu-latest` and `windows-latest` (Windows-2025Server-10.0.26100-SP0,
+  Python 3.13.15, the workspace at `D:\a\serialize-db\serialize-db`), every step in Git Bash
+  (`defaults.run.shell: bash`). The user ran a client project on Windows, where
+  `import serialize_db` failed on `import resource`; Windows has neither `resource` nor
+  `os.sysconf`, and `resources.py` reads `GlobalMemoryStatusEx` and `K32GetProcessMemoryInfo`
+  through `ctypes` there. The third run passed 354 cases with 75 skipped. `plan/POC.md`
+- What differs on Windows: PyArrow's `LocalFileSystem` lists with `/` (`D:/a/...`), so the local
+  root goes through `as_posix()`; DuckDB's partitioned `COPY ... RETURN_STATS` joins the partition
+  folders with `\` (`duckdb.md`); `Path.from_uri("file:///tmp/x")` raises `URI is not absolute`; a
+  new file's mode reads 0o666; `os.path.join` joins with `\`; and `os.environ` uppercases the
+  name, so the proxy's `username` variable reads the login's `USERNAME`
+  (`plan/OPEN_QUESTIONS.md`). The job log is the only reading: its download URL is refused by
+  this container's proxy (403), and `get_job_logs` with `tail_lines` returns the end of it.

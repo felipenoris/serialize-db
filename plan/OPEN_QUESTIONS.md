@@ -135,6 +135,15 @@ foi medido em [`POC.md`](POC.md).
   e `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
   passa a refleti-la, a lista de `probes/space.py` e a prosa que nomeia o dialeto em `README.md`,
   `docs/index.md`, `plan/` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a 2.0.54 o serve.
+- **O pacote no Windows.** A esteira roda os testes do pacote num runner Windows desde 2026-10-01
+  ([`POC.md`](POC.md)), com a pasta local e o DuckDB em memória; o S3, o Redshift, os probes,
+  `prepare_offline.sh` e o projeto cliente não rodaram no Windows. Lá, o `os.environ` passa o nome
+  da variável para maiúsculas (o `encodekey` do `os.py` do Python 3.13, lido sem rodar no Windows),
+  e `_proxy_settings`, de `serialize_db.storage`, lê na variável `username`, a do usuário do proxy
+  no espaço SageMaker, o `USERNAME` do login: com `HTTP_PROXY` definido, o DuckDB recebe o login
+  como usuário do proxy, com ou sem usuário no endereço. Espera o usuário: no Windows, ler o
+  usuário e a senha do proxy só do endereço, ou de variáveis `SERIALIZE_DB_`, ou manter a leitura
+  enquanto o Windows é só a máquina de quem desenvolve.
 
 ## Achados das sondas de consistência de leitura e escrita
 
