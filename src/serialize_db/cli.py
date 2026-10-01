@@ -334,7 +334,8 @@ def _add_load_parser(
         nargs="+",
         type=_name_argument,
         default=None,
-        help="só estas partições, gravadas e conferidas; as tabelas sem partição ficam de fora",
+        help="só estas partições, gravadas e conferidas, que toda tabela particionada precisa ter "
+        "na origem; as tabelas sem partição ficam de fora",
     )
     load_command.set_defaults(handler=_load)
 
@@ -923,9 +924,9 @@ def _load(
     args: argparse.Namespace,
 ) -> int:
     """A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada uma: 1 na
-    partição fora do contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato,
-    na tabela fora do modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no
-    conflito."""
+    partição pedida que a origem não tem, recusada antes de qualquer gravação, na partição fora do
+    contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato, na tabela fora do
+    modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito."""
     problems = schema.check_models(args.metadata)
     if problems:
         print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ", file=sys.stderr)
@@ -940,6 +941,9 @@ def _load(
     matches = True
     try:
         tables = load.load_order(_selected_tables(args.metadata, args.tables))
+        # A partição pedida que a origem não tem recusa a carga antes de qualquer gravação.
+        for table in tables:
+            load.check_requested_partitions(args.source, table, args.partitions)
         for table in tables:
             loaded = load.initial_load(db, table, args.source, args.partitions)
             report = load.load_report(db, table, args.source, args.partitions)

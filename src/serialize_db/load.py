@@ -29,7 +29,8 @@ carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e
 mesma forma só nos valores finitos, com os não finitos contados à parte, porque a soma em ponto
 flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um infinito para ``DECIMAL`` falha. A
 carga só termina quando ``matches`` é verdadeiro; ``serialize-db load`` roda as duas, com as mesmas
-partições quando ``--partitions`` as pede, e sai com 1 na diferença.
+partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição pedida que a
+origem não tem, recusada em toda tabela antes de qualquer gravação.
 
 Exemplo:
 
@@ -80,6 +81,7 @@ from serialize_db.storage import Storage
 __all__ = [
     "LoadReport",
     "PartitionReport",
+    "check_requested_partitions",
     "discover_partitions",
     "initial_load",
     "load_order",
@@ -475,6 +477,55 @@ def _wanted_values(
     return [value for value in found if value in partitions]
 
 
+def _check_requested(
+    table: sa.Table,
+    found: Mapping[str | None, object],
+    partitions: Sequence[str] | None,
+) -> None:
+    """Recusa, numa tabela particionada, um valor de ``partitions`` fora de ``found``; uma tabela
+    sem partição fica de fora do pedido, sem recusa."""
+    if partitions is None or table_options(table).partition_by is None:
+        return
+    absent = [value for value in partitions if value not in found]
+    if absent:
+        raise ContractError(
+            f"{table.name}: partição(ões) pedida(s) que a origem não tem: {', '.join(absent)}"
+        )
+
+
+def check_requested_partitions(
+    source: str,
+    table: sa.Table,
+    partitions: Sequence[str] | None,
+) -> None:
+    """Recusa um valor de ``partitions`` que a origem não tem, como ``initial_load`` e
+    ``load_report`` o recusam, sem abrir um motor.
+
+    ``serialize-db load`` e o script de migração conferem com ela toda tabela da carga antes de
+    gravar qualquer partição.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        check_requested_partitions("/dados/db_projetado", Operacao.__table__, ["2026-02-28"])
+        check_requested_partitions("/dados/db_projetado", Operacao.__table__, ["9999-12-31"])
+        # ContractError: cad_operacoes: partição(ões) pedida(s) que a origem não tem: 9999-12-31
+
+    :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
+        ``file://`` ou ``s3://``.
+    :param table: a tabela do modelo.
+    :param partitions: os valores pedidos, que toda tabela particionada precisa ter na origem;
+        uma tabela sem partição fica de fora do pedido, sem recusa; ``None`` não recusa nada.
+    :raises ContractError: um valor de ``partitions`` que a origem não tem, com a tabela e os
+        valores ausentes na mensagem.
+    :raises FileNotFoundError: a pasta da tabela ausente na origem.
+    :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
+    """
+    found, _ = discover_partitions(source, table)
+    _check_requested(table, found, partitions)
+
+
 def _load_partition(
     engine: DuckDBEngine,
     storage: Storage,
@@ -540,13 +591,14 @@ def initial_load(
     :param table: a tabela do modelo.
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
-    :param partitions: os valores a gravar, que filtram as partições encontradas e deixam de fora
-        uma tabela sem partição; ``None`` grava todas.
+    :param partitions: os valores a gravar, que toda tabela particionada precisa ter na origem, e
+        que deixam de fora uma tabela sem partição; ``None`` grava todas.
     :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
         sistema e os limites lidos do ambiente.
     :return: os valores gravados, na ordem da gravação; ``None`` é a tabela sem partição.
-    :raises ContractError: uma partição fora do contrato nas conferências da consulta, sem
-        commit, e a chamada seguinte recomeça dela.
+    :raises ContractError: um valor de ``partitions`` que a origem não tem, antes de criar a
+        tabela; ou uma partição fora do contrato nas conferências da consulta, sem commit, e a
+        chamada seguinte recomeça dela.
     :raises duckdb.Error: um valor que não converte para o tipo do contrato, ou uma coluna do
         contrato ausente dos arquivos, no ``COPY``, sem commit.
     :raises RegistrationRefused: uma conferência de ``register_files`` reprovou o arquivo gravado,
@@ -556,11 +608,13 @@ def initial_load(
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
     """
     options = table_options(table)
+    # A partição pedida que a origem não tem recusa a carga antes de criar a tabela.
+    found, _ = discover_partitions(source, table)
+    _check_requested(table, found, partitions)
     uri = db.uri(table)
     storage = db.storage
     dt = delta.create_table(uri, table, storage)
     # As partições pedidas que a origem tem e o log ainda não.
-    found, _ = discover_partitions(source, table)
     already = set(delta.partition_values(dt, options.partition_by))
     log.info("%s: %d partições na origem, %d no log", table.name, len(found), len(already))
     missing = []
@@ -777,12 +831,14 @@ def load_report(
     :param table: a tabela do modelo.
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
-    :param partitions: os valores a conferir, que filtram as partições da origem e do Delta e
-        deixam de fora uma tabela sem partição, como em ``initial_load``; ``None`` confere todas.
+    :param partitions: os valores a conferir, que toda tabela particionada precisa ter na origem,
+        filtram as partições da origem e do Delta e deixam de fora uma tabela sem partição, como
+        em ``initial_load``; ``None`` confere todas.
     :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
         sistema e os limites lidos do ambiente.
     :return: o relatório, com o veredito em ``matches``; uma partição presente num lado só tem
         ``None`` nas linhas do outro, e a tabela ainda fora do Delta tem toda partição assim.
+    :raises ContractError: um valor de ``partitions`` que a origem não tem.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
     """
@@ -791,6 +847,7 @@ def load_report(
     doubles = double_columns(table)
     # As pastas da origem que a carga lê: as pedidas em partitions, ou todas sem elas.
     found, skipped = discover_partitions(source, table)
+    _check_requested(table, found, partitions)
     wanted = {value: found[value] for value in _wanted_values(found, partitions)}
     execution_id = f"relatorio-{uuid.uuid4().hex[:8]}"
     # A origem e o Delta agregados na mesma sessão, com o secret da origem quando ela está no S3.

@@ -13,12 +13,15 @@ falta de memória por exemplo, deixa o que já conferiu e gravou. O relatório f
 versões, os limites do DuckDB lidos do ambiente e os argumentos, cada tabela com o relatório de
 ``load_report`` e as partições gravadas agora, e o que a raiz da origem tem fora do modelo. A raiz
 Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``, e a origem fica
-intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas.
+intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas, que toda
+tabela particionada precisa ter na origem: uma que falta recusa a execução antes de qualquer
+gravação.
 
 Uma partição fora do contrato interrompe a execução sem commit, com a tabela, a partição e a
-coluna na mensagem, e a execução seguinte recomeça dela; o script sai com 1 nesse caso e quando o
-relatório de alguma tabela acha diferença, e com 2 quando o modelo viola o contrato ou a origem não
-tem a pasta de uma tabela. As tabelas da origem fora do modelo (``alembic_version``,
+coluna na mensagem, e a execução seguinte recomeça dela; o script sai com 1 nesse caso, na
+partição pedida que a origem não tem e quando o relatório de alguma tabela acha diferença, e com
+2 quando o modelo viola o contrato ou a origem não tem a pasta de uma tabela. As tabelas da origem
+fora do modelo (``alembic_version``,
 ``meta_update_status``) e o ``schema.json`` da raiz ficam de fora e entram no relatório. A
 auditoria de chaves estrangeiras é ``serialize-db audit --foreign-keys``, depois da carga.
 
@@ -297,7 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         metavar="AAAA-MM-DD",
         default=None,
-        help="só estas partições, gravadas e conferidas; as tabelas sem partição ficam de fora",
+        help="só estas partições, gravadas e conferidas, que toda tabela particionada precisa ter "
+        "na origem; as tabelas sem partição ficam de fora",
     )
     parser.add_argument(
         "--report", metavar="ARQUIVO.json", help="grava o relatório da execução em JSON"
@@ -337,7 +341,11 @@ def main(
     # no começo da tabela e depois de cada partição.
     reports: list[TableReport] = []
     try:
-        for table in load.load_order(tables):
+        ordered = load.load_order(tables)
+        # A partição pedida que a origem não tem recusa a execução antes de qualquer gravação.
+        for table in ordered:
+            load.check_requested_partitions(arguments.source, table, arguments.partitions)
+        for table in ordered:
             print(f"{table.name}:")
             progress = None
             if arguments.report:

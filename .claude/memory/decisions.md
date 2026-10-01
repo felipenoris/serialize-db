@@ -1500,6 +1500,20 @@ extension the assistant named in its report. The Delta side still aggregates the
 drops the other partitions after the query. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
 `scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
 
+## The requested partition the source does not have (2026-10-01)
+
+The review of the changes of 2026-09-28 to 2026-10-01 read that `serialize-db load --partitions
+9999-12-31` wrote nothing, printed `0 partição(ões) conferida(s), contagens e somas iguais` and
+exited 0, because `_wanted_values` dropped the requested value `discover_partitions` did not find;
+the migration script did the same. Offered on a decision card the difference in the report
+(recommended), the refusal at the load, or keeping it, the user chose "Recusar na carga"
+(11:55 UTC): `initial_load` and `load_report` raise `ContractError` for a value of `partitions`
+the source does not have in a partitioned table, before `create_table`, an unpartitioned table
+stays out of the request without refusal, and the public `check_requested_partitions(source,
+table, partitions)` lets `serialize-db load` and the script check every table before writing any
+partition, exiting 1. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
+`scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
+
 ## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
 
 The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review
