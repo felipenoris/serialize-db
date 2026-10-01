@@ -40,12 +40,16 @@ from serialize_db import delta
 USAGE = "uso: .venv/bin/python probes/operacao/probe_load_resume.py <origem>"
 
 
-def execution_of(path: str) -> str:
+def execution_of(
+    path: str,
+) -> str:
     """O ``execution_id`` no nome de um arquivo da carga, ``<execution_id>_<uuid>.parquet``."""
     return path.rsplit("/", 1)[-1].split("_", 1)[0]
 
 
-def duckdb_leftovers(execution_ids: set[str]) -> list[Path]:
+def duckdb_leftovers(
+    execution_ids: set[str],
+) -> list[Path]:
     """As pastas temporárias do motor DuckDB das execuções em ``tempfile.gettempdir()``: o
     ``cleanup`` do motor as apaga, e o processo encerrado por ``SIGKILL`` não o roda."""
     found = []
@@ -56,7 +60,9 @@ def duckdb_leftovers(execution_ids: set[str]) -> list[Path]:
     return found
 
 
-def folder_megabytes(folder: Path) -> float:
+def folder_megabytes(
+    folder: Path,
+) -> float:
     """O tamanho dos arquivos sob a pasta, em MB."""
     total = 0
     for path in folder.rglob("*"):
@@ -65,7 +71,9 @@ def folder_megabytes(folder: Path) -> float:
     return total / 2**20
 
 
-def report_leftovers(execution_ids: set[str]) -> None:
+def report_leftovers(
+    execution_ids: set[str],
+) -> None:
     """Imprime e apaga as pastas temporárias que a execução encerrada deixou."""
     leftovers = duckdb_leftovers(execution_ids)
     if not leftovers:
@@ -76,8 +84,11 @@ def report_leftovers(execution_ids: set[str]) -> None:
         shutil.rmtree(folder)
 
 
-def check_killed(killed: lib.Finished, after_kill: dict[str, list[str]],
-                 values: list[str]) -> None:
+def check_killed(
+    killed: lib.Finished,
+    after_kill: dict[str, list[str]],
+    values: list[str],
+) -> None:
     """O sinal chegou com a primeira partição no log e a terceira fora dele."""
     problems = []
     if not killed.killed:
@@ -89,7 +100,11 @@ def check_killed(killed: lib.Finished, after_kill: dict[str, list[str]],
     lib.check("o processo encerrado entre a primeira e a terceira partição", problems)
 
 
-def check_rerun(rerun: lib.Finished, missing: list[str], values: list[str]) -> None:
+def check_rerun(
+    rerun: lib.Finished,
+    missing: list[str],
+    values: list[str],
+) -> None:
     """A repetição gravou só as partições ausentes do log e conferiu só as pedidas, sem
     diferença, com a saída 0."""
     problems = []
@@ -125,7 +140,9 @@ def main() -> None:
                                  f"{lib.PARTITION_BY}={values[1]}")
 
     # O sinal espera o arquivo da segunda partição, depois da linha da primeira no log.
-    def wait_second_file(process: subprocess.Popen) -> str:
+    def wait_second_file(
+        process: subprocess.Popen,
+    ) -> str:
         return lib.wait_for_file(storage, second_folder, process)
 
     print(f"partições pedidas: {', '.join(values)}")

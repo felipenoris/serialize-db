@@ -99,7 +99,10 @@ _SENTINEL_TABLE = re.compile(r"\{prefix\}(\w+)")
 # ---------------------------------------------------------------- o prefixo
 
 
-def _prefixed_copy(table: sa.Table, prefix: str) -> sa.Table:
+def _prefixed_copy(
+    table: sa.Table,
+    prefix: str,
+) -> sa.Table:
     """A cópia da tabela com o prefixo no nome e, de cada coluna, só o nome, a ``key`` e o tipo, o
     que um DML compilado usa.
 
@@ -115,8 +118,11 @@ def _prefixed_copy(table: sa.Table, prefix: str) -> sa.Table:
     return sa.Table(name, sa.MetaData(), *columns)
 
 
-def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
-             prefix: str = SENTINEL) -> sa.sql.ClauseElement:
+def prefixed(
+    statement: sa.sql.ClauseElement,
+    metadata: sa.MetaData,
+    prefix: str = SENTINEL,
+) -> sa.sql.ClauseElement:
     """O statement com cada tabela do contrato trocada pela cópia prefixada.
 
     A cópia de cada tabela de ``metadata`` leva o prefixo no nome e cada coluna com nome, ``key``
@@ -143,7 +149,9 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
     for table in metadata.tables.values():
         copies[table] = _prefixed_copy(table, prefix)
 
-    def replace(element: sa.sql.ClauseElement) -> sa.sql.ClauseElement | None:
+    def replace(
+        element: sa.sql.ClauseElement,
+    ) -> sa.sql.ClauseElement | None:
         # replacement_traverse chama replace em cada nó do statement; None deixa o nó como está.
         if isinstance(element, sa.Table):
             return copies.get(element)
@@ -157,7 +165,9 @@ def prefixed(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
 # ---------------------------------------------------------------- os parâmetros sem valor
 
 
-def required_parameters(statement: sa.sql.ClauseElement) -> set[str]:
+def required_parameters(
+    statement: sa.sql.ClauseElement,
+) -> set[str]:
     """Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós; protegida,
     o guarda dos motores antes de compilar.
 
@@ -173,7 +183,9 @@ def required_parameters(statement: sa.sql.ClauseElement) -> set[str]:
     return names
 
 
-def _statement_metadata(statement: sa.sql.ClauseElement) -> sa.MetaData | None:
+def _statement_metadata(
+    statement: sa.sql.ClauseElement,
+) -> sa.MetaData | None:
     """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``prefixed`` recebe;
     ``None`` num statement sem ``sa.Table``."""
     for table in find_tables(statement, include_crud=True):
@@ -182,8 +194,11 @@ def _statement_metadata(statement: sa.sql.ClauseElement) -> sa.MetaData | None:
     return None
 
 
-def bound_statement(statement: sa.sql.ClauseElement, params: Mapping[str, object] | None,
-                    prefix: str) -> sa.sql.ClauseElement:
+def bound_statement(
+    statement: sa.sql.ClauseElement,
+    params: Mapping[str, object] | None,
+    prefix: str,
+) -> sa.sql.ClauseElement:
     """A cópia prefixada do statement com os valores do cliente; protegida, o começo do caminho de
     compilação dos dois motores.
 
@@ -208,7 +223,9 @@ def bound_statement(statement: sa.sql.ClauseElement, params: Mapping[str, object
 # ---------------------------------------------------------------- o texto por motor
 
 
-def _parameters_as_placeholders(statement: sa.sql.ClauseElement) -> sa.sql.ClauseElement:
+def _parameters_as_placeholders(
+    statement: sa.sql.ClauseElement,
+) -> sa.sql.ClauseElement:
     """A cópia do statement com cada ``bindparam`` sem valor trocado por ``:nome``; o original não
     muda.
 
@@ -217,7 +234,10 @@ def _parameters_as_placeholders(statement: sa.sql.ClauseElement) -> sa.sql.Claus
     e sai como constante. Um nome fora de ``[a-z_][a-z0-9_]*`` é ``SqlError``, porque ``bind`` não
     o leria no texto.
     """
-    def replace(element: sa.sql.ClauseElement) -> sa.sql.ClauseElement | None:
+
+    def replace(
+        element: sa.sql.ClauseElement,
+    ) -> sa.sql.ClauseElement | None:
         # replacement_traverse chama replace em cada nó; None deixa o nó como está.
         if not isinstance(element, sa.BindParameter) or not element.required:
             return None
@@ -228,8 +248,12 @@ def _parameters_as_placeholders(statement: sa.sql.ClauseElement) -> sa.sql.Claus
     return replacement_traverse(statement, {}, replace)
 
 
-def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaData,
-           prefix: str = SENTINEL) -> str:
+def render(
+    statement: sa.sql.ClauseElement,
+    dialect: Dialect,
+    metadata: sa.MetaData,
+    prefix: str = SENTINEL,
+) -> str:
     """O texto do motor com as constantes embutidas e cada ``bindparam`` sem valor como ``:nome``.
 
     O statement é compilado sobre a cópia prefixada (``prefixed``) pelo dialeto do motor com
@@ -267,7 +291,9 @@ def render(statement: sa.sql.ClauseElement, dialect: Dialect, metadata: sa.MetaD
     return "\n".join(lines)
 
 
-def _placeholders(sql: str) -> set[str]:
+def _placeholders(
+    sql: str,
+) -> set[str]:
     """Os nomes dos marcadores ``:nome`` do texto, fora das regiões citadas."""
     names = set()
     for match in _QUOTED_OR_PLACEHOLDER.finditer(sql):
@@ -276,7 +302,11 @@ def _placeholders(sql: str) -> set[str]:
     return names
 
 
-def bind(sql: str, params: dict[str, object], dialect: Dialect) -> tuple[str, dict[str, object]]:
+def bind(
+    sql: str,
+    params: dict[str, object],
+    dialect: Dialect,
+) -> tuple[str, dict[str, object]]:
     """O texto com ``:nome`` reescrito para o marcador do motor e o dicionário conferido.
 
     Toda região citada passa intacta, entre aspas simples ou duplas: ``'12:30'``,
@@ -308,7 +338,9 @@ def bind(sql: str, params: dict[str, object], dialect: Dialect) -> tuple[str, di
             f"parâmetros do texto {sorted(names)} e do dicionário {sorted(params)} não fecham")
     marker = _MARKERS[dialect]
 
-    def rewrite(match: re.Match) -> str:
+    def rewrite(
+        match: re.Match,
+    ) -> str:
         if match.group("name") is None:
             return match.group(0)                # região citada, intacta
         return marker + match.group("name")
@@ -316,7 +348,9 @@ def bind(sql: str, params: dict[str, object], dialect: Dialect) -> tuple[str, di
     return _QUOTED_OR_PLACEHOLDER.sub(rewrite, sql), dict(params)
 
 
-def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
+def referenced_tables(
+    statement_or_sql: sa.sql.ClauseElement | str,
+) -> set[str]:
     """As tabelas de um statement Core (``find_tables``) ou de um texto gerado (o sentinela).
 
     Num statement Core entram as tabelas lidas e o alvo de um ``INSERT``, ``UPDATE`` ou
@@ -349,7 +383,10 @@ def referenced_tables(statement_or_sql: sa.sql.ClauseElement | str) -> set[str]:
 _SQL_SUFFIXES = (".duckdb.sql", ".redshift.sql")
 
 
-def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData) -> dict[str, str]:
+def sql_files(
+    statements: dict[str, sa.sql.ClauseElement],
+    metadata: sa.MetaData,
+) -> dict[str, str]:
     """Os arquivos de texto SQL de cada statement, em memória.
 
     O pipeline os versiona no seu repositório, e o diff contra a geração nova mostra o que uma
@@ -377,8 +414,11 @@ def sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData
     return files
 
 
-def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData,
-                    directory: str) -> list[str]:
+def write_sql_files(
+    statements: dict[str, sa.sql.ClauseElement],
+    metadata: sa.MetaData,
+    directory: str,
+) -> list[str]:
     """Grava ``sql_files`` em ``directory``.
 
     Nada é apagado: os arquivos de um statement que saiu do dicionário ficam na pasta, e
@@ -401,8 +441,11 @@ def write_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
     return write_files(sql_files(statements, metadata), directory)
 
 
-def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.MetaData,
-                    directory: str) -> list[str]:
+def check_sql_files(
+    statements: dict[str, sa.sql.ClauseElement],
+    metadata: sa.MetaData,
+    directory: str,
+) -> list[str]:
     """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
     O texto é comparado exato: o arquivo sem o ``\\n`` final difere, com o aviso
@@ -428,7 +471,12 @@ def check_sql_files(statements: dict[str, sa.sql.ClauseElement], metadata: sa.Me
     return diff_files(sql_files(statements, metadata), directory, _SQL_SUFFIXES)
 
 
-def read_sql(directory: str, name: str, dialect: Dialect, prefix: str) -> str:
+def read_sql(
+    directory: str,
+    name: str,
+    dialect: Dialect,
+    prefix: str,
+) -> str:
     """O texto versionado com o sentinela trocado pelo prefixo informado, pronto para ``bind``.
 
     Nenhuma outra primitiva preenche o sentinela.

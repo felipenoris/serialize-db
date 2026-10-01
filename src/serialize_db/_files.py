@@ -17,7 +17,9 @@ __all__: list[str] = []
 _NO_FINAL_NEWLINE = "\\ Sem quebra de linha no fim do arquivo"
 
 
-def _versioned_text(path: str) -> str:
+def _versioned_text(
+    path: str,
+) -> str:
     """O conteúdo do arquivo versionado, ou vazio quando ele não existe."""
     if not os.path.exists(path):
         return ""
@@ -25,7 +27,11 @@ def _versioned_text(path: str) -> str:
         return handle.read()
 
 
-def _stale_names(files: dict[str, str], directory: str, suffixes: tuple[str, ...]) -> list[str]:
+def _stale_names(
+    files: dict[str, str],
+    directory: str,
+    suffixes: tuple[str, ...],
+) -> list[str]:
     """Os arquivos de ``directory`` com nome terminado num de ``suffixes`` que a geração não
     produz, como os de uma tabela que saiu do modelo; vazio numa pasta que não existe."""
     if not os.path.isdir(directory):
@@ -39,7 +45,11 @@ def _stale_names(files: dict[str, str], directory: str, suffixes: tuple[str, ...
     return stale
 
 
-def _file_diff(versioned: str, generated: str, path: str) -> list[str]:
+def _file_diff(
+    versioned: str,
+    generated: str,
+    path: str,
+) -> list[str]:
     """O diff unificado de um arquivo, uma linha do diff por item, sem o ``\\n``.
 
     As linhas são comparadas com o ``\\n`` de cada uma, então o arquivo sem ``\\n`` no fim difere
@@ -58,7 +68,10 @@ def _file_diff(versioned: str, generated: str, path: str) -> list[str]:
     return lines
 
 
-def write_files(files: dict[str, str], directory: str) -> list[str]:
+def write_files(
+    files: dict[str, str],
+    directory: str,
+) -> list[str]:
     """Grava cada texto em ``directory/<nome>``, criando a pasta se preciso, e devolve os caminhos
     gravados em ordem de nome; um arquivo da pasta que a geração não produz fica como está."""
     os.makedirs(directory, exist_ok=True)
@@ -71,7 +84,11 @@ def write_files(files: dict[str, str], directory: str) -> list[str]:
     return written
 
 
-def diff_files(files: dict[str, str], directory: str, suffixes: tuple[str, ...]) -> list[str]:
+def diff_files(
+    files: dict[str, str],
+    directory: str,
+    suffixes: tuple[str, ...],
+) -> list[str]:
     """O diff unificado dos arquivos de ``directory`` contra os textos gerados, em ordem de nome.
 
     Vazio quando nada mudou. O texto é comparado exato, o ``\\n`` do fim inclusive; um arquivo

@@ -42,7 +42,9 @@ ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
 EXCEPTION_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception)\b")
 
 
-def environment_with(changes: dict[str, str | None]) -> dict[str, str]:
+def environment_with(
+    changes: dict[str, str | None],
+) -> dict[str, str]:
     """O ambiente do processo com as mudanças aplicadas: ``None`` remove a variável."""
     environment = dict(os.environ)
     for key, value in changes.items():
@@ -53,7 +55,9 @@ def environment_with(changes: dict[str, str | None]) -> dict[str, str]:
     return environment
 
 
-def last_error(stderr: str) -> str:
+def last_error(
+    stderr: str,
+) -> str:
     """A exceção final de um subprocesso numa linha: da última linha ``Tipo: mensagem`` até o fim,
     sem códigos de cor."""
     lines = ANSI_COLOR.sub("", stderr).strip().splitlines()
@@ -74,19 +78,25 @@ def last_error(stderr: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def storage(s3_location: S3Location) -> S3Location:
+def storage(
+    s3_location: S3Location,
+) -> S3Location:
     """Raiz da sessão no bucket."""
     return s3_location
 
 
 @pytest.fixture(scope="session")
-def table_uri(storage: S3Location) -> str:
+def table_uri(
+    storage: S3Location,
+) -> str:
     """Tabela ``operacoes`` gravada pela cadeia de credenciais padrão."""
     return write_sample_table(storage)
 
 
 @pytest.fixture(scope="session")
-def duckdb_connection(storage: S3Location) -> duckdb.DuckDBPyConnection:
+def duckdb_connection(
+    storage: S3Location,
+) -> duckdb.DuckDBPyConnection:
     """Conexão com ``httpfs`` e ``delta`` carregadas e um secret S3 com a chave da credencial
     do ``boto3``."""
     # storage roda antes do secret: pelo s3_location, proxy_environment exporta AWS_REGION e
@@ -106,7 +116,9 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
     # storage roda antes do boto3: pelo s3_location, proxy_environment exporta AWS_REGION e
     # NO_PROXY, e require_s3_access confere o acesso à raiz.
     @pytest.mark.usefixtures("storage")
-    def test_boto3_credential_source(self) -> None:
+    def test_boto3_credential_source(
+        self,
+    ) -> None:
         """Registra de onde o ``boto3`` obtém as credenciais e qual identidade assume."""
         session = boto3.Session()
 
@@ -134,7 +146,9 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         record("credentials.identity_arn", identity["Arn"])
 
     def test_delta_rs_credential_chain(
-        self, storage: S3Location, proxy_environment: dict[str, str | None]
+        self,
+        storage: S3Location,
+        proxy_environment: dict[str, str | None],
     ) -> None:
         """Quais variantes do ambiente deixam o delta-rs abrir a tabela pela cadeia padrão.
 
@@ -176,7 +190,10 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
 
         assert results["no_proxy_exported"] == "ok", results
 
-    def test_delta_rs_storage_options_fallback(self, storage: S3Location) -> None:
+    def test_delta_rs_storage_options_fallback(
+        self,
+        storage: S3Location,
+    ) -> None:
         """As credenciais temporárias do ``boto3`` em ``storage_options`` abrem a tabela sem a
         cadeia padrão.
 
@@ -203,7 +220,10 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         )
         assert DeltaTable(uri, storage_options=options).version() == 0
 
-    def test_conditional_put(self, storage: S3Location) -> None:
+    def test_conditional_put(
+        self,
+        storage: S3Location,
+    ) -> None:
         """``If-None-Match`` e ``If-Match`` no bucket: a primitiva do commit do Delta."""
         s3 = boto3.client("s3")
         key = f"{storage.prefix}/conditional.txt"
@@ -229,7 +249,11 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         storage.record("bucket_key_enabled", head.get("BucketKeyEnabled"))
         storage.record("versioned", "VersionId" in head)
 
-    def test_data_file_encryption(self, storage: S3Location, table_uri: str) -> None:
+    def test_data_file_encryption(
+        self,
+        storage: S3Location,
+        table_uri: str,
+    ) -> None:
         """Os arquivos do delta-rs recebem a criptografia padrão do bucket sem opção alguma: a mesma
         de um objeto que o ``boto3`` grava sem opção."""
         s3 = boto3.client("s3")
@@ -247,7 +271,9 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         assert data_file.get("SSEKMSKeyId") == reference.get("SSEKMSKeyId")
 
     def test_external_file_cache_serves_the_second_read(
-        self, storage: S3Location, table_uri: str
+        self,
+        storage: S3Location,
+        table_uri: str,
     ) -> None:
         """O cache de arquivos externos do DuckDB, ligado por padrão, guarda os blocos que o
         ``delta_scan`` leu do S3, e a segunda leitura na mesma instância não acrescenta nada a ele.
@@ -277,7 +303,11 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         assert after_first[1] > 0, after_first
         assert after_second == after_first, (after_first, after_second)
 
-    def test_boto3_list_copy_delete(self, storage: S3Location, table_uri: str) -> None:
+    def test_boto3_list_copy_delete(
+        self,
+        storage: S3Location,
+        table_uri: str,
+    ) -> None:
         """Listar, copiar e apagar objetos: o que ``export_snapshot(mode="copy")`` e a limpeza fazem
         no S3."""
         s3 = boto3.client("s3")

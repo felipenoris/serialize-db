@@ -17,7 +17,9 @@ __all__: list[str] = []
 Task = tuple[str, Callable[[], object]]
 
 
-def _outcome(future: Future) -> str:
+def _outcome(
+    future: Future,
+) -> str:
     """O resultado de uma tarefa terminada ou cancelada, para a nota da exceção."""
     if future.cancelled():
         return "cancelada"
@@ -27,7 +29,9 @@ def _outcome(future: Future) -> str:
     return f"falhou: {type(error).__name__}: {error}"
 
 
-def _outcomes_note(outcomes: Mapping[str, str]) -> str:
+def _outcomes_note(
+    outcomes: Mapping[str, str],
+) -> str:
     """A nota da exceção com o resultado de cada tabela: os commits feitos ficam, porque o Delta não
     tem transação entre tabelas."""
     lines = []
@@ -36,7 +40,9 @@ def _outcomes_note(outcomes: Mapping[str, str]) -> str:
     return "resultado por tabela: " + "; ".join(lines)
 
 
-def _outcomes_of(futures: Mapping[Future, str]) -> dict[str, str]:
+def _outcomes_of(
+    futures: Mapping[Future, str],
+) -> dict[str, str]:
     """O resultado de cada tarefa terminada, pelo nome da tabela."""
     outcomes = {}
     for future, name in futures.items():
@@ -55,14 +61,19 @@ class _PoolState:
     finished: dict[Future, str] = dataclasses.field(default_factory=dict)
     failure: BaseException | None = None
 
-    def start(self, waiting: list[Task]) -> None:
+    def start(
+        self,
+        waiting: list[Task],
+    ) -> None:
         """Começa as tarefas que cabem nos workers livres, enquanto não houve falha."""
         while waiting and self.failure is None and len(self.running) < self.workers:
             name, action = waiting.pop(0)
             future = self.pool.submit(action)
             self.running[future] = name
 
-    def collect(self) -> None:
+    def collect(
+        self,
+    ) -> None:
         """Espera a próxima tarefa terminar e guarda a primeira falha."""
         done, _ = wait(self.running, return_when=FIRST_COMPLETED)
         for future in done:
@@ -71,7 +82,10 @@ class _PoolState:
                 self.failure = future.exception()
 
 
-def run_in_pool(tasks: list[Task], max_workers: int) -> dict[str, object]:
+def run_in_pool(
+    tasks: list[Task],
+    max_workers: int,
+) -> dict[str, object]:
     """Roda as tarefas num pool de ``max_workers`` e devolve o resultado de cada uma pelo nome.
 
     Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em

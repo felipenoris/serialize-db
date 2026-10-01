@@ -94,7 +94,11 @@ FINITE_OR_NAN = [d for d in DOUBLES if d is not None and abs(d) < 1e30]
 AUGUST = MONTHS[3]
 
 
-def entrada_rows(month: str, start: int, count: int) -> pa.Table:
+def entrada_rows(
+    month: str,
+    start: int,
+    count: int,
+) -> pa.Table:
     """``count`` linhas de ``cad_entradas`` na partição ``month`` com valores de borda."""
     ids = list(range(start, start + count))
     day = datetime.date.fromisoformat(month)
@@ -113,23 +117,35 @@ def entrada_rows(month: str, start: int, count: int) -> pa.Table:
     return schema.cast(table, ENTRADA)
 
 
-def projected_expected(entrada: pa.Table) -> pa.Table:
+def projected_expected(
+    entrada: pa.Table,
+) -> pa.Table:
     """As linhas que o pipeline projeta de ``entrada``: toda coluna copiada e o id da entrada em
     ``id_entrada``; o ``id`` fica de fora, porque vem de ``next_ids``."""
     return entrada.append_column("id_entrada", entrada.column("id")).drop_columns(["id"])
 
 
-def engine_for(db: Database, folder: Path, execution_id: str) -> DuckDBEngine:
+def engine_for(
+    db: Database,
+    folder: Path,
+    execution_id: str,
+) -> DuckDBEngine:
     """O motor DuckDB da execução, com os limites do ambiente e o sandbox na pasta da sonda."""
     config = DuckDBConfig(temp_directory=str(folder / f"sandbox_{execution_id}"))
     return DuckDBEngine(config, execution_id, db.storage)
 
 
-def reader_config(folder: Path, name: str) -> DuckDBConfig:
+def reader_config(
+    folder: Path,
+    name: str,
+) -> DuckDBConfig:
     return DuckDBConfig(temp_directory=str(folder / f"leitor_{name}"))
 
 
-def report_known(title: str, problems: list[str]) -> None:
+def report_known(
+    title: str,
+    problems: list[str],
+) -> None:
     """A checagem sem a diferença conhecida do sinal do zero, impressa como leitura."""
     rest, known = known_zero_sign(problems)
     report(title, rest)
@@ -137,13 +153,19 @@ def report_known(title: str, problems: list[str]) -> None:
         print(f"   diferenças conhecidas do sinal do zero: {len(known)}; {known[0]}")
 
 
-def pipeline(run: Execution, months: list[str], outputs: list[sa.Table],
-             appenders: dict[str, object]) -> dict[str, int]:
+def pipeline(
+    run: Execution,
+    months: list[str],
+    outputs: list[sa.Table],
+    appenders: dict[str, object],
+) -> dict[str, int]:
     """O pipeline do cliente: uma thread por partição lê a entrada por ``stream`` e escreve
     cada lote em todo ``appender`` de saída com ids de ``next_ids``; devolve as linhas por mês."""
     written = {}
 
-    def project(month: str) -> None:
+    def project(
+        month: str,
+    ) -> None:
         statement = sa.select(ENTRADA).where(ENTRADA.c.data_str == month)
         rows = 0
         with run.sandbox.stream(statement, batch_size=3000) as stream:
@@ -163,8 +185,12 @@ def pipeline(run: Execution, months: list[str], outputs: list[sa.Table],
     return written
 
 
-def read_current(db: Database, folder: Path, table: sa.Table,
-                 month: str | None = None) -> pa.Table:
+def read_current(
+    db: Database,
+    folder: Path,
+    table: sa.Table,
+    month: str | None = None,
+) -> pa.Table:
     """A tabela pelo leitor Delta do canal ``current``, uma partição ou todas."""
     with db.open_delta(channel="current", config=reader_config(folder, "current")) as reader:
         statement = sa.select(table)
@@ -173,8 +199,12 @@ def read_current(db: Database, folder: Path, table: sa.Table,
         return reader.query(statement)
 
 
-def read_arrow(db: Database, table: sa.Table, month: str | None = None,
-               version: int | None = None) -> pa.Table:
+def read_arrow(
+    db: Database,
+    table: sa.Table,
+    month: str | None = None,
+    version: int | None = None,
+) -> pa.Table:
     """A tabela pelo dataset do delta-rs, uma partição ou todas."""
     found = delta.open_table(db.uri(table), db.storage, version).to_pyarrow_table()
     if month is not None:
@@ -182,7 +212,9 @@ def read_arrow(db: Database, table: sa.Table, month: str | None = None,
     return found
 
 
-def seed(db: Database) -> dict[str, pa.Table]:
+def seed(
+    db: Database,
+) -> dict[str, pa.Table]:
     """As quatro partições da entrada publicadas pelo escritor do delta-rs."""
     seeds = {}
     delta.create_table(db.uri(ENTRADA), ENTRADA, db.storage)
@@ -203,7 +235,11 @@ def cadastro_rows() -> pa.Table:
     return schema.cast(table, CADASTRO)
 
 
-def check_execution_a(db: Database, folder: Path, cadastro: pa.Table) -> None:
+def check_execution_a(
+    db: Database,
+    folder: Path,
+    cadastro: pa.Table,
+) -> None:
     """Seção A: a execução ``exec-a`` ingere a entrada, carrega o cadastro, roda o pipeline nas
     quatro partições em threads, audita e publica em duas threads: as duas tabelas particionadas
     com ``max_workers=2`` e o cadastro."""
@@ -255,8 +291,12 @@ def check_execution_a(db: Database, folder: Path, cadastro: pa.Table) -> None:
     report("A a execução exec-a rodou", problems)
 
 
-def check_published_a(db: Database, folder: Path, seeds: dict[str, pa.Table],
-                      cadastro: pa.Table) -> dict[tuple[str, str], pa.Table]:
+def check_published_a(
+    db: Database,
+    folder: Path,
+    seeds: dict[str, pa.Table],
+    cadastro: pa.Table,
+) -> dict[tuple[str, str], pa.Table]:
     """Seção A2: as tabelas publicadas contra as sementes pelo dataset e pelo leitor, os ids de
     1 a 80.000 sem repetição, os metadados dos commits e a entrada do snapshot ``t1``."""
     problems = []
@@ -296,12 +336,18 @@ def check_published_a(db: Database, folder: Path, seeds: dict[str, pa.Table],
     return expected_a
 
 
-def count_projected(reader: object) -> int:
+def count_projected(
+    reader: object,
+) -> int:
     return reader.query(sa.select(sa.func.count()).select_from(PROJ)).column(0)[0].as_py()
 
 
-def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table],
-                          expected_a: dict[tuple[str, str], pa.Table]) -> None:
+def check_pinned_reader_b(
+    db: Database,
+    folder: Path,
+    seeds: dict[str, pa.Table],
+    expected_a: dict[tuple[str, str], pa.Table],
+) -> None:
     """Seção B: um leitor ``current`` aberto antes de ``exec-b`` e consultado a cada 50 ms
     enquanto ela ingere com ``materialize=True``, lê ``pinned_delta``, projeta agosto de novo e
     setembro e publica; depois os canais ``current`` e ``default`` (em ``t1``)."""
@@ -379,7 +425,11 @@ def check_pinned_reader_b(db: Database, folder: Path, seeds: dict[str, pa.Table]
     report_known("B o leitor preso enquanto exec-b escreve; os canais", problems)
 
 
-def publish_outcome(run: Execution, name: str, outcomes: dict[str, object]) -> None:
+def publish_outcome(
+    run: Execution,
+    name: str,
+    outcomes: dict[str, object],
+) -> None:
     """O resultado de ``publish_delta`` de setembro em ``outcomes[name]``: o dicionário de
     versões, ou o ``ExecutionConflict``."""
     try:
@@ -388,7 +438,9 @@ def publish_outcome(run: Execution, name: str, outcomes: dict[str, object]) -> N
         outcomes[name] = error
 
 
-def prepare_september(run: Execution) -> None:
+def prepare_september(
+    run: Execution,
+) -> None:
     """A entrada ingerida, setembro projetado no ``appender`` e auditado, sem publicar."""
     run.ingest(ENTRADA)
     run.sandbox.create_table(PROJ)
@@ -397,7 +449,10 @@ def prepare_september(run: Execution) -> None:
     run.audit(PROJ, [NEW_MONTH])
 
 
-def last_committer(outcomes: dict[str, object], committers: list[str]) -> str:
+def last_committer(
+    outcomes: dict[str, object],
+    committers: list[str],
+) -> str:
     """A execução do commit de maior versão entre as que commitaram."""
     versions = {}
     for name in committers:
@@ -405,9 +460,15 @@ def last_committer(outcomes: dict[str, object], committers: list[str]) -> str:
     return max(versions, key=versions.get)
 
 
-def check_september(db: Database, folder: Path, seeds: dict[str, pa.Table], label: str,
-                    version: int, committers: list[str],
-                    outcomes: dict[str, object]) -> list[str]:
+def check_september(
+    db: Database,
+    folder: Path,
+    seeds: dict[str, pa.Table],
+    label: str,
+    version: int,
+    committers: list[str],
+    outcomes: dict[str, object],
+) -> list[str]:
     """As conferências de setembro depois de uma disputa: a versão esperada, um arquivo só no
     log, o do último commit, os órfãos da pasta impressos, os dados iguais à projeção e os ids
     sem repetição."""
@@ -437,7 +498,11 @@ def check_september(db: Database, folder: Path, seeds: dict[str, pa.Table], labe
     return problems
 
 
-def check_race_c(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> None:
+def check_race_c(
+    db: Database,
+    folder: Path,
+    seeds: dict[str, pa.Table],
+) -> None:
     """Seção C: ``exec-c`` e ``exec-d`` abertas na mesma versão publicam setembro em threads.
     Quando os dois commits se sobrepõem no delta-rs, um commita e o outro recebe
     ``ExecutionConflict``; quando o ``register_files`` da segunda abre a tabela depois do commit
@@ -482,19 +547,33 @@ class PausingEngine(DuckDBEngine):
     que põe o commit de outra execução entre a conferência da versão fixada de
     ``publish_delta`` e a abertura da tabela em ``register_files``."""
 
-    def __init__(self, config: DuckDBConfig, execution_id: str, storage: Storage,
-                 reached: threading.Event, gate: threading.Event) -> None:
+    def __init__(
+        self,
+        config: DuckDBConfig,
+        execution_id: str,
+        storage: Storage,
+        reached: threading.Event,
+        gate: threading.Event,
+    ) -> None:
         super().__init__(config, execution_id, storage)
         self.reached = reached
         self.gate = gate
 
-    def export_partition(self, *args: object, **kwargs: object) -> int:
+    def export_partition(
+        self,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
         self.reached.set()
         self.gate.wait(timeout=120)
         return super().export_partition(*args, **kwargs)
 
 
-def check_window_d(db: Database, folder: Path, seeds: dict[str, pa.Table]) -> None:
+def check_window_d(
+    db: Database,
+    folder: Path,
+    seeds: dict[str, pa.Table],
+) -> None:
     """Seção D: ``exec-e`` e ``exec-f`` abertas na mesma versão; ``exec-e`` para entre a
     conferência da versão fixada e o commit, ``exec-f`` publica setembro inteira nesse intervalo
     e ``exec-e`` segue. A docstring de ``publish_delta`` promete ``ExecutionConflict`` a

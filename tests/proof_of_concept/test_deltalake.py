@@ -76,7 +76,9 @@ ESPECIAIS = sa.Table(
 
 
 @pytest.fixture
-def folder(local_location: LocalLocation) -> Callable[[str], str]:
+def folder(
+    local_location: LocalLocation,
+) -> Callable[[str], str]:
     """O caminho de ``name`` sob ``deltalake/`` na raiz da sessão, sem criar a pasta; cada teste
     usa nomes próprios."""
     return lambda name: local_location.child(f"deltalake/{name}")
@@ -96,13 +98,19 @@ def con() -> Iterator[duckdb.DuckDBPyConnection]:
     connection.close()
 
 
-def log_actions(uri: str, version: int) -> list[dict]:
+def log_actions(
+    uri: str,
+    version: int,
+) -> list[dict]:
     """As ações do commit ``version``, uma por linha de ``_delta_log/<versão>.json``."""
     lines = Path(uri, "_delta_log", f"{version:020d}.json").read_text(encoding="utf-8").splitlines()
     return [json.loads(line) for line in lines]
 
 
-def added_stats(uri: str, version: int) -> list[dict]:
+def added_stats(
+    uri: str,
+    version: int,
+) -> list[dict]:
     """As estatísticas de cada ação ``add`` do commit ``version``, lidas do JSON da ação."""
     stats = []
     for action in log_actions(uri, version):
@@ -111,7 +119,12 @@ def added_stats(uri: str, version: int) -> list[dict]:
     return stats
 
 
-def add_action(path: str, size: int, partition_values: dict[str, str], stats: dict) -> AddAction:
+def add_action(
+    path: str,
+    size: int,
+    partition_values: dict[str, str],
+    stats: dict,
+) -> AddAction:
     """A ação ``add`` de um arquivo novo, com ``dataChange`` e o instante atual."""
     return AddAction(
         path=path,
@@ -123,7 +136,10 @@ def add_action(path: str, size: int, partition_values: dict[str, str], stats: di
     )
 
 
-def append_actions(uri: str, actions: list[AddAction]) -> None:
+def append_actions(
+    uri: str,
+    actions: list[AddAction],
+) -> None:
     """Registra ``actions`` num ``append`` com o esquema atual da tabela e a partição ``mes``."""
     table = DeltaTable(uri)
     table.create_write_transaction(
@@ -131,19 +147,27 @@ def append_actions(uri: str, actions: list[AddAction]) -> None:
     )
 
 
-def return_stats_row(cursor: duckdb.DuckDBPyConnection) -> dict:
+def return_stats_row(
+    cursor: duckdb.DuckDBPyConnection,
+) -> dict:
     """A linha do ``COPY ... (RETURN_STATS)`` de um arquivo, como dicionário pelo nome da coluna."""
     columns = [column[0] for column in cursor.description]
     return dict(zip(columns, cursor.fetchone()))
 
 
-def cast_column(table: pa.Table, name: str, target: pa.DataType) -> pa.Table:
+def cast_column(
+    table: pa.Table,
+    name: str,
+    target: pa.DataType,
+) -> pa.Table:
     """A tabela com a coluna ``name`` convertida para ``target``, na mesma posição."""
     index = table.schema.get_field_index(name)
     return table.set_column(index, name, table.column(name).cast(target))
 
 
-def test_create_from_schema_is_idempotent(folder: Callable[[str], str]) -> None:
+def test_create_from_schema_is_idempotent(
+    folder: Callable[[str], str],
+) -> None:
     """``DeltaTable.create(mode="ignore")`` grava a versão 0 com esquema, partição, comentários e
     propriedades, uma vez só."""
     uri = folder("create")
@@ -196,7 +220,10 @@ def test_create_from_schema_is_idempotent(folder: Callable[[str], str]) -> None:
     assert again.history()[0]["operation"] == "CREATE TABLE"
 
 
-def test_write_modes_and_predicate(folder: Callable[[str], str], two_months: pa.Table) -> None:
+def test_write_modes_and_predicate(
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+) -> None:
     """``append`` acrescenta, ``overwrite`` com ``predicate`` substitui só o mês, e o escritor
     valida predicado e nulidade."""
     uri = folder("write")
@@ -225,7 +252,10 @@ def test_write_modes_and_predicate(folder: Callable[[str], str], two_months: pa.
         write_deltalake(strict, pa.table({"id": pa.array([1, None], pa.int64())}), mode="append")
 
 
-def test_schema_evolution_and_update(folder: Callable[[str], str], two_months: pa.Table) -> None:
+def test_schema_evolution_and_update(
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+) -> None:
     """Coluna nova entra por ``schema_mode="merge"`` ou ``alter.add_columns``;
     ``alter.add_constraint`` registra um ``CHECK``; o tipo é convertido no ``append``; ``update``
     preenche por predicado."""
@@ -270,14 +300,19 @@ def test_schema_evolution_and_update(folder: Callable[[str], str], two_months: p
     assert legacy.num_rows == 3 * two_months.num_rows
 
 
-def test_time_travel_and_restore(folder: Callable[[str], str], two_months: pa.Table) -> None:
+def test_time_travel_and_restore(
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+) -> None:
     """Cada versão lê com os arquivos e o esquema dela; os metadados de commit ficam no histórico;
     ``restore`` é um commit novo."""
     uri = folder("history")
     february = two_months.filter(pc.field("mes") == MONTHS[1])
     february_predicate = f"mes = '{MONTHS[1]}'"
 
-    def properties(execution_id: str) -> CommitProperties:
+    def properties(
+        execution_id: str,
+    ) -> CommitProperties:
         return CommitProperties(custom_metadata={"serialize_db_execution_id": execution_id})
 
     write_deltalake(
@@ -324,7 +359,9 @@ def test_time_travel_and_restore(folder: Callable[[str], str], two_months: pa.Ta
 
 
 def test_add_actions_and_register_external_file(
-    folder: Callable[[str], str], two_months: pa.Table, con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """As ações ``add`` do log dão o caminho relativo, o tamanho e a partição; um Parquet de outro
     escritor entra por ``AddAction``."""
@@ -359,7 +396,10 @@ def test_add_actions_and_register_external_file(
     assert con.execute(registered_count).fetchone()[0] == 10
 
 
-def test_vacuum_with_keep_versions(folder: Callable[[str], str], two_months: pa.Table) -> None:
+def test_vacuum_with_keep_versions(
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+) -> None:
     """``vacuum`` recusa retenção abaixo da configurada; ``keep_versions`` preserva os arquivos de
     um snapshot."""
     uri = folder("vacuum")
@@ -394,7 +434,10 @@ def test_vacuum_with_keep_versions(folder: Callable[[str], str], two_months: pa.
         DeltaTable(uri, version=2).to_pyarrow_table()
 
 
-def test_dataset_reader_and_deep_copy(folder: Callable[[str], str], two_months: pa.Table) -> None:
+def test_dataset_reader_and_deep_copy(
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+) -> None:
     """A tabela é lida como dataset Arrow com poda por partição, e o leitor em lotes alimenta uma
     cópia profunda."""
     uri = folder("dataset")
@@ -416,7 +459,10 @@ def test_dataset_reader_and_deep_copy(folder: Callable[[str], str], two_months: 
     assert copy.to_pyarrow_table().num_rows == 1000
 
 
-def test_log_files(folder: Callable[[str], str], two_months: pa.Table) -> None:
+def test_log_files(
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+) -> None:
     """O log é um JSON por commit com uma ação por linha: ``commitInfo``, ``protocol``, ``metaData``
     e ``add``."""
     uri = folder("log")
@@ -435,7 +481,8 @@ def test_log_files(folder: Callable[[str], str], two_months: pa.Table) -> None:
 
 
 def test_is_deltatable_and_drop_column_not_null(
-    folder: Callable[[str], str], two_months: pa.Table
+    folder: Callable[[str], str],
+    two_months: pa.Table,
 ) -> None:
     """``is_deltatable`` distingue pasta vazia de tabela; ``drop_column_not_null`` relaxa a nulidade
     só nos metadados."""
@@ -462,7 +509,9 @@ def test_is_deltatable_and_drop_column_not_null(
 
 
 def test_duckdb_view_pins_version_and_reader_feeds_write(
-    folder: Callable[[str], str], two_months: pa.Table, con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """Uma view sobre ``delta_scan(uri, version := v)`` lê sempre ``v``; o leitor Arrow do DuckDB
     entra no ``write_deltalake``."""
@@ -491,7 +540,8 @@ def test_duckdb_view_pins_version_and_reader_feeds_write(
 
 
 def test_version_diff_reads_data_changes_in_the_log(
-    folder: Callable[[str], str], two_months: pa.Table
+    folder: Callable[[str], str],
+    two_months: pa.Table,
 ) -> None:
     """``delta.version_diff`` lê as partições a recarregar no Redshift das ações ``add`` e
     ``remove`` com ``dataChange`` do log: a substituição, o ``append`` e a remoção contam, a
@@ -535,7 +585,10 @@ def test_version_diff_reads_data_changes_in_the_log(
     assert rows_after == rows_before
 
 
-def test_compact_and_checkpoint(folder: Callable[[str], str], two_months: pa.Table) -> None:
+def test_compact_and_checkpoint(
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+) -> None:
     """``optimize.compact`` junta os arquivos pequenos de um mês; ``create_checkpoint`` grava o
     resumo do log."""
     uri = folder("compact")
@@ -564,7 +617,9 @@ def test_compact_and_checkpoint(folder: Callable[[str], str], two_months: pa.Tab
     assert DeltaTable(uri, version=0).to_pyarrow_table().num_rows == 1000
 
 
-def test_compact_packs_files_up_to_the_target_size(folder: Callable[[str], str]) -> None:
+def test_compact_packs_files_up_to_the_target_size(
+    folder: Callable[[str], str],
+) -> None:
     """``optimize.compact`` junta numa partição os arquivos que cabem juntos no tamanho alvo, o
     ``target_size`` ou, sem ele, a propriedade ``delta.targetFileSize`` da tabela; o arquivo que
     não cabe com outro fica, e sem nada a juntar não há commit. As métricas contam os arquivos
@@ -605,7 +660,9 @@ def test_compact_packs_files_up_to_the_target_size(folder: Callable[[str], str])
 
 
 def test_export_snapshot_by_copying_files(
-    folder: Callable[[str], str], two_months: pa.Table, con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """``export_snapshot(mode="copy")``: os arquivos que o log lista, copiados no layout
     ``mes=.../``, sem ler dados."""
@@ -632,7 +689,9 @@ def test_export_snapshot_by_copying_files(
 
 
 def test_initial_load_from_parquet_folders(
-    folder: Callable[[str], str], two_months: pa.Table, con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """A carga inicial: cada pasta ``mes=<valor>/`` de Parquet entra por ``overwrite`` com
     predicado, com o valor do caminho na coluna de partição, a chave em ``BIGINT`` e o ``double``
@@ -701,7 +760,9 @@ def test_initial_load_from_parquet_folders(
 
 
 def test_create_write_transaction_trusts_path_and_stats(
-    folder: Callable[[str], str], two_months: pa.Table, con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """``create_write_transaction`` não confere a ação: um caminho inexistente e uma estatística
     falsa commitam, e os leitores obedecem à ação."""
@@ -773,7 +834,9 @@ def test_create_write_transaction_trusts_path_and_stats(
 
 
 def test_create_write_transaction_trusts_file_schema(
-    folder: Callable[[str], str], two_months: pa.Table, con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    two_months: pa.Table,
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """Um arquivo sem uma coluna ``NOT NULL`` ou com um tipo incompatível commita; a coluna lê nulo,
     o tipo falha na leitura; o ``overwrite`` com ``partition_filters`` troca só os arquivos da
@@ -784,7 +847,11 @@ def test_create_write_transaction_trusts_file_schema(
     write_deltalake(uri, two_months.cast(not_null), mode="append")
     ten = sample_table().slice(160_000, 10).drop_columns(["mes"])
 
-    def register(month: str, name: str, data: pa.Table) -> None:
+    def register(
+        month: str,
+        name: str,
+        data: pa.Table,
+    ) -> None:
         """Grava ``data`` em ``mes=<month>/<name>`` e o registra num ``append`` sem mínimo e
         máximo."""
         partition_folder = Path(uri) / f"mes={month}"
@@ -846,7 +913,9 @@ def test_create_write_transaction_trusts_file_schema(
     assert DeltaTable(uri).to_pyarrow_table(filters=both_months).num_rows == 510
 
 
-def physical_types(path: Path) -> dict[str, str]:
+def physical_types(
+    path: Path,
+) -> dict[str, str]:
     """O tipo físico de cada coluna no rodapé de um arquivo Parquet."""
     schema = pq.ParquetFile(path).schema
     types = {}
@@ -856,7 +925,8 @@ def physical_types(path: Path) -> dict[str, str]:
 
 
 def test_compact_rewrites_files_from_another_writer(
-    folder: Callable[[str], str], two_months: pa.Table
+    folder: Callable[[str], str],
+    two_months: pa.Table,
 ) -> None:
     """``optimize.compact`` reescreve pelo escritor do delta-rs: o ``INT96`` e o
     ``FIXED_LEN_BYTE_ARRAY`` registrados saem em ``INT64``, com estatística."""
@@ -899,7 +969,9 @@ def test_compact_rewrites_files_from_another_writer(
     assert DeltaTable(uri).to_pyarrow_table().num_rows == 510
 
 
-def test_description_and_comments_survive_overwrite(folder: Callable[[str], str]) -> None:
+def test_description_and_comments_survive_overwrite(
+    folder: Callable[[str], str],
+) -> None:
     """A descrição, o nome e os comentários de coluna atravessam o ``overwrite`` e mudam por
     ``alter``."""
     uri = folder("description")
@@ -920,7 +992,9 @@ def test_description_and_comments_survive_overwrite(folder: Callable[[str], str]
         description="Operações por data-base",
     )
 
-    def comments(table: DeltaTable) -> dict[str, str | None]:
+    def comments(
+        table: DeltaTable,
+    ) -> dict[str, str | None]:
         """O comentário de cada campo, como o esquema Delta o guarda."""
         fields = json.loads(table.schema().to_json())["fields"]
         found = {}
@@ -950,7 +1024,8 @@ def test_description_and_comments_survive_overwrite(folder: Callable[[str], str]
 
 
 def test_written_stats_lose_the_row_on_decimal(
-    folder: Callable[[str], str], con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """O próprio delta-rs grava o mínimo e o máximo de ``decimal`` como float JSON, e a poda perde a
     linha."""
@@ -1000,7 +1075,8 @@ def test_written_stats_lose_the_row_on_decimal(
 
 
 def test_nan_statistics_hide_rows_from_delta_scan(
-    folder: Callable[[str], str], con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """O ``NaN`` fica fora do máximo, no ``RETURN_STATS`` e no escritor do delta-rs, e o
     ``delta_scan`` responde a um filtro por intervalo conforme a poda; o infinito registrado com as
@@ -1013,7 +1089,10 @@ def test_nan_statistics_hide_rows_from_delta_scan(
     """
     schema = pa.schema([("id", pa.int64()), ("valor", pa.float64())])
 
-    def register_values(name: str, values: str) -> str:
+    def register_values(
+        name: str,
+        values: str,
+    ) -> str:
         """Grava ``values`` pelo ``COPY ... RETURN_STATS`` na tabela ``t`` do sandbox e numa tabela
         Delta nova, registra o arquivo com as estatísticas de ``delta.file_from_return_stats`` e
         devolve a URI."""
@@ -1032,11 +1111,15 @@ def test_nan_statistics_hide_rows_from_delta_scan(
         DeltaTable(uri).create_write_transaction([added], mode="append", schema=schema)
         return uri
 
-    def count_above_three(relation: str) -> int:
+    def count_above_three(
+        relation: str,
+    ) -> int:
         """Quantas linhas de ``relation`` têm ``valor > 3``."""
         return con.execute(f"SELECT count(*) FROM {relation} WHERE valor > 3").fetchone()[0]
 
-    def logged_max(uri: str) -> list[float | None]:
+    def logged_max(
+        uri: str,
+    ) -> list[float | None]:
         """O ``max.valor`` de cada ação ``add`` da versão atual, como o delta-rs o lê do log."""
         actions = pa.table(DeltaTable(uri).get_add_actions(flatten=True))
         return actions.column("max.valor").to_pylist()
@@ -1077,7 +1160,8 @@ def test_nan_statistics_hide_rows_from_delta_scan(
 
 
 def test_float_statistics_off_keep_the_nan_row(
-    folder: Callable[[str], str], con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """Sem mínimo e máximo do ``Double`` no rodapé e no log, o ``delta_scan`` devolve a linha do
     ``NaN``.
@@ -1093,7 +1177,9 @@ def test_float_statistics_off_keep_the_nan_row(
     values = pa.array([1.5, float("nan"), 2.0, 4.0, 5.0, 6.0])
     table = pa.table({"id": ids, "valor": values})
 
-    def delta_scan_count(uri: str) -> int:
+    def delta_scan_count(
+        uri: str,
+    ) -> int:
         query = f"SELECT count(*) FROM delta_scan('{uri}') WHERE valor > 3"
         return con.execute(query).fetchone()[0]
 
@@ -1136,7 +1222,8 @@ def test_float_statistics_off_keep_the_nan_row(
 
 
 def test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning(
-    folder: Callable[[str], str], con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """A regra da issue #59 por partição: a partição com valor não finito grava o ``Double`` sem
     mínimo e máximo, a outra grava os dois, e o ``delta_scan`` devolve a linha do ``NaN`` e continua
@@ -1154,7 +1241,9 @@ def test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning(
     without_bounds = WriterProperties(column_properties=no_statistics)
 
     def write_partition(
-        value: str, numbers: list[float], properties: WriterProperties | None
+        value: str,
+        numbers: list[float],
+        properties: WriterProperties | None,
     ) -> None:
         """Substitui a partição ``value`` por ``numbers``, com o ``writer_properties`` da
         chamada."""
@@ -1186,7 +1275,8 @@ def test_float_statistics_off_per_partition_keep_the_nan_row_and_the_pruning(
 
 
 def test_dataset_filter_loses_rows_on_a_column_without_min_max(
-    folder: Callable[[str], str], con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """O dataset do delta-rs perde as linhas de um filtro sobre uma coluna que o log deixa sem
     mínimo e máximo, e o ``delta_scan`` não.
@@ -1201,7 +1291,11 @@ def test_dataset_filter_loses_rows_on_a_column_without_min_max(
     values = pa.array([1.0, 2.0, None, None, None], pa.float64())
     table = pa.table({"id": ids, "valor": values})
 
-    def counts(uri: str, condition: ds.Expression, text: str) -> tuple[int, int]:
+    def counts(
+        uri: str,
+        condition: ds.Expression,
+        text: str,
+    ) -> tuple[int, int]:
         """As linhas do filtro pelo dataset do delta-rs e pelo ``delta_scan``."""
         dataset = DeltaTable(uri).to_pyarrow_dataset()
         query = f"SELECT count(*) FROM delta_scan('{uri}') WHERE {text}"
@@ -1238,7 +1332,8 @@ def test_dataset_filter_loses_rows_on_a_column_without_min_max(
 
 
 def test_two_registrations_of_the_same_partition_conflict(
-    folder: Callable[[str], str], two_months: pa.Table
+    folder: Callable[[str], str],
+    two_months: pa.Table,
 ) -> None:
     """Dois ``create_write_transaction(mode="overwrite")`` da mesma partição, a partir da mesma
     versão: o segundo é ``CommitFailedError``, e a partição fica com o arquivo do primeiro.
@@ -1253,7 +1348,9 @@ def test_two_registrations_of_the_same_partition_conflict(
     february = two_months.filter(pc.equal(two_months.column("mes"), MONTHS[1]))
     february_rows = february.drop_columns(["mes"])
 
-    def write_file_action(name: str) -> AddAction:
+    def write_file_action(
+        name: str,
+    ) -> AddAction:
         """Grava ``february_rows`` em ``<name>.parquet`` na pasta de fevereiro e devolve a ação
         ``add``."""
         file = Path(uri) / f"mes={MONTHS[1]}" / f"{name}.parquet"
@@ -1292,7 +1389,8 @@ def test_two_registrations_of_the_same_partition_conflict(
 
 
 def test_delta_scan_prunes_by_equality_and_range_not_by_in_list(
-    folder: Callable[[str], str], con: duckdb.DuckDBPyConnection
+    folder: Callable[[str], str],
+    con: duckdb.DuckDBPyConnection,
 ) -> None:
     """O ``delta_scan`` abre só os arquivos das partições de um ``=`` ou de um intervalo; um ``IN``
     de mais de um valor e um ``OR`` abrem todos.
@@ -1309,7 +1407,9 @@ def test_delta_scan_prunes_by_equality_and_range_not_by_in_list(
     write_deltalake(uri, data, partition_by=["mes"])
     con.execute("CALL enable_logging('FileSystem')")
 
-    def partitions_opened(predicate: str) -> int:
+    def partitions_opened(
+        predicate: str,
+    ) -> int:
         """Quantas pastas de partição o ``delta_scan`` abre com ``predicate``."""
         con.execute("CALL truncate_duckdb_logs()")
         query = f"SELECT count(*) FROM delta_scan('{uri}', version := 0) WHERE {predicate}"

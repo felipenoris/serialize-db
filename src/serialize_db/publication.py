@@ -184,17 +184,25 @@ class PublishedColumn:
 # ---------------------------------------------------------------- o texto dos comandos
 
 
-def _published_name(environment: str, table: sa.Table) -> str:
+def _published_name(
+    environment: str,
+    table: sa.Table,
+) -> str:
     """``<ambiente>_<tabela>``, o nome da tabela publicada."""
     return f"{environment}_{table.name}"
 
 
-def _qualified(schema: str, name: str) -> str:
+def _qualified(
+    schema: str,
+    name: str,
+) -> str:
     """``"<esquema>"."<nome>"``."""
     return f"{quoted(schema)}.{quoted(name)}"
 
 
-def control_ddl(schema: str) -> str:
+def control_ddl(
+    schema: str,
+) -> str:
     """O ``CREATE TABLE`` da tabela de controle, sem ``IF NOT EXISTS``: só o usuário o roda, uma
     vez, e a segunda chamada falha com a mensagem do servidor.
 
@@ -212,7 +220,11 @@ def control_ddl(schema: str) -> str:
             "delta_version BIGINT, execution_id VARCHAR(127), published_at TIMESTAMP)")
 
 
-def control_read(schema: str, environment: str, table: sa.Table) -> str:
+def control_read(
+    schema: str,
+    environment: str,
+    table: sa.Table,
+) -> str:
     """O ``select`` da linha de controle da tabela, o primeiro comando da transação.
 
     Exemplo:
@@ -234,7 +246,11 @@ def control_read(schema: str, environment: str, table: sa.Table) -> str:
             f"WHERE table_name = {literal(_published_name(environment, table))}")
 
 
-def published_ddl(schema: str, environment: str, table: sa.Table) -> str:
+def published_ddl(
+    schema: str,
+    environment: str,
+    table: sa.Table,
+) -> str:
     """O ``CREATE TABLE`` da tabela publicada: o DDL do contrato com a chave primária
     informativa e as cláusulas físicas do modelo.
 
@@ -268,7 +284,11 @@ def published_ddl(schema: str, environment: str, table: sa.Table) -> str:
             + redshift_options(table_options(table)))
 
 
-def _partition_delete(published: str, table: sa.Table, value: str | None) -> str:
+def _partition_delete(
+    published: str,
+    table: sa.Table,
+    value: str | None,
+) -> str:
     """O ``DELETE`` da partição na tabela publicada; a tabela inteira sem partição."""
     partition_by = table_options(table).partition_by
     if partition_by is None:
@@ -276,11 +296,17 @@ def _partition_delete(published: str, table: sa.Table, value: str | None) -> str
     return f"DELETE FROM {published} WHERE {quoted(partition_by)} = {literal(value)}"
 
 
-def publication_statements(schema: str, environment: str, table: sa.Table,
-                           partitions: Sequence[str | None],
-                           manifests: Mapping[str | None, Sequence[delta.CopyManifest]],
-                           delta_version: int, published_version: int | None, execution_id: str,
-                           credentials: str) -> list[str]:
+def publication_statements(
+    schema: str,
+    environment: str,
+    table: sa.Table,
+    partitions: Sequence[str | None],
+    manifests: Mapping[str | None, Sequence[delta.CopyManifest]],
+    delta_version: int,
+    published_version: int | None,
+    execution_id: str,
+    credentials: str,
+) -> list[str]:
     """Os comandos da transação depois da leitura da linha de controle, um por ``execute``, sem
     ``BEGIN`` e ``COMMIT``: na primeira publicação o ``CREATE TABLE`` da tabela publicada; a
     staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e, quando ela tem
@@ -347,8 +373,12 @@ def publication_statements(schema: str, environment: str, table: sa.Table,
     return statements
 
 
-def unpublication_statements(schema: str, environment: str, table: sa.Table,
-                             published_version: int) -> list[str]:
+def unpublication_statements(
+    schema: str,
+    environment: str,
+    table: sa.Table,
+    published_version: int,
+) -> list[str]:
     """Os comandos da despublicação depois da leitura da linha de controle: o ``DROP TABLE`` da
     tabela publicada e o ``DELETE`` da linha, condicionado à versão lida.
 
@@ -376,7 +406,9 @@ def unpublication_statements(schema: str, environment: str, table: sa.Table,
 # ---------------------------------------------------------------- a reconciliação
 
 
-def _expected_column(column: sa.Column) -> PublishedColumn:
+def _expected_column(
+    column: sa.Column,
+) -> PublishedColumn:
     """A coluna do contrato como ``svv_all_columns`` a listaria, na família do tipo."""
     # O texto do tipo é o nome, com um número entre parênteses (a largura) ou dois (a precisão e
     # a escala): "BIGINT", "VARCHAR(20)", "DECIMAL(18, 2)".
@@ -392,14 +424,18 @@ def _expected_column(column: sa.Column) -> PublishedColumn:
     return PublishedColumn(column.name, family, None, None, None)
 
 
-def _optional_int(value: object) -> int | None:
+def _optional_int(
+    value: object,
+) -> int | None:
     """O inteiro de um número lido como texto ou do catálogo; ``None`` quando não há valor."""
     if value is None:
         return None
     return int(value)
 
 
-def _in_family(column: PublishedColumn) -> PublishedColumn:
+def _in_family(
+    column: PublishedColumn,
+) -> PublishedColumn:
     """A coluna publicada com o tipo na família, para a comparação."""
     family = _TYPE_FAMILIES.get(column.data_type.lower(), column.data_type.lower())
     if family in ("varchar", "char"):
@@ -409,8 +445,12 @@ def _in_family(column: PublishedColumn) -> PublishedColumn:
     return PublishedColumn(column.name, family, None, None, None)
 
 
-def reconcile_published(schema: str, environment: str, table: sa.Table,
-                        columns: Sequence[PublishedColumn]) -> tuple[list[str], list[str]]:
+def reconcile_published(
+    schema: str,
+    environment: str,
+    table: sa.Table,
+    columns: Sequence[PublishedColumn],
+) -> tuple[list[str], list[str]]:
     """O diff entre o contrato e a tabela publicada.
 
     Aditivo: a coluna anulável nova. Destrutivo: a coluna removida, a coluna ``NOT NULL`` nova, o
@@ -463,11 +503,17 @@ class _Connection:
     """Uma conexão da publicação: um cursor por comando, o erro do servidor com o comando
     mascarado numa nota, e o ``BEGIN``, o ``COMMIT`` e o ``ROLLBACK`` explícitos."""
 
-    def __init__(self, config: RedshiftConfig) -> None:
+    def __init__(
+        self,
+        config: RedshiftConfig,
+    ) -> None:
         self.config = config
         self.connection = connect(config)
 
-    def execute(self, text: str) -> object:
+    def execute(
+        self,
+        text: str,
+    ) -> object:
         """Roda um comando num cursor novo e o devolve."""
         cursor = self.connection.cursor()
         try:
@@ -477,22 +523,32 @@ class _Connection:
             raise
         return cursor
 
-    def rows(self, text: str) -> list:
+    def rows(
+        self,
+        text: str,
+    ) -> list:
         """As linhas de uma consulta."""
         return list(self.execute(text).fetchall())
 
-    def rollback(self) -> None:
+    def rollback(
+        self,
+    ) -> None:
         """O ``ROLLBACK``; o erro dele não esconde o que o causou."""
         try:
             self.execute("ROLLBACK")
         except redshift_connector.Error as error:
             log.warning("ROLLBACK recusado: %s", error)
 
-    def close(self) -> None:
+    def close(
+        self,
+    ) -> None:
         self.connection.close()
 
 
-def _check_control_table(connection: _Connection, schema: str) -> None:
+def _check_control_table(
+    connection: _Connection,
+    schema: str,
+) -> None:
     """A tabela de controle existe, por ``select 1 ... limit 0`` fora de transação; sem ela,
     ``PublicationError`` com a instrução de inicialização."""
     try:
@@ -504,15 +560,23 @@ def _check_control_table(connection: _Connection, schema: str) -> None:
         raise
 
 
-def _read_control(connection: _Connection, schema: str, environment: str,
-                  table: sa.Table) -> int | None:
+def _read_control(
+    connection: _Connection,
+    schema: str,
+    environment: str,
+    table: sa.Table,
+) -> int | None:
     """A versão publicada da tabela na linha de controle, ou ``None`` sem linha."""
     rows = connection.rows(control_read(schema, environment, table))
     return int(rows[0][0]) if rows else None
 
 
-def _published_columns(connection: _Connection, config: RedshiftConfig, environment: str,
-                       table: sa.Table) -> list[PublishedColumn]:
+def _published_columns(
+    connection: _Connection,
+    config: RedshiftConfig,
+    environment: str,
+    table: sa.Table,
+) -> list[PublishedColumn]:
     """As colunas da tabela publicada em ``svv_all_columns``, na ordem; vazia quando a tabela
     não existe."""
     name = _published_name(environment, table)
@@ -540,7 +604,10 @@ def _published_columns(connection: _Connection, config: RedshiftConfig, environm
 # ---------------------------------------------------------------- a publicação
 
 
-def _conflict(error: BaseException, table: sa.Table) -> ExecutionConflict | None:
+def _conflict(
+    error: BaseException,
+    table: sa.Table,
+) -> ExecutionConflict | None:
     """O ``ExecutionConflict`` de um erro do servidor que é conflito entre publicações: o
     ``1023`` e a tabela publicada que outra primeira publicação criou; ``None`` nos demais."""
     if serialization_failure(error):
@@ -552,8 +619,12 @@ def _conflict(error: BaseException, table: sa.Table) -> ExecutionConflict | None
     return None
 
 
-def _unpublish_table(connection: _Connection, config: RedshiftConfig, environment: str,
-                     table: sa.Table) -> int | None:
+def _unpublish_table(
+    connection: _Connection,
+    config: RedshiftConfig,
+    environment: str,
+    table: sa.Table,
+) -> int | None:
     """A transação da despublicação: a linha lida, o ``DROP TABLE`` e o ``DELETE`` da linha;
     devolve a versão que estava publicada, ou ``None`` sem linha."""
     connection.execute("BEGIN")
@@ -582,8 +653,12 @@ def _unpublish_table(connection: _Connection, config: RedshiftConfig, environmen
     return published
 
 
-def _reconcile(connection: _Connection, config: RedshiftConfig, environment: str,
-               table: sa.Table) -> None:
+def _reconcile(
+    connection: _Connection,
+    config: RedshiftConfig,
+    environment: str,
+    table: sa.Table,
+) -> None:
     """A tabela publicada reconciliada com o contrato: as colunas novas acrescentadas, fora de
     transação; um diff destrutivo despublica a tabela, e a transação da mesma publicação a
     recria."""
@@ -600,8 +675,13 @@ def _reconcile(connection: _Connection, config: RedshiftConfig, environment: str
         connection.execute(statement)
 
 
-def _partitions_to_publish(uri: str, table: sa.Table, published: int | None, version: int,
-                           storage: Storage) -> tuple[list[str | None], list[str | None]]:
+def _partitions_to_publish(
+    uri: str,
+    table: sa.Table,
+    published: int | None,
+    version: int,
+    storage: Storage,
+) -> tuple[list[str | None], list[str | None]]:
     """As partições que a publicação troca e, entre elas, as que têm arquivo na versão: todas na
     primeira publicação, as de ``version_diff`` entre a menor e a maior das duas versões nas
     seguintes, o que serve à volta a uma versão anterior à publicada."""
@@ -614,9 +694,13 @@ def _partitions_to_publish(uri: str, table: sa.Table, published: int | None, ver
     return changed, [value for value in changed if value in available]
 
 
-def _write_manifests(db: Database, table: sa.Table, values: Sequence[str | None],
-                     execution_id: str,
-                     version: int) -> dict[str | None, list[delta.CopyManifest]]:
+def _write_manifests(
+    db: Database,
+    table: sa.Table,
+    values: Sequence[str | None],
+    execution_id: str,
+    version: int,
+) -> dict[str | None, list[delta.CopyManifest]]:
     """Os manifestos do ``COPY`` de cada partição com arquivo, um por lista de colunas dos
     arquivos, em ``<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``."""
     storage = db.storage
@@ -631,8 +715,13 @@ def _write_manifests(db: Database, table: sa.Table, values: Sequence[str | None]
     return manifests
 
 
-def _run_publication(connection: _Connection, config: RedshiftConfig, table: sa.Table,
-                     statements: Sequence[str], published: int | None) -> None:
+def _run_publication(
+    connection: _Connection,
+    config: RedshiftConfig,
+    table: sa.Table,
+    statements: Sequence[str],
+    published: int | None,
+) -> None:
     """Os comandos da transação, um por ``execute``, cada ``COPY`` com a cláusula de credenciais
     montada logo antes; o último grava a linha de controle, e o ``UPDATE`` dela que não afeta
     linha é ``ExecutionConflict``."""
@@ -650,9 +739,14 @@ def _run_publication(connection: _Connection, config: RedshiftConfig, table: sa.
                                 f"(versão lida {published})")
 
 
-def _publication_transaction(connection: _Connection, db: Database, config: RedshiftConfig,
-                             table: sa.Table, execution_id: str,
-                             version: int) -> list[str | None] | None:
+def _publication_transaction(
+    connection: _Connection,
+    db: Database,
+    config: RedshiftConfig,
+    table: sa.Table,
+    execution_id: str,
+    version: int,
+) -> list[str | None] | None:
     """A transação da publicação de uma tabela: a linha de controle lida, as partições trocadas e
     a linha gravada; devolve as partições trocadas, ou ``None`` quando a versão já está
     publicada e nada muda."""
@@ -683,8 +777,13 @@ def _publication_transaction(connection: _Connection, db: Database, config: Reds
     return changed
 
 
-def _publish_table(db: Database, config: RedshiftConfig, table: sa.Table, execution_id: str,
-                   version: int) -> int:
+def _publish_table(
+    db: Database,
+    config: RedshiftConfig,
+    table: sa.Table,
+    execution_id: str,
+    version: int,
+) -> int:
     """A publicação de uma tabela, numa conexão própria: a reconciliação e a transação, com o
     tempo e o pico de RSS do processo na linha de log da tabela publicada."""
     started = time.perf_counter()
@@ -703,8 +802,11 @@ def _publish_table(db: Database, config: RedshiftConfig, table: sa.Table, execut
     return version
 
 
-def _version_to_publish(db: Database, table: sa.Table,
-                        versions: Mapping[str, int] | None) -> int:
+def _version_to_publish(
+    db: Database,
+    table: sa.Table,
+    versions: Mapping[str, int] | None,
+) -> int:
     """A versão do Delta que a publicação grava: a de ``versions``, ou a atual sem ``versions``; a
     tabela sem versão, fora de ``versions`` ou inexistente no ambiente, é ``PublicationError``."""
     if versions is not None:
@@ -720,7 +822,9 @@ def _version_to_publish(db: Database, table: sa.Table,
     return delta.open_table(uri, db.storage).version()
 
 
-def create_publications_table(config: RedshiftConfig) -> None:
+def create_publications_table(
+    config: RedshiftConfig,
+) -> None:
     """Cria a tabela de controle no esquema, uma vez, pelo usuário.
 
     Exemplo:
@@ -741,9 +845,14 @@ def create_publications_table(config: RedshiftConfig) -> None:
         connection.close()
 
 
-def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.Table],
-                     execution_id: str, max_workers: int = 1,
-                     versions: Mapping[str, int] | None = None) -> dict[str, int]:
+def publish_redshift(
+    db: Database,
+    config: RedshiftConfig,
+    tables: Sequence[sa.Table],
+    execution_id: str,
+    max_workers: int = 1,
+    versions: Mapping[str, int] | None = None,
+) -> dict[str, int]:
     """Publica as tabelas no Redshift.
 
     Confere a tabela de controle antes de tudo; depois, por tabela, numa conexão própria do pool: a
@@ -795,8 +904,11 @@ def publish_redshift(db: Database, config: RedshiftConfig, tables: Sequence[sa.T
     return run_in_pool(tasks, max_workers)
 
 
-def unpublish_redshift(db: Database, config: RedshiftConfig,
-                       tables: Sequence[sa.Table]) -> dict[str, int | None]:
+def unpublish_redshift(
+    db: Database,
+    config: RedshiftConfig,
+    tables: Sequence[sa.Table],
+) -> dict[str, int | None]:
     """Despublica as tabelas: por tabela, uma transação com o ``DROP TABLE`` da tabela publicada
     e o ``DELETE`` da linha de controle. O Delta fica intacto.
 
@@ -826,7 +938,10 @@ def unpublish_redshift(db: Database, config: RedshiftConfig,
         connection.close()
 
 
-def publication_status(db: Database, config: RedshiftConfig) -> list[PublicationStatus]:
+def publication_status(
+    db: Database,
+    config: RedshiftConfig,
+) -> list[PublicationStatus]:
     """A versão publicada contra a atual de cada tabela do ambiente que existe no Delta, com as
     partições pendentes.
 
@@ -854,8 +969,12 @@ def publication_status(db: Database, config: RedshiftConfig) -> list[Publication
         connection.close()
 
 
-def _table_status(connection: _Connection, db: Database, config: RedshiftConfig,
-                  table: sa.Table) -> PublicationStatus:
+def _table_status(
+    connection: _Connection,
+    db: Database,
+    config: RedshiftConfig,
+    table: sa.Table,
+) -> PublicationStatus:
     """A situação da publicação de uma tabela que existe no Delta: as partições pendentes são
     todas na tabela nunca publicada, e as de ``version_diff`` na publicada numa versão antiga."""
     uri = db.uri(table)

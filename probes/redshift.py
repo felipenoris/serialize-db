@@ -66,7 +66,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -124,7 +124,9 @@ DATASHARE_WRITE_SLICES = 64
 DATASHARE_WRITE_ISOLATION = "snapshot"
 
 
-def variable(name: str) -> str | None:
+def variable(
+    name: str,
+) -> str | None:
     """O valor de ``SERIALIZE_DB_REDSHIFT_<name>``, ou ``None`` quando ausente ou vazio."""
     return os.environ.get(f"SERIALIZE_DB_REDSHIFT_{name}") or None
 
@@ -154,18 +156,26 @@ class Target:
     source: str = "nada"
     namespace_roles: tuple[list[str], list[str]] | None = None
 
-    def qualified(self, name: str) -> str:
+    def qualified(
+        self,
+        name: str,
+    ) -> str:
         """O nome como a sessão o cita depois do ``USE``.
 
         É ``esquema.tabela``, ou só a tabela quando o alvo não tem esquema.
         """
         return ".".join(part for part in (self.schema, name) if part)
 
-    def fully_qualified(self, name: str) -> str:
+    def fully_qualified(
+        self,
+        name: str,
+    ) -> str:
         """O nome em três partes de uma sessão aberta em outro banco: ``banco.esquema.tabela``."""
         return ".".join(part for part in (self.schema_database(), self.schema, name) if part)
 
-    def schema_database(self) -> str | None:
+    def schema_database(
+        self,
+    ) -> str | None:
         """O banco que guarda o esquema do projeto: o do datashare, ou o da conexão."""
         return self.share_database or self.database
 
@@ -174,7 +184,11 @@ class Target:
 # Seção 1: a configuração
 
 
-def target_from_connection(report: Report, target: Target, chosen: dict) -> None:
+def target_from_connection(
+    report: Report,
+    target: Target,
+    chosen: dict,
+) -> None:
     """Preenche ``target`` com os dados da conexão Redshift do projeto.
 
     Nada muda quando as variáveis já preencheram o alvo (``target.source`` diferente de ``nada``).
@@ -214,7 +228,9 @@ def target_from_connection(report: Report, target: Target, chosen: dict) -> None
             target.password = credentials.get("password") or target.password
 
 
-def configuration(report: Report) -> Target:
+def configuration(
+    report: Report,
+) -> Target:
     """Seção 1, a configuração.
 
     Checagens: ``RS-1`` (a origem da conexão: as variáveis, a conexão Redshift do projeto ou nada).
@@ -289,7 +305,9 @@ def configuration(report: Report) -> Target:
 # Seção 2: as APIs
 
 
-def cluster_rows(clusters: dict) -> list[list[object]]:
+def cluster_rows(
+    clusters: dict,
+) -> list[list[object]]:
     """Uma linha por cluster provisionado, com o papel IAM padrão do COPY e o roteamento VPC."""
     rows: list[list[object]] = [["cluster", "estado", "endpoint", "banco", "versão", "nós", "papel IAM padrão", "papéis IAM", "vpc", "roteamento VPC", "público", "criptografado"]]
     for cluster in clusters.get("Clusters", []):
@@ -311,7 +329,9 @@ def cluster_rows(clusters: dict) -> list[list[object]]:
     return rows
 
 
-def workgroup_rows(workgroups: dict) -> list[list[object]]:
+def workgroup_rows(
+    workgroups: dict,
+) -> list[list[object]]:
     """Uma linha por workgroup serverless, com o namespace, a capacidade e o roteamento VPC."""
     rows: list[list[object]] = [["workgroup", "estado", "endpoint", "namespace", "capacidade", "público", "roteamento VPC"]]
     for workgroup in workgroups.get("workgroups", []):
@@ -328,7 +348,10 @@ def workgroup_rows(workgroups: dict) -> list[list[object]]:
     return rows
 
 
-def iam_roles(clusters: dict | None, namespaces: dict[str, dict]) -> tuple[list[str], list[str]]:
+def iam_roles(
+    clusters: dict | None,
+    namespaces: dict[str, dict],
+) -> tuple[list[str], list[str]]:
     """Os papéis IAM que ``IAM_ROLE`` aceitaria: os padrão e os apenas associados, sem repetição.
 
     Um papel só serve ao ``COPY`` quando está associado ao cluster ou ao namespace, e o padrão é o
@@ -350,12 +373,19 @@ def iam_roles(clusters: dict | None, namespaces: dict[str, dict]) -> tuple[list[
     return list(dict.fromkeys(defaults)), list(dict.fromkeys(attached))
 
 
-def data_api_row(record: list[dict]) -> list[object]:
+def data_api_row(
+    record: list[dict],
+) -> list[object]:
     """Uma linha da Data API: cada célula é um dicionário de um item, e ``isNull`` vira ``None``."""
     return [None if cell.get("isNull") else next(iter(cell.values())) for cell in record]
 
 
-def data_api_select(client: object, parameters: dict, sql: str, timeout: float = 30.0) -> tuple[list[str], list[list[object]], int]:
+def data_api_select(
+    client: object,
+    parameters: dict,
+    sql: str,
+    timeout: float = 30.0,
+) -> tuple[list[str], list[list[object]], int]:
     """O ciclo de ``examples/redshift_data_api.py``: dispara, espera o fim e pagina o resultado.
 
     Devolve as colunas, as linhas e a duração em milissegundos. Um estado final diferente de
@@ -387,7 +417,10 @@ def data_api_select(client: object, parameters: dict, sql: str, timeout: float =
     return columns, rows, described.get("Duration", 0) // 1_000_000
 
 
-def apis(report: Report, target: Target) -> None:
+def apis(
+    report: Report,
+    target: Target,
+) -> None:
     """Seção 2, as APIs.
 
     Checagens: ``RS-2`` (a API do serverless responde), ``RS-6`` (papel IAM do namespace para
@@ -409,7 +442,9 @@ def apis(report: Report, target: Target) -> None:
 
     namespaces: dict[str, dict] = {}
 
-    def read_namespace(name: str | None) -> None:
+    def read_namespace(
+        name: str | None,
+    ) -> None:
         """Lê e mostra o namespace de um workgroup, uma vez por nome.
 
         O namespace guarda o banco e os papéis IAM que ``RS-6`` separa.
@@ -510,7 +545,10 @@ def apis(report: Report, target: Target) -> None:
 # Seção 3: a rede
 
 
-def network(report: Report, target: Target) -> None:
+def network(
+    report: Report,
+    target: Target,
+) -> None:
     """Seção 3: ``RS-14`` (as APIs têm endpoint VPC) e ``RS-3`` (TCP até o host)."""
     report.h1("Rede")
 
@@ -546,13 +584,17 @@ def network(report: Report, target: Target) -> None:
 # Seção 4: a sessão
 
 
-def render_rows(found: tuple[list[str], list[tuple]]) -> str:
+def render_rows(
+    found: tuple[list[str], list[tuple]],
+) -> str:
     """O resultado de uma consulta como tabela alinhada, ou ``(nenhuma linha)``."""
     columns, rows = found
     return tabulate([columns, *[[str(value) for value in row] for row in rows]]) if rows else "(nenhuma linha)"
 
 
-def first_value(found: tuple[list[str], list[tuple]]) -> object | None:
+def first_value(
+    found: tuple[list[str], list[tuple]],
+) -> object | None:
     """O primeiro valor da primeira linha, ou ``None`` quando a consulta não devolveu linha.
 
     Um ``count(*)`` de ``sys_load_error_detail`` voltou sem linha no ambiente alvo (2026-09-23).
@@ -561,7 +603,10 @@ def first_value(found: tuple[list[str], list[tuple]]) -> object | None:
     return rows[0][0] if rows and rows[0] else None
 
 
-def count_text(found: tuple[list[str], list[tuple]], unit: str) -> str:
+def count_text(
+    found: tuple[list[str], list[tuple]],
+    unit: str,
+) -> str:
     """A contagem de uma consulta ``count(*)`` com a unidade, ou a falta da linha como leitura."""
     count = first_value(found)
     if count is None:
@@ -569,12 +614,19 @@ def count_text(found: tuple[list[str], list[tuple]], unit: str) -> str:
     return f"{count} {unit}"
 
 
-def column_value(columns: list[str], row: tuple, name: str) -> object | None:
+def column_value(
+    columns: list[str],
+    row: tuple,
+    name: str,
+) -> object | None:
     """O valor de uma coluna pelo nome, ou ``None`` quando a visão de sistema não a tem."""
     return row[columns.index(name)] if name in columns else None
 
 
-def matching_rows(found: tuple[list[str], list[tuple]], **wanted: str) -> list[tuple]:
+def matching_rows(
+    found: tuple[list[str], list[tuple]],
+    **wanted: str,
+) -> list[tuple]:
     """As linhas cujas colunas nomeadas casam com os valores dados, sem diferenciar maiúsculas.
 
     O filtro é feito aqui, e não no ``where`` da consulta, porque o nome das colunas varia entre as
@@ -588,18 +640,24 @@ def matching_rows(found: tuple[list[str], list[tuple]], **wanted: str) -> list[t
     ]
 
 
-def version_tuple(text: str) -> tuple[int, ...] | None:
+def version_tuple(
+    text: str,
+) -> tuple[int, ...] | None:
     """Os três números do patch em ``version()`` (``Redshift 1.0.78890``), ou ``None`` sem eles."""
     found = re.search(r"Redshift (\d+)\.(\d+)\.(\d+)", text)
     return tuple(int(part) for part in found.groups()) if found else None
 
 
-def credential_summary(credentials: dict) -> str:
+def credential_summary(
+    credentials: dict,
+) -> str:
     """O usuário e a expiração de uma credencial temporária; a senha nunca entra no relatório."""
     return f"dbUser={credentials.get('dbUser')} expira {credentials.get('expiration')}"
 
 
-def requirement_state(ok: bool | None) -> str:
+def requirement_state(
+    ok: bool | None,
+) -> str:
     """O estado de um requisito da escrita no datashare: ``atende``, ``não atende`` ou ``não lido``."""
     if ok is None:
         return "não lido"
@@ -608,7 +666,12 @@ def requirement_state(ok: bool | None) -> str:
     return "não atende"
 
 
-def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolation: object | None, slices: int | None) -> tuple[str, str]:
+def datashare_write_verdict(
+    version: tuple[int, ...] | None,
+    kind: str,
+    isolation: object | None,
+    slices: int | None,
+) -> tuple[str, str]:
     """O veredito da escrita no banco do datashare: patch mínimo, isolamento de snapshot e slices.
 
     Devolve ``("ok" | "fail" | "note", texto)``, um requisito por trecho. Um requisito que a sessão
@@ -642,7 +705,10 @@ def datashare_write_verdict(version: tuple[int, ...] | None, kind: str, isolatio
     return "ok", text
 
 
-def session(report: Report, target: Target) -> None:
+def session(
+    report: Report,
+    target: Target,
+) -> None:
     """Seção 4, a sessão.
 
     Checagens: ``RS-15`` (credencial temporária do workgroup), ``RS-4`` (a sessão abre), ``RS-7``
@@ -713,7 +779,10 @@ def session(report: Report, target: Target) -> None:
     # leituras dizem que a conexão caiu, em vez de repetir esse erro.
     lost: list[str] = []
 
-    def query(sql: str, params: tuple = ()) -> tuple[list[str], list[tuple]]:
+    def query(
+        sql: str,
+        params: tuple = (),
+    ) -> tuple[list[str], list[tuple]]:
         if lost:
             raise RuntimeError(f"conexão perdida em {lost[0]}; as leituras seguintes não rodam")
         cursor = connection.cursor()
@@ -1002,7 +1071,12 @@ def caller_credentials() -> tuple[object, object | None]:
     return found.get_frozen_credentials(), probelib.credential_expiry(found)
 
 
-def credential_text(access_key: str, token: str | None, expiry: object | None, now: datetime) -> str:
+def credential_text(
+    access_key: str,
+    token: str | None,
+    expiry: object | None,
+    now: datetime,
+) -> str:
     """O que o relatório diz das credenciais de quem chama.
 
     São o prefixo da chave, se há ``SESSION_TOKEN`` e quando expiram; o segredo nunca entra.
@@ -1014,7 +1088,11 @@ def credential_text(access_key: str, token: str | None, expiry: object | None, n
     return text
 
 
-def copy_principals(iam_role: str | None, namespace_roles: tuple[list[str], list[str]] | None, caller_arn: str | None) -> tuple[list[Principal], str | None]:
+def copy_principals(
+    iam_role: str | None,
+    namespace_roles: tuple[list[str], list[str]] | None,
+    caller_arn: str | None,
+) -> tuple[list[Principal], str | None]:
     """Quem alcança o S3 no ``COPY`` e no ``UNLOAD``, ou o motivo de não haver ninguém a simular.
 
     Sem ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, o comando leva as credenciais de quem chama, e a
@@ -1043,12 +1121,19 @@ def copy_principals(iam_role: str | None, namespace_roles: tuple[list[str], list
     return [Principal("SERIALIZE_DB_REDSHIFT_IAM_ROLE", iam_role, blocker, doubt)], None
 
 
-def render_decisions(found: dict) -> str:
+def render_decisions(
+    found: dict,
+) -> str:
     """As decisões de uma simulação de política como tabela: a ação e a decisão."""
     return tabulate([["ação", "decisão"], *[[item["EvalActionName"], item["EvalDecision"]] for item in found.get("EvaluationResults", [])]])
 
 
-def copy_access(report: Report, iam: object, principal: Principal, root: str) -> None:
+def copy_access(
+    report: Report,
+    iam: object,
+    principal: Principal,
+    root: str,
+) -> None:
     """``RS-11`` de uma identidade: se ela tem ``ListBucket``, ``GetObject`` e ``PutObject`` sob a
     raiz, pela simulação de política do cliente ``iam``.
 
@@ -1093,7 +1178,10 @@ def copy_access(report: Report, iam: object, principal: Principal, root: str) ->
         report.ok("RS-11", "alcance do COPY sobre a raiz", f"{who}: ListBucket, GetObject e PutObject sob {root}")
 
 
-def copy_role(report: Report, target: Target) -> None:
+def copy_role(
+    report: Report,
+    target: Target,
+) -> None:
     """Seção 5, quem alcança o S3.
 
     Checagens: ``RS-18`` (as credenciais de quem chama) e ``RS-11`` (se quem vai alcançar o S3 no

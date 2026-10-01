@@ -81,7 +81,9 @@ CHANGED_STATEMENTS["saldos_por_conta"] = STATEMENTS["saldos_por_conta"].add_colu
     sa.func.count().label("lancamentos"))
 
 
-def draft_sandbox(prefix: str) -> duckdb.DuckDBPyConnection:
+def draft_sandbox(
+    prefix: str,
+) -> duckdb.DuckDBPyConnection:
     """Um DuckDB em memória com as duas tabelas do statement de teste, criadas pelo DDL da etapa 1
     com o prefixo, e as linhas do rascunho de ``plan/PLAN-STAGE-2.md``."""
     connection = duckdb.connect()
@@ -96,7 +98,9 @@ def draft_sandbox(prefix: str) -> duckdb.DuckDBPyConnection:
     return connection
 
 
-def client_sandbox(prefix: str) -> duckdb.DuckDBPyConnection:
+def client_sandbox(
+    prefix: str,
+) -> duckdb.DuckDBPyConnection:
     """Um DuckDB em memória com as 12 tabelas do modelo cliente, prefixadas, e um lançamento."""
     connection = duckdb.connect()
     for table in ClientBase.metadata.sorted_tables:
@@ -109,8 +113,11 @@ def client_sandbox(prefix: str) -> duckdb.DuckDBPyConnection:
     return connection
 
 
-def render_and_bind(statement: sa.sql.ClauseElement, metadata: sa.MetaData,
-                    prefix: str) -> tuple[str, dict[str, object]]:
+def render_and_bind(
+    statement: sa.sql.ClauseElement,
+    metadata: sa.MetaData,
+    prefix: str,
+) -> tuple[str, dict[str, object]]:
     """O texto do DuckDB com o prefixo, com ``$nome`` e os valores da partição, pronto para
     ``execute``."""
     rendered = sql.render(statement, "duckdb", metadata, prefix=prefix)
@@ -146,7 +153,9 @@ def test_render_embeds_constants_and_keeps_parameters() -> None:
 
 
 @pytest.mark.parametrize("prefix", ["", "exec_42_"])
-def test_rendered_text_runs_in_duckdb(prefix: str) -> None:
+def test_rendered_text_runs_in_duckdb(
+    prefix: str,
+) -> None:
     """O texto com o prefixo informado passa por `bind` e roda num DuckDB em memória com `$nome`."""
     # O statement de teste sobre as linhas do rascunho.
     text, values = render_and_bind(TOTAL_BY_ACCOUNT, DRAFT_METADATA, prefix)
@@ -367,7 +376,9 @@ def test_read_sql_fills_the_sentinel() -> None:
 
 
 @pytest.mark.local
-def test_write_sql_files(local_location: LocalLocation) -> None:
+def test_write_sql_files(
+    local_location: LocalLocation,
+) -> None:
     """Os arquivos gravados sob a raiz local, com os nomes previstos, e o `check` vazio depois."""
     directory = local_location.child("sql")
     written = sql.write_sql_files(STATEMENTS, ClientBase.metadata, directory)
@@ -418,7 +429,9 @@ def test_check_sql_files_reports_stale_files_and_the_final_newline(
     assert sql.check_sql_files(remaining, ClientBase.metadata, directory) == []
 
 
-def test_cli_sql_check_reads_the_versioned_files(capsys: pytest.CaptureFixture) -> None:
+def test_cli_sql_check_reads_the_versioned_files(
+    capsys: pytest.CaptureFixture,
+) -> None:
     """`sql check` sai com 0 sem diff, 1 com o diff impresso e 2 sem `--statements` ou com um
     `--statements` que não é um dicionário."""
     directory = str(SQL_DIRECTORY)

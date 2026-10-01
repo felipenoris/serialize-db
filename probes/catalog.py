@@ -41,12 +41,18 @@ MAX_DATABASES = 5
 MAX_WORKGROUPS = 3
 
 
-def summary(items: list[dict], keys: tuple[str, ...]) -> str:
+def summary(
+    items: list[dict],
+    keys: tuple[str, ...],
+) -> str:
     """JSON legível de uma lista de respostas, só com as chaves pedidas."""
     return pretty([{key: item.get(key) for key in keys} for item in items])
 
 
-def network(report: Report, resolved: str | None) -> None:
+def network(
+    report: Report,
+    resolved: str | None,
+) -> None:
     """Seção 1, rede: o DNS de cada serviço, como leitura."""
     report.h1("Rede")
     if not resolved:
@@ -56,7 +62,9 @@ def network(report: Report, resolved: str | None) -> None:
     report.table([["nome", "endereços", "tipo"], *rows])
 
 
-def table_format(table: dict) -> str:
+def table_format(
+    table: dict,
+) -> str:
     """O formato de uma tabela do Glue: Iceberg, Delta ou Parquet, ou então a classificação.
 
     Iceberg, Delta e Parquet saem dos parâmetros e do descritor de armazenamento; sem nenhum deles,
@@ -73,7 +81,10 @@ def table_format(table: dict) -> str:
     return parameters.get("classification") or table.get("TableType") or "-"
 
 
-def glue(report: Report, resolved: str | None) -> None:
+def glue(
+    report: Report,
+    resolved: str | None,
+) -> None:
     """Seção 2, Glue.
 
     Checagens: ``CT-1`` (responde), ``CT-2`` (tabelas por formato) e ``CT-6`` (catálogos federados).
@@ -125,7 +136,10 @@ def glue(report: Report, resolved: str | None) -> None:
         report.note("CT-6", "catálogos federados do Glue (Lakehouse)", ", ".join(f"{item.get('Name')} ({item.get('CatalogType')})" for item in catalogs) or "nenhum")
 
 
-def athena(report: Report, resolved: str | None) -> None:
+def athena(
+    report: Report,
+    resolved: str | None,
+) -> None:
     """Seção 3, Athena: ``CT-3`` (responde) e o local de resultados dos primeiros workgroups."""
     import boto3
 
@@ -145,7 +159,9 @@ def athena(report: Report, resolved: str | None) -> None:
 
     # O local de resultados de cada workgroup diz onde uma consulta do Athena gravaria; o
     # GetWorkGroup pode ser negado.
-    def render_group(found: dict) -> str:
+    def render_group(
+        found: dict,
+    ) -> str:
         """Os campos da configuração do workgroup que o relatório mostra, em JSON.
 
         São ``ResultConfiguration``, ``EnforceWorkGroupConfiguration``, ``EngineVersion`` e
@@ -166,7 +182,10 @@ def athena(report: Report, resolved: str | None) -> None:
             report.value(f"ATHENA_RESULTS_{name}", location or "(sem local de resultados)")
 
 
-def lake_formation(report: Report, resolved: str | None) -> None:
+def lake_formation(
+    report: Report,
+    resolved: str | None,
+) -> None:
     """Seção 4, Lake Formation: ``CT-4``, os locais registrados, ou a negação."""
     import boto3
 
@@ -183,7 +202,10 @@ def lake_formation(report: Report, resolved: str | None) -> None:
         report.note("CT-4", "Lake Formation", f"{len(resources)} local(is) registrado(s)")
 
 
-def s3_tables(report: Report, resolved: str | None) -> None:
+def s3_tables(
+    report: Report,
+    resolved: str | None,
+) -> None:
     """Seção 5, S3 Tables: ``CT-5``, os table buckets, ou a negação.
 
     Um table bucket é o gatilho de reavaliação.

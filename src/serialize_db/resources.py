@@ -176,7 +176,9 @@ def _cgroup_cpu_quota() -> float | None:
     return min(quotas, default=None)
 
 
-def _cpu_quota_v2(folder: Path) -> float | None:
+def _cpu_quota_v2(
+    folder: Path,
+) -> float | None:
     """A cota de ``cpu.max`` no cgroup v2, em CPUs: ``"max 100000"`` sem cota e
     ``"150000 100000"`` com uma cota de 1,5 CPU; ``None`` sem cota."""
     fields = _read_fields(folder / "cpu.max")
@@ -185,7 +187,9 @@ def _cpu_quota_v2(folder: Path) -> float | None:
     return int(fields[0]) / int(fields[1])
 
 
-def _cpu_quota_v1(folder: Path) -> float | None:
+def _cpu_quota_v1(
+    folder: Path,
+) -> float | None:
     """A cota do cgroup v1, ``cpu.cfs_quota_us`` sobre ``cpu.cfs_period_us``, em CPUs; ``None``
     sem cota, que o v1 escreve como -1."""
     quota = _read_number(folder / "cpu.cfs_quota_us")
@@ -195,7 +199,9 @@ def _cpu_quota_v1(folder: Path) -> float | None:
     return quota / period
 
 
-def _cgroup_folders(controller: str) -> list[tuple[Path, int]]:
+def _cgroup_folders(
+    controller: str,
+) -> list[tuple[Path, int]]:
     """As pastas do cgroup do processo para o controlador, com a versão, da dele até a raiz
     montada: ``/sys/fs/cgroup/<caminho>`` no v2 e ``/sys/fs/cgroup/<controlador>/<caminho>`` no v1,
     pelas linhas de ``/proc/self/cgroup``; vazia fora do Linux."""
@@ -217,7 +223,10 @@ def _cgroup_folders(controller: str) -> list[tuple[Path, int]]:
     return folders
 
 
-def _folder_chain(mount: Path, relative: str) -> list[Path]:
+def _folder_chain(
+    mount: Path,
+    relative: str,
+) -> list[Path]:
     """A pasta do cgroup sob a montagem e as ancestrais dela até a montagem; só a montagem quando a
     pasta não existe, no contêiner que monta o próprio cgroup como raiz."""
     folder = mount / relative.lstrip("/")
@@ -229,14 +238,18 @@ def _folder_chain(mount: Path, relative: str) -> list[Path]:
     return chain
 
 
-def _read_fields(path: Path) -> list[str]:
+def _read_fields(
+    path: Path,
+) -> list[str]:
     """As palavras do arquivo; vazia quando ele não existe."""
     if not path.is_file():
         return []
     return path.read_text().split()
 
 
-def _read_number(path: Path) -> int | None:
+def _read_number(
+    path: Path,
+) -> int | None:
     """O número do arquivo; ``None`` quando ele não existe ou diz ``max``, sem limite."""
     fields = _read_fields(path)
     if not fields or fields[0] == "max":
@@ -244,7 +257,10 @@ def _read_number(path: Path) -> int | None:
     return int(fields[0])
 
 
-def _stat_value(path: Path, key: str) -> int:
+def _stat_value(
+    path: Path,
+    key: str,
+) -> int:
     """O valor de ``key`` num ``memory.stat``; 0 quando o arquivo ou a chave faltam."""
     if not path.is_file():
         return 0

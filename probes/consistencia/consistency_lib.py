@@ -112,12 +112,19 @@ INTS = [-2147483648, 2147483647, 0, -1, 1, None]
 FLAGS = [True, False, None]
 
 
-def pick(values: list, index: int) -> object:
+def pick(
+    values: list,
+    index: int,
+) -> object:
     """O valor de ``values`` na posição ``index``, dando a volta na lista."""
     return values[index % len(values)]
 
 
-def edge_rows(value: str, start: int, count: int) -> pa.Table:
+def edge_rows(
+    value: str,
+    start: int,
+    count: int,
+) -> pa.Table:
     """``count`` linhas de ``cad_tudo`` na partição ``value``, com ids de ``start`` em diante e
     cada coluna percorrendo os seus valores de borda, no contrato por ``schema.cast``."""
     ids = list(range(start, start + count))
@@ -150,7 +157,10 @@ def edge_rows(value: str, start: int, count: int) -> pa.Table:
     return schema.cast(table, TUDO)
 
 
-def same(a: object, b: object) -> bool:
+def same(
+    a: object,
+    b: object,
+) -> bool:
     """Se dois valores lidos são o mesmo: ``NaN`` igual a ``NaN``, e o zero com o seu sinal."""
     if isinstance(a, float) and isinstance(b, float):
         if math.isnan(a) and math.isnan(b):
@@ -159,8 +169,13 @@ def same(a: object, b: object) -> bool:
     return a == b
 
 
-def compare(expected: pa.Table, found: pa.Table, key: str = "id", label: str = "",
-            json_columns: tuple[str, ...] = ()) -> list[str]:
+def compare(
+    expected: pa.Table,
+    found: pa.Table,
+    key: str = "id",
+    label: str = "",
+    json_columns: tuple[str, ...] = (),
+) -> list[str]:
     """As diferenças entre duas tabelas ordenadas por ``key``: a contagem de linhas, e por
     coluna o tipo e o primeiro valor diferente, com quantos há; uma coluna em ``json_columns``
     compara os documentos, porque o Redshift reserializa o texto JSON."""
@@ -194,7 +209,11 @@ def compare(expected: pa.Table, found: pa.Table, key: str = "id", label: str = "
     return problems
 
 
-def to_contract(found: pa.Table, table: sa.Table, notes: set[str]) -> pa.Table:
+def to_contract(
+    found: pa.Table,
+    table: sa.Table,
+    notes: set[str],
+) -> pa.Table:
     """As colunas do contrato de ``found`` levadas aos tipos dele por ``schema.cast``, anotando em
     ``notes`` cada tipo cru diferente do contrato (o fuso da sessão, ``large_string``, a extensão
     JSON), que é leitura e não diferença de valor."""
@@ -206,14 +225,18 @@ def to_contract(found: pa.Table, table: sa.Table, notes: set[str]) -> pa.Table:
     return schema.cast(found.select(contract.names), table)
 
 
-def print_notes(notes: set[str]) -> None:
+def print_notes(
+    notes: set[str],
+) -> None:
     """Imprime os tipos crus anotados por ``to_contract``."""
     print("tipos crus dos leitores contra o contrato:")
     for note in sorted(notes):
         print("   ", note)
 
 
-def known_zero_sign(problems: list[str]) -> tuple[list[str], list[str]]:
+def known_zero_sign(
+    problems: list[str],
+) -> tuple[list[str], list[str]]:
     """Separa a diferença conhecida do sinal do zero em ``valor`` (o ``COPY`` do DuckDB) das
     demais: devolve as demais e as conhecidas."""
     known = []
@@ -232,17 +255,25 @@ def known_zero_sign(problems: list[str]) -> tuple[list[str], list[str]]:
 class Tee:
     """Escreve ao mesmo tempo no terminal e no arquivo de saída."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+    ) -> None:
         self.file = path.open("w", encoding="utf-8")
         self.terminal = sys.stdout
 
-    def write(self, text: str) -> int:
+    def write(
+        self,
+        text: str,
+    ) -> int:
         self.terminal.write(text)
         self.file.write(text)
         self.file.flush()
         return len(text)
 
-    def flush(self) -> None:
+    def flush(
+        self,
+    ) -> None:
         self.terminal.flush()
         self.file.flush()
 
@@ -251,7 +282,9 @@ FAILED: list[str] = []
 PASSED: list[str] = []
 
 
-def probe_folder(name: str) -> Path:
+def probe_folder(
+    name: str,
+) -> Path:
     """A pasta de trabalho da sonda ``name``, vazia, sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; sem a
     variável, ou com uma pasta inexistente, a sonda para com o código 2. Também abre o arquivo de
     saída em ``probes/output/`` e imprime o cabeçalho com a data, a plataforma e as versões."""
@@ -273,7 +306,10 @@ def probe_folder(name: str) -> Path:
     return folder
 
 
-def report(title: str, problems: list[str]) -> None:
+def report(
+    title: str,
+    problems: list[str],
+) -> None:
     """Imprime a checagem ``title`` como ``OK`` ou ``PROBLEMAS`` com a lista, e a registra para o
     código de saída."""
     print(f"== {title}: {'OK' if not problems else 'PROBLEMAS'}")
@@ -282,7 +318,9 @@ def report(title: str, problems: list[str]) -> None:
     (FAILED if problems else PASSED).append(title)
 
 
-def finish(folder: Path) -> None:
+def finish(
+    folder: Path,
+) -> None:
     """Imprime o resumo das checagens, apaga a pasta de trabalho (``SERIALIZE_DB_TEST_KEEP`` a
     mantém) e encerra com o código 1 quando alguma checagem reprovou."""
     print(f"checagens: {len(PASSED) + len(FAILED)}, reprovadas: {len(FAILED)}")

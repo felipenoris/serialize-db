@@ -42,8 +42,12 @@ APPENDED_ROWS = 10
 MONTHS = ("2026-01", "2026-02")
 
 
-def timed(storage: SessionRoot, label: str, action: Callable[[], object],
-          repeat: int = 1) -> object:
+def timed(
+    storage: SessionRoot,
+    label: str,
+    action: Callable[[], object],
+    repeat: int = 1,
+) -> object:
     """Executa ``action`` ``repeat`` vezes e registra o tempo total em ``timing.<label>`` do
     armazenamento."""
     started = time.perf_counter()
@@ -56,7 +60,9 @@ def timed(storage: SessionRoot, label: str, action: Callable[[], object],
     return result
 
 
-def run_in_threads(actions: list[Callable[[], object]]) -> float:
+def run_in_threads(
+    actions: list[Callable[[], object]],
+) -> float:
     """Roda as ações em threads, uma por ação, e devolve o tempo até a última terminar.
 
     Cada ação é uma função sem argumentos; ``functools.partial(funcao, argumento)`` fixa o argumento
@@ -72,7 +78,10 @@ def run_in_threads(actions: list[Callable[[], object]]) -> float:
     return time.perf_counter() - started
 
 
-def seconds(storage: SessionRoot, label: str) -> float:
+def seconds(
+    storage: SessionRoot,
+    label: str,
+) -> float:
     """Tempo registrado por ``timed`` para ``label``, em segundos."""
     # timed grava o texto "0.087 s" sob o prefixo do armazenamento.
     recorded = str(REPORT[f"{storage.name}.timing.{label}"])
@@ -104,7 +113,9 @@ def sample_table() -> pa.Table:
     )
 
 
-def write_sample_table(storage: SessionRoot) -> str:
+def write_sample_table(
+    storage: SessionRoot,
+) -> str:
     """Grava ``operacoes`` sob a raiz da sessão, ``overwrite`` particionado por ``mes`` e um
     ``append``, e devolve a URI."""
     uri = storage.child("operacoes")
@@ -123,7 +134,9 @@ def write_sample_table(storage: SessionRoot) -> str:
 
 
 def load_extension(
-    connection: duckdb.DuckDBPyConnection, extension: str, directory: str | None
+    connection: duckdb.DuckDBPyConnection,
+    extension: str,
+    directory: str | None,
 ) -> None:
     """Carrega ``extension`` da pasta de extensões; a que falta é instalada só com
     ``SERIALIZE_DB_DUCKDB_EXTENSIONS``, e sem a variável o teste é pulado."""
@@ -142,7 +155,9 @@ def load_extension(
     connection.execute(f"INSTALL {extension}; LOAD {extension}")
 
 
-def connect_duckdb(extensions: Iterable[str]) -> duckdb.DuckDBPyConnection:
+def connect_duckdb(
+    extensions: Iterable[str],
+) -> duckdb.DuckDBPyConnection:
     """Conexão com ``extensions`` carregadas da pasta de extensões.
 
     A suíte instala uma extensão que falta só na pasta informada em
@@ -180,10 +195,16 @@ class StreamOnly:
     do DuckDB) o aceita como um leitor, sem que ele seja um ``RecordBatchReader``.
     """
 
-    def __init__(self, source: pa.RecordBatchReader) -> None:
+    def __init__(
+        self,
+        source: pa.RecordBatchReader,
+    ) -> None:
         self._source = source
 
-    def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+    def __arrow_c_stream__(
+        self,
+        requested_schema: object = None,
+    ) -> object:
         return self._source.__arrow_c_stream__(requested_schema)
 
 
@@ -191,7 +212,11 @@ class DeltaProofOfConcept:
     """Testes que valem para os dois armazenamentos; a subclasse é coletada com as fixtures do seu
     módulo: ``storage``, ``table_uri`` e ``duckdb_connection``."""
 
-    def test_write_and_open(self, storage: SessionRoot, table_uri: str) -> None:
+    def test_write_and_open(
+        self,
+        storage: SessionRoot,
+        table_uri: str,
+    ) -> None:
         """A tabela gravada tem os dois commits, um arquivo por mês mais o do ``append`` e o
         protocolo esperado."""
         table = DeltaTable(table_uri)
@@ -220,7 +245,9 @@ class DeltaProofOfConcept:
         assert rows == ROWS + APPENDED_ROWS
 
     def test_delta_scan_reads_types(
-        self, storage: SessionRoot, duckdb_connection: duckdb.DuckDBPyConnection,
+        self,
+        storage: SessionRoot,
+        duckdb_connection: duckdb.DuckDBPyConnection,
         table_uri: str,
     ) -> None:
         """``delta_scan`` lê a tabela com os tipos do contrato e soma o ``DECIMAL`` sem perda."""
@@ -253,7 +280,9 @@ class DeltaProofOfConcept:
         assert total == sample_total + appended_total
 
     def test_delta_scan_prunes_partitions(
-        self, storage: SessionRoot, duckdb_connection: duckdb.DuckDBPyConnection,
+        self,
+        storage: SessionRoot,
+        duckdb_connection: duckdb.DuckDBPyConnection,
         table_uri: str,
     ) -> None:
         """O filtro por ``mes`` lê só os arquivos da partição."""
@@ -276,7 +305,9 @@ class DeltaProofOfConcept:
         assert int(scanned.group(1)) == 1
 
     def test_scan_timings(
-        self, storage: SessionRoot, duckdb_connection: duckdb.DuckDBPyConnection,
+        self,
+        storage: SessionRoot,
+        duckdb_connection: duckdb.DuckDBPyConnection,
         table_uri: str,
     ) -> None:
         """Consultas pontuais: ``delta_scan``, ``ATTACH`` fixado, ``read_parquet`` e tabela
@@ -297,7 +328,9 @@ class DeltaProofOfConcept:
         con.execute(f"ATTACH IF NOT EXISTS '{table_uri}' AS pinned (TYPE delta, PIN_SNAPSHOT true)")
         parquet = f"read_parquet('{table_uri}/*/*.parquet', hive_partitioning = true)"
 
-        def run(sql: str) -> Callable[[], object]:
+        def run(
+            sql: str,
+        ) -> Callable[[], object]:
             """A ação que ``timed`` repete: executa ``sql`` e devolve as linhas."""
             return lambda: con.execute(sql).fetchall()
 
@@ -327,7 +360,10 @@ class DeltaProofOfConcept:
         delta_scan_seconds = seconds(storage, "point_queries.delta_scan")
         assert materialized_seconds < delta_scan_seconds
 
-    def test_vacuum_deletes_files(self, storage: SessionRoot) -> None:
+    def test_vacuum_deletes_files(
+        self,
+        storage: SessionRoot,
+    ) -> None:
         """``vacuum(dry_run=False)`` remove do armazenamento os arquivos substituídos."""
         uri = storage.child("vacuum_probe")
         small = sample_table().slice(0, 1000)

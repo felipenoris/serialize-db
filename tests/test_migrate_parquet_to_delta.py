@@ -40,13 +40,18 @@ OUTSIDE_MODEL = ["alembic_version", "meta_update_status", "schema.json"]
 
 
 @pytest.fixture(scope="module")
-def base(local_location: LocalLocation) -> source.SourceBase:
+def base(
+    local_location: LocalLocation,
+) -> source.SourceBase:
     """A base fictícia gravada uma vez por módulo sob a pasta da sessão."""
     return source.write_source(Path(local_location.child("migracao-origem")))
 
 
 @pytest.fixture
-def folder(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Path:
+def folder(
+    local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
     """Uma pasta nova por teste sob a raiz da sessão, que também recebe a pasta temporária do
     processo."""
     path = Path(local_location.child(f"migracao/{uuid.uuid4().hex[:8]}"))
@@ -55,7 +60,11 @@ def folder(local_location: LocalLocation, monkeypatch: pytest.MonkeyPatch) -> Pa
     return path
 
 
-def rewrite_first_chunk(folder: Path, column: str, value: object) -> None:
+def rewrite_first_chunk(
+    folder: Path,
+    column: str,
+    value: object,
+) -> None:
     """Regrava ``chunk_0.parquet`` de ``folder`` com ``value`` na primeira linha de ``column``, no
     layout da origem."""
     path = folder / "chunk_0.parquet"
@@ -69,8 +78,11 @@ def rewrite_first_chunk(folder: Path, column: str, value: object) -> None:
                    use_deprecated_int96_timestamps=True)
 
 
-def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
-                                      capsys: pytest.CaptureFixture) -> None:
+def test_main_migrates_the_whole_base(
+    base: source.SourceBase,
+    folder: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """A linha de comando sobre a base inteira: as tabelas sem partição antes das particionadas,
     cada partição com linhas, tempo e pico, a tabela sem partição como tabela inteira, o
     relatório em JSON com as 12 tabelas iguais, o ambiente e o que ficou fora do modelo, saída 0;
@@ -127,8 +139,11 @@ def test_main_migrates_the_whole_base(base: source.SourceBase, folder: Path,
     assert "in_progress" not in document
 
 
-def test_main_confers_only_the_requested_partitions(base: source.SourceBase, folder: Path,
-                                                    capsys: pytest.CaptureFixture) -> None:
+def test_main_confers_only_the_requested_partitions(
+    base: source.SourceBase,
+    folder: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """Com ``--partitions``, a carga e o relatório ficam nas partições pedidas: as outras da
     origem, fora do Delta, não contam como diferença, e a saída é 0."""
     report_path = folder / "relatorio.json"
@@ -144,8 +159,11 @@ def test_main_confers_only_the_requested_partitions(base: source.SourceBase, fol
     assert conferred == ["2026-02-28"]
 
 
-def test_report_keeps_the_progress_of_an_interrupted_load(base: source.SourceBase, folder: Path,
-                                                          capsys: pytest.CaptureFixture) -> None:
+def test_report_keeps_the_progress_of_an_interrupted_load(
+    base: source.SourceBase,
+    folder: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """Uma carga interrompida em 2026-03-31 deixa no relatório a tabela da vez em ``in_progress``,
     com as partições já gravadas: o JSON é regravado a cada partição."""
     # Uma cópia de cad_operacoes com a partição 2026-03-31 fora do contrato.
@@ -169,8 +187,11 @@ def test_report_keeps_the_progress_of_an_interrupted_load(base: source.SourceBas
     assert document["environment"]["arguments"]["tables"] == ["cad_operacoes"]
 
 
-def test_main_refuses_a_model_with_violations(base: source.SourceBase, folder: Path,
-                                              capsys: pytest.CaptureFixture) -> None:
+def test_main_refuses_a_model_with_violations(
+    base: source.SourceBase,
+    folder: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """O modelo de referência viola o contrato: saída 2 com a lista, sem ler a origem; uma
     tabela fora do modelo e um ``--metadata`` que não importa são erros de uso."""
     never_written = folder / "nunca-gravada"
@@ -196,8 +217,11 @@ def test_main_refuses_a_model_with_violations(base: source.SourceBase, folder: P
     assert not never_written.exists()
 
 
-def test_empty_environment_variable_counts_as_absent(base: source.SourceBase, folder: Path,
-                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+def test_empty_environment_variable_counts_as_absent(
+    base: source.SourceBase,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``SERIALIZE_DB_ENVIRONMENT`` vazia conta como ausente, como nos subcomandos de
     ``serialize-db``: a tabela vai para o ambiente ``dsv``, e não para um ambiente vazio."""
     monkeypatch.setenv("SERIALIZE_DB_ENVIRONMENT", "")
@@ -208,14 +232,18 @@ def test_empty_environment_variable_counts_as_absent(base: source.SourceBase, fo
     assert (root / "dsv" / "cad_contas" / "_delta_log").is_dir()
 
 
-def test_print_report_names_the_unpartitioned_table(capsys: pytest.CaptureFixture) -> None:
+def test_print_report_names_the_unpartitioned_table(
+    capsys: pytest.CaptureFixture,
+) -> None:
     """A diferença na tabela sem partição sai como ``DIFERENÇA na tabela inteira``."""
     partition = PartitionReport(None, 5, 4, {}, {}, {}, {})
     migrate.print_report(LoadReport("cad_contas", (partition,), (), ()))
     assert "DIFERENÇA na tabela inteira: origem 5 linhas" in capsys.readouterr().out
 
 
-def test_print_report_names_the_missing_side(capsys: pytest.CaptureFixture) -> None:
+def test_print_report_names_the_missing_side(
+    capsys: pytest.CaptureFixture,
+) -> None:
     """A partição que falta num dos lados sai como ``ausente``, e não como ``None linhas``."""
     only_in_delta = PartitionReport("2026-01-31", None, 3, {}, {}, {}, {})
     only_in_source = PartitionReport("2026-02-28", 4, None, {}, {}, {}, {})

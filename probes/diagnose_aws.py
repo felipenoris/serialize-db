@@ -96,7 +96,12 @@ STS_SUMMARY = {
 # O formato das linhas
 
 
-def report(status: str, label: str, detail: str, started: float | None = None) -> None:
+def report(
+    status: str,
+    label: str,
+    detail: str,
+    started: float | None = None,
+) -> None:
     """Imprime uma linha ``[status] rótulo: detalhe (tempo)``."""
     elapsed = f" ({time.perf_counter() - started:.1f} s)" if started is not None else ""
     print(f"[{status:^5}] {label}: {detail}{elapsed}")
@@ -106,7 +111,9 @@ def report(status: str, label: str, detail: str, started: float | None = None) -
 # O contexto: versões, variáveis e região
 
 
-def show_versions(root: str) -> None:
+def show_versions(
+    root: str,
+) -> None:
     """O cabeçalho: a raiz, a data, a plataforma e as versões das bibliotecas que a suíte usa."""
     import boto3
     import botocore
@@ -134,7 +141,9 @@ def show_environment() -> None:
         print(f"  ~/.aws/{file} {'existe' if (aws_folder / file).is_file() else '(ausente)'}")
 
 
-def no_proxy_state(environ: Mapping[str, str]) -> str:
+def no_proxy_state(
+    environ: Mapping[str, str],
+) -> str:
     """``NO_PROXY`` como o ambiente a tem: ``ausente``, ``vazia`` ou ``definida``.
 
     Vazia e ausente diferem para o delta-rs.
@@ -145,7 +154,9 @@ def no_proxy_state(environ: Mapping[str, str]) -> str:
     return "vazia" if value == "" else "definida"
 
 
-def suite_environment(environ: Mapping[str, str]) -> dict[str, str]:
+def suite_environment(
+    environ: Mapping[str, str],
+) -> dict[str, str]:
     """As variáveis que a suíte exporta antes de abrir a tabela.
 
     A suíte exporta ``NO_PROXY`` de ``no_proxy`` quando a maiúscula está ausente ou vazia. O cliente
@@ -175,7 +186,10 @@ def resolve_regions() -> tuple[str | None, str | None]:
 # As verificações: DNS, credenciais, S3 por cada cliente, STS
 
 
-def check_dns(bucket: str, region: str | None) -> None:
+def check_dns(
+    bucket: str,
+    region: str | None,
+) -> None:
     """O DNS dos endpoints do S3 e do STS.
 
     Um IP privado indica endpoint VPC de interface com DNS privado.
@@ -216,7 +230,12 @@ def check_boto3_credentials() -> bool:
     return True
 
 
-def check_s3_boto3(bucket: str, prefix: str, region: str | None, label: str) -> bool:
+def check_s3_boto3(
+    bucket: str,
+    prefix: str,
+    region: str | None,
+    label: str,
+) -> bool:
     """Lista um objeto sob ``<raiz>/serialize-db-poc/`` como a suíte faz, com a região dada."""
     import boto3
 
@@ -232,7 +251,9 @@ def check_s3_boto3(bucket: str, prefix: str, region: str | None, label: str) -> 
     return True
 
 
-def sts_verdict(error: BaseException) -> str:
+def sts_verdict(
+    error: BaseException,
+) -> str:
     """O veredito de uma chamada ao STS que falhou.
 
     É ``respondeu`` para um erro de credencial ou de permissão, ``sem resposta`` para a rede, o
@@ -246,7 +267,9 @@ def sts_verdict(error: BaseException) -> str:
     return "erro local"
 
 
-def check_sts(region: str | None) -> str:
+def check_sts(
+    region: str | None,
+) -> str:
     """Chama ``get_caller_identity`` e devolve o veredito: ``respondeu``, com identidade ou com
     erro, ``sem resposta`` ou ``erro local``."""
     import boto3
@@ -266,7 +289,13 @@ def check_sts(region: str | None) -> str:
 # O delta-rs e o DuckDB, cada um num subprocesso com espera limitada
 
 
-def run_probe(label: str, code: str, arguments: list[str], on_success: Callable[[str], str], environment: Mapping[str, str] | None = None) -> bool:
+def run_probe(
+    label: str,
+    code: str,
+    arguments: list[str],
+    on_success: Callable[[str], str],
+    environment: Mapping[str, str] | None = None,
+) -> bool:
     """Roda ``code`` num subprocesso com espera limitada e imprime a linha da verificação.
 
     A espera é limitada porque o delta-rs e o DuckDB têm esperas próprias. ``environment``
@@ -308,7 +337,12 @@ except Exception as error:
 """
 
 
-def check_delta_rs(root: str, options: dict[str, str], label: str, environment: Mapping[str, str] | None = None) -> bool:
+def check_delta_rs(
+    root: str,
+    options: dict[str, str],
+    label: str,
+    environment: Mapping[str, str] | None = None,
+) -> bool:
     """Lista ``_delta_log/`` de uma tabela sob a raiz pelo ``is_deltatable`` do delta-rs.
 
     A listagem exercita as credenciais, a região e o endpoint do delta-rs, sem escrever.
@@ -339,7 +373,10 @@ except Exception as error:
 """
 
 
-def check_duckdb(root: str, region: str | None) -> bool:
+def check_duckdb(
+    root: str,
+    region: str | None,
+) -> bool:
     """Lista o prefixo pela conexão de ``Storage.duckdb_connect``, a da suíte S3 e dos motores.
 
     A conexão carrega ``httpfs`` e ``delta`` da pasta de extensões e cria o secret com a chave que o
@@ -347,7 +384,9 @@ def check_duckdb(root: str, region: str | None) -> bool:
     """
     proxy = probelib.duckdb_proxy()
 
-    def listed(output: str) -> str:
+    def listed(
+        output: str,
+    ) -> str:
         """A linha do DuckDB que listou: os objetos, a pasta de extensões da conexão e o proxy."""
         found = json.loads(output)
         directory = found["extension_directory"] or "(padrão)"
@@ -360,7 +399,9 @@ def check_duckdb(root: str, region: str | None) -> bool:
 # O diagnóstico e o resumo
 
 
-def main(argv: list[str]) -> int:
+def main(
+    argv: list[str],
+) -> int:
     root, _ = probelib.s3_root(argv)
     if not root.startswith("s3://"):
         print(f"uso: .venv/bin/python probes/diagnose_aws.py s3://bucket/prefixo\n{probelib.NO_ROOT}", file=sys.stderr)
@@ -380,7 +421,9 @@ def main(argv: list[str]) -> int:
         print(f"resultado gravado em {path}")
 
 
-def endpoint_summary(environ: Mapping[str, str]) -> str:
+def endpoint_summary(
+    environ: Mapping[str, str],
+) -> str:
     """A linha do endpoint no resumo, pelo que a suíte faz com cada variável.
 
     A suíte passa ``AWS_ENDPOINT_URL`` ao ``boto3``, ao PyArrow, ao delta-rs e ao secret do DuckDB,
@@ -396,7 +439,9 @@ def endpoint_summary(environ: Mapping[str, str]) -> str:
     return "sem AWS_ENDPOINT_URL; os nomes s3.<região>.amazonaws.com precisam resolver (ver DNS acima)"
 
 
-def diagnose(root: str) -> int:
+def diagnose(
+    root: str,
+) -> int:
     """As verificações na ordem do relatório e o resumo.
 
     Devolve 0 quando os três clientes e o STS responderam, senão 1.

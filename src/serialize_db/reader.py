@@ -77,7 +77,9 @@ def _new_reader_id() -> str:
     return f"reader-{today}-{uuid.uuid4().hex[:8]}"
 
 
-def _check_select(statement_or_sql: sa.sql.ClauseElement | str) -> None:
+def _check_select(
+    statement_or_sql: sa.sql.ClauseElement | str,
+) -> None:
     """A regra de leitura comum: um statement Core que não é ``Select`` nem ``CompoundSelect`` é
     ``ContractError`` antes de chamar o motor; um texto pronto roda como está."""
     if isinstance(statement_or_sql, str):
@@ -102,7 +104,9 @@ class _Source:
     description: str
 
 
-def _current_source(db: Database) -> _Source:
+def _current_source(
+    db: Database,
+) -> _Source:
     """A versão atual de cada tabela do modelo que existe no ambiente, como ``Execution`` na
     abertura."""
     versions = {}
@@ -115,7 +119,11 @@ def _current_source(db: Database) -> _Source:
     return _Source(None, versions, uris, f"a versão atual do ambiente {db.environment}")
 
 
-def _snapshot_source(db: Database, name: str, entry: Mapping[str, int]) -> _Source:
+def _snapshot_source(
+    db: Database,
+    name: str,
+    entry: Mapping[str, int],
+) -> _Source:
     """As versões da entrada do snapshot, nas tabelas do modelo que ela tem."""
     versions = {}
     uris = {}
@@ -126,7 +134,11 @@ def _snapshot_source(db: Database, name: str, entry: Mapping[str, int]) -> _Sour
     return _Source(name, versions, uris, f"o snapshot {name}")
 
 
-def _archived_source(db: Database, name: str, entry: Mapping[str, int]) -> _Source:
+def _archived_source(
+    db: Database,
+    name: str,
+    entry: Mapping[str, int],
+) -> _Source:
     """As cópias de ``arquivo/<nome>/<tabela>`` das tabelas do modelo que a entrada arquivada tem,
     na versão atual de cada cópia, que não muda depois do ``archive``."""
     storage = db.storage
@@ -141,7 +153,11 @@ def _archived_source(db: Database, name: str, entry: Mapping[str, int]) -> _Sour
     return _Source(name, versions, uris, f"o snapshot arquivado {name}")
 
 
-def _resolve_source(db: Database, snapshot: str | None, channel: str | None) -> _Source:
+def _resolve_source(
+    db: Database,
+    snapshot: str | None,
+    channel: str | None,
+) -> _Source:
     """As versões pelo modo pedido: o canal ``current``, o snapshot pelo nome, vivo ou arquivado,
     ou o snapshot do canal, o ``default`` sem argumento."""
     if snapshot is not None and channel is not None:
@@ -166,38 +182,58 @@ class _ReaderStream:
     variável, como em ``db.open_delta().stream(...)``, não é coletado enquanto o stream está
     aberto, e o finalizador dele não fecha o motor debaixo da consulta."""
 
-    def __init__(self, reader: DeltaReader, stream: BatchStream) -> None:
+    def __init__(
+        self,
+        reader: DeltaReader,
+        stream: BatchStream,
+    ) -> None:
         self._reader: DeltaReader | None = reader
         self._stream = stream
         self.schema = stream.schema
 
-    def read_next_batch(self) -> pa.RecordBatch:
+    def read_next_batch(
+        self,
+    ) -> pa.RecordBatch:
         """O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último lote."""
         return self._stream.read_next_batch()
 
-    def __iter__(self) -> Iterator[pa.RecordBatch]:
+    def __iter__(
+        self,
+    ) -> Iterator[pa.RecordBatch]:
         # O gerador segura este stream, e com ele o leitor, enquanto o laço o percorre.
         yield from self._stream
 
-    def read_all(self) -> pa.Table:
+    def read_all(
+        self,
+    ) -> pa.Table:
         """Os lotes que faltam numa ``pa.Table``."""
         return self._stream.read_all()
 
-    def __arrow_c_stream__(self, requested_schema: object = None) -> object:
+    def __arrow_c_stream__(
+        self,
+        requested_schema: object = None,
+    ) -> object:
         # O leitor Arrow puxa o gerador deste stream, que segura o leitor até o último lote.
         batches = pa.RecordBatchReader.from_batches(self.schema, iter(self))
         return batches.__arrow_c_stream__(requested_schema)
 
-    def close(self) -> None:
+    def close(
+        self,
+    ) -> None:
         """Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
         segura."""
         self._stream.close()
         self._reader = None
 
-    def __enter__(self) -> _ReaderStream:
+    def __enter__(
+        self,
+    ) -> _ReaderStream:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None:
         self.close()
 
 
@@ -217,8 +253,13 @@ class DeltaReader:
             reader.query(sa.select(sa.func.count()).select_from(Lancamento.__table__))
     """
 
-    def __init__(self, db: Database, snapshot: str | None = None, channel: str | None = None,
-                 config: DuckDBConfig | None = None) -> None:
+    def __init__(
+        self,
+        db: Database,
+        snapshot: str | None = None,
+        channel: str | None = None,
+        config: DuckDBConfig | None = None,
+    ) -> None:
         """Lê as versões, abre o motor e cria as views; ``db.open_delta`` é a entrada.
 
         :param db: o banco, com a raiz, o ambiente e os modelos.
@@ -264,12 +305,17 @@ class DeltaReader:
         log.info("leitor %s aberto sobre %s: versões %s", self.reader_id, self._source,
                  self.versions)
 
-    def _create_view(self, table: sa.Table) -> None:
+    def _create_view(
+        self,
+        table: sa.Table,
+    ) -> None:
         """A view de uma tabela, numa sessão a mais do motor, fechada no fim."""
         with self._engine.new_session() as session:
             session.ingest(table, self._uris[table.name], self.versions[table.name])
 
-    def _open_views(self) -> None:
+    def _open_views(
+        self,
+    ) -> None:
         """Uma view por tabela do modelo presente nas versões, as tabelas em paralelo."""
         tasks = []
         for table in self._db.tables():
@@ -280,19 +326,29 @@ class DeltaReader:
 
     # ------------------------------------------------------------ a materialização
 
-    def _check_view(self, name: str) -> None:
+    def _check_view(
+        self,
+        name: str,
+    ) -> None:
         """A tabela do modelo sem view é ``ContractError`` com a origem das versões."""
         if name not in self.versions:
             raise ContractError(f"{name}: a tabela do modelo não tem view no leitor, porque não "
                                 f"está em {self._source}")
 
-    def _kind(self, name: str) -> str:
+    def _kind(
+        self,
+        name: str,
+    ) -> str:
         """``TABLE`` depois de uma materialização, ``VIEW`` antes dela."""
         with self._lock:
             return "TABLE" if name in self.materialized else "VIEW"
 
-    def _materialize_one(self, table: sa.Table, where: str,
-                         partitions: list[str] | None) -> None:
+    def _materialize_one(
+        self,
+        table: sa.Table,
+        where: str,
+        partitions: list[str] | None,
+    ) -> None:
         """A troca da view, ou da tabela de uma materialização anterior, por ``CREATE TABLE ... AS
         SELECT * FROM delta_scan(...)``, numa transação de uma sessão a mais; a falha devolve o
         objeto anterior pelo ``ROLLBACK``."""
@@ -312,7 +368,11 @@ class DeltaReader:
         log.info("leitor %s: %s materializada, partições %s", self.reader_id, table.name,
                  "todas" if partitions is None else partitions)
 
-    def materialize(self, *tables: sa.Table, partitions: list[str] | None = None) -> None:
+    def materialize(
+        self,
+        *tables: sa.Table,
+        partitions: list[str] | None = None,
+    ) -> None:
         """Copia as tabelas para o banco local do leitor: o nome do modelo passa a ser uma tabela
         com os dados da versão lida, ou só das partições pedidas.
 
@@ -350,7 +410,10 @@ class DeltaReader:
 
     # ------------------------------------------------------------ a leitura
 
-    def _check_readable(self, statement_or_sql: sa.sql.ClauseElement | str) -> None:
+    def _check_readable(
+        self,
+        statement_or_sql: sa.sql.ClauseElement | str,
+    ) -> None:
         """A regra de leitura comum e, num statement Core, a view de cada tabela do modelo que
         ele cita; o texto pronto recebe o erro de catálogo do DuckDB."""
         _check_select(statement_or_sql)
@@ -360,8 +423,11 @@ class DeltaReader:
             if name in self._db.metadata.tables:
                 self._check_view(name)
 
-    def query(self, statement_or_sql: sa.sql.ClauseElement | str,
-              params: Mapping[str, object] | None = None) -> pa.Table:
+    def query(
+        self,
+        statement_or_sql: sa.sql.ClauseElement | str,
+        params: Mapping[str, object] | None = None,
+    ) -> pa.Table:
         """O resultado inteiro como ``pa.Table``, pelo motor.
 
         Exemplo:
@@ -387,9 +453,12 @@ class DeltaReader:
         self._check_readable(statement_or_sql)
         return self._engine.query(statement_or_sql, params)
 
-    def stream(self, statement_or_sql: sa.sql.ClauseElement | str,
-               params: Mapping[str, object] | None = None,
-               batch_size: int = 100_000) -> BatchStream:
+    def stream(
+        self,
+        statement_or_sql: sa.sql.ClauseElement | str,
+        params: Mapping[str, object] | None = None,
+        batch_size: int = 100_000,
+    ) -> BatchStream:
         """Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a memória
         limitada a 64 MiB de lotes.
 
@@ -423,7 +492,9 @@ class DeltaReader:
         return _ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))
 
     @contextlib.contextmanager
-    def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
+    def session(
+        self,
+    ) -> Iterator[duckdb.DuckDBPyConnection]:
         """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
         é consulta, como uma tabela temporária ao lado das views.
 
@@ -445,7 +516,9 @@ class DeltaReader:
 
     # ------------------------------------------------------------ o encerramento
 
-    def close(self) -> None:
+    def close(
+        self,
+    ) -> None:
         """Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco temporário,
         com as tabelas materializadas, e a pasta de transbordo. O DuckDB só devolve a memória
         aqui: num caderno, o leitor sem ``with`` segura a memória até esta chamada. A segunda
@@ -461,10 +534,15 @@ class DeltaReader:
         """
         self._finalizer()
 
-    def __enter__(self) -> DeltaReader:
+    def __enter__(
+        self,
+    ) -> DeltaReader:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None:
         self.close()
 
 
@@ -486,8 +564,13 @@ class RedshiftReader:
                     work(batch)
     """
 
-    def __init__(self, metadata: sa.MetaData, environment: str,
-                 config: RedshiftConfig | None = None, unload_to: str | None = None) -> None:
+    def __init__(
+        self,
+        metadata: sa.MetaData,
+        environment: str,
+        config: RedshiftConfig | None = None,
+        unload_to: str | None = None,
+    ) -> None:
         """Abre a sessão no esquema; ``open_redshift`` e ``db.open_redshift`` são as entradas.
 
         :param metadata: o ``MetaData`` dos modelos do cliente, cujas tabelas os statements citam.
@@ -528,8 +611,11 @@ class RedshiftReader:
         self._engine = RedshiftEngine(config, self.reader_id, storage, staging_prefix,
                                       prefix=f"{self.environment}_")
 
-    def query(self, statement_or_sql: sa.sql.ClauseElement | str,
-              params: Mapping[str, object] | None = None) -> pa.Table:
+    def query(
+        self,
+        statement_or_sql: sa.sql.ClauseElement | str,
+        params: Mapping[str, object] | None = None,
+    ) -> pa.Table:
         """O resultado inteiro como ``pa.Table``, pelo cursor do driver, que materializa o
         resultado no cliente: o caminho dos resultados pequenos.
 
@@ -557,9 +643,12 @@ class RedshiftReader:
         _check_select(statement_or_sql)
         return self._engine.query(statement_or_sql, params)
 
-    def stream(self, statement_or_sql: sa.sql.ClauseElement | str,
-               params: Mapping[str, object] | None = None,
-               batch_size: int = 100_000) -> BatchStream:
+    def stream(
+        self,
+        statement_or_sql: sa.sql.ClauseElement | str,
+        params: Mapping[str, object] | None = None,
+        batch_size: int = 100_000,
+    ) -> BatchStream:
         """Os lotes da consulta lidos dos arquivos do ``UNLOAD ... PARALLEL OFF`` dela em
         ``<unload_to>/<id do leitor>/stream/<uuid>/``, dois lotes à frente do cliente: o caminho
         dos resultados grandes.
@@ -593,7 +682,9 @@ class RedshiftReader:
         _check_select(statement_or_sql)
         return self._engine.stream(statement_or_sql, params, batch_size)
 
-    def session(self) -> contextlib.AbstractContextManager[object]:
+    def session(
+        self,
+    ) -> contextlib.AbstractContextManager[object]:
         """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
         é consulta, como uma tabela temporária.
 
@@ -609,7 +700,9 @@ class RedshiftReader:
         """
         return self._engine.session()
 
-    def close(self) -> None:
+    def close(
+        self,
+    ) -> None:
         """Fecha a sessão e esvazia a pasta ``<unload_to>/<id do leitor>/``, nada fora dela; sem
         ``unload_to``, só fecha a sessão. A segunda chamada não faz nada.
 
@@ -623,15 +716,24 @@ class RedshiftReader:
         """
         self._engine.cleanup()
 
-    def __enter__(self) -> RedshiftReader:
+    def __enter__(
+        self,
+    ) -> RedshiftReader:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(
+        self,
+        *exc: object,
+    ) -> None:
         self.close()
 
 
-def open_redshift(metadata: sa.MetaData, environment: str, config: RedshiftConfig | None = None,
-                  unload_to: str | None = None) -> RedshiftReader:
+def open_redshift(
+    metadata: sa.MetaData,
+    environment: str,
+    config: RedshiftConfig | None = None,
+    unload_to: str | None = None,
+) -> RedshiftReader:
     """Abre o leitor da base publicada no Redshift para o cliente que tem o modelo e não a raiz
     Delta; o time que tem o ``Database`` entra por ``db.open_redshift``.
 

@@ -38,8 +38,12 @@ from serialize_db.execution import Database
 USAGE = "uso: .venv/bin/python probes/operacao/probe_archive_resume.py <origem>"
 
 
-def check_killed(killed: lib.Finished, after_kill: dict[str, list[str]], values: list[str],
-                 in_snapshots: bool) -> None:
+def check_killed(
+    killed: lib.Finished,
+    after_kill: dict[str, list[str]],
+    values: list[str],
+    in_snapshots: bool,
+) -> None:
     """O sinal chegou com uma partição ao menos na cópia, outra fora dela e o snapshot ainda em
     ``snapshots``."""
     problems = []
@@ -54,8 +58,12 @@ def check_killed(killed: lib.Finished, after_kill: dict[str, list[str]], values:
     lib.check("o processo encerrado no meio da cópia", problems)
 
 
-def check_rerun(rerun: lib.Finished, after_kill: dict[str, list[str]], values: list[str],
-                name: str) -> None:
+def check_rerun(
+    rerun: lib.Finished,
+    after_kill: dict[str, list[str]],
+    values: list[str],
+    name: str,
+) -> None:
     """A repetição pulou as partições registradas na cópia e copiou as outras."""
     problems = []
     if rerun.code != 0:
@@ -69,7 +77,12 @@ def check_rerun(rerun: lib.Finished, after_kill: dict[str, list[str]], values: l
     lib.check("a repetição pula as partições já copiadas e copia as outras", problems)
 
 
-def check_copy(db: Database, source_uri: str, archive_uri: str, values: list[str]) -> None:
+def check_copy(
+    db: Database,
+    source_uri: str,
+    archive_uri: str,
+    values: list[str],
+) -> None:
     """A cópia com os arquivos da versão do snapshot, uma versão por partição e nenhum arquivo
     fora do log."""
     storage = db.storage

@@ -64,11 +64,16 @@ def client_frame() -> pd.DataFrame:
     })
 
 
-def dtypes_of(frame: pd.DataFrame) -> dict[str, str]:
+def dtypes_of(
+    frame: pd.DataFrame,
+) -> dict[str, str]:
     return {name: str(dtype) for name, dtype in frame.dtypes.items()}
 
 
-def check_round_trip(engine: DuckDBEngine, frame: pd.DataFrame) -> None:
+def check_round_trip(
+    engine: DuckDBEngine,
+    frame: pd.DataFrame,
+) -> None:
     """Seção P: o ``DataFrame`` por ``from_pandas`` e ``cast``, gravado por ``create_table`` e
     ``append``, de volta por ``query`` igual ao que entrou, e o ``to_pandas`` com e sem
     ``types_mapper`` como leitura."""
@@ -105,7 +110,9 @@ def check_round_trip(engine: DuckDBEngine, frame: pd.DataFrame) -> None:
     report("P a ida e volta pelo pandas: query igual ao cast da entrada", problems)
 
 
-def print_refusals(frame: pd.DataFrame) -> None:
+def print_refusals(
+    frame: pd.DataFrame,
+) -> None:
     """As recusas de ``cast`` na fronteira, como leitura: nanossegundos, escala a mais, instante
     sem fuso em coluna com fuso, float em ``Numeric``, texto acima do limite."""
     cases = {

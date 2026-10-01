@@ -296,3 +296,17 @@ workflow's command installed it (`duckdb.connect(config={'extension_directory': 
 passed and 94 skipped, and the stand-in with the local root 522 passed and 1 skipped; since the
 secret by `boto3`'s key of 2026-09-25 nothing loads `aws`, and on 2026-09-28 the stand-in passed
 with `delta` and `httpfs` only. `README.md`
+
+## The target batteries of 2026-09-25 and 2026-09-26
+
+The battery of 2026-09-25 in the target (8 vCPUs, 15,505 MB, deltalake 1.6.6) passed every suite
+case (S3 512, Redshift 45 twice, engine 6 and publication 8 twice each, with the stage 10 reader
+and the publication by channel), loaded the base in 219.4 s and opened the Delta reader's 12 views
+in 0.645 s. `probes/credentials.py` read there delta-rs, `S3FileSystem` and `boto3` renewing the
+container credential, which rotates about every 30.6 minutes, the open Redshift connection
+outliving its password, and DuckDB's `delta_scan` failing once after the key its secret holds
+expired, since only `httpfs` triggers `REFRESH auto`. The user chose the same day the secret with
+`boto3`'s key, which the DuckDB engine recreates at each session entry when it changes; the battery
+of 2026-09-26 passed every suite case again (S3 531, the stale-key case among them), loaded the
+source's new month 2026-07-31 (`.claude/memory/source-base.md`), published the whole base by
+channel and read, in the probe, the engine's secret renewed before each expiry. `plan/POC.md`

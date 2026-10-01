@@ -76,7 +76,9 @@ MEASURES = sa.Table("cad_medidas", sa.MetaData(),
                     sa.Column("largura", sa.BigInteger))
 
 
-def text_columns_table(*names: str) -> sa.Table:
+def text_columns_table(
+    *names: str,
+) -> sa.Table:
     """``cad_colunas``, particionada por ``parte``, com as colunas de texto ``names`` entre a chave
     ``id`` e a partição, na ordem pedida."""
     columns = [sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False)]
@@ -87,7 +89,11 @@ def text_columns_table(*names: str) -> sa.Table:
                     info={"serialize_db": {"partition_by": ["parte"]}})
 
 
-def text_columns_rows(table: sa.Table, value: str, ids: list[int]) -> pa.Table:
+def text_columns_rows(
+    table: sa.Table,
+    value: str,
+    ids: list[int],
+) -> pa.Table:
     """As linhas de ``cad_colunas`` na partição ``value``, no contrato: cada coluna de texto com o
     nome dela seguido do id, como ``a1``."""
     data = {"id": pa.array(ids, pa.int64())}
@@ -106,7 +112,9 @@ OID_OF = {
 }
 
 
-def row_desc_of(arrow_schema: pa.Schema) -> list[dict]:
+def row_desc_of(
+    arrow_schema: pa.Schema,
+) -> list[dict]:
     """O ``row_desc`` do driver para um esquema Arrow."""
     fields = []
     for field in arrow_schema:
@@ -119,7 +127,10 @@ def row_desc_of(arrow_schema: pa.Schema) -> list[dict]:
     return fields
 
 
-def server_error(message: str, code: str = "XX000") -> redshift_connector.ProgrammingError:
+def server_error(
+    message: str,
+    code: str = "XX000",
+) -> redshift_connector.ProgrammingError:
     """O erro do driver com os campos do servidor."""
     return redshift_connector.ProgrammingError({"S": "ERROR", "C": code, "M": message})
 
@@ -131,7 +142,10 @@ class FakeCursor:
     """O cursor de uma ``FakeConnection``: ``execute`` pergunta à conexão, que responde as linhas
     e o ``row_desc``."""
 
-    def __init__(self, connection: FakeConnection) -> None:
+    def __init__(
+        self,
+        connection: FakeConnection,
+    ) -> None:
         self.connection = connection
         self.paramstyle = "format"
         self.description: list | None = None
@@ -139,7 +153,11 @@ class FakeCursor:
         self.ps: dict = {"row_desc": []}
         self._rows: list = []
 
-    def execute(self, text: str, params: object = None) -> FakeCursor:
+    def execute(
+        self,
+        text: str,
+        params: object = None,
+    ) -> FakeCursor:
         row_desc, rows = self.connection.answer(text, params)
         self.ps = {"row_desc": row_desc}
         self.description = None
@@ -149,10 +167,14 @@ class FakeCursor:
         self._rows = rows
         return self
 
-    def fetchone(self) -> list | None:
+    def fetchone(
+        self,
+    ) -> list | None:
         return self._rows.pop(0) if self._rows else None
 
-    def fetchall(self) -> list:
+    def fetchall(
+        self,
+    ) -> list:
         rows, self._rows = self._rows, []
         return rows
 
@@ -173,9 +195,14 @@ class FakeConnection:
     ``unload_rows`` num Parquet da pasta local com o manifesto, como o Redshift faria; com
     ``fail``, cada comando recebe esse erro."""
 
-    def __init__(self, storage: Storage | None = None, unload_rows: pa.Table | None = None,
-                 existing: set[str] = frozenset(), delay: float = 0.0,
-                 drop_next: int = 0) -> None:
+    def __init__(
+        self,
+        storage: Storage | None = None,
+        unload_rows: pa.Table | None = None,
+        existing: set[str] = frozenset(),
+        delay: float = 0.0,
+        drop_next: int = 0,
+    ) -> None:
         self.storage = storage
         self.unload_rows = unload_rows if unload_rows is not None else pa.table({})
         self.existing = set(existing)
@@ -188,13 +215,21 @@ class FakeConnection:
         self.autocommit = False
         self.closed = False
 
-    def cursor(self) -> FakeCursor:
+    def cursor(
+        self,
+    ) -> FakeCursor:
         return FakeCursor(self)
 
-    def close(self) -> None:
+    def close(
+        self,
+    ) -> None:
         self.closed = True
 
-    def answer(self, text: str, params: object) -> tuple[list, list]:
+    def answer(
+        self,
+        text: str,
+        params: object,
+    ) -> tuple[list, list]:
         """A resposta de um comando: as linhas de uma consulta conhecida, ou nada."""
         command = Command(text, params, time.perf_counter())
         self.commands.append(command)
@@ -209,7 +244,10 @@ class FakeConnection:
         finally:
             command.finished = time.perf_counter()
 
-    def _answer(self, text: str) -> tuple[list, list]:
+    def _answer(
+        self,
+        text: str,
+    ) -> tuple[list, list]:
         first = text.split(None, 1)[0].upper()
         if first == "UNLOAD":
             self._unload(text)
@@ -231,7 +269,10 @@ class FakeConnection:
             self.existing.add(re.search(r'"(\w+)"', text).group(1))
         return [], []
 
-    def _unload(self, text: str) -> None:
+    def _unload(
+        self,
+        text: str,
+    ) -> None:
         """Grava as linhas do UNLOAD num arquivo do destino, e o manifesto."""
         self.last_unload_count = self.unload_rows.num_rows
         if self.unload_rows.num_rows == 0:
@@ -251,13 +292,18 @@ class FakeConnection:
         self.storage.write_text(self.storage.join(prefix, "manifest"),
                                 json.dumps({"entries": [entry]}))
 
-    def texts(self) -> list[str]:
+    def texts(
+        self,
+    ) -> list[str]:
         """Os comandos registrados, mascarados."""
         return [mask(command.text) for command in self.commands]
 
 
-def fake_engine(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection,
-                storage: Storage | None = None) -> RedshiftEngine:
+def fake_engine(
+    monkeypatch: pytest.MonkeyPatch,
+    connection: FakeConnection,
+    storage: Storage | None = None,
+) -> RedshiftEngine:
     """O motor sobre a conexão de mentira, com o ``staging/`` da execução na raiz local."""
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
     root = storage if storage is not None else Storage.for_uri("/tmp/sem-uso")
@@ -267,7 +313,9 @@ def fake_engine(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection,
 # ---------------------------------------------------------------- a configuração e os textos
 
 
-def test_config_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``SERIALIZE_DB_REDSHIFT_*`` para ``RedshiftConfig``; a variável vazia é ausente; o par
     informado e o workgroup são os caminhos de conexão, e sem os dois a conexão é recusada."""
     variables = {
@@ -296,7 +344,9 @@ def test_sandbox_prefix_normalizes_and_limits() -> None:
         sandbox_prefix("x" * 59)
 
 
-def test_credentials_clause_and_mask(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_credentials_clause_and_mask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``IAM_ROLE`` com ARN e ``default``; as três chaves da sessão sem ``iam_role``; ``mask``
     tira os valores, e a nota de um erro leva o comando mascarado."""
     assert redshift.credentials_clause(CONFIG) == "IAM_ROLE default"
@@ -459,7 +509,9 @@ def test_schema_from_row_description() -> None:
         schema_from_row_description([{"label": b"c_num", "type_oid": 1700, "type_modifier": -1}])
 
 
-def test_stream_literal_values(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stream_literal_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """O texto do ``UNLOAD`` de um statement com texto, data, número e ``IN`` de lista, com o ``%``
     sem dobrar e o prefixo do sandbox; o texto pronto com os ``bindparam`` tipados pelo valor; um
     ``bindparam`` sem valor, também num ``IN`` de lista, recusado antes de qualquer comando."""
@@ -559,8 +611,10 @@ def test_literal_text_keeps_the_backslash_before_a_colon_in_a_value() -> None:
 
 
 @pytest.mark.local
-def test_stream_empty_result(monkeypatch: pytest.MonkeyPatch,
-                             local_location: LocalLocation) -> None:
+def test_stream_empty_result(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Uma conexão de mentira em que o ``UNLOAD`` não grava manifesto: com
     ``pg_last_unload_count()`` em 0, o ``stream`` sai sem lote e com o esquema do ``row_desc``; com
     2, a falta do manifesto sobe com a contagem."""
@@ -590,7 +644,9 @@ def test_stream_empty_result(monkeypatch: pytest.MonkeyPatch,
 
 @pytest.mark.local
 def test_stream_reads_the_unloaded_file_in_the_statement_schema(
-        monkeypatch: pytest.MonkeyPatch, local_location: LocalLocation) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Os lotes vêm do arquivo do ``UNLOAD``, com o ``INT96`` em microssegundos e cada lote no
     esquema do ``row_desc``; ``close`` apaga o prefixo do stream, e ``read_all`` dá as linhas."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
@@ -609,8 +665,10 @@ def test_stream_reads_the_unloaded_file_in_the_statement_schema(
 
 
 @pytest.mark.local
-def test_statements_serialize_on_the_single_session(monkeypatch: pytest.MonkeyPatch,
-                                                    local_location: LocalLocation) -> None:
+def test_statements_serialize_on_the_single_session(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Dois comandos de duas threads não se sobrepõem; um comando roda enquanto um ``stream`` ainda
     lê os arquivos, porque o lock solta no fim do ``UNLOAD``; um ``stream`` aberto dentro de
     ``session()``, na mesma thread, não trava; e ``new_session`` abre outra conexão."""
@@ -649,7 +707,9 @@ def test_statements_serialize_on_the_single_session(monkeypatch: pytest.MonkeyPa
     # new_session abre outra conexão, com o USE e o search_path, e a fecha na saída.
     connections = []
 
-    def open_fake(login: dict) -> FakeConnection:
+    def open_fake(
+        login: dict,
+    ) -> FakeConnection:
         connections.append(FakeConnection(storage))
         return connections[-1]
 
@@ -663,7 +723,9 @@ def test_statements_serialize_on_the_single_session(monkeypatch: pytest.MonkeyPa
 
 
 def test_connection_dropped_by_the_server_is_reopened_once(
-        monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Uma conexão derrubada (``InterfaceError``) é reaberta uma vez, com o ``USE`` e o
     ``search_path``, e o comando repetido; dentro de uma transação o erro sobe, com o
     ``ROLLBACK`` tentado."""
@@ -689,7 +751,8 @@ def test_connection_dropped_by_the_server_is_reopened_once(
 
 
 def test_connection_dropped_at_commit_raises_without_reconnecting(
-        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Uma conexão derrubada no ``COMMIT``: o ``InterfaceError`` sobe da transação, porque o
     ``COMMIT`` roda dentro dela e o resultado dele é desconhecido, e nenhum comando vai a uma
     segunda conexão; fechada a transação, a conexão derrubada volta a ser reaberta."""
@@ -715,7 +778,9 @@ def test_connection_dropped_at_commit_raises_without_reconnecting(
 
 @pytest.mark.local
 def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
-        monkeypatch: pytest.MonkeyPatch, local_location: LocalLocation) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """``create_table`` roda o DDL do modelo e anota a tabela, e recusa o nome ocupado; o appender
     recusa a tabela que não existe; o arquivo nasce no ``staging/`` na thread auxiliar; ``close``
     grava ao lado dele o manifesto com o arquivo como a única entrada, obrigatória e com o
@@ -742,7 +807,10 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     original_write_file_manifest = redshift._write_file_manifest
     manifests = []
 
-    def reading_manifest(sink: object, manifest_path: str) -> str:
+    def reading_manifest(
+        sink: object,
+        manifest_path: str,
+    ) -> str:
         uri = original_write_file_manifest(sink, manifest_path)
         manifest_text, _ = storage.read_text(manifest_path)
         manifests.append({"manifest": json.loads(manifest_text), "uri": uri,
@@ -811,8 +879,10 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
 
 
 @pytest.mark.local
-def test_appender_copy_lists_the_file_columns(monkeypatch: pytest.MonkeyPatch,
-                                              local_location: LocalLocation) -> None:
+def test_appender_copy_lists_the_file_columns(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """O ``COPY`` do appender lista as colunas do arquivo, as do primeiro lote na ordem do
     contrato, no ``COPY`` direto e no da staging ``_carga`` da tabela com JSON: o lote sem uma
     coluna anulável do meio não desloca as seguintes."""
@@ -840,8 +910,10 @@ def test_appender_copy_lists_the_file_columns(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.local
-def test_appender_second_close_does_nothing(monkeypatch: pytest.MonkeyPatch,
-                                            local_location: LocalLocation) -> None:
+def test_appender_second_close_does_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """O ``close`` explícito dentro do ``with``: a saída do ``with`` chama o ``close`` de novo, e
     ele não roda outro ``COPY``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
@@ -857,8 +929,10 @@ def test_appender_second_close_does_nothing(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.local
-def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.MonkeyPatch,
-                                                         local_location: LocalLocation) -> None:
+def test_ingest_loads_each_partition_through_the_staging(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Por partição, o manifesto no ``staging/``, o ``DELETE`` da staging, o ``COPY ... MANIFEST
     FILLRECORD`` com a lista das colunas do arquivo e o ``INSERT`` com o valor; a staging apagada
     no fim; a partição sem arquivo não roda; o nome ocupado e a tabela sem versão são
@@ -931,8 +1005,10 @@ def test_ingest_loads_each_partition_through_the_staging(monkeypatch: pytest.Mon
 
 @pytest.mark.local
 def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
-        monkeypatch: pytest.MonkeyPatch, local_location: LocalLocation,
-        caplog: pytest.LogCaptureFixture) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """O registro: o ``UNLOAD`` sem ``PARTITION BY`` para
     ``<coluna>=<valor>/<execution_id>_<uuid>/`` na pasta da tabela, o ``select`` sem a coluna de
     partição e com o JSON serializado, e o arquivo como o Redshift o gravou (``INT96``) no log, com
@@ -1035,15 +1111,24 @@ class Target:
     engine: RedshiftEngine
     execution_id: str
 
-    def uri(self, table: sa.Table) -> str:
+    def uri(
+        self,
+        table: sa.Table,
+    ) -> str:
         return self.storage.uri_of(f"prd/{table.name}")
 
-    def qualified(self, suffix: str) -> str:
+    def qualified(
+        self,
+        suffix: str,
+    ) -> str:
         return self.engine.qualified(self.engine.prefix + suffix)
 
 
 @pytest.fixture
-def target(s3_location: S3Location, redshift_driver: None) -> Iterator[Target]:
+def target(
+    s3_location: S3Location,
+    redshift_driver: None,
+) -> Iterator[Target]:
     """O motor sobre uma raiz nova no bucket e um sandbox próprio; no substituto local, a conexão
     de ``tests/emulator.py`` no lugar do driver."""
     storage = Storage.for_uri(s3_location.child(f"engine/{uuid.uuid4().hex[:8]}"))
@@ -1054,7 +1139,12 @@ def target(s3_location: S3Location, redshift_driver: None) -> Iterator[Target]:
     engine.cleanup()
 
 
-def published_table(target: Target, table: sa.Table, months: list[str], rows: int = 100) -> int:
+def published_table(
+    target: Target,
+    table: sa.Table,
+    months: list[str],
+    rows: int = 100,
+) -> int:
     """A tabela Delta com ``rows`` linhas por mês e ids contíguos a partir de 1; devolve a última
     versão."""
     uri = target.uri(table)
@@ -1066,13 +1156,19 @@ def published_table(target: Target, table: sa.Table, months: list[str], rows: in
     return version
 
 
-def count_of(engine: RedshiftEngine, name: str) -> int:
+def count_of(
+    engine: RedshiftEngine,
+    name: str,
+) -> int:
     """As linhas da tabela ``name`` do esquema."""
     counted = engine.query(f"SELECT count(*) AS n FROM {engine.qualified(name)}")
     return counted.column("n")[0].as_py()
 
 
-def totals_of(engine: RedshiftEngine, name: str) -> dict:
+def totals_of(
+    engine: RedshiftEngine,
+    name: str,
+) -> dict:
     """As linhas, os ids distintos e a soma de ``valor`` da tabela ``name`` do esquema."""
     totals = engine.query(f'SELECT count(*) AS linhas, count(DISTINCT "id_lancamento") AS ids, '
                           f'sum("valor") AS soma FROM {engine.qualified(name)}')
@@ -1081,7 +1177,9 @@ def totals_of(engine: RedshiftEngine, name: str) -> dict:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_connect_uses_share_database(target: Target) -> None:
+def test_connect_uses_share_database(
+    target: Target,
+) -> None:
     """Depois do ``USE``, o ``CREATE TABLE`` de uma tabela ``exec_<id>_*`` por nome em duas partes
     passa e ``name_in_use`` lê o nome livre; leituras, nunca asserções: o SQLSTATE e a mensagem da
     relação inexistente, ``current_database()``, que o Redshift descreve com o tipo ``name``
@@ -1107,8 +1205,10 @@ def test_connect_uses_share_database(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_ingest_stream_appender_export(target: Target,
-                                       caplog: pytest.LogCaptureFixture) -> None:
+def test_ingest_stream_appender_export(
+    target: Target,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """``ingest`` de uma partição de um Delta no bucket, ``stream`` em lotes igual ao ``query``,
     ``create_table`` e o ``appender`` por ``COPY``, a auditoria com a versão fixada,
     ``export_partition`` pelo registro e pela troca com as mesmas linhas, e ``cleanup`` sem tabela
@@ -1232,8 +1332,10 @@ def test_ingest_stream_appender_export(target: Target,
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_appender_copies_the_file_at_close(target: Target,
-                                           monkeypatch: pytest.MonkeyPatch) -> None:
+def test_appender_copies_the_file_at_close(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A tabela de ``create_table`` nasce vazia e fica vazia até o ``close``; o arquivo que some
     antes do ``COPY`` o faz falhar pela entrada obrigatória do manifesto, sem deixar linha, e a
     mensagem do servidor é uma leitura; o ``appender`` sem lote não muda a tabela; o segundo
@@ -1253,7 +1355,10 @@ def test_appender_copies_the_file_at_close(target: Target,
     original_write_file_manifest = redshift._write_file_manifest
     manifests = []
 
-    def manifest_without_file(sink: object, manifest_path: str) -> str:
+    def manifest_without_file(
+        sink: object,
+        manifest_path: str,
+    ) -> str:
         manifests.append(manifest_path)
         uri = original_write_file_manifest(sink, manifest_path)
         sink.storage.delete([sink.path])
@@ -1288,7 +1393,9 @@ def test_appender_copies_the_file_at_close(target: Target,
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_appender_loads_a_batch_without_a_middle_column(target: Target) -> None:
+def test_appender_loads_a_batch_without_a_middle_column(
+    target: Target,
+) -> None:
     """Um lote sem uma coluna anulável do meio da tabela: cada coluna do arquivo entra na de mesmo
     nome, e a que falta fica nula, pelo ``COPY`` direto e pela staging da tabela com JSON."""
     engine = target.engine
@@ -1314,7 +1421,9 @@ def test_appender_loads_a_batch_without_a_middle_column(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_ingest_and_pinned_delta_load_files_before_a_middle_column(target: Target) -> None:
+def test_ingest_and_pinned_delta_load_files_before_a_middle_column(
+    target: Target,
+) -> None:
     """Uma coluna anulável nova no meio do modelo depois de uma partição gravada: o ``ingest`` e o
     ``pinned_delta`` põem cada valor do arquivo anterior a ela na coluna de mesmo nome, com ela
     nula; na versão seguinte, a partição antiga tem também um arquivo com a coluna nova, e os
@@ -1350,7 +1459,9 @@ def test_ingest_and_pinned_delta_load_files_before_a_middle_column(target: Targe
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_ingest_and_pinned_delta_load_reordered_columns(target: Target) -> None:
+def test_ingest_and_pinned_delta_load_reordered_columns(
+    target: Target,
+) -> None:
     """Duas colunas do modelo trocadas de lugar depois de uma partição gravada, sem diferença
     para o esquema Delta: o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo
     nome."""
@@ -1375,7 +1486,9 @@ def test_ingest_and_pinned_delta_load_reordered_columns(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_new_session_sees_committed_tables(target: Target) -> None:
+def test_new_session_sees_committed_tables(
+    target: Target,
+) -> None:
     """A sessão de ``new_session`` vê a tabela ``exec_<id>_*`` confirmada pela principal e não a
     temporária dela; duas ingestões em duas sessões terminam, e a principal lê as duas."""
     engine = target.engine
@@ -1388,7 +1501,11 @@ def test_new_session_sees_committed_tables(target: Target) -> None:
     temporary = f"{engine.prefix}temporaria"
     engine.query(f"CREATE TEMP TABLE {temporary} AS SELECT 1 AS x")
 
-    def ingest(table: sa.Table, uri: str, pinned: int) -> None:
+    def ingest(
+        table: sa.Table,
+        uri: str,
+        pinned: int,
+    ) -> None:
         with engine.new_session() as session:
             session.ingest(table, uri, pinned)
 
@@ -1409,7 +1526,9 @@ def test_new_session_sees_committed_tables(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_two_writers_on_the_same_table_both_enter(target: Target) -> None:
+def test_two_writers_on_the_same_table_both_enter(
+    target: Target,
+) -> None:
     """Dois appenders na mesma tabela, com os ``close`` ao mesmo tempo, entram os dois com todas
     as suas linhas: em duas sessões de ``new_session()``, cada ``COPY`` na sua conexão, e na
     sessão principal, um depois do outro sob o lock. Um appender numa sessão a mais e um
@@ -1423,22 +1542,33 @@ def test_two_writers_on_the_same_table_both_enter(target: Target) -> None:
     both = {"linhas": 2_000, "ids": 2_000, "soma": both_sum}
     barrier = threading.Barrier(2)
 
-    def write(session: RedshiftEngine, table: sa.Table, rows: pa.Table) -> None:
+    def write(
+        session: RedshiftEngine,
+        table: sa.Table,
+        rows: pa.Table,
+    ) -> None:
         # A saída do with roda o close logo depois da barreira, junto com o outro escritor.
         with session.appender(table) as appender:
             appender.write(rows)
             barrier.wait(timeout=60)
 
-    def write_in_a_new_session(table: sa.Table, rows: pa.Table) -> None:
+    def write_in_a_new_session(
+        table: sa.Table,
+        rows: pa.Table,
+    ) -> None:
         with engine.new_session() as session:
             write(session, table, rows)
 
-    def update_first_half(table: sa.Table) -> None:
+    def update_first_half(
+        table: sa.Table,
+    ) -> None:
         barrier.wait(timeout=60)
         engine.query(sa.update(table).where(table.c.id_lancamento <= 500)
                      .values(valor=table.c.valor + 1))
 
-    def run_together(*tasks: tuple) -> None:
+    def run_together(
+        *tasks: tuple,
+    ) -> None:
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = [pool.submit(*task) for task in tasks]
             for future in futures:
@@ -1468,7 +1598,9 @@ def test_two_writers_on_the_same_table_both_enter(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_stream_literal_values_on_the_target(target: Target) -> None:
+def test_stream_literal_values_on_the_target(
+    target: Target,
+) -> None:
     """Valores com ``'`` e ``\\`` voltam iguais pelo ``stream`` e pelo ``query``; um ``select``
     sem linha dá o stream vazio com o esquema; a tabela temporária criada por ``query`` é lida
     pelo ``UNLOAD`` do ``stream`` seguinte; o ``row_desc`` de cada tipo do contrato e dos
@@ -1517,7 +1649,9 @@ def test_stream_literal_values_on_the_target(target: Target) -> None:
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_stream_and_query_agree_on_a_colon_inside_a_literal(target: Target) -> None:
+def test_stream_and_query_agree_on_a_colon_inside_a_literal(
+    target: Target,
+) -> None:
     """Um texto com ``:nome`` dentro de um literal, e um valor do cliente com contrabarra antes de
     ``:``, dão a mesma linha pelo ``stream`` e pelo ``query``: o literal e o valor chegam intactos
     ao ``UNLOAD``."""
@@ -1548,7 +1682,9 @@ def test_stream_and_query_agree_on_a_colon_inside_a_literal(target: Target) -> N
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_small_append_copy_cost(target: Target) -> None:
+def test_small_append_copy_cost(
+    target: Target,
+) -> None:
     """O tempo de um ``append`` de 10 linhas pelo ``appender``, o ``COPY`` de um arquivo pequeno,
     como leitura, nunca como reprovação."""
     engine = target.engine

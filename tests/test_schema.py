@@ -156,7 +156,9 @@ class Ruim(RuimBase):
 TUDO.to_metadata(RuimBase.metadata)
 
 
-def batch_of_tudo(**columns: pa.Array | list) -> pa.RecordBatch:
+def batch_of_tudo(
+    **columns: pa.Array | list,
+) -> pa.RecordBatch:
     """Um lote com as colunas informadas, para os testes de ``cast``."""
     return pa.RecordBatch.from_pydict(columns)
 
@@ -181,7 +183,7 @@ def test_arrow_schema_maps_every_contract_type() -> None:
     ids=str,
 )
 def test_arrow_schema_refuses_foreign_types(
-    kind: type[sa.types.TypeEngine] | sa.types.TypeEngine
+    kind: type[sa.types.TypeEngine] | sa.types.TypeEngine,
 ) -> None:
     """Um tipo fora da tabela de tipos é ``ContractError`` com a tabela e a coluna; o ``Enum``
     também, embora derive de ``String``, porque nada confere a lista de valores."""
@@ -202,7 +204,9 @@ def test_arrow_schema_refuses_foreign_types(
     ],
 )
 def test_arrow_schema_refuses_numeric_outside_the_decimal(
-    precision: int, scale: int, message: str
+    precision: int,
+    scale: int,
+    message: str,
 ) -> None:
     """A precisão fora de 1 a 38 e a escala fora de 0 à precisão, até 37, são ``ContractError``
     com a tabela e a coluna, no lugar do ``ValueError`` do PyArrow e da ``Exception`` genérica do
@@ -213,14 +217,19 @@ def test_arrow_schema_refuses_numeric_outside_the_decimal(
 
 
 @pytest.mark.parametrize(("precision", "scale"), [(38, 2), (38, 37), (10, 10), (1, 0)], ids=str)
-def test_arrow_schema_accepts_numeric_at_the_decimal_limits(precision: int, scale: int) -> None:
+def test_arrow_schema_accepts_numeric_at_the_decimal_limits(
+    precision: int,
+    scale: int,
+) -> None:
     """Os extremos da precisão e da escala passam no Arrow e no esquema Delta."""
     table = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(precision, scale)))
     assert schema.arrow_schema(table).field("valor").type == pa.decimal128(precision, scale)
     assert delta_document(table)["fields"][0]["type"] == f"decimal({precision},{scale})"
 
 
-def delta_document(table: sa.Table) -> dict:
+def delta_document(
+    table: sa.Table,
+) -> dict:
     """O esquema Delta da tabela como documento JSON."""
     return json.loads(schema.delta_schema(table).to_json())
 
@@ -291,7 +300,10 @@ def test_table_options_defaults_and_keys() -> None:
         schema.table_options(two_partitions)
 
 
-def keyed_table(unique_columns: list[str], index_columns: list[list[str]]) -> sa.Table:
+def keyed_table(
+    unique_columns: list[str],
+    index_columns: list[list[str]],
+) -> sa.Table:
     """Uma tabela com a chave primária `id`, uma `UniqueConstraint` por coluna de
     `unique_columns` e um índice único por lista de `index_columns`, declarados na ordem dada, e
     um índice comum."""
@@ -354,7 +366,9 @@ def test_ddl_per_dialect() -> None:
 # falta.
 @pytest.mark.parametrize("dialect", ["duckdb", "redshift"],
                          ids=["dialect_duckdb", "dialect_redshift"])
-def test_ddl_quotes_every_identifier(dialect: str) -> None:
+def test_ddl_quotes_every_identifier(
+    dialect: str,
+) -> None:
     """Todo nome de tabela e de coluna entre aspas, `"to"` e `"timestamp"` inclusive."""
     contratos = schema.ddl(ClientBase.metadata.tables["cad_contratos"], dialect)
     lancamentos = schema.ddl(ClientBase.metadata.tables["cad_lancamentos"], dialect)
@@ -432,7 +446,9 @@ ACCEPTED_BATCH = pa.RecordBatch.from_pydict({
 
 
 @pytest.mark.parametrize("kind", ["batch", "table"])
-def test_cast_reorders_and_normalizes(kind: str) -> None:
+def test_cast_reorders_and_normalizes(
+    kind: str,
+) -> None:
     """Colunas fora de ordem, `large_string`, nanossegundo zero e inteiro em Numeric entram."""
     data = ACCEPTED_BATCH if kind == "batch" else pa.Table.from_batches([ACCEPTED_BATCH])
     converted = schema.cast(data, TUDO)
@@ -462,7 +478,9 @@ def test_cast_reader_converts_batch_by_batch() -> None:
 
 
 @pytest.mark.parametrize("text_type", [pa.string(), pa.large_string()], ids=str)
-def test_cast_measures_text_against_the_varchar_ceiling(text_type: pa.DataType) -> None:
+def test_cast_measures_text_against_the_varchar_ceiling(
+    text_type: pa.DataType,
+) -> None:
     """Numa coluna `Text`, 65.535 bytes passam e 65.536 são recusados, em `string` e em
     `large_string`, o tipo do `str` do pandas 3."""
     at_ceiling = batch_of_tudo(observacao=pa.array(["x" * 65535], text_type))
@@ -506,7 +524,9 @@ UUIDS = [uuid.UUID(bytes=b"abcdefghijklmnop"), None, uuid.UUID(int=0), uuid.uuid
 
 
 @pytest.mark.parametrize("kind", ["batch", "pandas", "reader"])
-def test_cast_turns_uuid_into_its_canonical_text(kind: str) -> None:
+def test_cast_turns_uuid_into_its_canonical_text(
+    kind: str,
+) -> None:
     """Um `uuid.UUID`, que o PyArrow e o pandas inferem como `arrow.uuid`, entra numa coluna de
     texto como `str(valor)`, o nulo inclusive. O cast do PyArrow converte a extensão pelos 16
     bytes: o UUID aleatório saía recusado como UTF-8 inválido, e o de bytes ASCII entrava como
@@ -645,7 +665,9 @@ REFUSED_BATCHES = {
 
 
 @pytest.mark.parametrize("case", sorted(REFUSED_BATCHES))
-def test_cast_refuses_each_loss(case: str) -> None:
+def test_cast_refuses_each_loss(
+    case: str,
+) -> None:
     """Cada perda é `ContractError` com a tabela e a coluna na mensagem."""
     batch, column = REFUSED_BATCHES[case]
     with pytest.raises(ContractError) as error:
@@ -761,7 +783,9 @@ def test_partition_column_is_any_text_and_the_source_optional() -> None:
     ]
 
 
-def references_a_key(constraint: sa.ForeignKeyConstraint) -> bool:
+def references_a_key(
+    constraint: sa.ForeignKeyConstraint,
+) -> bool:
     """Se as colunas apontadas são a chave primária ou uma `UniqueConstraint` da tabela apontada,
     na mesma ordem."""
     referred = constraint.referred_table
@@ -773,7 +797,10 @@ def references_a_key(constraint: sa.ForeignKeyConstraint) -> bool:
     return referenced in targets
 
 
-def foreign_key_model(local_columns: list[str], referenced: list[str]) -> sa.MetaData:
+def foreign_key_model(
+    local_columns: list[str],
+    referenced: list[str],
+) -> sa.MetaData:
     """Duas tabelas: `alvo`, com a `UniqueConstraint` em `(a, b)`, e `origem`, com a chave
     estrangeira das colunas locais informadas para as colunas apontadas informadas."""
     metadata = sa.MetaData()
@@ -792,7 +819,9 @@ def foreign_key_model(local_columns: list[str], referenced: list[str]) -> sa.Met
     return metadata
 
 
-def create_all_on_duckdb(metadata: sa.MetaData) -> None:
+def create_all_on_duckdb(
+    metadata: sa.MetaData,
+) -> None:
     """`create_all` num `Connection` do `duckdb-engine` sobre um banco em memória novo, porque
     `create_all` pula a tabela que já existe com o mesmo nome."""
     engine = sa.create_engine("duckdb:///:memory:")
@@ -888,7 +917,9 @@ def test_check_schema_files_reports_a_changed_model() -> None:
 
 
 @pytest.mark.local
-def test_write_schema_files(local_location: LocalLocation) -> None:
+def test_write_schema_files(
+    local_location: LocalLocation,
+) -> None:
     """Os arquivos gravados sob a raiz local, com os nomes previstos, e o `check` vazio depois."""
     directory = local_location.child("schema")
     written = schema.write_schema_files(ClientBase.metadata, directory)
@@ -937,7 +968,9 @@ def test_check_schema_files_reports_stale_files_and_the_final_newline(
     assert schema.check_schema_files(reduced, directory) == []
 
 
-def test_cli_schema_check_reads_the_versioned_files(capsys: pytest.CaptureFixture) -> None:
+def test_cli_schema_check_reads_the_versioned_files(
+    capsys: pytest.CaptureFixture,
+) -> None:
     """`schema check` sai com 0 sem diff, 1 com o diff impresso e 2 sem `--metadata` ou com um
     `--metadata` que não é um `MetaData`."""
     directory = str(SCHEMA_DIRECTORY)

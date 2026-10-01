@@ -237,7 +237,8 @@ answer. `_resolve_metadata` **stays private in `serialize_db.cli`**, duplicated 
 enters the project**: `ruff` in the `dev` group and in the workflow was refused, so the style rules
 of `CLAUDE.md` stay checked by reading, and the line width stays what each file uses (100 in the
 package and in the script, wider in the probes and in the proofs of concept). A later session
-proposes none of the three again.
+proposes none of the three again. The Ruff configuration entered `pyproject.toml` on 2026-10-01
+at the user's request (below); the `dev` group and the workflow stay out, the question of that day.
 
 On 2026-09-21 the user kept `duckdb-engine` and `sqlalchemy-redshift` as the compilers of
 `render` in stage 2, after the review measured the alternative (SQLAlchemy's own `postgresql`
@@ -1498,3 +1499,26 @@ the requested partitions match. The migration script passes its `--partitions` t
 extension the assistant named in its report. The Delta side still aggregates the whole table and
 drops the other partitions after the query. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
 `scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
+
+## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
+
+The user asked (02:16 UTC) for the Ruff configuration in `pyproject.toml` and a code review
+adopting one pattern in function declarations: one parameter per line, a trailing comma and the
+`) -> int:` on its own line. Asked on a decision card which declarations, the user chose "Todas"
+(02:24 UTC): every function with at least one parameter, `self`-only methods and `Protocol` stubs
+included; a function without parameters stays as it is. `[tool.ruff]` sets `line-length = 100`,
+`include` to the Python files (the Ruff 0.16 default includes `*.md`, which would format the code
+blocks of `plan/` and `docs/`), `extend-exclude` for `examples/` (kept as run) and
+`tests/reference_model/` (kept as it is), the formatter's `skip-magic-trailing-comma = false`, the
+mechanism of the pattern, and `select = ["E4", "E7", "E9", "F", "E501"]` with `probes/**` out of
+`E501`; Ruff stays out of the `dev` group and of the workflow, where the user refused it on
+2026-09-21, and runs by `uvx ruff` (0.16.9 on 2026-10-01). The 1,973 signatures with a parameter in
+`src/`, `tests/`, `probes/` and `scripts/` were rewritten by a trailing comma and
+`ruff format --range` over the header lines only, so the bodies kept their text, and every header
+equals what `ruff format` over the whole file produces (2,275 headers compared, 0 differences);
+`ruff check` passes after three unused imports left `probes/bucket.py`, `probes/duckdb_threads.py`
+and `probes/redshift.py` and the fixture parameter `target` of `tests/test_reader.py` got
+`# noqa: F811`, changes the assistant named in its report. Two questions await the user in
+`plan/OPEN_QUESTIONS.md`: `ruff format` over the rest of the code (74 of the 89 files Ruff reads,
+8,995 changed lines) and Ruff in the `dev` group, in the workflow and in `README.md`.
+`pyproject.toml`, `plan/CURRENT_STATE.md`, `plan/OPEN_QUESTIONS.md`

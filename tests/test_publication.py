@@ -68,7 +68,10 @@ METADATA = delta.commit_metadata("exec-0", {})
 CONTROL = f'"{SCHEMA}"."serialize_db_publications"'
 
 
-def server_error(message: str, code: str = "XX000") -> redshift_connector.ProgrammingError:
+def server_error(
+    message: str,
+    code: str = "XX000",
+) -> redshift_connector.ProgrammingError:
     """O erro do driver com os campos do servidor."""
     return redshift_connector.ProgrammingError({"S": "ERROR", "C": code, "M": message})
 
@@ -76,16 +79,25 @@ def server_error(message: str, code: str = "XX000") -> redshift_connector.Progra
 class FakeCursor:
     """O cursor de uma ``FakeConnection``."""
 
-    def __init__(self, connection: FakeConnection) -> None:
+    def __init__(
+        self,
+        connection: FakeConnection,
+    ) -> None:
         self.connection = connection
         self.rowcount = -1
         self._rows: list = []
 
-    def execute(self, text: str, params: object = None) -> FakeCursor:
+    def execute(
+        self,
+        text: str,
+        params: object = None,
+    ) -> FakeCursor:
         self._rows, self.rowcount = self.connection.answer(text)
         return self
 
-    def fetchall(self) -> list:
+    def fetchall(
+        self,
+    ) -> list:
         return list(self._rows)
 
 
@@ -94,9 +106,14 @@ class FakeConnection:
     a linha de controle de cada tabela, as colunas de ``svv_all_columns`` e o ``rowcount`` do
     ``UPDATE``, e falha no comando que casa com ``fail``."""
 
-    def __init__(self, control_table: bool = True, rows: dict[str, int] | None = None,
-                 columns: list[tuple] | None = None, update_rowcount: int = 1,
-                 fail: tuple[str, Exception] | None = None) -> None:
+    def __init__(
+        self,
+        control_table: bool = True,
+        rows: dict[str, int] | None = None,
+        columns: list[tuple] | None = None,
+        update_rowcount: int = 1,
+        fail: tuple[str, Exception] | None = None,
+    ) -> None:
         self.control_table = control_table
         self.rows = dict(rows or {})
         self.columns = columns or []
@@ -106,13 +123,20 @@ class FakeConnection:
         self.autocommit = False
         self.closed = False
 
-    def cursor(self) -> FakeCursor:
+    def cursor(
+        self,
+    ) -> FakeCursor:
         return FakeCursor(self)
 
-    def close(self) -> None:
+    def close(
+        self,
+    ) -> None:
         self.closed = True
 
-    def answer(self, text: str) -> tuple[list, int]:
+    def answer(
+        self,
+        text: str,
+    ) -> tuple[list, int]:
         self.commands.append(mask(text))
         if self.fail is not None and re.search(self.fail[0], text):
             raise self.fail[1]
@@ -139,25 +163,36 @@ class FakeConnection:
             return [], self.update_rowcount
         return [], -1
 
-    def texts(self, first_word: str | None = None) -> list[str]:
+    def texts(
+        self,
+        first_word: str | None = None,
+    ) -> list[str]:
         """Os comandos registrados, ou só os que começam por ``first_word``."""
         if first_word is None:
             return list(self.commands)
         return [text for text in self.commands if text.startswith(first_word)]
 
 
-def use_fake(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection) -> None:
+def use_fake(
+    monkeypatch: pytest.MonkeyPatch,
+    connection: FakeConnection,
+) -> None:
     """A conexão de mentira no lugar do driver, para toda conexão que a publicação abrir."""
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
 
 
-def local_db(local_location: LocalLocation, environment: str = "prd") -> Database:
+def local_db(
+    local_location: LocalLocation,
+    environment: str = "prd",
+) -> Database:
     """Um banco numa pasta nova, com o modelo das suítes."""
     root = local_location.child(f"publicacao/{uuid.uuid4().hex[:8]}")
     return Database(root, environment, Base.metadata)
 
 
-def text_columns_table(*names: str) -> sa.Table:
+def text_columns_table(
+    *names: str,
+) -> sa.Table:
     """``cad_colunas``, particionada por ``parte``, com as colunas de texto ``names`` entre a chave
     ``id`` e a partição, na ordem pedida."""
     columns = [sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False)]
@@ -168,7 +203,11 @@ def text_columns_table(*names: str) -> sa.Table:
                     info={"serialize_db": {"partition_by": ["parte"]}})
 
 
-def text_columns_rows(table: sa.Table, value: str, ids: list[int]) -> pa.Table:
+def text_columns_rows(
+    table: sa.Table,
+    value: str,
+    ids: list[int],
+) -> pa.Table:
     """As linhas de ``cad_colunas`` na partição ``value``, no contrato: cada coluna de texto com o
     nome dela seguido do id, como ``a1``."""
     data = {"id": pa.array(ids, pa.int64())}
@@ -179,8 +218,12 @@ def text_columns_rows(table: sa.Table, value: str, ids: list[int]) -> pa.Table:
     return schema.cast(pa.table(data), table)
 
 
-def published_entries(db: Database, months: list[str], rows: int = 30,
-                      table: sa.Table = ENTRIES) -> int:
+def published_entries(
+    db: Database,
+    months: list[str],
+    rows: int = 30,
+    table: sa.Table = ENTRIES,
+) -> int:
     """A tabela Delta com ``rows`` linhas por mês; devolve a última versão."""
     uri = db.uri(table)
     delta.create_table(uri, table, db.storage)
@@ -191,7 +234,12 @@ def published_entries(db: Database, months: list[str], rows: int = 30,
     return version
 
 
-def partition_files(db: Database, uri: str, version: int, value: str) -> list[str]:
+def partition_files(
+    db: Database,
+    uri: str,
+    version: int,
+    value: str,
+) -> list[str]:
     """Os nomes dos arquivos de uma partição numa versão da tabela, em ordem."""
     dt = delta.open_table(uri, db.storage, version=version)
     names = []
@@ -201,12 +249,16 @@ def partition_files(db: Database, uri: str, version: int, value: str) -> list[st
     return sorted(names)
 
 
-def manifest_files(manifest: dict) -> list[str]:
+def manifest_files(
+    manifest: dict,
+) -> list[str]:
     """Os nomes dos arquivos de um manifesto do ``COPY``, em ordem."""
     return sorted(entry["url"].rsplit("/", 1)[-1] for entry in manifest["entries"])
 
 
-def exit_code(arguments: list[str]) -> int | str | None:
+def exit_code(
+    arguments: list[str],
+) -> int | str | None:
     """O código de saída de ``main``, também quando o ``argparse`` encerra o processo."""
     try:
         return cli.main(arguments)
@@ -218,8 +270,10 @@ def exit_code(arguments: list[str]) -> int | str | None:
 
 
 @pytest.mark.local
-def test_publish_requires_the_control_table(monkeypatch: pytest.MonkeyPatch,
-                                            local_location: LocalLocation) -> None:
+def test_publish_requires_the_control_table(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Sem a tabela de controle, ``publish_redshift``, ``unpublish_redshift`` e
     ``publication_status`` levantam ``PublicationError`` com o comando de inicialização e não
     rodam outro comando; ``control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta e a tabela
@@ -329,8 +383,10 @@ def test_publication_statements_text() -> None:
 
 
 @pytest.mark.local
-def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
-                                         local_location: LocalLocation) -> None:
+def test_publish_checks_the_version_read(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """A versão lida igual à do Delta encerra a transação por ``ROLLBACK`` sem outro comando; a
     lida abaixo publica só as partições de ``version_diff``; a lida acima da pedida, com as
     versões de um snapshot, publica as partições alteradas entre as duas com os arquivos da
@@ -412,8 +468,10 @@ def test_publish_checks_the_version_read(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.mark.local
-def test_publish_builds_the_credentials_for_each_copy(monkeypatch: pytest.MonkeyPatch,
-                                                      local_location: LocalLocation) -> None:
+def test_publish_builds_the_credentials_for_each_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """Cada ``COPY`` da transação leva a cláusula de credenciais montada logo antes do seu
     ``execute``, e nenhum outro comando a leva: a chave que vence no meio da transação de uma
     tabela não chega ao ``COPY`` seguinte."""
@@ -426,7 +484,9 @@ def test_publish_builds_the_credentials_for_each_copy(monkeypatch: pytest.Monkey
     # registrado, e a posição do comando que a conexão roda em seguida.
     positions = []
 
-    def fresh_clause(config: RedshiftConfig) -> str:
+    def fresh_clause(
+        config: RedshiftConfig,
+    ) -> str:
         positions.append(len(connection.commands))
         return f"IAM_ROLE 'arn:aws:iam::123456789012:role/papel-{len(positions)}'"
 
@@ -491,8 +551,10 @@ def test_reconcile_published_add_column_and_recreate() -> None:
 
 
 @pytest.mark.local
-def test_publication_status_lists_pending_partitions(monkeypatch: pytest.MonkeyPatch,
-                                                     local_location: LocalLocation) -> None:
+def test_publication_status_lists_pending_partitions(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
     """A versão publicada, a atual e as partições pendentes por tabela: todas na nunca publicada,
     as alteradas na publicada, nenhuma na publicada na versão atual; a tabela fora do Delta fica
     de fora."""
@@ -532,17 +594,27 @@ class Target:
     folder: Path
 
     @property
-    def environment(self) -> str:
+    def environment(
+        self,
+    ) -> str:
         return self.db.environment
 
-    def published(self, table: sa.Table) -> str:
+    def published(
+        self,
+        table: sa.Table,
+    ) -> str:
         return f'"{self.config.schema}"."{self.environment}_{table.name}"'
 
-    def control(self) -> str:
+    def control(
+        self,
+    ) -> str:
         return f'"{self.config.schema}"."{publication.CONTROL_TABLE}"'
 
 
-def rows_of(config: RedshiftConfig, text: str) -> list[tuple]:
+def rows_of(
+    config: RedshiftConfig,
+    text: str,
+) -> list[tuple]:
     """As linhas de uma consulta numa conexão própria."""
     connection = redshift.connect(config)
     try:
@@ -553,7 +625,10 @@ def rows_of(config: RedshiftConfig, text: str) -> list[tuple]:
         connection.close()
 
 
-def relation_exists(config: RedshiftConfig, qualified: str) -> bool:
+def relation_exists(
+    config: RedshiftConfig,
+    qualified: str,
+) -> bool:
     """Se a tabela existe, por ``select 1 ... limit 0``."""
     try:
         rows_of(config, f"SELECT 1 FROM {qualified} LIMIT 0")
@@ -565,8 +640,11 @@ def relation_exists(config: RedshiftConfig, qualified: str) -> bool:
 
 
 @pytest.fixture
-def target(s3_location: S3Location, local_location: LocalLocation,
-           redshift_driver: None) -> Iterator[Target]:
+def target(
+    s3_location: S3Location,
+    local_location: LocalLocation,
+    redshift_driver: None,
+) -> Iterator[Target]:
     """O banco do teste, o ambiente ``poc<id>`` e a tabela de controle, criada quando não existe
     e apagada só nesse caso; as tabelas publicadas, as do modelo e ``cad_colunas``, e as linhas de
     controle do ambiente saem no fim."""
@@ -594,8 +672,13 @@ def target(s3_location: S3Location, local_location: LocalLocation,
         connection.close()
 
 
-def export_with_duckdb(target: Target, table: sa.Table, months: list[str], rows: int = 40,
-                       execution_id: str = "exec-duckdb") -> int:
+def export_with_duckdb(
+    target: Target,
+    table: sa.Table,
+    months: list[str],
+    rows: int = 40,
+    execution_id: str = "exec-duckdb",
+) -> int:
     """As partições exportadas pelo motor DuckDB, pelo registro do arquivo do ``COPY``: os
     arquivos que a publicação lê; devolve a versão."""
     db = target.db
@@ -616,7 +699,10 @@ def export_with_duckdb(target: Target, table: sa.Table, months: list[str], rows:
     return version
 
 
-def published_rows(target: Target, table: sa.Table) -> dict[str, list[tuple]]:
+def published_rows(
+    target: Target,
+    table: sa.Table,
+) -> dict[str, list[tuple]]:
     """As linhas da tabela publicada por partição: o id, o preço, o carimbo e o JSON."""
     rows = rows_of(target.config, (
         'SELECT "data_base_str", "id_lancamento", "preco", "carimbo", JSON_SERIALIZE("meta") '
@@ -627,7 +713,9 @@ def published_rows(target: Target, table: sa.Table) -> dict[str, list[tuple]]:
     return by_partition
 
 
-def control_rows(target: Target) -> dict[str, tuple[int, str]]:
+def control_rows(
+    target: Target,
+) -> dict[str, tuple[int, str]]:
     """A versão e a execução de cada linha de controle do ambiente."""
     rows = rows_of(target.config, (
         f"SELECT table_name, delta_version, execution_id FROM {target.control()} "
@@ -635,7 +723,10 @@ def control_rows(target: Target) -> dict[str, tuple[int, str]]:
     return {name: (int(version), execution_id) for name, version, execution_id in rows}
 
 
-def use_cli_environment(target: Target, monkeypatch: pytest.MonkeyPatch) -> None:
+def use_cli_environment(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """As variáveis ``SERIALIZE_DB_REDSHIFT_*`` da configuração do teste, que a linha de comando
     lê, e a pasta temporária do processo na pasta do teste."""
     for name, value in (("SCHEMA", target.config.schema), ("HOST", target.config.host),
@@ -648,7 +739,11 @@ def use_cli_environment(target: Target, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(tempfile, "tempdir", str(target.folder))
 
 
-def delta_ids(db: Database, value: str, channel: str | None = None) -> list[int]:
+def delta_ids(
+    db: Database,
+    value: str,
+    channel: str | None = None,
+) -> list[int]:
     """Os ids da partição ``value`` de ``Projetado`` pelo leitor Delta do canal; sem canal, o
     leitor que abre sem argumento, o do canal ``default``."""
     statement = (
@@ -663,8 +758,10 @@ def delta_ids(db: Database, value: str, channel: str | None = None) -> list[int]
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_first_publication_loads_every_partition(target: Target,
-                                                 caplog: pytest.LogCaptureFixture) -> None:
+def test_first_publication_loads_every_partition(
+    target: Target,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Sem linha de controle, a tabela publicada criada, todas as partições e o ``INSERT`` da
     linha de controle, numa transação, sobre os arquivos que o motor DuckDB exportou pelo
     registro, com ``Numeric(18, 2)``, ``DateTime`` e a coluna JSON, e a tabela no log com as
@@ -698,7 +795,9 @@ def test_first_publication_loads_every_partition(target: Target,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_publish_only_changed_partitions(target: Target) -> None:
+def test_publish_only_changed_partitions(
+    target: Target,
+) -> None:
     """Duas publicações: a segunda, depois de uma partição alterada, troca só essa partição, e a
     linha de controle passa à versão nova; a partição removida no Delta sai da tabela
     publicada; o estado lista as partições pendentes antes de cada publicação."""
@@ -739,24 +838,36 @@ class PausingCursor:
     """O cursor da publicação B, nas partes que a publicação usa: depois da leitura da linha de
     controle, avisa ``read_done`` e espera ``resume``."""
 
-    def __init__(self, cursor: object, read_done: threading.Event,
-                 resume: threading.Event) -> None:
+    def __init__(
+        self,
+        cursor: object,
+        read_done: threading.Event,
+        resume: threading.Event,
+    ) -> None:
         self.cursor = cursor
         self.read_done = read_done
         self.resume = resume
 
     @property
-    def rowcount(self) -> int:
+    def rowcount(
+        self,
+    ) -> int:
         return self.cursor.rowcount
 
-    def execute(self, text: str, params: object = None) -> PausingCursor:
+    def execute(
+        self,
+        text: str,
+        params: object = None,
+    ) -> PausingCursor:
         self.cursor.execute(text, params)
         if text.startswith("SELECT delta_version FROM"):
             self.read_done.set()
             self.resume.wait(timeout=120)
         return self
 
-    def fetchall(self) -> list:
+    def fetchall(
+        self,
+    ) -> list:
         return self.cursor.fetchall()
 
 
@@ -764,32 +875,47 @@ class PausingConnection:
     """A conexão da publicação B, que para depois da leitura da linha de controle até a
     publicação A confirmar: as duas leem a mesma versão, e a segunda a gravar conflita."""
 
-    def __init__(self, connection: object, read_done: threading.Event,
-                 resume: threading.Event) -> None:
+    def __init__(
+        self,
+        connection: object,
+        read_done: threading.Event,
+        resume: threading.Event,
+    ) -> None:
         self.connection = connection
         self.read_done = read_done
         self.resume = resume
 
     @property
-    def autocommit(self) -> bool:
+    def autocommit(
+        self,
+    ) -> bool:
         return self.connection.autocommit
 
     @autocommit.setter
-    def autocommit(self, value: bool) -> None:
+    def autocommit(
+        self,
+        value: bool,
+    ) -> None:
         self.connection.autocommit = value
 
-    def cursor(self) -> PausingCursor:
+    def cursor(
+        self,
+    ) -> PausingCursor:
         return PausingCursor(self.connection.cursor(), self.read_done, self.resume)
 
-    def close(self) -> None:
+    def close(
+        self,
+    ) -> None:
         self.connection.close()
 
 
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_concurrent_publication_raises_execution_conflict(target: Target,
-                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+def test_concurrent_publication_raises_execution_conflict(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Duas publicações da mesma tabela a partir da mesma versão lida: a segunda levanta
     ``ExecutionConflict``, pelo ``1023`` ou pelo ``UPDATE`` sem linha; a partição e a linha de
     controle ficam as da primeira."""
@@ -805,7 +931,9 @@ def test_concurrent_publication_raises_execution_conflict(target: Target,
     resume = threading.Event()
     plain_connect = redshift.driver_connect
 
-    def connect_b(login: dict) -> object:
+    def connect_b(
+        login: dict,
+    ) -> object:
         # Toda conexão de B pausa na leitura da linha de controle; a da conferência da tabela de
         # controle não a lê.
         return PausingConnection(plain_connect(login), read_done, resume)
@@ -839,7 +967,9 @@ def test_concurrent_publication_raises_execution_conflict(target: Target,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_unpublish_drops_the_table_and_the_control_row(target: Target) -> None:
+def test_unpublish_drops_the_table_and_the_control_row(
+    target: Target,
+) -> None:
     """Depois de uma publicação, ``unpublish_redshift`` apaga a tabela publicada e a linha de
     controle numa transação; a segunda chamada não acha linha e devolve ``None``; a publicação
     seguinte é uma primeira publicação."""
@@ -861,8 +991,10 @@ def test_unpublish_drops_the_table_and_the_control_row(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_failed_copy_leaves_control_row_untouched(target: Target,
-                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_copy_leaves_control_row_untouched(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Um manifesto inválido na segunda partição: nenhuma partição trocada, controle intacto."""
     db = target.db
     version = export_with_duckdb(target, PROJECTED, MONTHS)
@@ -874,8 +1006,14 @@ def test_failed_copy_leaves_control_row_untouched(target: Target,
     plain = delta.copy_manifest
     broken = []
 
-    def broken_manifest(uri: str, version: int, partitions: list | None, destination: str,
-                        storage: Storage, **options: object) -> list[delta.CopyManifest]:
+    def broken_manifest(
+        uri: str,
+        version: int,
+        partitions: list | None,
+        destination: str,
+        storage: Storage,
+        **options: object,
+    ) -> list[delta.CopyManifest]:
         manifests = plain(uri, version, partitions, destination, storage, **options)
         if partitions == [MONTHS[1]]:
             missing = {"url": storage.uri_of("nao/existe.parquet"), "mandatory": True,
@@ -901,7 +1039,9 @@ def test_failed_copy_leaves_control_row_untouched(target: Target,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_reconcile_published_on_the_target(target: Target) -> None:
+def test_reconcile_published_on_the_target(
+    target: Target,
+) -> None:
     """A tabela publicada igual ao modelo não tem diff na leitura de ``svv_all_columns``; uma
     coluna anulável nova entra por ``ADD COLUMN`` e a publicação seguinte a preenche; a largura
     de ``VARCHAR(n)`` que muda despublica e recria a tabela com todas as partições."""
@@ -952,7 +1092,9 @@ def test_reconcile_published_on_the_target(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_publication_loads_files_before_a_middle_column(target: Target) -> None:
+def test_publication_loads_files_before_a_middle_column(
+    target: Target,
+) -> None:
     """Uma coluna anulável nova no meio do modelo depois de uma partição gravada: a primeira
     publicação põe cada valor do arquivo anterior a ela na coluna de mesmo nome, com ela nula; a
     seguinte troca a partição antiga, que ganhou um arquivo com a coluna nova, com os dois grupos
@@ -986,7 +1128,9 @@ def test_publication_loads_files_before_a_middle_column(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_publication_loads_reordered_columns(target: Target) -> None:
+def test_publication_loads_reordered_columns(
+    target: Target,
+) -> None:
     """Duas colunas do modelo trocadas de lugar depois de uma partição gravada, sem diferença
     para o esquema Delta: a publicação põe cada valor na coluna de mesmo nome."""
     db = target.db
@@ -1006,7 +1150,9 @@ def test_publication_loads_reordered_columns(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_published_join_redistribution_is_read(target: Target) -> None:
+def test_published_join_redistribution_is_read(
+    target: Target,
+) -> None:
     """O ``EXPLAIN`` de um join típico entre as tabelas publicadas, ``cad_lancamentos`` com
     ``cad_contas`` por ``id_conta``, depois da primeira publicação: os rótulos ``DS_*`` de cada
     passo, como leitura, nunca como reprovação."""
@@ -1030,9 +1176,11 @@ def test_published_join_redistribution_is_read(target: Target) -> None:
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
-                                                           monkeypatch: pytest.MonkeyPatch,
-                                                           capsys: pytest.CaptureFixture) -> None:
+def test_cli_publishes_by_channel_and_snapshot_and_reverts(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """``serialize-db publish_redshift`` publica as versões do snapshot do canal ``default``, as
     de um snapshot pelo nome, de volta a um anterior, e a versão atual pelo canal ``current``;
     ``--status`` e ``--unpublish`` seguem pela linha de comando; saem com 2 o snapshot arquivado,
@@ -1110,9 +1258,11 @@ def test_cli_publishes_by_channel_and_snapshot_and_reverts(target: Target,
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
-def test_redo_a_snapshot_and_revert_by_the_channel(target: Target,
-                                                   monkeypatch: pytest.MonkeyPatch,
-                                                   capsys: pytest.CaptureFixture) -> None:
+def test_redo_a_snapshot_and_revert_by_the_channel(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
     """O runbook "Refazer um snapshot" de ``docs/operacao.md``, sobre o snapshot ``2026T3``
     publicado pelo canal ``default``: uma ``Execution`` com ``execution_id`` novo refaz uma
     partição, marcada com o snapshot ``2026T3.r2``; ``serialize-db channel`` aponta o canal para

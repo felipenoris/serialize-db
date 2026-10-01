@@ -74,13 +74,20 @@ ACCOUNTS = Conta.__table__
 MONTHS = ["2026-07-31", "2026-08-31"]
 
 
-def account_of(entry_id: int) -> int:
+def account_of(
+    entry_id: int,
+) -> int:
     """A conta do lançamento ``entry_id``: 1, 2 e 3 em rodízio."""
     return 1 + entry_id % 3
 
 
-def entry_rows(value: str, start: int, count: int, table: sa.Table = ENTRIES,
-               valor: list[float] | None = None) -> pa.Table:
+def entry_rows(
+    value: str,
+    start: int,
+    count: int,
+    table: sa.Table = ENTRIES,
+    valor: list[float] | None = None,
+) -> pa.Table:
     """``count`` lançamentos da partição ``value`` com ids a partir de ``start``, no contrato."""
     ids = list(range(start, start + count))
     day = datetime.date.fromisoformat(value)
@@ -105,7 +112,9 @@ def entry_rows(value: str, start: int, count: int, table: sa.Table = ENTRIES,
     return schema.cast(data, table)
 
 
-def account_rows(numbers: list[str]) -> pa.Table:
+def account_rows(
+    numbers: list[str],
+) -> pa.Table:
     """Uma conta por número, ids a partir de 1, no contrato."""
     ids = pa.array(range(1, len(numbers) + 1), pa.int64())
     data = pa.table({"id_conta": ids, "numero": numbers})

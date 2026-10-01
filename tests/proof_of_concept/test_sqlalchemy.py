@@ -117,7 +117,9 @@ CLIENTES = [
 ]
 
 
-def redshift_ddl(table: sa.Table) -> str:
+def redshift_ddl(
+    table: sa.Table,
+) -> str:
     """O ``CREATE TABLE`` do Redshift compilado pelo dialeto, com as opções físicas de
     ``Table.info["serialize_db"]`` no fim.
 
@@ -143,12 +145,16 @@ def redshift_ddl(table: sa.Table) -> str:
     return " ".join(parts)
 
 
-def normalized(sql: str) -> str:
+def normalized(
+    sql: str,
+) -> str:
     """O texto com espaços e quebras de linha reduzidos a um espaço, para comparações."""
     return " ".join(sql.split())
 
 
-def literal_text(statement: sa.sql.ClauseElement) -> str:
+def literal_text(
+    statement: sa.sql.ClauseElement,
+) -> str:
     """O texto do DuckDB com as constantes embutidas (``literal_binds``), numa linha só."""
     compiled = statement.compile(dialect=DIALECTS["duckdb"], compile_kwargs={"literal_binds": True})
     return normalized(str(compiled))
@@ -165,15 +171,21 @@ def engine() -> Iterator[sa.Engine]:
     engine.dispose()
 
 
-def load_sample(engine: sa.Engine) -> None:
+def load_sample(
+    engine: sa.Engine,
+) -> None:
     """Carrega as linhas de exemplo por um único ``INSERT`` de várias linhas por tabela."""
     with engine.begin() as connection:
         connection.execute(sa.insert(Operacao).values(OPERACOES))
         connection.execute(sa.insert(Cliente).values(CLIENTES))
 
 
-def insert_by_arrow(engine: sa.Engine, id_operacao: int, data_ref: dt.date,
-                    valor: decimal.Decimal) -> None:
+def insert_by_arrow(
+    engine: sa.Engine,
+    id_operacao: int,
+    data_ref: dt.date,
+    valor: decimal.Decimal,
+) -> None:
     """Insere uma operação do cliente 7 em 2026-08 por uma tabela Arrow registrada na conexão
     bruta, com ``INSERT ... BY NAME`` e sem ``executemany``."""
     incoming = pa.table(
@@ -246,7 +258,9 @@ def test_ddl_per_dialect() -> None:
     assert "texto TEXT" in normalized(redshift_ddl(text_table))
 
 
-def test_create_all_and_reflection(engine: sa.Engine) -> None:
+def test_create_all_and_reflection(
+    engine: sa.Engine,
+) -> None:
     """``create_all`` cria as tabelas no DuckDB; a reflexão devolve colunas, tipos e comentários,
     não a chave."""
     inspector = sa.inspect(engine)
@@ -270,7 +284,9 @@ def test_create_all_and_reflection(engine: sa.Engine) -> None:
         metadata.create_all(engine)
 
 
-def test_core_insert_and_select(engine: sa.Engine) -> None:
+def test_core_insert_and_select(
+    engine: sa.Engine,
+) -> None:
     """``insert(...).values(lista)`` é um único comando; ``select`` com join e agregação devolve
     ``Decimal``."""
     load_sample(engine)
@@ -300,7 +316,9 @@ def test_core_insert_and_select(engine: sa.Engine) -> None:
     assert meta == {"canal": "app"}
 
 
-def test_arrow_path_on_raw_connection(engine: sa.Engine) -> None:
+def test_arrow_path_on_raw_connection(
+    engine: sa.Engine,
+) -> None:
     """O SQL compilado pelo SQLAlchemy roda na conexão DuckDB por trás do engine, com Arrow na saída
     e na entrada."""
     load_sample(engine)
@@ -325,7 +343,9 @@ def test_arrow_path_on_raw_connection(engine: sa.Engine) -> None:
         assert connection.execute(count).scalar_one() == 5
 
 
-def test_numeric_precision_dialect_versus_arrow(engine: sa.Engine) -> None:
+def test_numeric_precision_dialect_versus_arrow(
+    engine: sa.Engine,
+) -> None:
     """Pelo dialeto, ``Numeric`` passa por ``float``; pelo Arrow, ``decimal128(18, 2)`` guarda os 18
     dígitos."""
     exact = decimal.Decimal("1234567890123.45")  # 15 dígitos significativos
@@ -358,7 +378,9 @@ def test_numeric_precision_dialect_versus_arrow(engine: sa.Engine) -> None:
     assert stored == big
 
 
-def test_pandas_read_sql_keeps_decimal_only_with_coerce_float_off(engine: sa.Engine) -> None:
+def test_pandas_read_sql_keeps_decimal_only_with_coerce_float_off(
+    engine: sa.Engine,
+) -> None:
     """``pandas.read_sql`` converte ``Decimal`` em ``float`` por padrão; ``coerce_float=False``
     preserva os objetos."""
     load_sample(engine)
@@ -376,7 +398,8 @@ def test_pandas_read_sql_keeps_decimal_only_with_coerce_float_off(engine: sa.Eng
 
 
 def test_literal_binds_renders_a_bindparam_without_value_as_null(
-        recwarn: pytest.WarningsRecorder) -> None:
+    recwarn: pytest.WarningsRecorder,
+) -> None:
     """Sob ``literal_binds``, o ``bindparam`` sem valor sai ``NULL`` sem erro, e o ``SAWarning`` só
     aparece numa comparação por ``=``.
 
@@ -436,7 +459,9 @@ def test_compiled_binds_marks_the_bindparam_without_value_as_required() -> None:
     assert constructed == {**values, "cliente": 7, "valor_1": decimal.Decimal("100.00")}
 
     # replacement_traverse chama a função em cada nó e deixa o nó como está quando ela devolve None.
-    def placeholder(element: sa.sql.ClauseElement) -> sa.sql.ClauseElement | None:
+    def placeholder(
+        element: sa.sql.ClauseElement,
+    ) -> sa.sql.ClauseElement | None:
         if isinstance(element, sa.BindParameter) and element.required:
             return sa.literal_column(f":{element.key}", type_=element.type)
         return None
@@ -599,13 +624,19 @@ def test_generic_function_subclass_registers_in_sa_func_for_the_whole_process() 
         inherit_cache = True
 
     @compiles(serialize_db_sonda_bytes, "duckdb")
-    def _duckdb_bytes(element: FunctionElement, compiler: sa.sql.compiler.SQLCompiler,
-                      **kw: object) -> str:
+    def _duckdb_bytes(
+        element: FunctionElement,
+        compiler: sa.sql.compiler.SQLCompiler,
+        **kw: object,
+    ) -> str:
         return f"strlen({compiler.process(element.clauses, **kw)})"
 
     @compiles(serialize_db_sonda_bytes, "redshift")
-    def _redshift_bytes(element: FunctionElement, compiler: sa.sql.compiler.SQLCompiler,
-                        **kw: object) -> str:
+    def _redshift_bytes(
+        element: FunctionElement,
+        compiler: sa.sql.compiler.SQLCompiler,
+        **kw: object,
+    ) -> str:
         return f"octet_length({compiler.process(element.clauses, **kw)})"
 
     duckdb_text = str(serialize_db_sonda_bytes(column).compile(dialect=DIALECTS["duckdb"]))
@@ -627,7 +658,9 @@ def test_three_part_name_needs_quoted_name_without_quotes() -> None:
     """
     dialect = DIALECTS["redshift"]
 
-    def table(schema: str) -> sa.Table:
+    def table(
+        schema: str,
+    ) -> sa.Table:
         return sa.Table("operacoes", sa.MetaData(schema=schema),
                         sa.Column("id_operacao", sa.BigInteger, nullable=False))
 

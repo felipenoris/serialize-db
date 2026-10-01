@@ -48,7 +48,9 @@ AWS_VARIABLES = (
 
 
 @pytest.fixture
-def clean_aws(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+def clean_aws(
+    monkeypatch: pytest.MonkeyPatch,
+) -> pytest.MonkeyPatch:
     """O ambiente sem as variáveis da AWS que ``Storage`` lê."""
     for name in AWS_VARIABLES:
         monkeypatch.delenv(name, raising=False)
@@ -57,13 +59,17 @@ def clean_aws(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
 @pytest.fixture(params=[pytest.param("local", marks=pytest.mark.local),
                         pytest.param("s3", marks=pytest.mark.s3)])
-def storage(request: pytest.FixtureRequest) -> Storage:
+def storage(
+    request: pytest.FixtureRequest,
+) -> Storage:
     """Uma raiz nova por teste, sob a pasta da sessão local ou sob o prefixo da sessão no bucket."""
     location = request.getfixturevalue(f"{request.param}_location")
     return Storage.for_uri(location.child(f"storage/{uuid.uuid4().hex[:8]}"))
 
 
-def test_storage_for_uri(clean_aws: pytest.MonkeyPatch) -> None:
+def test_storage_for_uri(
+    clean_aws: pytest.MonkeyPatch,
+) -> None:
     """``s3://``, ``file://`` e caminho dão o sistema de arquivos certo e o caminho nele, sem rede,
     com o ``%20`` do ``file://`` como espaço; o S3 sem região e outro esquema são erro."""
     # O S3, com a região da variável.
@@ -93,7 +99,9 @@ def test_storage_for_uri(clean_aws: pytest.MonkeyPatch) -> None:
         Storage.for_uri("s3://bucket/delta")
 
 
-def test_paths_relative_to_the_root(clean_aws: pytest.MonkeyPatch) -> None:
+def test_paths_relative_to_the_root(
+    clean_aws: pytest.MonkeyPatch,
+) -> None:
     """``join`` junta por ``/`` sem barras nas pontas; ``relative`` leva uma URI sob a raiz ao
     caminho relativo e recusa a de fora; ``uri_of`` faz a volta."""
     clean_aws.setenv("AWS_REGION", "sa-east-1")
@@ -107,7 +115,9 @@ def test_paths_relative_to_the_root(clean_aws: pytest.MonkeyPatch) -> None:
         storage.relative("s3://bucket/delta2/prd")
 
 
-def test_storage_options_resolved_per_call(clean_aws: pytest.MonkeyPatch) -> None:
+def test_storage_options_resolved_per_call(
+    clean_aws: pytest.MonkeyPatch,
+) -> None:
     """Cada chamada devolve um dicionário novo, com a região da variável, o retry e as chaves de
     SSE configuradas, e nenhuma credencial; a pasta local não precisa de opção."""
     clean_aws.setenv("AWS_DEFAULT_REGION", "sa-east-1")
@@ -158,7 +168,9 @@ def test_duckdb_proxy_settings_without_credentials_in_the_address() -> None:
                         "http_proxy_password": "x"}
 
 
-def test_duckdb_secret_options_for_an_endpoint(clean_aws: pytest.MonkeyPatch) -> None:
+def test_duckdb_secret_options_for_an_endpoint(
+    clean_aws: pytest.MonkeyPatch,
+) -> None:
     """Sem ``AWS_ENDPOINT_URL``, só a região; com ele, o endereço sem o esquema e o endereço por
     caminho, e ``USE_SSL false`` só num endpoint ``http``."""
     clean_aws.setenv("AWS_REGION", "sa-east-1")
@@ -183,13 +195,18 @@ class RecordingConnection:
     connection: duckdb.DuckDBPyConnection
     texts: list[str] = dataclasses.field(default_factory=list)
 
-    def execute(self, text: str,
-                parameters: list[object] | None = None) -> duckdb.DuckDBPyConnection:
+    def execute(
+        self,
+        text: str,
+        parameters: list[object] | None = None,
+    ) -> duckdb.DuckDBPyConnection:
         self.texts.append(text)
         return self.connection.execute(text, parameters)
 
 
-def stored_secret(connection: duckdb.DuckDBPyConnection) -> str:
+def stored_secret(
+    connection: duckdb.DuckDBPyConnection,
+) -> str:
     """O ``secret_string`` do secret do S3, que mostra a chave e mascara o segredo e o token."""
     rows = connection.execute(
         "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'").fetchall()
@@ -197,7 +214,9 @@ def stored_secret(connection: duckdb.DuckDBPyConnection) -> str:
     return rows[0][0]
 
 
-def test_renew_duckdb_secret_follows_the_key(clean_aws: pytest.MonkeyPatch) -> None:
+def test_renew_duckdb_secret_follows_the_key(
+    clean_aws: pytest.MonkeyPatch,
+) -> None:
     """O secret é criado sem um anterior, fica com a mesma chave e é recriado quando a chave da
     credencial troca, com a região do ambiente e sem mostrar o segredo nem o token; a chave, o
     segredo e o token ficam fora do texto dos comandos."""
@@ -230,7 +249,9 @@ def test_renew_duckdb_secret_follows_the_key(clean_aws: pytest.MonkeyPatch) -> N
         assert value not in commands
 
 
-def test_create_text_and_write_text_if_match(storage: Storage) -> None:
+def test_create_text_and_write_text_if_match(
+    storage: Storage,
+) -> None:
     """A segunda ``create_text`` e o ``if_match`` velho são ``ConflictError`` sem gravar; o
     conteúdo final é o da escrita que venceu, e o arquivo ausente é ``FileNotFoundError``."""
     path = storage.join("prd", "_serialize_db", "snapshots.json")
@@ -255,12 +276,19 @@ class RefusingS3Client:
     """O cliente S3 dublê de ``Storage._s3_client``: registra cada ``put_object`` e o recusa com o
     código e o status HTTP dados, como o serviço responderia."""
 
-    def __init__(self, code: str, status: int) -> None:
+    def __init__(
+        self,
+        code: str,
+        status: int,
+    ) -> None:
         self.code = code
         self.status = status
         self.requests: list[dict] = []
 
-    def put_object(self, **request: object) -> dict:
+    def put_object(
+        self,
+        **request: object,
+    ) -> dict:
         """Registra o pedido e levanta a ``ClientError`` do botocore com o código dado."""
         self.requests.append(request)
         response = {"Error": {"Code": self.code, "Message": f"recusado com {self.status}"},
@@ -268,7 +296,10 @@ class RefusingS3Client:
         raise botocore.exceptions.ClientError(response, "PutObject")
 
 
-def refusing_s3_storage(monkeypatch: pytest.MonkeyPatch, client: RefusingS3Client) -> Storage:
+def refusing_s3_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    client: RefusingS3Client,
+) -> Storage:
     """Um armazenamento no S3, sem rede, cujo cliente do ``boto3`` é o dublê."""
     monkeypatch.setenv("AWS_REGION", "sa-east-1")
     monkeypatch.setattr(Storage, "_s3_client", lambda self: client)
@@ -278,7 +309,10 @@ def refusing_s3_storage(monkeypatch: pytest.MonkeyPatch, client: RefusingS3Clien
 @pytest.mark.parametrize(("code", "status"), [("PreconditionFailed", 412),
                                               ("ConditionalRequestConflict", 409)])
 def test_s3_refusals_of_the_conditional_write_are_conflict_error(
-        clean_aws: pytest.MonkeyPatch, code: str, status: int) -> None:
+    clean_aws: pytest.MonkeyPatch,
+    code: str,
+    status: int,
+) -> None:
     """No S3, o 412 da condição e o 409 de outra operação no objeto durante a gravação são
     ``ConflictError`` em ``create_text`` e em ``write_text``, cada pedido com a sua condição; sem
     rede, pelo cliente dublê."""
@@ -297,7 +331,8 @@ def test_s3_refusals_of_the_conditional_write_are_conflict_error(
 
 
 def test_s3_other_errors_of_the_conditional_write_propagate(
-        clean_aws: pytest.MonkeyPatch) -> None:
+    clean_aws: pytest.MonkeyPatch,
+) -> None:
     """No S3, um erro do serviço fora das recusas da condição, como o 403, sobe como a
     ``ClientError`` do botocore, sem virar ``ConflictError``."""
     client = RefusingS3Client("AccessDenied", 403)
@@ -307,13 +342,18 @@ def test_s3_other_errors_of_the_conditional_write_propagate(
     assert len(client.requests) == 1
 
 
-def file_mode(storage: Storage, path: str) -> int:
+def file_mode(
+    storage: Storage,
+    path: str,
+) -> int:
     """As permissões do arquivo na pasta local, sem o tipo, como ``0o644``."""
     return stat.S_IMODE(os.stat(f"{storage.path}/{path}").st_mode)
 
 
 @pytest.mark.local
-def test_local_files_get_the_mode_of_a_new_file(local_location: LocalLocation) -> None:
+def test_local_files_get_the_mode_of_a_new_file(
+    local_location: LocalLocation,
+) -> None:
     """Na pasta local, sob a umask 0o022, ``create_text`` e ``write_text`` de um arquivo novo dão
     o modo de um arquivo novo, ``rw-r--r--``, sem execução, e ``write_text`` sobre um arquivo
     existente mantém o modo dele: outro usuário da pasta continua a ler o arquivo de controle."""
@@ -338,7 +378,9 @@ def test_local_files_get_the_mode_of_a_new_file(local_location: LocalLocation) -
     assert kept == 0o640
 
 
-def test_list_copy_delete(storage: Storage) -> None:
+def test_list_copy_delete(
+    storage: Storage,
+) -> None:
     """``list_files`` desce as pastas, filtra pelo sufixo e exclui ``_delta_log/``; ``copy``
     preserva os bytes, também acima do limiar multipart do ``boto3``; ``delete`` de um caminho
     ausente não falha."""
@@ -370,7 +412,9 @@ def test_list_copy_delete(storage: Storage) -> None:
     assert not storage.exists("copia/p=a/1.parquet")
 
 
-def test_duckdb_connect_loads_delta(storage: Storage) -> None:
+def test_duckdb_connect_loads_delta(
+    storage: Storage,
+) -> None:
     """A conexão sai com a extensão ``delta`` da pasta configurada, sem instalação automática; no
     S3, com o secret na chave que a cadeia do ``boto3`` resolve."""
     with storage.duckdb_connect() as connection:

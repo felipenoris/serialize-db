@@ -65,7 +65,10 @@ class Unloaded:
     footer_seconds: float
 
 
-def export_select(engine: RedshiftEngine, name: str) -> str:
+def export_select(
+    engine: RedshiftEngine,
+    name: str,
+) -> str:
     """O ``select`` da exportação sobre a tabela ``name`` do sandbox, como o do motor para
     ``cad_lancamentos``, que não tem coluna JSON: as colunas sem a de partição, na ordem da
     ``sort_key``."""
@@ -75,8 +78,13 @@ def export_select(engine: RedshiftEngine, name: str) -> str:
             f"ORDER BY {', '.join(order)}")
 
 
-def unload(engine: RedshiftEngine, db: Database, select: str, prefix: str,
-           parallel: bool) -> Unloaded:
+def unload(
+    engine: RedshiftEngine,
+    db: Database,
+    select: str,
+    prefix: str,
+    parallel: bool,
+) -> Unloaded:
     """O ``UNLOAD`` do ``select`` para o prefixo, cronometrado, e a leitura dos rodapés dos
     arquivos do manifesto."""
     storage = db.storage
@@ -93,12 +101,18 @@ def unload(engine: RedshiftEngine, db: Database, select: str, prefix: str,
     return Unloaded(seconds, sizes, rows, time.perf_counter() - started)
 
 
-def mode_label(parallel: bool) -> str:
+def mode_label(
+    parallel: bool,
+) -> str:
     """O modo como a linha do relatório o escreve."""
     return "paralelo" if parallel else "PARALLEL OFF"
 
 
-def sized_table(engine: RedshiftEngine, rows: int, total: int) -> str:
+def sized_table(
+    engine: RedshiftEngine,
+    rows: int,
+    total: int,
+) -> str:
     """A tabela do sandbox com ``rows`` linhas da partição: a do ``ingest`` para a partição
     inteira, ou uma nova por ``CREATE TABLE AS ... LIMIT``, que o ``cleanup`` apaga."""
     ingested = engine.prefix + lib.TABLE.name
@@ -111,8 +125,13 @@ def sized_table(engine: RedshiftEngine, rows: int, total: int) -> str:
     return name
 
 
-def measure(engine: RedshiftEngine, db: Database, rows: int, total: int,
-            problems: list[str]) -> dict[bool, list[Unloaded]]:
+def measure(
+    engine: RedshiftEngine,
+    db: Database,
+    rows: int,
+    total: int,
+    problems: list[str],
+) -> dict[bool, list[Unloaded]]:
     """Os ``UNLOAD`` de uma tabela de ``rows`` linhas nos dois modos, ``REPETITIONS`` vezes cada,
     com a ordem alternada; anota em ``problems`` as linhas e os arquivos fora do esperado."""
     select = export_select(engine, sized_table(engine, rows, total))
@@ -135,7 +154,9 @@ def measure(engine: RedshiftEngine, db: Database, rows: int, total: int,
     return runs
 
 
-def print_summary(results: dict[int, dict[bool, list[Unloaded]]]) -> None:
+def print_summary(
+    results: dict[int, dict[bool, list[Unloaded]]],
+) -> None:
     """O menor tempo de cada tamanho e modo, com os arquivos e a razão entre os modos."""
     print("resumo, o menor tempo de cada modo:")
     for rows, runs in results.items():

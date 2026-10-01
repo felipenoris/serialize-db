@@ -33,7 +33,11 @@ NOTES: set[str] = set()
 KEY_COLUMN = "_chave"
 
 
-def read_source(connection: object, folder: Path, table: sa.Table) -> pa.Table:
+def read_source(
+    connection: object,
+    folder: Path,
+    table: sa.Table,
+) -> pa.Table:
     """Os arquivos de origem de uma tabela, com a coluna de partição Hive tomada do caminho,
     levados ao contrato."""
     partition_by = table_options(table).partition_by
@@ -46,17 +50,27 @@ def read_source(connection: object, folder: Path, table: sa.Table) -> pa.Table:
     return to_contract(connection.execute(text).to_arrow_table(), table, NOTES)
 
 
-def read_scan(connection: object, db: Database, table: sa.Table) -> pa.Table:
+def read_scan(
+    connection: object,
+    db: Database,
+    table: sa.Table,
+) -> pa.Table:
     text = f"SELECT * FROM delta_scan('{db.uri(table)}')"
     return to_contract(connection.execute(text).to_arrow_table(), table, NOTES)
 
 
-def read_arrow(db: Database, table: sa.Table) -> pa.Table:
+def read_arrow(
+    db: Database,
+    table: sa.Table,
+) -> pa.Table:
     found = delta.open_table(db.uri(table), db.storage).to_pyarrow_table()
     return to_contract(found, table, NOTES)
 
 
-def with_key(table: sa.Table, data: pa.Table) -> tuple[pa.Table, str]:
+def with_key(
+    table: sa.Table,
+    data: pa.Table,
+) -> tuple[pa.Table, str]:
     """A tabela com a coluna de ordenação da comparação: a chave única quando é uma coluna, ou
     a chave composta unida num texto em ``_chave``."""
     key = list(table_options(table).keys[0])
@@ -67,8 +81,14 @@ def with_key(table: sa.Table, data: pa.Table) -> tuple[pa.Table, str]:
     return data.append_column(KEY_COLUMN, joined), KEY_COLUMN
 
 
-def check_table(connection: object, db: Database, root: str, config: DuckDBConfig,
-                source_folder: Path, table: sa.Table) -> list[str]:
+def check_table(
+    connection: object,
+    db: Database,
+    root: str,
+    config: DuckDBConfig,
+    source_folder: Path,
+    table: sa.Table,
+) -> list[str]:
     """Uma tabela: a carga, a segunda passagem, os dois leitores contra a origem e o relatório."""
     loaded = load.initial_load(db, table, root, config=config)
     again = load.initial_load(db, table, root, config=config)

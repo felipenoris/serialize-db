@@ -71,7 +71,11 @@ SAMPLE_ROWS = 20
 # ---------------------------------------------------------------- as funções por dialeto
 
 
-def _by_name(element: FunctionElement, compiler: object, **kw: object) -> str:
+def _by_name(
+    element: FunctionElement,
+    compiler: object,
+    **kw: object,
+) -> str:
     """A regra padrão: o nome da função com os argumentos, para os dialetos sem regra própria e para
     o ``str`` de um statement. Uma subclasse de ``FunctionElement`` sem regra padrão não compila
     fora dos dialetos que a declaram, e o dialeto do DuckDB é um compilador do PostgreSQL."""
@@ -90,12 +94,20 @@ compiles(partition_text)(_by_name)
 
 
 @compiles(partition_text, "duckdb")
-def _duckdb_partition_text(element: partition_text, compiler: object, **kw: object) -> str:
+def _duckdb_partition_text(
+    element: partition_text,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"strftime({compiler.process(element.clauses, **kw)}, '%Y-%m-%d')"
 
 
 @compiles(partition_text, "redshift")
-def _redshift_partition_text(element: partition_text, compiler: object, **kw: object) -> str:
+def _redshift_partition_text(
+    element: partition_text,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"to_char({compiler.process(element.clauses, **kw)}, 'YYYY-MM-DD')"
 
 
@@ -113,7 +125,11 @@ compiles(json_valid)(_by_name)
 
 
 @compiles(json_valid, "redshift")
-def _redshift_json_valid(element: json_valid, compiler: object, **kw: object) -> str:
+def _redshift_json_valid(
+    element: json_valid,
+    compiler: object,
+    **kw: object,
+) -> str:
     return "true"
 
 
@@ -130,12 +146,20 @@ compiles(text_bytes)(_by_name)
 
 
 @compiles(text_bytes, "duckdb")
-def _duckdb_text_bytes(element: text_bytes, compiler: object, **kw: object) -> str:
+def _duckdb_text_bytes(
+    element: text_bytes,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"strlen({compiler.process(element.clauses, **kw)})"
 
 
 @compiles(text_bytes, "redshift")
-def _redshift_text_bytes(element: text_bytes, compiler: object, **kw: object) -> str:
+def _redshift_text_bytes(
+    element: text_bytes,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"octet_length({compiler.process(element.clauses, **kw)})"
 
 
@@ -152,12 +176,20 @@ compiles(json_bytes)(_by_name)
 
 
 @compiles(json_bytes, "duckdb")
-def _duckdb_json_bytes(element: json_bytes, compiler: object, **kw: object) -> str:
+def _duckdb_json_bytes(
+    element: json_bytes,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"strlen(CAST({compiler.process(element.clauses, **kw)} AS VARCHAR))"
 
 
 @compiles(json_bytes, "redshift")
-def _redshift_json_bytes(element: json_bytes, compiler: object, **kw: object) -> str:
+def _redshift_json_bytes(
+    element: json_bytes,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"json_size({compiler.process(element.clauses, **kw)})"
 
 
@@ -174,14 +206,20 @@ compiles(partition_value_valid)(_by_name)
 
 
 @compiles(partition_value_valid, "duckdb")
-def _duckdb_partition_value_valid(element: partition_value_valid, compiler: object,
-                                  **kw: object) -> str:
+def _duckdb_partition_value_valid(
+    element: partition_value_valid,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"regexp_full_match({compiler.process(element.clauses, **kw)}, '{PARTITION_VALUE}')"
 
 
 @compiles(partition_value_valid, "redshift")
-def _redshift_partition_value_valid(element: partition_value_valid, compiler: object,
-                                    **kw: object) -> str:
+def _redshift_partition_value_valid(
+    element: partition_value_valid,
+    compiler: object,
+    **kw: object,
+) -> str:
     return f"({compiler.process(element.clauses, **kw)} ~ '^{PARTITION_VALUE}$')"
 
 
@@ -205,7 +243,11 @@ compiles(is_finite)(_by_name)
 
 
 @compiles(is_finite, "redshift")
-def _redshift_is_finite(element: is_finite, compiler: object, **kw: object) -> str:
+def _redshift_is_finite(
+    element: is_finite,
+    compiler: object,
+    **kw: object,
+) -> str:
     value = compiler.process(element.clauses, **kw)
     return f"({value} > '-Infinity'::float8 AND {value} < 'Infinity'::float8)"
 
@@ -296,11 +338,15 @@ class AuditReport:
     de controle e os não finitos."""
 
     @property
-    def passed(self) -> bool:
+    def passed(
+        self,
+    ) -> bool:
         """Se todas as verificações que rodaram passaram."""
         return all(result.passed for result in self.results)
 
-    def sql(self) -> str:
+    def sql(
+        self,
+    ) -> str:
         """O texto de todas as verificações.
 
         Exemplo:
@@ -317,7 +363,10 @@ class AuditReport:
             blocks.append(f"-- {result.name}\n{result.sql}")
         return "\n\n".join(blocks)
 
-    def rows(self, value: str | None) -> int:
+    def rows(
+        self,
+        value: str | None,
+    ) -> int:
         """As linhas da partição na auditoria.
 
         Exemplo:
@@ -335,7 +384,10 @@ class AuditReport:
 # ---------------------------------------------------------------- as verificações
 
 
-def _scope(table: sa.Table, partitions: Sequence[str] | None) -> sa.ColumnElement:
+def _scope(
+    table: sa.Table,
+    partitions: Sequence[str] | None,
+) -> sa.ColumnElement:
     """A condição das partições da execução; verdadeira numa tabela sem partição ou sem lista."""
     partition_by = table_options(table).partition_by
     if partition_by is None or partitions is None:
@@ -343,7 +395,9 @@ def _scope(table: sa.Table, partitions: Sequence[str] | None) -> sa.ColumnElemen
     return table.c[partition_by].in_(list(partitions))
 
 
-def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
+def _defect_counters(
+    table: sa.Table,
+) -> dict[str, sa.ColumnElement]:
     """A condição de cada contador de defeito da verificação de linhas, pelo rótulo."""
     options = table_options(table)
     counters = {}
@@ -375,7 +429,9 @@ def _defect_counters(table: sa.Table) -> dict[str, sa.ColumnElement]:
     return counters
 
 
-def _totals(table: sa.Table) -> list[sa.ColumnElement]:
+def _totals(
+    table: sa.Table,
+) -> list[sa.ColumnElement]:
     """As somas de controle como ``DECIMAL(38, 6)`` e a contagem dos não finitos de cada ``Double``.
 
     A soma de uma coluna ``Double`` corre só nos valores finitos: o ``CAST`` de um ``NaN`` ou de um
@@ -398,14 +454,19 @@ def _totals(table: sa.Table) -> list[sa.ColumnElement]:
     return sums + nonfinite
 
 
-def _count_where(condition: sa.ColumnElement) -> sa.ColumnElement:
+def _count_where(
+    condition: sa.ColumnElement,
+) -> sa.ColumnElement:
     """As linhas em que a condição vale, por ``count(CASE WHEN <condição> THEN 1 END)``: o Redshift
     não tem a cláusula ``FILTER`` nos agregados, e o ``CASE`` sem ``ELSE`` dá nulo, que o ``count``
     não conta."""
     return sa.func.count(sa.case((condition, 1)))
 
 
-def _rows_check(table: sa.Table, partitions: Sequence[str] | None) -> Check:
+def _rows_check(
+    table: sa.Table,
+    partitions: Sequence[str] | None,
+) -> Check:
     """A verificação de linhas: os contadores de defeito, as somas e os não finitos, por
     partição."""
     partition_by = table_options(table).partition_by
@@ -428,12 +489,18 @@ def _rows_check(table: sa.Table, partitions: Sequence[str] | None) -> Check:
     return Check("linhas", statement, "algum contador acima de zero", counters=counters)
 
 
-def _key_label(key: Sequence[str]) -> str:
+def _key_label(
+    key: Sequence[str],
+) -> str:
     """O nome de uma verificação de chave: as colunas juntadas por ``_``."""
     return "_".join(key)
 
 
-def _key_within(table: sa.Table, key: Sequence[str], partitions: Sequence[str] | None) -> Check:
+def _key_within(
+    table: sa.Table,
+    key: Sequence[str],
+    partitions: Sequence[str] | None,
+) -> Check:
     """A chave repetida nas partições da execução."""
     columns = [table.c[name] for name in key]
     statement = (
@@ -446,7 +513,10 @@ def _key_within(table: sa.Table, key: Sequence[str], partitions: Sequence[str] |
     return Check(f"chave_{_key_label(key)}", statement, "alguma linha")
 
 
-def _single_integer_key(table: sa.Table, key: Sequence[str]) -> sa.Column | None:
+def _single_integer_key(
+    table: sa.Table,
+    key: Sequence[str],
+) -> sa.Column | None:
     """A coluna de ``key`` quando ``key`` é a chave sequencial da tabela, a chave primária inteira
     de uma coluna que ``next_ids`` preenche; ``None`` nas outras chaves."""
     column = sequential_key(table)
@@ -455,8 +525,13 @@ def _single_integer_key(table: sa.Table, key: Sequence[str]) -> sa.Column | None
     return column
 
 
-def _key_against_pinned(table: sa.Table, key: Sequence[str], partitions: Sequence[str],
-                        pinned: sa.FromClause, pinned_max_key: int | None) -> Check:
+def _key_against_pinned(
+    table: sa.Table,
+    key: Sequence[str],
+    partitions: Sequence[str],
+    pinned: sa.FromClause,
+    pinned_max_key: int | None,
+) -> Check:
     """A chave das partições da execução repetida nas demais partições da versão fixada.
 
     Na chave primária inteira de uma coluna, com ``pinned_max_key``, o ``skip_when`` aprova a
@@ -480,8 +555,12 @@ def _key_against_pinned(table: sa.Table, key: Sequence[str], partitions: Sequenc
     return Check(f"chave_{_key_label(key)}_tabela", statement, "alguma linha", skip_when)
 
 
-def _orphans(table: sa.Table, constraint: sa.ForeignKeyConstraint, referenced: sa.FromClause,
-             partitions: Sequence[str] | None) -> Check:
+def _orphans(
+    table: sa.Table,
+    constraint: sa.ForeignKeyConstraint,
+    referenced: sa.FromClause,
+    partitions: Sequence[str] | None,
+) -> Check:
     """As linhas da execução cuja chave estrangeira não acha a linha referenciada."""
     local = [table.c[column.name] for column in constraint.columns]
     remote = [referenced.c[element.column.name] for element in constraint.elements]
@@ -495,8 +574,12 @@ def _orphans(table: sa.Table, constraint: sa.ForeignKeyConstraint, referenced: s
     return Check(f"orfao_{label}", statement, "alguma linha")
 
 
-def _needs_pinned_check(options: TableOptions, key: Sequence[str],
-                        partitions: Sequence[str] | None, key_scope: KeyScope | None) -> bool:
+def _needs_pinned_check(
+    options: TableOptions,
+    key: Sequence[str],
+    partitions: Sequence[str] | None,
+    key_scope: KeyScope | None,
+) -> bool:
     """Se a chave pede a verificação contra as demais partições da versão fixada: só numa
     tabela particionada, com as partições da execução, e numa chave sem a coluna de partição; a
     chave com a coluna de ``partition_source`` só com ``key_scope="table"``."""
@@ -509,9 +592,13 @@ def _needs_pinned_check(options: TableOptions, key: Sequence[str],
     return True
 
 
-def _key_checks(table: sa.Table, partitions: Sequence[str] | None, key_scope: KeyScope | None,
-                pinned: sa.FromClause | None,
-                pinned_max_key: int | None) -> tuple[list[Check], list[str]]:
+def _key_checks(
+    table: sa.Table,
+    partitions: Sequence[str] | None,
+    key_scope: KeyScope | None,
+    pinned: sa.FromClause | None,
+    pinned_max_key: int | None,
+) -> tuple[list[Check], list[str]]:
     """As verificações de chave e as que não rodam, com o motivo."""
     options = table_options(table)
     found = []
@@ -531,7 +618,9 @@ def _key_checks(table: sa.Table, partitions: Sequence[str] | None, key_scope: Ke
 
 
 def _foreign_key_checks(
-    table: sa.Table, partitions: Sequence[str] | None, foreign_keys: bool,
+    table: sa.Table,
+    partitions: Sequence[str] | None,
+    foreign_keys: bool,
     referenced: Mapping[str, sa.FromClause] | None,
 ) -> tuple[list[Check], list[str]]:
     """Os anti-joins das chaves estrangeiras e as que não rodam, com o motivo."""
@@ -549,10 +638,15 @@ def _foreign_key_checks(
     return found, not_run
 
 
-def checks(table: sa.Table, partitions: Sequence[str] | None = None, foreign_keys: bool = False,
-           key_scope: KeyScope | None = None, pinned: sa.FromClause | None = None,
-           referenced: Mapping[str, sa.FromClause] | None = None,
-           pinned_max_key: int | None = None) -> list[Check]:
+def checks(
+    table: sa.Table,
+    partitions: Sequence[str] | None = None,
+    foreign_keys: bool = False,
+    key_scope: KeyScope | None = None,
+    pinned: sa.FromClause | None = None,
+    referenced: Mapping[str, sa.FromClause] | None = None,
+    pinned_max_key: int | None = None,
+) -> list[Check]:
     """As verificações do contrato para as partições da execução, sobre a tabela do modelo.
 
     Exemplo:
@@ -587,10 +681,15 @@ def checks(table: sa.Table, partitions: Sequence[str] | None = None, foreign_key
     return found
 
 
-def checks_and_not_run(table: sa.Table, partitions: Sequence[str] | None, foreign_keys: bool,
-                       key_scope: KeyScope | None, pinned: sa.FromClause | None,
-                       referenced: Mapping[str, sa.FromClause] | None,
-                       pinned_max_key: int | None) -> tuple[list[Check], list[str]]:
+def checks_and_not_run(
+    table: sa.Table,
+    partitions: Sequence[str] | None,
+    foreign_keys: bool,
+    key_scope: KeyScope | None,
+    pinned: sa.FromClause | None,
+    referenced: Mapping[str, sa.FromClause] | None,
+    pinned_max_key: int | None,
+) -> tuple[list[Check], list[str]]:
     """As verificações de ``checks`` e as que ela deixa de fora, com o motivo; protegida, para o
     relatório dos motores."""
     if partitions is not None:
@@ -603,7 +702,8 @@ def checks_and_not_run(table: sa.Table, partitions: Sequence[str] | None, foreig
 
 
 def readings_by_partition(
-    rows: Sequence[Mapping[str, object]], table: sa.Table,
+    rows: Sequence[Mapping[str, object]],
+    table: sa.Table,
 ) -> tuple[dict[str | None, dict[str, object]], dict[str | None, tuple[str, ...]]]:
     """As leituras da verificação de linhas por valor de partição e as colunas ``Double`` com valor
     não finito em cada partição; protegida, para o relatório dos motores.
@@ -640,18 +740,26 @@ def failing_counters(
     return defects, failing
 
 
-def sample_statement(table: sa.Table, partitions: Sequence[str] | None,
-                     condition: sa.ColumnElement) -> sa.Select:
+def sample_statement(
+    table: sa.Table,
+    partitions: Sequence[str] | None,
+    condition: sa.ColumnElement,
+) -> sa.Select:
     """Até 20 linhas inteiras em que a condição de um contador vale, nas partições da execução;
     protegida, para a amostra que os motores buscam na reprovação da verificação de linhas."""
     return sa.select(table).where(_scope(table, partitions), condition).limit(SAMPLE_ROWS)
 
 
-def audit_sql(table: sa.Table, dialect: Dialect, partitions: Sequence[str] | None = None,
-              foreign_keys: bool = False, key_scope: KeyScope | None = None,
-              pinned: sa.FromClause | None = None,
-              referenced: Mapping[str, sa.FromClause] | None = None,
-              prefix: str = sql.SENTINEL) -> dict[str, str]:
+def audit_sql(
+    table: sa.Table,
+    dialect: Dialect,
+    partitions: Sequence[str] | None = None,
+    foreign_keys: bool = False,
+    key_scope: KeyScope | None = None,
+    pinned: sa.FromClause | None = None,
+    referenced: Mapping[str, sa.FromClause] | None = None,
+    prefix: str = sql.SENTINEL,
+) -> dict[str, str]:
     """O texto de cada verificação no dialeto, por ``sql.render`` com o prefixo pedido, sem conexão
     e sem motor: o SQL que a auditoria roda, para depuração.
 
