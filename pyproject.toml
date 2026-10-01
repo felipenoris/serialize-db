@@ -38,6 +38,7 @@ dev = [
     "pyarrow==25.0.1",
     "pytest>=8.4",
     "redshift-connector>=2.1",
+    "ruff==0.16.9",
     "sqlalchemy==2.0.54",
     "sqlglot==30.19.0",
 ]
@@ -68,8 +69,8 @@ markers = [
     "redshift: cria tabelas no esquema SERIALIZE_DB_TEST_REDSHIFT_SCHEMA; pulado sem ela, falha sem conexão",
 ]
 
-# O Ruff roda por `uvx ruff check` e `uvx ruff format` sobre esta configuração, escrita contra o
-# Ruff 0.16.9; ele não está no grupo dev nem na esteira.
+# O ruff do grupo dev lê esta configuração: `uv run ruff check` e `uv run ruff format --check`,
+# que a esteira roda antes dos testes.
 [tool.ruff]
 line-length = 100
 # Só os arquivos Python: o padrão do Ruff 0.16 inclui `*.md`, e formataria os blocos de código de
