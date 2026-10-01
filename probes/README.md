@@ -27,7 +27,7 @@ Um relatório que uma etapa pendente ainda consulta é guardado em `plan/reading
 .venv/bin/python probes/catalog.py
 .venv/bin/python probes/parquet_source.py /caminho/da/base
 .venv/bin/python probes/parquet_source.py /caminho/da/base --text-bytes
-PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/delta/db_projetado
+PYTHONPATH=tests .venv/bin/python probes/duckdb_threads.py s3://bucket/prefixo/prd
 .venv/bin/python probes/credentials.py s3://bucket/prefixo/prd/cad_contas
 SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local .venv/bin/python probes/consistencia/probe_types.py
 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest -m redshift -s probes/consistencia/probe_redshift_test.py
