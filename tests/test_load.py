@@ -169,8 +169,12 @@ def test_discover_partitions_and_skipped_entries(
 def test_load_order_puts_unpartitioned_tables_first() -> None:
     """As tabelas sem partição vêm antes das particionadas, cada grupo na ordem dada."""
     ordered = [table.name for table in load.load_order(list(TABLES.values()))]
-    assert ordered[-4:] == ["cad_operacoes", "rel_contrato_operacao", "cad_contratos",
-                            "cad_lancamentos"]
+    assert ordered[-4:] == [
+        "cad_operacoes",
+        "rel_contrato_operacao",
+        "cad_contratos",
+        "cad_lancamentos",
+    ]
     assert all(table_options(TABLES[name]).partition_by is None for name in ordered[:-4])
 
 
@@ -185,8 +189,9 @@ def test_partition_query_casts_to_the_contract(
     table = TABLES["cad_lancamentos"]
     folder_uri = f"{base.root}/cad_lancamentos/data_base_str=2026-01-31"
     query = load.partition_query(folder_uri, table, "2026-01-31")
-    contracts_query = load.partition_query(f"{base.root}/cad_contratos/data_str=2026-02-28",
-                                           TABLES["cad_contratos"], "2026-02-28")
+    contracts_query = load.partition_query(
+        f"{base.root}/cad_contratos/data_str=2026-02-28", TABLES["cad_contratos"], "2026-02-28"
+    )
     with DuckDBEngine(config, "consulta", db.storage) as engine, engine.session() as connection:
         query_schema = connection.execute(query).to_arrow_table().schema
         path_values = connection.execute(f"SELECT DISTINCT data_base_str FROM ({query})").fetchall()
@@ -225,8 +230,10 @@ def test_initial_load_loads_every_partition_once(
     assert metadata.description == table.comment
     assert metadata.configuration == delta.RETENTION
     assert dt.history(limit=1)[0]["serialize_db_execution_id"].startswith("carga-")
-    rows_by_value = {action["partition.data_str"]: action["num_records"]
-                     for action in add_actions(db, "cad_contratos")}
+    rows_by_value = {
+        action["partition.data_str"]: action["num_records"]
+        for action in add_actions(db, "cad_contratos")
+    }
     assert rows_by_value == base.partition_rows["cad_contratos"]
 
     # A segunda carga não grava nada.
@@ -304,14 +311,14 @@ def test_keys_are_int64_and_timestamps_are_microseconds(
 
     # O arquivo gravado: o execution_id no nome e os tipos físicos contra os da origem.
     (written,) = dt.file_uris()
-    assert re.search(r"/data_base_str=2026-02-28/carga-[0-9a-f]{8}_[0-9a-f]{32}\.parquet$",
-                     written)
+    assert re.search(r"/data_base_str=2026-02-28/carga-[0-9a-f]{8}_[0-9a-f]{32}\.parquet$", written)
     types = physical_types(written)
     assert types["id_lancamento"] == "INT64"
     assert types["timestamp"] == "INT64"
     assert "data_base_str" not in types
     source_types = physical_types(
-        str(base.root / "cad_lancamentos" / "data_base_str=2026-02-28" / "chunk_0.parquet"))
+        str(base.root / "cad_lancamentos" / "data_base_str=2026-02-28" / "chunk_0.parquet")
+    )
     assert (source_types["id_lancamento"], source_types["timestamp"]) == ("INT32", "INT96")
 
 
@@ -336,7 +343,8 @@ def test_rows_are_written_in_sort_key_order(
     partition_folder = base.root / "cad_lancamentos" / "data_base_str=2026-01-31"
     chunks = sorted(partition_folder.glob("*.parquet"))
     source_rows = pa.concat_tables(
-        [pq.read_table(chunk, columns=sort_columns) for chunk in chunks]).to_pylist()
+        [pq.read_table(chunk, columns=sort_columns) for chunk in chunks]
+    ).to_pylist()
     assert [key_values(row, sort_columns) for row in source_rows] != written_keys
 
 
@@ -366,8 +374,9 @@ def rewrite_first_chunk(
     layout da origem."""
     path = folder / "chunk_0.parquet"
     altered = replace_first_value(pq.read_table(path), column, value)
-    pq.write_table(altered, path, version="1.0", use_dictionary=False,
-                   use_deprecated_int96_timestamps=True)
+    pq.write_table(
+        altered, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
+    )
 
 
 def source_with_defect(
@@ -407,10 +416,16 @@ def assert_refused_without_commit(
 @pytest.mark.parametrize(
     ("table", "column", "value", "fragment"),
     [
-        pytest.param("cad_operacoes", "data", datetime.date(2026, 3, 31),
-                     "1 linhas com data diferente de 2026-02-28", id="off_the_path"),
-        pytest.param("cad_contratos", "to", "ABC", "1 textos acima de String(2) em to",
-                     id="above_the_length"),
+        pytest.param(
+            "cad_operacoes",
+            "data",
+            datetime.date(2026, 3, 31),
+            "1 linhas com data diferente de 2026-02-28",
+            id="off_the_path",
+        ),
+        pytest.param(
+            "cad_contratos", "to", "ABC", "1 textos acima de String(2) em to", id="above_the_length"
+        ),
     ],
 )
 def test_source_value_different_from_the_path_aborts(
@@ -441,8 +456,9 @@ def test_null_in_not_null_column_is_refused(
     ``NOT NULL`` e os arquivos declaram anuláveis é recusado com a coluna e a partição."""
     assert not TABLES["cad_contratos"].c[column].nullable
     origin = source_with_defect(folder, base, "cad_contratos", column, None)
-    assert_refused_without_commit(db, config, origin, "cad_contratos",
-                                  f"1 nulos na coluna NOT NULL {column}")
+    assert_refused_without_commit(
+        db, config, origin, "cad_contratos", f"1 nulos na coluna NOT NULL {column}"
+    )
 
 
 def write_chunks(
@@ -465,22 +481,34 @@ def test_text_is_measured_as_in_cast_and_the_audit(
     entram."""
     metadata = sa.MetaData()
     documents = sa.Table(
-        "cad_documentos", metadata,
+        "cad_documentos",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-        sa.Column("chave", sa.Uuid), sa.Column("documento", sa.JSON), sa.Column("nota", sa.Text),
+        sa.Column("chave", sa.Uuid),
+        sa.Column("documento", sa.JSON),
+        sa.Column("nota", sa.Text),
     )
     notes = sa.Table(
-        "cad_notas", metadata,
+        "cad_notas",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
         sa.Column("nota", sa.Text(5)),
     )
     origin = folder / "origem"
-    write_chunks(origin, {
-        "cad_documentos": pa.table({"id": [1], "chave": ["x" * 40],
-                                    "documento": [json.dumps({"k": "z" * 70000})],
-                                    "nota": ["y" * 70000]}),
-        "cad_notas": pa.table({"id": [1], "nota": ["0123456789"]}),
-    })
+    write_chunks(
+        origin,
+        {
+            "cad_documentos": pa.table(
+                {
+                    "id": [1],
+                    "chave": ["x" * 40],
+                    "documento": [json.dumps({"k": "z" * 70000})],
+                    "nota": ["y" * 70000],
+                }
+            ),
+            "cad_notas": pa.table({"id": [1], "nota": ["0123456789"]}),
+        },
+    )
     db = Database(str(folder / "delta"), "prd", metadata)
 
     # Os três textos acima do limite do contrato, recusados sem commit.
@@ -513,8 +541,9 @@ def source_with_nonfinite(
     partition_column = source.PARTITIONS["cad_lancamentos"].column
     nonfinite_values = {"2026-02-28": float("nan"), "2026-03-31": float("inf")}
     for value, number in nonfinite_values.items():
-        rewrite_first_chunk(new_root / "cad_lancamentos" / f"{partition_column}={value}",
-                            "valor", number)
+        rewrite_first_chunk(
+            new_root / "cad_lancamentos" / f"{partition_column}={value}", "valor", number
+        )
     return str(new_root)
 
 
@@ -599,8 +628,11 @@ def test_load_report_matches_and_detects_a_difference(
     assert [partition.value for partition in rates_report.partitions] == [None]
     assert rates_report.partitions[0].source_rows == base.rows["cad_aliquotas"]
     assert rates_report.partitions[0].source_sums.keys() == {"fator"}
-    assert rates_report.conversions == ("id: int32 -> int64", "id_conta_origem: int32 -> int64",
-                                        "id_conta_destino: int32 -> int64")
+    assert rates_report.conversions == (
+        "id: int32 -> int64",
+        "id_conta_origem: int32 -> int64",
+        "id_conta_destino: int32 -> int64",
+    )
     entries_report = load.load_report(db, TABLES["cad_lancamentos"], origin, config=config)
     assert not entries_report.matches
     assert all(partition.delta_rows is None for partition in entries_report.partitions)
@@ -613,7 +645,8 @@ def test_load_report_matches_and_detects_a_difference(
             f"SELECT min(id_operacao) FROM delta_scan('{uri}') WHERE data_str = '2026-03-31'"
         ).fetchone()[0]
     delta.open_table(uri, db.storage).delete(
-        f"data_str = '2026-03-31' AND id_operacao = {deleted_id}")
+        f"data_str = '2026-03-31' AND id_operacao = {deleted_id}"
+    )
     report = load.load_report(db, TABLES["cad_operacoes"], origin, config=config)
     assert not report.matches
     differing = [partition for partition in report.partitions if not partition.matches]
@@ -647,7 +680,8 @@ def test_load_report_confers_only_the_requested_partitions(
             f"SELECT min(id_operacao) FROM delta_scan('{uri}') WHERE data_str = '2026-02-28'"
         ).fetchone()[0]
     delta.open_table(uri, db.storage).delete(
-        f"data_str = '2026-02-28' AND id_operacao = {deleted_id}")
+        f"data_str = '2026-02-28' AND id_operacao = {deleted_id}"
+    )
     report = load.load_report(db, operations, origin, partitions=only, config=config)
     assert not report.matches
     assert [partition.value for partition in report.partitions] == only
@@ -669,14 +703,16 @@ def test_load_report_reads_only_what_the_load_reads(
     padrão como ``backup/`` com ``Hive partition mismatch`` (leitura de 2026-09-28)."""
     metadata = sa.MetaData()
     parts = sa.Table(
-        "cad_partes", metadata,
+        "cad_partes",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
         sa.Column("valor", sa.Double),
         sa.Column("data_str", sa.String(10), nullable=False),
         info={"serialize_db": {"partition_by": ["data_str"]}},
     )
     whole = sa.Table(
-        "cad_inteira", metadata,
+        "cad_inteira",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
         sa.Column("valor", sa.Double),
     )
@@ -684,13 +720,16 @@ def test_load_report_reads_only_what_the_load_reads(
     contract_rows = pa.table({"id": pa.array([1], pa.int64()), "valor": [1.5]})
     other_rows = pa.table({"id": pa.array([2], pa.int32()), "valor": [2.5]})
     origin = folder / "origem"
-    write_chunks(origin, {
-        "cad_partes/data_str=2026-01-31": contract_rows,
-        "cad_partes/data_str=2026 Q1": other_rows,
-        "cad_partes/backup": other_rows,
-        "cad_inteira": contract_rows,
-        "cad_inteira/backup": other_rows,
-    })
+    write_chunks(
+        origin,
+        {
+            "cad_partes/data_str=2026-01-31": contract_rows,
+            "cad_partes/data_str=2026 Q1": other_rows,
+            "cad_partes/backup": other_rows,
+            "cad_inteira": contract_rows,
+            "cad_inteira/backup": other_rows,
+        },
+    )
     db = Database(str(folder / "delta"), "prd", metadata)
 
     # A tabela particionada: só a partição da regra, carregada e conferida.
@@ -730,7 +769,8 @@ def test_foreign_key_orphans_are_reported_not_blocking(
     with db.storage.duckdb_connect() as connection:
         orphaned_account = connection.execute(
             f"SELECT min(id_conta) FROM delta_scan('{entries_uri}') "
-            "WHERE data_base_str = '2026-01-31'").fetchone()[0]
+            "WHERE data_base_str = '2026-01-31'"
+        ).fetchone()[0]
     delta.open_table(accounts_uri, db.storage).delete(f"id_conta = {orphaned_account}")
 
     # A auditoria das chaves estrangeiras sobre a versão fixada de cada tabela referenciada.
@@ -742,8 +782,9 @@ def test_foreign_key_orphans_are_reported_not_blocking(
     version = delta.open_table(entries_uri, db.storage).version()
     with DuckDBEngine(config, "auditoria", db.storage) as engine:
         engine.ingest(entries, entries_uri, version, ["2026-01-31"])
-        report = engine.audit(entries, ["2026-01-31"], entries_uri, version, foreign_keys=True,
-                              referenced=referenced)
+        report = engine.audit(
+            entries, ["2026-01-31"], entries_uri, version, foreign_keys=True, referenced=referenced
+        )
     assert not report.passed
     by_name = {result.name: result for result in report.results}
     assert by_name["orfao_id_conta"].defects >= 1
@@ -787,8 +828,15 @@ def test_cli_load_loads_the_base_and_reports(
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
-    common = ["load", "--metadata", "client_model:Base.metadata", "--source", origin_of(base),
-              "--environment", "prd"]
+    common = [
+        "load",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        origin_of(base),
+        "--environment",
+        "prd",
+    ]
     assert cli.main([*common, "--root", root]) == 0
     printed = capsys.readouterr().out
     assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
@@ -807,8 +855,15 @@ def test_cli_load_loads_the_base_and_reports(
     # Uma partição só de uma tabela: o relatório confere só a pedida, e as outras da origem, fora
     # do Delta, não contam como diferença.
     partial_root = str(folder / "parcial")
-    partial = [*common, "--root", partial_root, "--tables", "cad_contratos",
-               "--partitions", "2026-02-28"]
+    partial = [
+        *common,
+        "--root",
+        partial_root,
+        "--tables",
+        "cad_contratos",
+        "--partitions",
+        "2026-02-28",
+    ]
     assert cli.main(partial) == 0
     printed = capsys.readouterr().out
     assert "cad_contratos: 1 partição(ões) gravada(s): 2026-02-28" in printed
@@ -819,8 +874,17 @@ def test_cli_load_loads_the_base_and_reports(
     # A partição fora do contrato: saída 1 com a mensagem, sem traceback.
     off_the_path = datetime.date(2026, 3, 31)
     defective = source_with_defect(folder, base, "cad_operacoes", "data", off_the_path)
-    refused = ["load", "--metadata", "client_model:Base.metadata", "--source", defective,
-               "--root", str(folder / "recusada"), "--tables", "cad_operacoes"]
+    refused = [
+        "load",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        defective,
+        "--root",
+        str(folder / "recusada"),
+        "--tables",
+        "cad_operacoes",
+    ]
     assert cli.main(refused) == 1
     printed_errors = capsys.readouterr().err
     refusal = "serialize-db load: cad_operacoes partição 2026-02-28: 1 linhas com data"
@@ -828,8 +892,15 @@ def test_cli_load_loads_the_base_and_reports(
 
     # Os erros de uso: o modelo de referência viola o contrato, a tabela fora do modelo e a
     # origem sem a pasta da tabela.
-    reference = ["load", "--metadata", "reference_model.model_db_projetado:Base.metadata",
-                 "--source", origin_of(base), "--root", str(folder / "nunca-gravada")]
+    reference = [
+        "load",
+        "--metadata",
+        "reference_model.model_db_projetado:Base.metadata",
+        "--source",
+        origin_of(base),
+        "--root",
+        str(folder / "nunca-gravada"),
+    ]
     assert cli.main(reference) == 2
     assert "modelo fora do contrato" in capsys.readouterr().err
     assert not Path(folder, "nunca-gravada").exists()
@@ -863,8 +934,19 @@ def test_cli_load_names_the_unpartitioned_table(
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     monkeypatch.setattr(load, "load_report", unpartitioned_difference)
-    arguments = ["load", "--metadata", "client_model:Base.metadata", "--source", origin_of(base),
-                 "--root", str(folder / "delta"), "--environment", "prd", "--tables", "cad_contas"]
+    arguments = [
+        "load",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        origin_of(base),
+        "--root",
+        str(folder / "delta"),
+        "--environment",
+        "prd",
+        "--tables",
+        "cad_contas",
+    ]
     assert cli.main(arguments) == 1
     printed = capsys.readouterr().out
     assert "cad_contas: 1 partição(ões) gravada(s): tabela inteira" in printed

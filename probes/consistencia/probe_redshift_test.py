@@ -13,6 +13,7 @@ quem desenvolve, contra o substituto de ``tests/emulator.py``.
     SERIALIZE_DB_TEST_EMULATOR=1 PYTHONPATH=tests .venv/bin/python -m pytest -p conftest \\
         -m redshift -s probes/consistencia/probe_redshift_test.py
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -101,8 +102,9 @@ def target(
         publication.create_publications_table(config)
     target = Target(db, config, s3_location.child(f"consistencia/{environment}-unload"))
     yield target
-    cleanup = [f"DROP TABLE IF EXISTS {target.published(table)}"
-               for table in Base.metadata.sorted_tables]
+    cleanup = [
+        f"DROP TABLE IF EXISTS {target.published(table)}" for table in Base.metadata.sorted_tables
+    ]
     if created:
         cleanup.append(f"DROP TABLE {target.control()}")
     else:
@@ -132,8 +134,9 @@ def seed(
     accounts_uri = db.uri(ACCOUNTS)
     delta.create_table(accounts_uri, ACCOUNTS, db.storage)
     accounts = account_rows(["A", "B", "C"])
-    accounts_version = delta.publish_partition(accounts_uri, ACCOUNTS, None, accounts, {},
-                                               db.storage)
+    accounts_version = delta.publish_partition(
+        accounts_uri, ACCOUNTS, None, accounts, {}, db.storage
+    )
     return seeds, version, accounts, accounts_version
 
 
@@ -178,8 +181,7 @@ def concurrent_appenders(
     ) -> int:
         statement = sa.select(ENTRIES).where(ENTRIES.c.data_base_str == month)
         engine.create_table(table)
-        with (engine.stream(statement, batch_size=500) as stream,
-              engine.appender(table) as appender):
+        with engine.stream(statement, batch_size=500) as stream, engine.appender(table) as appender:
             for batch in stream:
                 ids = pc.add(batch.column("id_lancamento"), offset)
                 appender.write(batch.set_column(0, "id_lancamento", ids))
@@ -198,8 +200,9 @@ def concurrent_appenders(
         problems.append(f"linhas dos appenders {rows}")
     for table, _, _ in jobs:
         found = engine.query(sa.select(table))
-        problems += compare(expected[table.name], found, "id_lancamento",
-                            f"carregada {table.name}", JSON_COLUMNS)
+        problems += compare(
+            expected[table.name], found, "id_lancamento", f"carregada {table.name}", JSON_COLUMNS
+        )
     return problems, expected
 
 
@@ -217,8 +220,9 @@ def export_projected(
     if not report.passed:
         problems.append(f"auditoria {[r.name for r in report.results if not r.passed]}")
     metadata = delta.commit_metadata(engine.execution_id, {}, None)
-    version = engine.export_partition(PROJECTED, uri, MONTHS[0], metadata,
-                                      expected_rows=report.rows(MONTHS[0]))
+    version = engine.export_partition(
+        PROJECTED, uri, MONTHS[0], metadata, expected_rows=report.rows(MONTHS[0])
+    )
     arrow = delta.open_table(uri, db.storage).to_pyarrow_table()
     problems += compare(expected, arrow, "id_lancamento", "export dataset", JSON_COLUMNS)
     with db.storage.duckdb_connect() as connection:
@@ -240,6 +244,7 @@ def extra_sessions(
 ) -> list[str]:
     """Duas sessões a mais em threads: uma ingere as contas, a outra consulta; a ingestão fica
     visível na sessão principal."""
+
     def ingest_accounts() -> None:
         with engine.new_session() as session:
             session.ingest(ACCOUNTS, accounts_uri, accounts_version)
@@ -272,12 +277,14 @@ def publish_and_read(
     """``publish_redshift`` com dois workers e o leitor publicado, consultado e transmitido por
     duas threads."""
     problems = []
-    published = publication.publish_redshift(target.db, target.config, [PROJECTED, ACCOUNTS],
-                                             execution_id, max_workers=2)
+    published = publication.publish_redshift(
+        target.db, target.config, [PROJECTED, ACCOUNTS], execution_id, max_workers=2
+    )
     if published != versions:
         problems.append(f"publicadas {published}, esperadas {versions}")
-    reader = open_redshift(Base.metadata, target.db.environment, target.config,
-                           unload_to=target.unload_to)
+    reader = open_redshift(
+        Base.metadata, target.db.environment, target.config, unload_to=target.unload_to
+    )
     try:
 
         def read_published(
@@ -309,8 +316,9 @@ def test_redshift_consistency(
     qualquer problema."""
     db = target.db
     execution_id = f"exec-{uuid.uuid4().hex[:8]}"
-    engine = RedshiftEngine(target.config, execution_id, db.storage,
-                            f"{db.environment}/staging/{execution_id}")
+    engine = RedshiftEngine(
+        target.config, execution_id, db.storage, f"{db.environment}/staging/{execution_id}"
+    )
     problems: list[str] = []
     readings: list[str] = []
     try:
@@ -323,13 +331,19 @@ def test_redshift_consistency(
         second = PROJECTED.to_metadata(sa.MetaData(), name="cad_projetados_2")
         appender_problems, expected_loaded = concurrent_appenders(engine, seeds, second)
         problems += appender_problems
-        export_problems, exported = export_projected(engine, db, expected_loaded[PROJECTED.name],
-                                                     readings)
+        export_problems, exported = export_projected(
+            engine, db, expected_loaded[PROJECTED.name], readings
+        )
         problems += export_problems
         problems += extra_sessions(engine, db.uri(ACCOUNTS), accounts_version)
-        problems += publish_and_read(target, execution_id, expected_loaded[PROJECTED.name],
-                                     accounts, {PROJECTED.name: exported,
-                                                ACCOUNTS.name: accounts_version}, readings)
+        problems += publish_and_read(
+            target,
+            execution_id,
+            expected_loaded[PROJECTED.name],
+            accounts,
+            {PROJECTED.name: exported, ACCOUNTS.name: accounts_version},
+            readings,
+        )
     finally:
         engine.cleanup()
     print("\nLEITURAS:")

@@ -146,7 +146,8 @@ def opened_partition_folders(
     abertura de arquivo é uma mensagem com ``"op":"OPEN"`` e o caminho do arquivo.
     """
     messages = connection.execute(
-        "SELECT message FROM duckdb_logs WHERE type = 'FileSystem'").fetchall()
+        "SELECT message FROM duckdb_logs WHERE type = 'FileSystem'"
+    ).fetchall()
     folders = set()
     for (message,) in messages:
         if '"op":"OPEN"' in message and ".parquet" in message:
@@ -240,8 +241,9 @@ def require_duckdb_extension(
     try:
         connection.execute(f"LOAD {name}")
     except duckdb.IOException as error:
-        pytest.skip(f"extensão {name} do DuckDB fora da pasta de extensões: "
-                    f"{str(error).splitlines()[0]}")
+        pytest.skip(
+            f"extensão {name} do DuckDB fora da pasta de extensões: {str(error).splitlines()[0]}"
+        )
     finally:
         connection.close()
 
@@ -341,7 +343,8 @@ def pytest_itemcollected(
     for fixture, marker in SUITE_FIXTURES.items():
         if fixture in names and item.get_closest_marker(marker) is None:
             raise pytest.UsageError(
-                f"{item.nodeid} usa a fixture {fixture} sem o marcador {marker}")
+                f"{item.nodeid} usa a fixture {fixture} sem o marcador {marker}"
+            )
 
 
 @pytest.hookimpl(trylast=True)

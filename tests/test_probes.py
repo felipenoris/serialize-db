@@ -932,8 +932,12 @@ def test_python_packages_fail_sp9_on_a_version_below_the_runtime_pin(
     monkeypatch.setattr(probelib, "REPO_ROOT", folder)
     # Só este interpretador, com as versões instaladas fabricadas.
     monkeypatch.setattr(probelib, "python_candidates", lambda: [sys.executable])
-    installed = {"boto3": "1.40.0", "duckdb": "1.5.5", "redshift_connector": "2.1.0",
-                 "pytest": "9.1.1"}
+    installed = {
+        "boto3": "1.40.0",
+        "duckdb": "1.5.5",
+        "redshift_connector": "2.1.0",
+        "pytest": "9.1.1",
+    }
     monkeypatch.setattr(space, "package_version", installed.get)
 
     with make_report(folder, monkeypatch) as report:
@@ -1614,8 +1618,9 @@ def test_schema_difference_names_missing_extra_retyped_and_reordered() -> None:
     missing = parquet_source.schema_difference(reference, reference[:2])
     assert ["mes", "ausente", "string no majoritário", "-"] in missing
 
-    execution_id = column("id_execucao", arrow_type="string", physical="BYTE_ARRAY",
-                          logical="String")
+    execution_id = column(
+        "id_execucao", arrow_type="string", physical="BYTE_ARRAY", logical="String"
+    )
     extra = parquet_source.schema_difference(reference, [*reference, execution_id])
     assert extra == [["id_execucao", "a mais", "-", "string"]]
 
@@ -1793,8 +1798,9 @@ def threads_input(
 ) -> duckdb_threads.TableInput:
     """Uma tabela medida fabricada, sem partição, com as linhas que o log diz ter."""
     table = sa.Table(name, sa.MetaData(), sa.Column("id", sa.BigInteger))
-    return duckdb_threads.TableInput(table=table, uri=f"/delta/{name}", version=3, partitions=None,
-                                     files=1, bytes=100, rows=rows)
+    return duckdb_threads.TableInput(
+        table=table, uri=f"/delta/{name}", version=3, partitions=None, files=1, bytes=100, rows=rows
+    )
 
 
 def test_thread_values_multiply_the_default_or_take_the_requested() -> None:
@@ -1842,11 +1848,13 @@ def test_latest_common_partition_needs_the_value_in_every_table() -> None:
 def test_partition_totals_sum_the_partition_or_the_whole_table() -> None:
     """Os arquivos, os bytes e as linhas das ações ``add`` da partição, ou de todas sem coluna de
     partição."""
-    actions = pa.table({
-        "partition.data_str": ["2026-06-30", "2026-06-30", "2026-03-31"],
-        "size_bytes": [10, 20, 40],
-        "num_records": [1, 2, 4],
-    })
+    actions = pa.table(
+        {
+            "partition.data_str": ["2026-06-30", "2026-06-30", "2026-03-31"],
+            "size_bytes": [10, 20, 40],
+            "num_records": [1, 2, 4],
+        }
+    )
     assert duckdb_threads.partition_totals(actions, "data_str", "2026-06-30") == (2, 30, 3)
     assert duckdb_threads.partition_totals(actions, None, None) == (3, 70, 7)
 
@@ -1905,10 +1913,18 @@ def test_measurement_rows_and_fastest_configuration() -> None:
     curto da configuração que falhou; a mais rápida ignora a que falhou."""
     inputs = [threads_input("cad_lancamentos", 10), threads_input("cad_contratos", 5)]
     measurements = [
-        duckdb_threads.Measurement("materializada", 4, seconds=[2.0, 1.0], threads_read=4,
-                                   base_mb=100, peak_mb=150, rows=10),
-        duckdb_threads.Measurement("materializada", 8, seconds=[0.5], threads_read=8,
-                                   base_mb=100, peak_mb=160, rows=10),
+        duckdb_threads.Measurement(
+            "materializada",
+            4,
+            seconds=[2.0, 1.0],
+            threads_read=4,
+            base_mb=100,
+            peak_mb=150,
+            rows=10,
+        ),
+        duckdb_threads.Measurement(
+            "materializada", 8, seconds=[0.5], threads_read=8, base_mb=100, peak_mb=160, rows=10
+        ),
         duckdb_threads.Measurement(
             "materializada", 12, error="OutOfMemoryException: sem memória\nmais"
         ),
@@ -1939,12 +1955,15 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
     aplicou, e ``DT-4`` registra a configuração que falhou, que também vai para a seção final."""
     inputs = [threads_input("cad_lancamentos", 10)]
     measurements = [
-        duckdb_threads.Measurement("materializada", 4, seconds=[1.0], threads_read=4,
-                                   base_mb=100, peak_mb=150, rows=10),
-        duckdb_threads.Measurement("materializada", 8, seconds=[1.0], threads_read=8,
-                                   base_mb=100, peak_mb=150, rows=9),
-        duckdb_threads.Measurement("agregada", 4, seconds=[1.0], threads_read=2,
-                                   base_mb=100, peak_mb=150, rows=10),
+        duckdb_threads.Measurement(
+            "materializada", 4, seconds=[1.0], threads_read=4, base_mb=100, peak_mb=150, rows=10
+        ),
+        duckdb_threads.Measurement(
+            "materializada", 8, seconds=[1.0], threads_read=8, base_mb=100, peak_mb=150, rows=9
+        ),
+        duckdb_threads.Measurement(
+            "agregada", 4, seconds=[1.0], threads_read=2, base_mb=100, peak_mb=150, rows=10
+        ),
         duckdb_threads.Measurement("agregada", 8, error="IOException: sem arquivo"),
     ]
     with make_report(folder, monkeypatch) as report:
@@ -1956,8 +1975,11 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
         assert report.finish() == 2
 
     # Sem reprovação nem falha, a saída é 0.
-    passing = [duckdb_threads.Measurement("materializada", 4, seconds=[1.0], threads_read=4,
-                                          base_mb=100, peak_mb=150, rows=10)]
+    passing = [
+        duckdb_threads.Measurement(
+            "materializada", 4, seconds=[1.0], threads_read=4, base_mb=100, peak_mb=150, rows=10
+        )
+    ]
     with make_report(folder, monkeypatch) as report:
         duckdb_threads.measurement_checks(report, passing, inputs)
         assert report.finish() == 0
@@ -1995,8 +2017,9 @@ def credential_round(
 ) -> credentials.Round:
     """Uma rodada fabricada ``minutes`` minutos depois de ``NOW``, com a credencial do contêiner
     expirando 60 minutos depois de ``NOW``."""
-    return credentials.Round(NOW + minutes * MINUTE, readings, container_key, NOW + 60 * MINUTE,
-                             secret_key, clause_key)
+    return credentials.Round(
+        NOW + minutes * MINUTE, readings, container_key, NOW + 60 * MINUTE, secret_key, clause_key
+    )
 
 
 def test_fingerprint_identifies_a_key_without_showing_it() -> None:
@@ -2027,16 +2050,18 @@ def test_wait_deadline_passes_the_last_expiry_by_the_margin_up_to_the_ceiling() 
     ceiling = 90 * MINUTE
     last = NOW + 60 * MINUTE
 
-    deadline, reason = credentials.wait_deadline(NOW, [NOW + 50 * MINUTE, None, last], margin,
-                                                 ceiling, None)
+    deadline, reason = credentials.wait_deadline(
+        NOW, [NOW + 50 * MINUTE, None, last], margin, ceiling, None
+    )
     assert deadline == NOW + 63 * MINUTE
     assert reason == f"a expiração das {credentials.clock(last)} mais a margem"
 
     late = NOW + 120 * MINUTE
     deadline, reason = credentials.wait_deadline(NOW, [late], margin, ceiling, None)
     assert deadline == NOW + ceiling
-    assert reason == (f"o teto de --max-wait-minutes, antes da expiração das "
-                      f"{credentials.clock(late)}")
+    assert reason == (
+        f"o teto de --max-wait-minutes, antes da expiração das {credentials.clock(late)}"
+    )
 
     deadline, _reason = credentials.wait_deadline(NOW, [last], margin, ceiling, 2 * MINUTE)
     assert deadline == NOW + 2 * MINUTE
@@ -2076,8 +2101,7 @@ def test_key_verdict_needs_another_key_in_every_round_after_the_expiry() -> None
     """A chave montada a cada uso passa quando toda rodada depois da expiração leva outra chave e
     reprova quando alguma ainda leva a do início; a rodada que não leu a chave não conta."""
     expiry = NOW + 60 * MINUTE
-    renewed = [(NOW, "aaaa1111"), (NOW + 55 * MINUTE, "bbbb2222"),
-               (NOW + 65 * MINUTE, "bbbb2222")]
+    renewed = [(NOW, "aaaa1111"), (NOW + 55 * MINUTE, "bbbb2222"), (NOW + 65 * MINUTE, "bbbb2222")]
     assert credentials.key_change(renewed) == NOW + 55 * MINUTE
     status, text = credentials.key_verdict(renewed, expiry)
     assert status == "pass"
@@ -2104,17 +2128,33 @@ def test_timeline_rows_and_round_line_show_each_client_and_the_keys() -> None:
     leu, e as chaves pela impressão digital; a linha da rodada traz o mesmo."""
     clients = [credentials.DELTA_RS, credentials.DUCKDB_DELTA]
     rounds = [
-        credential_round(0, [credential_reading(credentials.DELTA_RS, 0),
-                             credential_reading(credentials.DUCKDB_DELTA, 0)]),
-        credential_round(65, [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False)],
-                         container_key="bbbb2222", secret_key=None),
+        credential_round(
+            0,
+            [
+                credential_reading(credentials.DELTA_RS, 0),
+                credential_reading(credentials.DUCKDB_DELTA, 0),
+            ],
+        ),
+        credential_round(
+            65,
+            [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False)],
+            container_key="bbbb2222",
+            secret_key=None,
+        ),
     ]
     expiry = NOW + 60 * MINUTE
     rows = credentials.timeline_rows(rounds, clients, expiry)
     assert rows[0] == ["HORA", "EXPIRAÇÃO", *clients, "CONTÊINER", "ATÉ", "SECRET", "CLÁUSULA"]
     assert rows[1][1:4] == ["-60 min", "ok", "ok"]
-    assert rows[2][1:] == ["+5 min", "-", "FALHOU", "bbbb2222", credentials.clock(expiry), "-",
-                           "aaaa1111"]
+    assert rows[2][1:] == [
+        "+5 min",
+        "-",
+        "FALHOU",
+        "bbbb2222",
+        credentials.clock(expiry),
+        "-",
+        "aaaa1111",
+    ]
 
     line = credentials.round_line(rounds[1], expiry)
     assert line.startswith(f"{credentials.clock(rounds[1].at)} (+5 min): duckdb delta_scan FALHOU;")
@@ -2129,14 +2169,19 @@ def test_credential_checks_blame_a_held_client_only_when_a_new_one_reads(
     """``CR-4`` reprova o ``delta_scan`` segurado que falha depois da expiração quando o cliente
     novo lê; ``CR-6`` fica nota quando o cliente novo também falha; ``CR-10`` reprova a cláusula
     que ainda leva a chave expirada, e ``CR-11`` o cliente novo que falhou."""
-    first = [credential_reading(credentials.DUCKDB_DELTA, 0),
-             credential_reading(credentials.PYARROW, 0)]
-    after = [credential_reading(credentials.DUCKDB_DELTA, 65, ok=False, detail="ExpiredToken"),
-             credential_reading(credentials.PYARROW, 65, ok=False, detail="ExpiredToken")]
-    rounds = [credential_round(0, first),
-              credential_round(65, after, container_key="bbbb2222")]
-    controls = [credential_reading(credentials.DUCKDB_DELTA, 66),
-                credential_reading(credentials.PYARROW, 66, ok=False, detail="AccessDenied")]
+    first = [
+        credential_reading(credentials.DUCKDB_DELTA, 0),
+        credential_reading(credentials.PYARROW, 0),
+    ]
+    after = [
+        credential_reading(credentials.DUCKDB_DELTA, 65, ok=False, detail="ExpiredToken"),
+        credential_reading(credentials.PYARROW, 65, ok=False, detail="ExpiredToken"),
+    ]
+    rounds = [credential_round(0, first), credential_round(65, after, container_key="bbbb2222")]
+    controls = [
+        credential_reading(credentials.DUCKDB_DELTA, 66),
+        credential_reading(credentials.PYARROW, 66, ok=False, detail="AccessDenied"),
+    ]
     # As checagens leem só os nomes dos clientes abertos.
     held = credentials.Held(readers={credentials.DUCKDB_DELTA: str, credentials.PYARROW: str})
     storage = types.SimpleNamespace(is_s3=True)
@@ -2189,22 +2234,28 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
     monkeypatch.setattr(credentials, "prepare_environment", no_environment_change)
     monkeypatch.setattr(credentials, "container_credential", no_container_credential)
     monkeypatch.setattr(credentials, "credentials_clause", fabricated_clause)
-    for name in ("SERIALIZE_DB_REDSHIFT_WORKGROUP", "SERIALIZE_DB_REDSHIFT_HOST",
-                 "SERIALIZE_DB_REDSHIFT_IAM_ROLE"):
+    for name in (
+        "SERIALIZE_DB_REDSHIFT_WORKGROUP",
+        "SERIALIZE_DB_REDSHIFT_HOST",
+        "SERIALIZE_DB_REDSHIFT_IAM_ROLE",
+    ):
         monkeypatch.delenv(name, raising=False)
 
     stdout = sys.stdout
     try:
-        code = credentials.main(["credentials.py", str(table), "--wait-minutes", "0.01",
-                                 "--interval-minutes", "0.004"])
+        code = credentials.main(
+            ["credentials.py", str(table), "--wait-minutes", "0.01", "--interval-minutes", "0.004"]
+        )
     finally:
         sys.stdout = stdout
 
     assert code == 0
     text = next(folder.glob("credentials_*.txt")).read_text()
-    every_client = ("delta-rs ok, duckdb delta_scan ok, duckdb read_parquet ok, pyarrow ok, "
-                    "boto3 ok; contêiner - até -, secret -, cláusula "
-                    f"{credentials.fingerprint('AKIAEXEMPLO')}")
+    every_client = (
+        "delta-rs ok, duckdb delta_scan ok, duckdb read_parquet ok, pyarrow ok, "
+        "boto3 ok; contêiner - até -, secret -, cláusula "
+        f"{credentials.fingerprint('AKIAEXEMPLO')}"
+    )
     assert every_client in text
     assert "Nenhuma leitura falhou." in text
     assert "4 cliente(s) novo(s) leram" in text

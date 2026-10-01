@@ -11,6 +11,7 @@ vão ao terminal e a ``probes/output/operacao_<sonda>_<data-hora>.txt``. Código
 toda checagem passou, 1 quando alguma reprovou ou a sonda parou numa exceção, 2 sem raiz de
 trabalho ou com a origem sem as partições.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -106,8 +107,11 @@ def _suite_root() -> str:
     local_root = os.environ.get("SERIALIZE_DB_TEST_LOCAL_ROOT")
     if local_root and Path(local_root).is_dir():
         return local_root
-    print("SERIALIZE_DB_TEST_S3_ROOT ausente e SERIALIZE_DB_TEST_LOCAL_ROOT ausente ou sem pasta: "
-          "a sonda grava só sob a raiz das suítes.", file=sys.stderr)
+    print(
+        "SERIALIZE_DB_TEST_S3_ROOT ausente e SERIALIZE_DB_TEST_LOCAL_ROOT ausente ou sem pasta: "
+        "a sonda grava só sob a raiz das suítes.",
+        file=sys.stderr,
+    )
     sys.exit(2)
 
 
@@ -125,14 +129,19 @@ def work_database(
     sys.stderr = Tee(report, sys.stderr)
     # O log da biblioteca vai à mesma saída a partir de INFO, com o instante de cada linha; o dos
     # outros pacotes, como o botocore, só a partir de WARNING.
-    logging.basicConfig(stream=sys.stdout, level=logging.WARNING,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        stream=sys.stdout,
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     logging.getLogger("serialize_db").setLevel(logging.INFO)
     versions = []
     for package in PACKAGES:
         versions.append(f"{package} {importlib.metadata.version(package)}")
-    print(f"{time.strftime('%Y-%m-%d %H:%M:%S %z')}; {platform.platform()}; "
-          f"python {platform.python_version()}; {', '.join(versions)}")
+    print(
+        f"{time.strftime('%Y-%m-%d %H:%M:%S %z')}; {platform.platform()}; "
+        f"python {platform.python_version()}; {', '.join(versions)}"
+    )
     print(f"máquina: {available_cpus()} CPUs, {available_memory() / 2**30:.1f} GiB disponíveis")
     print(f"raiz de trabalho: {root}; ambiente {ENVIRONMENT}; saída: {output}")
     db = Database(root, ENVIRONMENT, Base.metadata)
@@ -149,8 +158,10 @@ def source_partitions(
     found, _ = load.discover_partitions(source, TABLE)
     values = list(found)[:count]
     if len(values) < count:
-        print(f"{source}: {TABLE.name} tem {len(found)} partição(ões), a sonda pede {count}",
-              file=sys.stderr)
+        print(
+            f"{source}: {TABLE.name} tem {len(found)} partição(ões), a sonda pede {count}",
+            file=sys.stderr,
+        )
         sys.exit(2)
     return values
 
@@ -240,8 +251,16 @@ def cli_arguments(
     *options: str,
 ) -> list[str]:
     """Os argumentos de um subcomando de operação sobre o banco da sonda."""
-    return [command, "--root", db.storage.uri, "--environment", db.environment,
-            "--metadata", METADATA, *options]
+    return [
+        command,
+        "--root",
+        db.storage.uri,
+        "--environment",
+        db.environment,
+        "--metadata",
+        METADATA,
+        *options,
+    ]
 
 
 def _child_environment() -> dict[str, str]:
@@ -261,8 +280,13 @@ def _start(
     stdout."""
     print("$ serialize-db " + " ".join(arguments))
     command = [str(Path(sys.executable).with_name("serialize-db")), *arguments]
-    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            env=_child_environment())
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=_child_environment(),
+    )
 
 
 def run_cli(
@@ -315,8 +339,7 @@ def run_cli_killed(
         if process.poll() is None:
             process.send_signal(signal.SIGKILL)
             killed = True
-            print(f"  SIGKILL depois {waited}, {time.perf_counter() - started:.1f} s do "
-                  "início")
+            print(f"  SIGKILL depois {waited}, {time.perf_counter() - started:.1f} s do início")
     reader.join()
     code = process.wait()
     seconds = time.perf_counter() - started

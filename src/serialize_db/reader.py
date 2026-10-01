@@ -87,7 +87,8 @@ def _check_select(
     if not isinstance(statement_or_sql, (sa.Select, sa.CompoundSelect)):
         raise ContractError(
             f"o leitor roda só Select e CompoundSelect, e recebeu "
-            f"{type(statement_or_sql).__name__}; um comando vai pela conexão de session()")
+            f"{type(statement_or_sql).__name__}; um comando vai pela conexão de session()"
+        )
 
 
 # ---------------------------------------------------------------- as versões do leitor Delta
@@ -161,8 +162,9 @@ def _resolve_source(
     """As versões pelo modo pedido: o canal ``current``, o snapshot pelo nome, vivo ou arquivado,
     ou o snapshot do canal, o ``default`` sem argumento."""
     if snapshot is not None and channel is not None:
-        raise ContractError(f"open_delta recebe snapshot={snapshot!r} ou channel={channel!r}, "
-                            "não os dois")
+        raise ContractError(
+            f"open_delta recebe snapshot={snapshot!r} ou channel={channel!r}, não os dois"
+        )
     if channel == delta.CURRENT_CHANNEL:
         return _current_source(db)
     control, _ = delta.read_snapshots(db.storage, db.environment)
@@ -292,8 +294,9 @@ class DeltaReader:
         except BaseException:
             self.close()
             raise
-        log.info("leitor %s aberto sobre %s: versões %s", self.reader_id, self._source,
-                 self.versions)
+        log.info(
+            "leitor %s aberto sobre %s: versões %s", self.reader_id, self._source, self.versions
+        )
 
     def _create_view(
         self,
@@ -320,8 +323,10 @@ class DeltaReader:
     ) -> None:
         """A tabela do modelo sem view é ``ContractError`` com a origem das versões."""
         if name not in self.versions:
-            raise ContractError(f"{name}: a tabela do modelo não tem view no leitor, porque não "
-                                f"está em {self._source}")
+            raise ContractError(
+                f"{name}: a tabela do modelo não tem view no leitor, porque não "
+                f"está em {self._source}"
+            )
 
     def _kind(
         self,
@@ -353,8 +358,12 @@ class DeltaReader:
                 raise
         with self._lock:
             self.materialized[table.name] = partitions
-        log.info("leitor %s: %s materializada, partições %s", self.reader_id, table.name,
-                 "todas" if partitions is None else partitions)
+        log.info(
+            "leitor %s: %s materializada, partições %s",
+            self.reader_id,
+            table.name,
+            "todas" if partitions is None else partitions,
+        )
 
     def materialize(
         self,
@@ -590,8 +599,9 @@ class RedshiftReader:
         if unload_to is not None:
             storage = Storage.for_uri(unload_to)
             staging_prefix = self.reader_id
-        self._engine = RedshiftEngine(config, self.reader_id, storage, staging_prefix,
-                                      prefix=f"{self.environment}_")
+        self._engine = RedshiftEngine(
+            config, self.reader_id, storage, staging_prefix, prefix=f"{self.environment}_"
+        )
 
     def query(
         self,

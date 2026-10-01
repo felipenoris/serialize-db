@@ -57,8 +57,12 @@ def clean_aws(
     return monkeypatch
 
 
-@pytest.fixture(params=[pytest.param("local", marks=pytest.mark.local),
-                        pytest.param("s3", marks=pytest.mark.s3)])
+@pytest.fixture(
+    params=[
+        pytest.param("local", marks=pytest.mark.local),
+        pytest.param("s3", marks=pytest.mark.s3),
+    ]
+)
 def storage(
     request: pytest.FixtureRequest,
 ) -> Storage:
@@ -145,8 +149,10 @@ def test_prepare_environment() -> None:
     """``NO_PROXY`` sai de ``no_proxy`` quando ausente ou vazia, a região vai nos dois sentidos, e
     a segunda chamada não muda nada."""
     environ = {"no_proxy": "169.254.170.2,localhost", "AWS_REGION": "us-west-2"}
-    assert prepare_environment(environ) == {"NO_PROXY": "169.254.170.2,localhost",
-                                            "AWS_DEFAULT_REGION": "us-west-2"}
+    assert prepare_environment(environ) == {
+        "NO_PROXY": "169.254.170.2,localhost",
+        "AWS_DEFAULT_REGION": "us-west-2",
+    }
     assert prepare_environment(environ) == {}
 
     # NO_PROXY vazia, como o shell da extensão do Claude Code no espaço a deixa, conta como ausente.
@@ -161,11 +167,17 @@ def test_duckdb_proxy_settings_without_credentials_in_the_address() -> None:
     assert _proxy_settings({}) == {}
     assert _proxy_settings({"HTTP_PROXY": "http://proxy:3128"}) == {"http_proxy": "proxy:3128"}
     embedded = _proxy_settings({"HTTP_PROXY": "http://ana:p%40ss@proxy:3128"})
-    assert embedded == {"http_proxy": "proxy:3128", "http_proxy_username": "ana",
-                        "http_proxy_password": "p@ss"}
+    assert embedded == {
+        "http_proxy": "proxy:3128",
+        "http_proxy_username": "ana",
+        "http_proxy_password": "p@ss",
+    }
     separate = _proxy_settings({"HTTP_PROXY": "proxy:3128", "username": "bia", "password": "x"})
-    assert separate == {"http_proxy": "proxy:3128", "http_proxy_username": "bia",
-                        "http_proxy_password": "x"}
+    assert separate == {
+        "http_proxy": "proxy:3128",
+        "http_proxy_username": "bia",
+        "http_proxy_password": "x",
+    }
 
 
 def test_duckdb_secret_options_for_an_endpoint(
@@ -209,7 +221,8 @@ def stored_secret(
 ) -> str:
     """O ``secret_string`` do secret do S3, que mostra a chave e mascara o segredo e o token."""
     rows = connection.execute(
-        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'").fetchall()
+        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'"
+    ).fetchall()
     assert len(rows) == 1
     return rows[0][0]
 
@@ -291,8 +304,10 @@ class RefusingS3Client:
     ) -> dict:
         """Registra o pedido e levanta a ``ClientError`` do botocore com o código dado."""
         self.requests.append(request)
-        response = {"Error": {"Code": self.code, "Message": f"recusado com {self.status}"},
-                    "ResponseMetadata": {"HTTPStatusCode": self.status}}
+        response = {
+            "Error": {"Code": self.code, "Message": f"recusado com {self.status}"},
+            "ResponseMetadata": {"HTTPStatusCode": self.status},
+        }
         raise botocore.exceptions.ClientError(response, "PutObject")
 
 
@@ -306,8 +321,9 @@ def refusing_s3_storage(
     return Storage.for_uri("s3://bucket/delta")
 
 
-@pytest.mark.parametrize(("code", "status"), [("PreconditionFailed", 412),
-                                              ("ConditionalRequestConflict", 409)])
+@pytest.mark.parametrize(
+    ("code", "status"), [("PreconditionFailed", 412), ("ConditionalRequestConflict", 409)]
+)
 def test_s3_refusals_of_the_conditional_write_are_conflict_error(
     clean_aws: pytest.MonkeyPatch,
     code: str,
@@ -384,8 +400,12 @@ def test_list_copy_delete(
     """``list_files`` desce as pastas, filtra pelo sufixo e exclui ``_delta_log/``; ``copy``
     preserva os bytes, também acima do limiar multipart do ``boto3``; ``delete`` de um caminho
     ausente não falha."""
-    for name in ("t/p=a/1.parquet", "t/p=b/2.parquet", "t/_delta_log/00.checkpoint.parquet",
-                 "t/_delta_log/00000000000000000000.json"):
+    for name in (
+        "t/p=a/1.parquet",
+        "t/p=b/2.parquet",
+        "t/_delta_log/00.checkpoint.parquet",
+        "t/_delta_log/00000000000000000000.json",
+    ):
         storage.write_text(name, name)
     assert storage.list_files("t", ".parquet") == ["t/p=a/1.parquet", "t/p=b/2.parquet"]
     assert storage.list_files("ausente") == []
@@ -419,9 +439,11 @@ def test_duckdb_connect_loads_delta(
     S3, com o secret na chave que a cadeia do ``boto3`` resolve."""
     with storage.duckdb_connect() as connection:
         loaded = connection.execute(
-            "SELECT extension_name FROM duckdb_extensions() WHERE loaded ORDER BY 1").fetchall()
+            "SELECT extension_name FROM duckdb_extensions() WHERE loaded ORDER BY 1"
+        ).fetchall()
         autoinstall = connection.execute(
-            "SELECT current_setting('autoinstall_known_extensions')").fetchone()[0]
+            "SELECT current_setting('autoinstall_known_extensions')"
+        ).fetchone()[0]
         secrets = connection.execute("SELECT name FROM duckdb_secrets()").fetchall()
         secret = stored_secret(connection) if storage.is_s3 else None
     assert ("delta",) in loaded

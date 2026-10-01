@@ -161,7 +161,8 @@ def _resolve_statements(
     for name, statement in target.items():
         if not isinstance(statement, sa.sql.ClauseElement):
             raise argparse.ArgumentTypeError(
-                f"{spec}[{name!r}] não é um statement: {type(statement).__name__}")
+                f"{spec}[{name!r}] não é um statement: {type(statement).__name__}"
+            )
     return target
 
 
@@ -199,7 +200,8 @@ def _engine_argument(
     ``SERIALIZE_DB_ENGINE``, só por esta função, porque o ``choices`` não vale para o padrão."""
     if text not in ("duckdb", "redshift"):
         raise argparse.ArgumentTypeError(
-            f"motor {text!r}: use duckdb ou redshift, em --engine ou SERIALIZE_DB_ENGINE")
+            f"motor {text!r}: use duckdb ou redshift, em --engine ou SERIALIZE_DB_ENGINE"
+        )
     return text
 
 
@@ -209,11 +211,19 @@ def _add_database_arguments(
     """``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
     ``SERIALIZE_DB_*``: os de ``run``, de ``load`` e das rotinas de operação."""
     root = os.environ.get("SERIALIZE_DB_ROOT")
-    parser.add_argument("--metadata", required=True, type=_resolve_metadata,
-                        help="o MetaData dos modelos, como pipeline.models:Base.metadata")
-    parser.add_argument("--root", default=root, required=not root,
-                        help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo; "
-                             "padrão SERIALIZE_DB_ROOT")
+    parser.add_argument(
+        "--metadata",
+        required=True,
+        type=_resolve_metadata,
+        help="o MetaData dos modelos, como pipeline.models:Base.metadata",
+    )
+    parser.add_argument(
+        "--root",
+        default=root,
+        required=not root,
+        help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo; "
+        "padrão SERIALIZE_DB_ROOT",
+    )
     parser.add_argument("--environment", type=_name_argument, default=_environment_default())
 
 
@@ -223,13 +233,22 @@ def _add_run_parser(
     """``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão."""
     run = commands.add_parser("run", help="executa o pipeline, de uma partição ou sem partição")
     _add_database_arguments(run)
-    run.add_argument("--engine", type=_engine_argument, choices=["duckdb", "redshift"],
-                     default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb")
-    run.add_argument("--partition", type=_name_argument, default=None,
-                     help="a partição da execução; sem ela, a execução não tem partição")
+    run.add_argument(
+        "--engine",
+        type=_engine_argument,
+        choices=["duckdb", "redshift"],
+        default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb",
+    )
+    run.add_argument(
+        "--partition",
+        type=_name_argument,
+        default=None,
+        help="a partição da execução; sem ela, a execução não tem partição",
+    )
     run.add_argument("--execution-id", type=_name_argument, default=None)
-    run.add_argument("pipeline", type=_resolve_function,
-                     help="modulo:funcao que recebe a execução aberta")
+    run.add_argument(
+        "pipeline", type=_resolve_function, help="modulo:funcao que recebe a execução aberta"
+    )
     run.set_defaults(handler=_run)
 
 
@@ -239,30 +258,57 @@ def _add_publish_redshift_parser(
     """``serialize-db publish_redshift``: a publicação no Redshift de um snapshot, pelo nome ou
     pelo canal, o estado, a tabela de controle e a despublicação; a conexão vem de
     ``SERIALIZE_DB_REDSHIFT_*``."""
-    publish = commands.add_parser("publish_redshift",
-                                  help="a publicação no Redshift de um snapshot")
-    publish.add_argument("--metadata", type=_resolve_metadata, default=None,
-                         help="modulo:atributo com o MetaData dos modelos; dispensado por --init")
+    publish = commands.add_parser(
+        "publish_redshift", help="a publicação no Redshift de um snapshot"
+    )
+    publish.add_argument(
+        "--metadata",
+        type=_resolve_metadata,
+        default=None,
+        help="modulo:atributo com o MetaData dos modelos; dispensado por --init",
+    )
     publish.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
     publish.add_argument("--environment", type=_name_argument, default=_environment_default())
     which = publish.add_mutually_exclusive_group()
-    which.add_argument("--snapshot", type=_name_argument, default=None,
-                       help="publica as versões deste snapshot do arquivo de controle")
-    which.add_argument("--channel", type=_name_argument, default=None,
-                       help="publica o snapshot deste canal; current é a versão atual de cada "
-                            "tabela")
-    publish.add_argument("--tables", nargs="+", default=None,
-                         help="as tabelas a publicar ou despublicar; sem ela, todas do modelo")
+    which.add_argument(
+        "--snapshot",
+        type=_name_argument,
+        default=None,
+        help="publica as versões deste snapshot do arquivo de controle",
+    )
+    which.add_argument(
+        "--channel",
+        type=_name_argument,
+        default=None,
+        help="publica o snapshot deste canal; current é a versão atual de cada tabela",
+    )
+    publish.add_argument(
+        "--tables",
+        nargs="+",
+        default=None,
+        help="as tabelas a publicar ou despublicar; sem ela, todas do modelo",
+    )
     publish.add_argument("--max-workers", type=int, default=1)
-    publish.add_argument("--execution-id", type=_name_argument, default=None,
-                         help="o identificador gravado na linha de controle; sem ele, "
-                              "publicacao-<AAAA-MM-DD>-<uuid8>")
-    publish.add_argument("--init", action="store_true",
-                         help="cria a tabela de controle serialize_db_publications, uma vez")
-    publish.add_argument("--status", action="store_true",
-                         help="mostra a versão publicada e a atual de cada tabela")
-    publish.add_argument("--unpublish", action="store_true",
-                         help="despublica as tabelas: DROP TABLE e a linha de controle")
+    publish.add_argument(
+        "--execution-id",
+        type=_name_argument,
+        default=None,
+        help="o identificador gravado na linha de controle; sem ele, "
+        "publicacao-<AAAA-MM-DD>-<uuid8>",
+    )
+    publish.add_argument(
+        "--init",
+        action="store_true",
+        help="cria a tabela de controle serialize_db_publications, uma vez",
+    )
+    publish.add_argument(
+        "--status", action="store_true", help="mostra a versão publicada e a atual de cada tabela"
+    )
+    publish.add_argument(
+        "--unpublish",
+        action="store_true",
+        help="despublica as tabelas: DROP TABLE e a linha de controle",
+    )
     publish.set_defaults(handler=_publish_redshift)
 
 
@@ -272,15 +318,24 @@ def _add_load_parser(
     """``load``: a carga inicial da base Parquet de origem nas tabelas Delta do ambiente."""
     load_command = commands.add_parser("load", help="a carga inicial da base Parquet de origem")
     _add_database_arguments(load_command)
-    load_command.add_argument("--source", required=True,
-                              help="a raiz da base Parquet de origem, pasta local ou "
-                                   "s3://bucket/prefixo")
-    load_command.add_argument("--tables", nargs="+", default=None,
-                              help="só estas tabelas do modelo; sem elas, todas, as sem partição "
-                                   "antes das particionadas")
-    load_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None,
-                              help="só estas partições, gravadas e conferidas; as tabelas "
-                                   "sem partição ficam de fora")
+    load_command.add_argument(
+        "--source",
+        required=True,
+        help="a raiz da base Parquet de origem, pasta local ou s3://bucket/prefixo",
+    )
+    load_command.add_argument(
+        "--tables",
+        nargs="+",
+        default=None,
+        help="só estas tabelas do modelo; sem elas, todas, as sem partição antes das particionadas",
+    )
+    load_command.add_argument(
+        "--partitions",
+        nargs="+",
+        type=_name_argument,
+        default=None,
+        help="só estas partições, gravadas e conferidas; as tabelas sem partição ficam de fora",
+    )
     load_command.set_defaults(handler=_load)
 
 
@@ -289,56 +344,72 @@ def _add_operation_parsers(
 ) -> None:
     """Os subcomandos da operação: ``snapshot``, ``channel``, ``vacuum``, ``compact``,
     ``archive``, ``export`` e ``history``."""
-    snapshot = commands.add_parser("snapshot",
-                                   help="o snapshot do banco com a versão atual de cada tabela")
+    snapshot = commands.add_parser(
+        "snapshot", help="o snapshot do banco com a versão atual de cada tabela"
+    )
     _add_database_arguments(snapshot)
     snapshot.add_argument("--name", required=True, type=_name_argument)
     snapshot.set_defaults(handler=_snapshot)
 
-    channel = commands.add_parser("channel",
-                                  help="aponta um canal do ambiente para um snapshot, ou lista "
-                                       "os canais")
+    channel = commands.add_parser(
+        "channel", help="aponta um canal do ambiente para um snapshot, ou lista os canais"
+    )
     _add_database_arguments(channel)
-    channel.add_argument("--name", type=_name_argument, default=None,
-                         help="o canal, como default; com --snapshot")
-    channel.add_argument("--snapshot", type=_name_argument, default=None,
-                         help="o snapshot que o canal passa a apontar, presente em snapshots")
+    channel.add_argument(
+        "--name", type=_name_argument, default=None, help="o canal, como default; com --snapshot"
+    )
+    channel.add_argument(
+        "--snapshot",
+        type=_name_argument,
+        default=None,
+        help="o snapshot que o canal passa a apontar, presente em snapshots",
+    )
     channel.set_defaults(handler=_channel)
 
-    vacuum = commands.add_parser("vacuum",
-                                 help="os arquivos fora da retenção e das versões dos snapshots")
+    vacuum = commands.add_parser(
+        "vacuum", help="os arquivos fora da retenção e das versões dos snapshots"
+    )
     _add_database_arguments(vacuum)
     vacuum.add_argument("--apply", action="store_true", help="apaga os arquivos listados")
     vacuum.add_argument("--full", action="store_true", help="inclui os arquivos órfãos")
-    vacuum.add_argument("--retention-hours", type=int, default=9600,
-                        help="a retenção em horas; padrão 9600, os 400 dias")
+    vacuum.add_argument(
+        "--retention-hours",
+        type=int,
+        default=9600,
+        help="a retenção em horas; padrão 9600, os 400 dias",
+    )
     vacuum.set_defaults(handler=_vacuum)
 
-    compact_command = commands.add_parser("compact",
-                                          help="junta os arquivos pequenos das partições")
+    compact_command = commands.add_parser(
+        "compact", help="junta os arquivos pequenos das partições"
+    )
     _add_database_arguments(compact_command)
     compact_command.add_argument("--table", required=True)
     compact_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
     compact_command.set_defaults(handler=_compact)
 
-    archive = commands.add_parser("archive",
-                                  help="copia as tabelas de um snapshot para arquivo/<nome>/")
+    archive = commands.add_parser(
+        "archive", help="copia as tabelas de um snapshot para arquivo/<nome>/"
+    )
     _add_database_arguments(archive)
     archive.add_argument("--name", required=True, type=_name_argument)
     archive.set_defaults(handler=_archive)
 
-    export = commands.add_parser("export",
-                                 help="as pastas Parquet de uma versão da tabela, sem o log")
+    export = commands.add_parser(
+        "export", help="as pastas Parquet de uma versão da tabela, sem o log"
+    )
     _add_database_arguments(export)
     export.add_argument("--table", required=True)
-    export.add_argument("--destination", required=True,
-                        help="a URI da pasta de destino, vazia e sob a raiz")
+    export.add_argument(
+        "--destination", required=True, help="a URI da pasta de destino, vazia e sob a raiz"
+    )
     export.add_argument("--version", type=int, default=None, help="a versão; padrão a atual")
     export.add_argument("--mode", choices=["copy", "rewrite"], default="copy")
     export.set_defaults(handler=_export)
 
-    history = commands.add_parser("history",
-                                  help="os commits de uma tabela com os metadados da biblioteca")
+    history = commands.add_parser(
+        "history", help="os commits de uma tabela com os metadados da biblioteca"
+    )
     _add_database_arguments(history)
     history.add_argument("--table", required=True)
     history.set_defaults(handler=_history)
@@ -349,21 +420,30 @@ def _add_audit_parser(
 ) -> None:
     """``serialize-db audit``: o texto das verificações ou a auditoria da versão atual do Delta."""
     audit_command = commands.add_parser("audit", help="a auditoria de uma tabela")
-    audit_command.add_argument("--metadata", required=True, type=_resolve_metadata,
-                               help="modulo:atributo com o MetaData dos modelos")
+    audit_command.add_argument(
+        "--metadata",
+        required=True,
+        type=_resolve_metadata,
+        help="modulo:atributo com o MetaData dos modelos",
+    )
     audit_command.add_argument("--table", required=True)
     audit_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
     audit_command.add_argument("--foreign-keys", action="store_true")
     audit_command.add_argument("--key-scope", choices=["partition", "table"], default=None)
-    audit_command.add_argument("--engine", type=_engine_argument, choices=["duckdb", "redshift"],
-                               default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb",
-                               help="o dialeto do texto e o motor da auditoria")
-    audit_command.add_argument("--sql", action="store_true",
-                               help="imprime o texto das verificações, sem conexão nem "
-                                    "armazenamento")
+    audit_command.add_argument(
+        "--engine",
+        type=_engine_argument,
+        choices=["duckdb", "redshift"],
+        default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb",
+        help="o dialeto do texto e o motor da auditoria",
+    )
+    audit_command.add_argument(
+        "--sql",
+        action="store_true",
+        help="imprime o texto das verificações, sem conexão nem armazenamento",
+    )
     audit_command.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
-    audit_command.add_argument("--environment", type=_name_argument,
-                               default=_environment_default())
+    audit_command.add_argument("--environment", type=_name_argument, default=_environment_default())
     audit_command.set_defaults(handler=_audit)
 
 
@@ -379,23 +459,39 @@ def _build_parser() -> argparse.ArgumentParser:
 
     schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
     schema_actions = schema_command.add_subparsers(dest="action", required=True)
-    for action, handler, help_text in (("write", _schema_write, "grava os arquivos"),
-                                       ("check", _schema_check, "compara sem gravar")):
+    for action, handler, help_text in (
+        ("write", _schema_write, "grava os arquivos"),
+        ("check", _schema_check, "compara sem gravar"),
+    ):
         action_parser = schema_actions.add_parser(action, help=help_text)
-        action_parser.add_argument("--metadata", required=True, type=_resolve_metadata,
-                                   help="modulo:atributo com o MetaData dos modelos")
+        action_parser.add_argument(
+            "--metadata",
+            required=True,
+            type=_resolve_metadata,
+            help="modulo:atributo com o MetaData dos modelos",
+        )
         action_parser.add_argument("directory", help="a pasta dos arquivos de esquema")
         action_parser.set_defaults(handler=handler)
 
     sql_command = commands.add_parser("sql", help="o texto SQL dos statements em cada motor")
     sql_actions = sql_command.add_subparsers(dest="action", required=True)
-    for action, handler, help_text in (("write", _sql_write, "grava os arquivos"),
-                                       ("check", _sql_check, "compara sem gravar")):
+    for action, handler, help_text in (
+        ("write", _sql_write, "grava os arquivos"),
+        ("check", _sql_check, "compara sem gravar"),
+    ):
         action_parser = sql_actions.add_parser(action, help=help_text)
-        action_parser.add_argument("--metadata", required=True, type=_resolve_metadata,
-                                   help="modulo:atributo com o MetaData dos modelos")
-        action_parser.add_argument("--statements", required=True, type=_resolve_statements,
-                                   help="modulo:atributo com o dicionário {nome: statement}")
+        action_parser.add_argument(
+            "--metadata",
+            required=True,
+            type=_resolve_metadata,
+            help="modulo:atributo com o MetaData dos modelos",
+        )
+        action_parser.add_argument(
+            "--statements",
+            required=True,
+            type=_resolve_statements,
+            help="modulo:atributo com o dicionário {nome: statement}",
+        )
         action_parser.add_argument("directory", help="a pasta dos arquivos de texto SQL")
         action_parser.set_defaults(handler=handler)
     return parser
@@ -465,8 +561,13 @@ def _run(
             from serialize_db.engine.redshift import RedshiftConfig
 
             redshift = RedshiftConfig.from_environment()
-        execution = Execution(Database(args.root, args.environment, args.metadata), args.engine,
-                              args.partition, args.execution_id, redshift=redshift)
+        execution = Execution(
+            Database(args.root, args.environment, args.metadata),
+            args.engine,
+            args.partition,
+            args.execution_id,
+            redshift=redshift,
+        )
         # A entrada do with abre o motor, que confere a conexão e o prefixo do sandbox; a saída
         # grava o snapshot marcado, na escrita condicional do arquivo de controle.
         with execution as run:
@@ -515,8 +616,12 @@ def _audit_engine(
         # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
-        return RedshiftEngine(RedshiftConfig.from_environment(), execution_id, db.storage,
-                              db.staging_prefix(execution_id))
+        return RedshiftEngine(
+            RedshiftConfig.from_environment(),
+            execution_id,
+            db.storage,
+            db.staging_prefix(execution_id),
+        )
     raise ContractError(f"motor {args.engine!r}: use 'duckdb' ou 'redshift'")
 
 
@@ -575,8 +680,9 @@ def _audit_current(
             print(f"{table.name} na versão {version}:")
             print(f"ingestão: reprovada ({error})")
             return 1
-        report = engine.audit(table, args.partitions, uri, version, args.foreign_keys,
-                              args.key_scope, referenced)
+        report = engine.audit(
+            table, args.partitions, uri, version, args.foreign_keys, args.key_scope, referenced
+        )
     print(f"{table.name} na versão {version}:")
     _print_report(report)
     return 0 if report.passed else 1
@@ -593,12 +699,16 @@ def _audit(
         print(f"serialize-db audit: a tabela {args.table} não está nos modelos", file=sys.stderr)
         return 2
     if args.partitions is not None and schema.table_options(table).partition_by is None:
-        print(f"serialize-db audit: {table.name} não tem partição; audite a tabela inteira, sem "
-              "--partitions", file=sys.stderr)
+        print(
+            f"serialize-db audit: {table.name} não tem partição; audite a tabela inteira, sem "
+            "--partitions",
+            file=sys.stderr,
+        )
         return 2
     if args.sql:
-        texts = audit.audit_sql(table, args.engine, args.partitions, args.foreign_keys,
-                                args.key_scope)
+        texts = audit.audit_sql(
+            table, args.engine, args.partitions, args.foreign_keys, args.key_scope
+        )
         for name, text in texts.items():
             print(f"-- {name}\n{text}\n")
         return 0
@@ -639,12 +749,18 @@ def _publish_redshift(
 
     chosen = args.snapshot is not None or args.channel is not None
     if (args.init or args.status or args.unpublish) and chosen:
-        print("serialize-db publish_redshift: --init, --status e --unpublish não recebem "
-              "--snapshot nem --channel", file=sys.stderr)
+        print(
+            "serialize-db publish_redshift: --init, --status e --unpublish não recebem "
+            "--snapshot nem --channel",
+            file=sys.stderr,
+        )
         return 2
     if not (args.init or args.status or args.unpublish) and not chosen:
-        print("serialize-db publish_redshift: informe --snapshot <nome> ou --channel <nome> "
-              "(default, current)", file=sys.stderr)
+        print(
+            "serialize-db publish_redshift: informe --snapshot <nome> ou --channel <nome> "
+            "(default, current)",
+            file=sys.stderr,
+        )
         return 2
     try:
         config = RedshiftConfig.from_environment()
@@ -660,8 +776,10 @@ def _publish_redshift(
         print(f"{config.schema}.{publication.CONTROL_TABLE} criada")
         return 0
     if not args.root or args.metadata is None:
-        print("serialize-db publish_redshift: informe --metadata e --root ou SERIALIZE_DB_ROOT",
-              file=sys.stderr)
+        print(
+            "serialize-db publish_redshift: informe --metadata e --root ou SERIALIZE_DB_ROOT",
+            file=sys.stderr,
+        )
         return 2
     db = Database(args.root, args.environment, args.metadata)
     try:
@@ -673,8 +791,11 @@ def _publish_redshift(
         else:
             versions = _versions_to_publish(db, args, tables)
             execution_id = _publication_id(args.execution_id)
-            _print_published(publication.publish_redshift(db, config, tables, execution_id,
-                                                          args.max_workers, versions))
+            _print_published(
+                publication.publish_redshift(
+                    db, config, tables, execution_id, args.max_workers, versions
+                )
+            )
     except (argparse.ArgumentTypeError, PublicationError, ContractError) as error:
         print(f"serialize-db publish_redshift: {error}", file=sys.stderr)
         return 2
@@ -702,8 +823,9 @@ def _versions_to_publish(
         source = f"do snapshot {name}"
     missing = [table.name for table in tables if table.name not in versions]
     if missing:
-        raise PublicationError(f"{', '.join(missing)}: fora {source}; --tables deixa de fora a "
-                               "tabela sem versão")
+        raise PublicationError(
+            f"{', '.join(missing)}: fora {source}; --tables deixa de fora a tabela sem versão"
+        )
     return versions
 
 
@@ -729,8 +851,9 @@ def _print_statuses(
         else:
             published = f"publicada {status.published_version}"
         # A tabela sem partição fica pendente inteira, com o valor None.
-        pending = ["tabela inteira" if value is None else value
-                   for value in status.pending_partitions]
+        pending = [
+            "tabela inteira" if value is None else value for value in status.pending_partitions
+        ]
         print(f"{status.table}: {published}, atual {status.current_version}, pendentes {pending}")
 
 
@@ -781,10 +904,12 @@ def _print_load_report(
     for partition in report.partitions:
         if not partition.matches:
             where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
-            source = _side_text("origem", partition.source_rows, partition.source_sums,
-                                partition.source_nonfinite)
-            in_delta = _side_text("Delta", partition.delta_rows, partition.delta_sums,
-                                  partition.delta_nonfinite)
+            source = _side_text(
+                "origem", partition.source_rows, partition.source_sums, partition.source_nonfinite
+            )
+            in_delta = _side_text(
+                "Delta", partition.delta_rows, partition.delta_sums, partition.delta_nonfinite
+            )
             print(f"  DIFERENÇA {where}: {source}, {in_delta}")
     verdict = "contagens e somas iguais" if report.matches else "com diferenças"
     print(f"  {len(report.partitions)} partição(ões) conferida(s), {verdict}")
@@ -803,8 +928,7 @@ def _load(
     conflito."""
     problems = schema.check_models(args.metadata)
     if problems:
-        print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ",
-              file=sys.stderr)
+        print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ", file=sys.stderr)
         return 2
     # A origem num esquema que a biblioteca não lê, ou no S3 sem região, é erro de uso.
     try:
@@ -862,8 +986,9 @@ def _existing_table(
     impressa quando ela não está no modelo ou não tem Delta."""
     table = args.metadata.tables.get(args.table)
     if table is None:
-        print(f"serialize-db {command}: a tabela {args.table} não está nos modelos",
-              file=sys.stderr)
+        print(
+            f"serialize-db {command}: a tabela {args.table} não está nos modelos", file=sys.stderr
+        )
         return None
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
@@ -908,8 +1033,11 @@ def _channel(
     os dois, lista os canais do ambiente. 2 com um só dos dois, no canal ``current``, no snapshot
     ausente ou arquivado e no conflito de escrita."""
     if (args.name is None) != (args.snapshot is None):
-        print("serialize-db channel: informe --name e --snapshot juntos, ou nenhum dos dois para "
-              "listar os canais", file=sys.stderr)
+        print(
+            "serialize-db channel: informe --name e --snapshot juntos, ou nenhum dos dois para "
+            "listar os canais",
+            file=sys.stderr,
+        )
         return 2
     db = Database(args.root, args.environment, args.metadata)
     control, _ = delta.read_snapshots(db.storage, db.environment)
@@ -940,8 +1068,9 @@ def _vacuum(
     control, _ = delta.read_snapshots(db.storage, db.environment)
     verb = "apagado(s)" if args.apply else "a apagar"
     for name, (_, uri) in _existing_tables(db).items():
-        listed = delta.vacuum_keeping_snapshots(uri, control, name, db.storage,
-                                                args.retention_hours, args.apply, args.full)
+        listed = delta.vacuum_keeping_snapshots(
+            uri, control, name, db.storage, args.retention_hours, args.apply, args.full
+        )
         print(f"{name}: {len(listed)} arquivo(s) {verb}")
         for path in listed:
             print(f"    {path}")
@@ -969,25 +1098,33 @@ def _compact(
         return 2
     table, uri = found
     if schema.table_options(table).partition_by is not None and not args.partitions:
-        print("serialize-db compact: informe --partitions numa tabela particionada",
-              file=sys.stderr)
+        print(
+            "serialize-db compact: informe --partitions numa tabela particionada", file=sys.stderr
+        )
         return 2
     current = delta.open_table(uri, db.storage).version()
     control, _ = delta.read_snapshots(db.storage, db.environment)
     for name, versions in control["snapshots"].items():
         if versions.get(table.name) == current:
-            print(f"serialize-db compact: o snapshot {name} está na versão atual {current} de "
-                  f"{table.name}; compacte antes de um snapshot", file=sys.stderr)
+            print(
+                f"serialize-db compact: o snapshot {name} está na versão atual {current} de "
+                f"{table.name}; compacte antes de um snapshot",
+                file=sys.stderr,
+            )
             return 2
     started = time.perf_counter()
     metrics = delta.compact(uri, table, args.partitions or [], db.storage)
     # Sem arquivos que caibam juntos no tamanho alvo, o delta-rs não grava nem commita.
     if metrics["numFilesAdded"] == 0 and metrics["numFilesRemoved"] == 0:
-        print(f"{table.name}: nada a juntar em {metrics['totalConsideredFiles']} arquivo(s), "
-              f"nenhum commit, {_measure(started)}")
+        print(
+            f"{table.name}: nada a juntar em {metrics['totalConsideredFiles']} arquivo(s), "
+            f"nenhum commit, {_measure(started)}"
+        )
         return 0
-    print(f"{table.name}: {metrics['numFilesAdded']} arquivo(s) gravado(s), "
-          f"{metrics['numFilesRemoved']} removido(s), {_measure(started)}")
+    print(
+        f"{table.name}: {metrics['numFilesAdded']} arquivo(s) gravado(s), "
+        f"{metrics['numFilesRemoved']} removido(s), {_measure(started)}"
+    )
     return 0
 
 
@@ -1005,14 +1142,18 @@ def _archive(
     control, _ = delta.read_snapshots(storage, db.environment)
     entry = control["snapshots"].get(args.name)
     if entry is None:
-        print(f"serialize-db archive: o snapshot {args.name} não está em snapshots",
-              file=sys.stderr)
+        print(
+            f"serialize-db archive: o snapshot {args.name} não está em snapshots", file=sys.stderr
+        )
         return 2
     # Os canais conferidos antes da cópia: archive_snapshot só os confere depois dela.
     pointing = delta.channels_pointing(control, args.name)
     if pointing:
-        print(f"serialize-db archive: o snapshot {args.name} é o do canal {', '.join(pointing)}; "
-              "mova o canal antes (serialize-db channel)", file=sys.stderr)
+        print(
+            f"serialize-db archive: o snapshot {args.name} é o do canal {', '.join(pointing)}; "
+            "mova o canal antes (serialize-db channel)",
+            file=sys.stderr,
+        )
         return 2
     pending = []
     for name, version in sorted(entry.items()):
@@ -1033,8 +1174,10 @@ def _archive(
         except ExecutionConflict as error:
             print(f"serialize-db archive: conflito na cópia de {name}: {error}", file=sys.stderr)
             return 2
-        print(f"{name}: versão {version} copiada para {destination}, versão {copied} no arquivo, "
-              f"{_measure(started)}")
+        print(
+            f"{name}: versão {version} copiada para {destination}, versão {copied} no arquivo, "
+            f"{_measure(started)}"
+        )
     try:
         delta.archive_snapshot(storage, db.environment, args.name)
     except (ValueError, ConflictError) as error:
@@ -1064,11 +1207,11 @@ def _export(
         print(f"serialize-db export: destino não vazio: {args.destination}", file=sys.stderr)
         return 2
     started = time.perf_counter()
-    files = delta.export_snapshot(uri, table, args.destination, db.storage, args.version,
-                                  args.mode)
+    files = delta.export_snapshot(uri, table, args.destination, db.storage, args.version, args.mode)
     version = "" if args.version is None else f" da versão {args.version}"
-    print(f"{table.name}: {len(files)} arquivo(s) em {args.destination}{version}, "
-          f"{_measure(started)}")
+    print(
+        f"{table.name}: {len(files)} arquivo(s) em {args.destination}{version}, {_measure(started)}"
+    )
     return 0
 
 

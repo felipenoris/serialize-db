@@ -56,18 +56,32 @@ TUDO = sa.Table(
     sa.Column("data_str", sa.String(10), nullable=False, comment="Partição AAAA-MM-DD de data"),
     sa.Index("ix_tudo_data_nome", "data", "nome", unique=True),
     comment="Todos os tipos do contrato",
-    info={"serialize_db": {
-        "partition_by": ["data_str"], "partition_source": "data", "sort_key": ["data", "nome"],
-        "redshift": {"diststyle": "KEY", "distkey": "id"},
-    }},
+    info={
+        "serialize_db": {
+            "partition_by": ["data_str"],
+            "partition_source": "data",
+            "sort_key": ["data", "nome"],
+            "redshift": {"diststyle": "KEY", "distkey": "id"},
+        }
+    },
 )
 
 EXPECTED_ARROW = {
-    "id": pa.int64(), "data": pa.date32(), "nome": pa.string(), "to": pa.string(),
-    "valor": pa.decimal128(18, 2), "spread": pa.float64(), "parcelas": pa.int16(),
-    "sistema": pa.int32(), "ativa": pa.bool_(), "observacao": pa.string(), "meta": pa.string(),
-    "timestamp": pa.timestamp("us"), "carimbo_utc": pa.timestamp("us", tz="UTC"),
-    "chave": pa.string(), "data_str": pa.string(),
+    "id": pa.int64(),
+    "data": pa.date32(),
+    "nome": pa.string(),
+    "to": pa.string(),
+    "valor": pa.decimal128(18, 2),
+    "spread": pa.float64(),
+    "parcelas": pa.int16(),
+    "sistema": pa.int32(),
+    "ativa": pa.bool_(),
+    "observacao": pa.string(),
+    "meta": pa.string(),
+    "timestamp": pa.timestamp("us"),
+    "carimbo_utc": pa.timestamp("us", tz="UTC"),
+    "chave": pa.string(),
+    "data_str": pa.string(),
 }
 
 EXPECTED_DUCKDB_DDL = """CREATE TABLE "tudo" (
@@ -131,8 +145,9 @@ class Ruim(RuimBase):
         sa.ForeignKey("tudo.id", deferrable=True, initially="DEFERRED"),
         comment="Referência",
     )
-    data_tudo: Mapped[datetime.date] = mapped_column(sa.Date,
-                                                     comment="Alvo de índice único, sem chave")
+    data_tudo: Mapped[datetime.date] = mapped_column(
+        sa.Date, comment="Alvo de índice único, sem chave"
+    )
     nome_tudo: Mapped[str] = mapped_column(
         sa.String(100), comment="Alvo de índice único, sem chave"
     )
@@ -142,14 +157,18 @@ class Ruim(RuimBase):
     sigla: Mapped[str] = mapped_column(sa.VARCHAR, comment="Subclasse de String sem comprimento")
     codigo: Mapped[str] = mapped_column(sa.CHAR, comment="Subclasse de String sem comprimento")
     peso: Mapped[bytes] = mapped_column(sa.LargeBinary, comment="Fora do contrato")
-    situacao: Mapped[str] = mapped_column(sa.Enum("ativa", "encerrada", name="situacao"),
-                                          comment="Enum, cuja lista nada confere")
-    saldo: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(39, 2),
-                                                   comment="Acima dos 38 dígitos do DECIMAL")
-    taxa: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(10, 12),
-                                                  comment="Escala acima da precisão")
-    fracao: Mapped[decimal.Decimal] = mapped_column(sa.Numeric(0, 0),
-                                                    comment="Precisão zero, e não o padrão 18")
+    situacao: Mapped[str] = mapped_column(
+        sa.Enum("ativa", "encerrada", name="situacao"), comment="Enum, cuja lista nada confere"
+    )
+    saldo: Mapped[decimal.Decimal] = mapped_column(
+        sa.Numeric(39, 2), comment="Acima dos 38 dígitos do DECIMAL"
+    )
+    taxa: Mapped[decimal.Decimal] = mapped_column(
+        sa.Numeric(10, 12), comment="Escala acima da precisão"
+    )
+    fracao: Mapped[decimal.Decimal] = mapped_column(
+        sa.Numeric(0, 0), comment="Precisão zero, e não o padrão 18"
+    )
 
 
 # A tabela referenciada por Ruim, no mesmo MetaData, para a chave estrangeira resolver.
@@ -178,8 +197,13 @@ def test_arrow_schema_maps_every_contract_type() -> None:
 
 @pytest.mark.parametrize(
     "kind",
-    [sa.Float, sa.LargeBinary, sa.ARRAY(sa.Integer), sa.Interval,
-     pytest.param(sa.Enum("a", "b", name="letra"), id="Enum")],
+    [
+        sa.Float,
+        sa.LargeBinary,
+        sa.ARRAY(sa.Integer),
+        sa.Interval,
+        pytest.param(sa.Enum("a", "b", name="letra"), id="Enum"),
+    ],
     ids=str,
 )
 def test_arrow_schema_refuses_foreign_types(
@@ -276,8 +300,9 @@ def test_table_options_defaults_and_keys() -> None:
     """Os padrões sem `info`, as chaves do modelo e de `keys`, e a partição de uma coluna só."""
     # A tabela sem info: os padrões, e a chave primária em keys.
     plain = sa.Table("simples", sa.MetaData(), sa.Column("id", sa.BigInteger, primary_key=True))
-    defaults = schema.TableOptions(partition_by=None, partition_source=None, sort_key=(),
-                                   redshift={}, keys=(("id",),))
+    defaults = schema.TableOptions(
+        partition_by=None, partition_source=None, sort_key=(), redshift={}, keys=(("id",),)
+    )
     assert schema.table_options(plain) == defaults
 
     # As UniqueConstraint de cad_contratos e de cad_aliquotas e o índice único de TUDO são chaves.
@@ -293,9 +318,12 @@ def test_table_options_defaults_and_keys() -> None:
     assert schema.table_options(adjusted).keys == (("id",), ("nome",))
 
     # Duas colunas de partição são ContractError.
-    two_partitions = sa.Table("duas", sa.MetaData(),
-                              sa.Column("id", sa.BigInteger, primary_key=True),
-                              info={"serialize_db": {"partition_by": ["a", "b"]}})
+    two_partitions = sa.Table(
+        "duas",
+        sa.MetaData(),
+        sa.Column("id", sa.BigInteger, primary_key=True),
+        info={"serialize_db": {"partition_by": ["a", "b"]}},
+    )
     with pytest.raises(ContractError, match="duas: uma coluna de partição no máximo"):
         schema.table_options(two_partitions)
 
@@ -313,9 +341,14 @@ def keyed_table(
     for position, names in enumerate(index_columns):
         indexes.append(sa.Index(f"ix_chaves_{position}", *names, unique=True))
     indexes.append(sa.Index("ix_chaves_comum", "c3"))
-    return sa.Table("chaves", sa.MetaData(),
-                    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-                    *columns, *constraints, *indexes)
+    return sa.Table(
+        "chaves",
+        sa.MetaData(),
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        *columns,
+        *constraints,
+        *indexes,
+    )
 
 
 def test_keys_follow_the_column_names_in_each_group() -> None:
@@ -337,9 +370,7 @@ def test_keys_follow_the_column_names_in_each_group() -> None:
 def test_sql_type_per_dialect() -> None:
     """Cada tipo do contrato no texto de cada motor."""
     duckdb_types = {column.name: schema.sql_type(column, "duckdb") for column in TUDO.columns}
-    redshift_types = {
-        column.name: schema.sql_type(column, "redshift") for column in TUDO.columns
-    }
+    redshift_types = {column.name: schema.sql_type(column, "redshift") for column in TUDO.columns}
     assert duckdb_types["valor"] == redshift_types["valor"] == "DECIMAL(18, 2)"
     assert duckdb_types["nome"] == redshift_types["nome"] == "VARCHAR(100)"
     assert duckdb_types["observacao"] == "VARCHAR"
@@ -350,7 +381,10 @@ def test_sql_type_per_dialect() -> None:
     assert duckdb_types["timestamp"] == redshift_types["timestamp"] == "TIMESTAMP"
     assert duckdb_types["carimbo_utc"] == redshift_types["carimbo_utc"] == "TIMESTAMPTZ"
     assert (duckdb_types["parcelas"], duckdb_types["sistema"], duckdb_types["id"]) == (
-        "SMALLINT", "INTEGER", "BIGINT")
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+    )
 
 
 def test_ddl_per_dialect() -> None:
@@ -364,8 +398,9 @@ def test_ddl_per_dialect() -> None:
 # Os ids evitam "redshift", o marcador da suíte Redshift: o id do parâmetro vira palavra-chave do
 # teste, e o conftest pula o teste com essa palavra-chave quando SERIALIZE_DB_TEST_REDSHIFT_SCHEMA
 # falta.
-@pytest.mark.parametrize("dialect", ["duckdb", "redshift"],
-                         ids=["dialect_duckdb", "dialect_redshift"])
+@pytest.mark.parametrize(
+    "dialect", ["duckdb", "redshift"], ids=["dialect_duckdb", "dialect_redshift"]
+)
 def test_ddl_quotes_every_identifier(
     dialect: str,
 ) -> None:
@@ -389,9 +424,12 @@ def test_ddl_runs_in_duckdb_memory() -> None:
     connection.execute(schema.ddl(TUDO, "duckdb"))
     created = connection.execute("SELECT count(*) FROM information_schema.tables").fetchone()
     assert created == (13,)
-    types = dict(connection.execute(
-        "SELECT column_name, data_type FROM information_schema.columns "
-        "WHERE table_name = 'tudo'").fetchall())
+    types = dict(
+        connection.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_name = 'tudo'"
+        ).fetchall()
+    )
     assert types["valor"] == "DECIMAL(18,2)"
     assert types["carimbo_utc"] == "TIMESTAMP WITH TIME ZONE"
     assert types["meta"] == "JSON"
@@ -435,14 +473,16 @@ def test_ddl_temporary_table() -> None:
 
 # ---------------------------------------------------------------- o cast por lote
 
-ACCEPTED_BATCH = pa.RecordBatch.from_pydict({
-    "nome": pa.array(["a", "b"], pa.large_string()),
-    "id": pa.array([1, 2], pa.int32()),
-    "valor": pa.array([10, 20], pa.int64()),
-    "data": pa.array([datetime.datetime(2026, 8, 31)] * 2, pa.timestamp("ns")),
-    "data_str": ["2026-08-31", "2026-08-31"],
-    "extra": [1, 2],
-})
+ACCEPTED_BATCH = pa.RecordBatch.from_pydict(
+    {
+        "nome": pa.array(["a", "b"], pa.large_string()),
+        "id": pa.array([1, 2], pa.int32()),
+        "valor": pa.array([10, 20], pa.int64()),
+        "data": pa.array([datetime.datetime(2026, 8, 31)] * 2, pa.timestamp("ns")),
+        "data_str": ["2026-08-31", "2026-08-31"],
+        "extra": [1, 2],
+    }
+)
 
 
 @pytest.mark.parametrize("kind", ["batch", "table"])
@@ -556,7 +596,8 @@ def test_cast_integer_into_numeric_of_any_precision() -> None:
     do tipo inteiro, 19 dígitos mais a escala num `int64` e 10 num `int32` (leituras de
     2026-09-22 e 2026-09-28)."""
     table = sa.Table(
-        "decimais", sa.MetaData(),
+        "decimais",
+        sa.MetaData(),
         sa.Column("pequeno", sa.Numeric(5, 2)),
         sa.Column("fino", sa.Numeric(10, 4)),
         sa.Column("largo", sa.Numeric(38, 2)),
@@ -564,9 +605,15 @@ def test_cast_integer_into_numeric_of_any_precision() -> None:
         sa.Column("minimo", sa.Numeric(38, 29)),
     )
     integers = pa.array([1, 999], pa.int64())
-    batch = pa.RecordBatch.from_pydict({"pequeno": integers, "fino": integers, "largo": integers,
-                                        "miudo": integers,
-                                        "minimo": pa.array([1, 999], pa.int32())})
+    batch = pa.RecordBatch.from_pydict(
+        {
+            "pequeno": integers,
+            "fino": integers,
+            "largo": integers,
+            "miudo": integers,
+            "minimo": pa.array([1, 999], pa.int32()),
+        }
+    )
     converted = schema.cast(batch, table)
     expected = [decimal.Decimal("1.00"), decimal.Decimal("999.00")]
     assert converted.column("pequeno").to_pylist() == expected
@@ -590,8 +637,9 @@ def test_cast_reads_a_pandas_category_by_its_values() -> None:
     exata em `Numeric(18, 2)` e o texto em `String(n)`. O double fora da escala é recusado como
     fora do dicionário; o cast do PyArrow de um dicionário para decimal o arredonda em silêncio
     (leitura de 2026-09-28)."""
-    categories = pd.DataFrame({"valor": pd.Categorical([1.25, 2.5, 1.25]),
-                               "nome": pd.Categorical(["a", "b", "a"])})
+    categories = pd.DataFrame(
+        {"valor": pd.Categorical([1.25, 2.5, 1.25]), "nome": pd.Categorical(["a", "b", "a"])}
+    )
     frame = pa.Table.from_pandas(categories, preserve_index=False)
     assert pa.types.is_dictionary(frame.schema.field("valor").type)
     converted = schema.cast(frame, TUDO)
@@ -611,8 +659,10 @@ def test_cast_float16_into_numeric_through_float64() -> None:
     fora da escala é recusado como o double, em `REFUSED_BATCHES`."""
     halves = pa.array(np.array([1.5, 0.25], dtype=np.float16))
     converted = schema.cast(batch_of_tudo(valor=halves), TUDO)
-    assert converted.column("valor").to_pylist() == [decimal.Decimal("1.50"),
-                                                     decimal.Decimal("0.25")]
+    assert converted.column("valor").to_pylist() == [
+        decimal.Decimal("1.50"),
+        decimal.Decimal("0.25"),
+    ]
 
 
 # O meio-dia de 2026-08-31, sem fuso e em UTC, dos timestamps recusados.
@@ -622,42 +672,62 @@ NOON_UTC = datetime.datetime(2026, 8, 31, 12, tzinfo=datetime.timezone.utc)
 REFUSED_BATCHES = {
     "nulo em NOT NULL": (batch_of_tudo(id=pa.array([1, None], pa.int64())), "id"),
     "double fora da escala": (batch_of_tudo(valor=pa.array([1.236])), "valor"),
-    "hora numa coluna Date": (
-        batch_of_tudo(data=pa.array([NOON], pa.timestamp("us"))), "data"),
+    "hora numa coluna Date": (batch_of_tudo(data=pa.array([NOON], pa.timestamp("us"))), "data"),
     "struct em JSON": (batch_of_tudo(meta=pa.array([{"k": 1}])), "meta"),
     "texto acima de String(100)": (batch_of_tudo(nome=pa.array(["x" * 101])), "nome"),
     "texto acima de String(2) em bytes": (batch_of_tudo(to=pa.array(["ãã"])), "to"),
     # O texto chega em outros tipos Arrow e é medido depois da conversão para string.
     "large_string acima de String(2)": (
-        batch_of_tudo(to=pa.array(["xyz"], pa.large_string())), "to"),
-    "string_view acima de String(2)": (
-        batch_of_tudo(to=pa.array(["xyz"], pa.string_view())), "to"),
+        batch_of_tudo(to=pa.array(["xyz"], pa.large_string())),
+        "to",
+    ),
+    "string_view acima de String(2)": (batch_of_tudo(to=pa.array(["xyz"], pa.string_view())), "to"),
     "dicionário acima de String(2)": (
-        batch_of_tudo(to=pa.array(["xyz"]).dictionary_encode()), "to"),
+        batch_of_tudo(to=pa.array(["xyz"]).dictionary_encode()),
+        "to",
+    ),
     "texto acima dos 36 bytes do Uuid": (
-        batch_of_tudo(chave=pa.array([str(uuid.UUID(int=1)) + "x"])), "chave"),
+        batch_of_tudo(chave=pa.array([str(uuid.UUID(int=1)) + "x"])),
+        "chave",
+    ),
     # O dicionário, a category do pandas, é conferido pelos seus valores.
     "dicionário de double fora da escala": (
-        batch_of_tudo(valor=pa.array([1.236]).dictionary_encode()), "valor"),
+        batch_of_tudo(valor=pa.array([1.236]).dictionary_encode()),
+        "valor",
+    ),
     "dicionário de timestamp com hora numa coluna Date": (
-        batch_of_tudo(data=pa.array([NOON], pa.timestamp("us")).dictionary_encode()), "data"),
+        batch_of_tudo(data=pa.array([NOON], pa.timestamp("us")).dictionary_encode()),
+        "data",
+    ),
     "dicionário de timestamp com fuso numa coluna sem fuso": (
-        batch_of_tudo(timestamp=pa.array(
-            [NOON_UTC], pa.timestamp("us", tz="America/Sao_Paulo")).dictionary_encode()),
-        "timestamp"),
+        batch_of_tudo(
+            timestamp=pa.array(
+                [NOON_UTC], pa.timestamp("us", tz="America/Sao_Paulo")
+            ).dictionary_encode()
+        ),
+        "timestamp",
+    ),
     "float16 fora da escala": (
-        batch_of_tudo(valor=pa.array(np.array([1.236], dtype=np.float16))), "valor"),
+        batch_of_tudo(valor=pa.array(np.array([1.236], dtype=np.float16))),
+        "valor",
+    ),
     "escala perdida": (
-        batch_of_tudo(valor=pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))), "valor"),
+        batch_of_tudo(valor=pa.array([decimal.Decimal("1.234")], pa.decimal128(20, 3))),
+        "valor",
+    ),
     "inteiro acima da precisão": (batch_of_tudo(valor=pa.array([10**17], pa.int64())), "valor"),
     "nanossegundo não nulo": (
-        batch_of_tudo(timestamp=pa.array([1], pa.timestamp("ns"))), "timestamp"),
+        batch_of_tudo(timestamp=pa.array([1], pa.timestamp("ns"))),
+        "timestamp",
+    ),
     "fuso numa coluna sem fuso": (
         batch_of_tudo(timestamp=pa.array([NOON_UTC], pa.timestamp("us", tz="UTC"))),
-        "timestamp"),
+        "timestamp",
+    ),
     "sem fuso numa coluna com fuso": (
         batch_of_tudo(carimbo_utc=pa.array([NOON], pa.timestamp("us"))),
-        "carimbo_utc"),
+        "carimbo_utc",
+    ),
     "estouro de inteiro": (batch_of_tudo(parcelas=pa.array([40000], pa.int32())), "parcelas"),
     "tipo sem conversão": (batch_of_tudo(sistema=pa.array([{"a": 1}])), "sistema"),
     "nenhuma coluna do contrato": (batch_of_tudo(extra=[1]), "extra"),
@@ -732,10 +802,14 @@ def test_check_models_lists_two_partition_columns() -> None:
     """Duas colunas em `partition_by` entram na lista de violações, sem interromper a conferência
     das outras tabelas."""
     metadata = sa.MetaData()
-    sa.Table("duas", metadata,
-             sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-             sa.Column("a", sa.String(10)), sa.Column("b", sa.String(10)),
-             info={"serialize_db": {"partition_by": ["a", "b"]}})
+    sa.Table(
+        "duas",
+        metadata,
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+        sa.Column("a", sa.String(10)),
+        sa.Column("b", sa.String(10)),
+        info={"serialize_db": {"partition_by": ["a", "b"]}},
+    )
     sa.Table("sem_chave", metadata, sa.Column("nome", sa.String(10)))
     assert schema.check_models(metadata) == [
         "duas: uma coluna de partição no máximo, recebidas ['a', 'b']",
@@ -805,15 +879,19 @@ def foreign_key_model(
     estrangeira das colunas locais informadas para as colunas apontadas informadas."""
     metadata = sa.MetaData()
     sa.Table(
-        "alvo", metadata,
+        "alvo",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-        sa.Column("a", sa.Integer, nullable=False), sa.Column("b", sa.Integer, nullable=False),
+        sa.Column("a", sa.Integer, nullable=False),
+        sa.Column("b", sa.Integer, nullable=False),
         sa.UniqueConstraint("a", "b"),
     )
     sa.Table(
-        "origem", metadata,
+        "origem",
+        metadata,
         sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
-        sa.Column("a", sa.Integer), sa.Column("b", sa.Integer),
+        sa.Column("a", sa.Integer),
+        sa.Column("b", sa.Integer),
         sa.ForeignKeyConstraint(local_columns, referenced),
     )
     return metadata
@@ -887,8 +965,13 @@ def test_check_models_lists_the_reference_model_defects() -> None:
         "strings": len(strings),
         "unkeyed": len(unkeyed),
     }
-    assert sizes == {"tables": 12, "foreign_keys": 14, "deferrable": 12, "strings": 20,
-                     "unkeyed": 3}
+    assert sizes == {
+        "tables": 12,
+        "foreign_keys": 14,
+        "deferrable": 12,
+        "strings": 20,
+        "unkeyed": 3,
+    }
 
 
 def test_client_model_is_clean() -> None:
@@ -957,7 +1040,8 @@ def test_check_schema_files_reports_stale_files_and_the_final_newline(
     stale = ["cad_b.delta.json", "cad_b.duckdb.sql", "cad_b.redshift.sql"]
     diff = schema.check_schema_files(reduced, directory)
     assert [line for line in diff if line.startswith("--- ")] == [
-        f"--- {directory}/{name}" for name in stale]
+        f"--- {directory}/{name}" for name in stale
+    ]
     assert '-CREATE TABLE "cad_b" (' in diff
     added = [line for line in diff if line.startswith("+") and not line.startswith("+++ ")]
     assert added == []

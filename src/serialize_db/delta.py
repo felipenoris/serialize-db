@@ -649,8 +649,12 @@ def file_from_footer(
             continue
         minimum[field.name] = convert(low)
         maximum[field.name] = convert(high)
-    return RegisteredFile(path=path, size=int(size), rows=int(rows),
-                          stats={"min": minimum, "max": maximum, "null_count": nulls})
+    return RegisteredFile(
+        path=path,
+        size=int(size),
+        rows=int(rows),
+        stats={"min": minimum, "max": maximum, "null_count": nulls},
+    )
 
 
 def _exact_statistic(
@@ -700,8 +704,12 @@ def _action_stats(
             continue
         minimum[field.name] = _json_value(low)
         maximum[field.name] = _json_value(high)
-    stats = {"numRecords": file.rows, "minValues": minimum, "maxValues": maximum,
-             "nullCount": nulls}
+    stats = {
+        "numRecords": file.rows,
+        "minValues": minimum,
+        "maxValues": maximum,
+        "nullCount": nulls,
+    }
     return json.dumps(stats, allow_nan=False)
 
 
@@ -773,7 +781,8 @@ def _check_file_size(
     found = storage.size(storage.join(table_path, file.path))
     if found != file.size:
         raise RegistrationRefused(
-            f"{file.path}: ausente ou com {found} bytes, e a ação declara {file.size}")
+            f"{file.path}: ausente ou com {found} bytes, e a ação declara {file.size}"
+        )
 
 
 def _check_footer_schema(
@@ -800,7 +809,8 @@ def _check_footer_schema(
             order.append(column.name)
     if partition_by in physical:
         raise RegistrationRefused(
-            f"{file.path}: a coluna de partição {partition_by} está dentro do arquivo")
+            f"{file.path}: a coluna de partição {partition_by} está dentro do arquivo"
+        )
     expected = []
     for field in contract:
         if field.name == partition_by:
@@ -811,7 +821,8 @@ def _check_footer_schema(
         if physical[field.name] not in allowed:
             raise RegistrationRefused(
                 f"{file.path}: {field.name} em {physical[field.name]}, "
-                f"fora de {sorted(allowed)} para {field.type}")
+                f"fora de {sorted(allowed)} para {field.type}"
+            )
         expected.append(field.name)
     if order != expected:
         raise RegistrationRefused(f"{file.path}: colunas na ordem {order}, e o contrato {expected}")
@@ -868,7 +879,8 @@ def _check_file_rows(
     """As linhas do rodapé iguais às que o arquivo declara, que viram o ``numRecords`` da ação."""
     if footer.metadata.num_rows != file.rows:
         raise RegistrationRefused(
-            f"{file.path}: {footer.metadata.num_rows} linhas no rodapé, {file.rows} declaradas")
+            f"{file.path}: {footer.metadata.num_rows} linhas no rodapé, {file.rows} declaradas"
+        )
 
 
 def _check_row_counts(
@@ -1040,8 +1052,9 @@ def _duckdb_reading(
         measures.append(f"min({quoted(name)})")
         measures.append(f"max({quoted(name)})")
     where = _partition_filter(table_options(table).partition_by, value)
-    text = (f"SELECT {', '.join(measures)} FROM delta_scan({literal(uri)}, "
-            f"version := {version}){where}")
+    text = (
+        f"SELECT {', '.join(measures)} FROM delta_scan({literal(uri)}, version := {version}){where}"
+    )
     connection = storage.duckdb_connect(config=environment_limits())
     try:
         row = connection.execute(text).fetchone()
@@ -1127,15 +1140,21 @@ def _read_back_problems(
     lidos: um máximo abaixo do lido podaria o arquivo que tem a linha.
     """
     problems = []
-    counts = {"esperadas": expected_rows, "log": log_reading.rows,
-              "delta-rs": arrow_reading.rows, "delta_scan": duckdb_reading.rows}
+    counts = {
+        "esperadas": expected_rows,
+        "log": log_reading.rows,
+        "delta-rs": arrow_reading.rows,
+        "delta_scan": duckdb_reading.rows,
+    }
     if len(set(counts.values())) > 1:
         problems.append(f"linhas {counts}")
     arrow_extremes = (arrow_reading.minimum, arrow_reading.maximum)
     duckdb_extremes = (duckdb_reading.minimum, duckdb_reading.maximum)
     if arrow_extremes != duckdb_extremes:
-        problems.append(f"chave {keys}: delta-rs {arrow_reading.minimum}..{arrow_reading.maximum}"
-                        f", delta_scan {duckdb_reading.minimum}..{duckdb_reading.maximum}")
+        problems.append(
+            f"chave {keys}: delta-rs {arrow_reading.minimum}..{arrow_reading.maximum}"
+            f", delta_scan {duckdb_reading.minimum}..{duckdb_reading.maximum}"
+        )
     contract = arrow_schema(table)
     for index, name in enumerate(keys):
         low, high = log_reading.minimum[index], log_reading.maximum[index]
@@ -1144,8 +1163,9 @@ def _read_back_problems(
         if not exact or low is None or high is None or read_low is None:
             continue
         if low > read_low or high < read_high:
-            problems.append(f"{name}: o log registra {low}..{high}, e os dados têm "
-                            f"{read_low}..{read_high}")
+            problems.append(
+                f"{name}: o log registra {low}..{high}, e os dados têm {read_low}..{read_high}"
+            )
     return problems
 
 
@@ -1184,14 +1204,16 @@ def read_back(
     log_reading = _log_reading(dt, table, value, keys)
     arrow_reading = _arrow_reading(dt, table, value, keys)
     duckdb_reading = _duckdb_reading(uri, version, table, value, keys, storage)
-    problems = _read_back_problems(table, keys, expected_rows, log_reading, arrow_reading,
-                                   duckdb_reading)
+    problems = _read_back_problems(
+        table, keys, expected_rows, log_reading, arrow_reading, duckdb_reading
+    )
     if not problems:
         return
     dt.restore(version - 1)
     raise RegistrationRefused(
         f"{table.name} {partition_label(value)}: a releitura da versão {version} reprovou e a "
-        f"tabela voltou à versão {version - 1}: {'; '.join(problems)}")
+        f"tabela voltou à versão {version - 1}: {'; '.join(problems)}"
+    )
 
 
 # ---------------------------------------------------------------- a evolução do esquema
@@ -1339,7 +1361,8 @@ def reconcile(
     if diff.destructive:
         raise SchemaDiffRefused(
             f"{table.name}: diff destrutivo, só por rewrite(uri, table, storage, expressions): "
-            f"{'; '.join(diff.destructive)}")
+            f"{'; '.join(diff.destructive)}"
+        )
     fields = {}
     for field in delta_schema(table).fields:
         fields[field.name] = field
@@ -1404,7 +1427,8 @@ def _nonfinite_by_partition(
         rows = [(None, *counted)]
     else:
         rows = connection.execute(
-            f"SELECT {quoted(partition_by)}, {counts} FROM ({select}) GROUP BY 1").fetchall()
+            f"SELECT {quoted(partition_by)}, {counts} FROM ({select}) GROUP BY 1"
+        ).fetchall()
     found = {}
     for value, *counts in rows:
         found[value] = tuple(name for name, count in zip(doubles, counts) if count)
@@ -1425,8 +1449,10 @@ def _copy_rewrite(
         options = "FORMAT parquet, RETURN_STATS"
     else:
         target = uri
-        options = (f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), APPEND true, "
-                   "FILENAME_PATTERN 'rewrite_{uuid}', RETURN_STATS")
+        options = (
+            f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), APPEND true, "
+            "FILENAME_PATTERN 'rewrite_{uuid}', RETURN_STATS"
+        )
     cursor = connection.execute(f"COPY ({select}) TO {literal(target)} ({options})")
     names = [column[0] for column in cursor.description]
     rows = []
@@ -1523,8 +1549,9 @@ def rewrite(
         connection.close()
     actions, total = _rewritten_actions(written, table, uri, storage, nonfinite)
     partition_by = table_options(table).partition_by
-    _commit_actions(dt, table.name, partition_by, actions, value=None, metadata={},
-                    schema=delta_schema(table))
+    _commit_actions(
+        dt, table.name, partition_by, actions, value=None, metadata={}, schema=delta_schema(table)
+    )
     version = open_table(uri, storage).version()
     read_back(uri, table, None, total, storage)
     return version
@@ -1603,7 +1630,8 @@ def version_diff(
         except FileNotFoundError:
             raise LogUnavailable(
                 f"{table.name}: o log da versão {version} não existe; as partições alteradas entre "
-                f"{published} e {current} não podem ser lidas, publique a tabela inteira") from None
+                f"{published} e {current} não podem ser lidas, publique a tabela inteira"
+            ) from None
         changed.update(_changed_partitions(text, partition_by))
     return changed
 
@@ -1698,11 +1726,13 @@ def copy_manifest(
         if not _in_partitions(action, partition_columns, partitions):
             continue
         columns = _file_columns(storage, storage.join(table_path, action["path"]))
-        entries_by_columns.setdefault(columns, []).append({
-            "url": f"{uri.rstrip('/')}/{action['path']}",
-            "mandatory": True,
-            "meta": {"content_length": action["size_bytes"]},
-        })
+        entries_by_columns.setdefault(columns, []).append(
+            {
+                "url": f"{uri.rstrip('/')}/{action['path']}",
+                "mandatory": True,
+                "meta": {"content_length": action["size_bytes"]},
+            }
+        )
 
     # Um manifesto por lista, numerado pela ordem em que a lista apareceu.
     manifests = []
@@ -1775,9 +1805,11 @@ def snapshot(
     check_partition_value(name)
     control, fingerprint = read_snapshots(storage, environment)
     if name in control["snapshots"] or name in control.get("archived", {}):
-        raise ContractError(f"{environment}: o snapshot {name} já existe, e o nome não volta a ser "
-                            "usado, nem arquivado; grave o snapshot novo com outro nome e aponte "
-                            "o canal para ele com serialize-db channel")
+        raise ContractError(
+            f"{environment}: o snapshot {name} já existe, e o nome não volta a ser "
+            "usado, nem arquivado; grave o snapshot novo com outro nome e aponte "
+            "o canal para ele com serialize-db channel"
+        )
     control["snapshots"][name] = dict(sorted(versions.items()))
     _write_control(storage, environment, control, fingerprint)
     return control
@@ -1829,8 +1861,10 @@ def archive_snapshot(
         raise ValueError(f"{environment}: o snapshot {name} não está em snapshots")
     pointing = channels_pointing(control, name)
     if pointing:
-        raise ValueError(f"{environment}: o snapshot {name} é o do canal {', '.join(pointing)}; "
-                         "mova o canal antes (serialize-db channel)")
+        raise ValueError(
+            f"{environment}: o snapshot {name} é o do canal {', '.join(pointing)}; "
+            "mova o canal antes (serialize-db channel)"
+        )
     control.setdefault("archived", {})[name] = control["snapshots"].pop(name)
     _write_control(storage, environment, control, fingerprint)
     return control
@@ -1882,12 +1916,16 @@ def set_channel(
     """
     check_partition_value(name)
     if name == CURRENT_CHANNEL:
-        raise ContractError(f"o canal {CURRENT_CHANNEL} é reservado: ele é a versão atual de cada "
-                            "tabela, e nada o move")
+        raise ContractError(
+            f"o canal {CURRENT_CHANNEL} é reservado: ele é a versão atual de cada "
+            "tabela, e nada o move"
+        )
     control, fingerprint = read_snapshots(storage, environment)
     if snapshot in control.get("archived", {}):
-        raise ValueError(f"{environment}: o snapshot {snapshot} está arquivado, e o vacuum não "
-                         "preserva as versões dele")
+        raise ValueError(
+            f"{environment}: o snapshot {snapshot} está arquivado, e o vacuum não "
+            "preserva as versões dele"
+        )
     if snapshot not in control["snapshots"]:
         raise ValueError(f"{environment}: o snapshot {snapshot} não está em snapshots")
     control.setdefault("channels", {})[name] = snapshot
@@ -1917,13 +1955,17 @@ def channel_snapshot(
     """
     # O canal reservado não fica no arquivo, e set_channel recusa criá-lo.
     if name == CURRENT_CHANNEL:
-        raise ContractError(f"o canal {CURRENT_CHANNEL} não fica no arquivo de controle: ele é a "
-                            "versão atual de cada tabela, sem snapshot")
+        raise ContractError(
+            f"o canal {CURRENT_CHANNEL} não fica no arquivo de controle: ele é a "
+            "versão atual de cada tabela, sem snapshot"
+        )
     snapshot = control.get("channels", {}).get(name)
     if snapshot is None:
-        raise ContractError(f"o canal {name} não existe no arquivo de controle; aponte-o com "
-                            f"serialize-db channel --name {name} --snapshot <nome>, ou leia a "
-                            f"versão atual pelo canal {CURRENT_CHANNEL}")
+        raise ContractError(
+            f"o canal {name} não existe no arquivo de controle; aponte-o com "
+            f"serialize-db channel --name {name} --snapshot <nome>, ou leia a "
+            f"versão atual pelo canal {CURRENT_CHANNEL}"
+        )
     return snapshot
 
 
@@ -1948,8 +1990,10 @@ def snapshot_versions(
     versions = control.get("snapshots", {}).get(name)
     if versions is None:
         if name in control.get("archived", {}):
-            raise ContractError(f"o snapshot {name} está arquivado: só o leitor Delta o lê, pela "
-                                f"cópia em arquivo/{name}/")
+            raise ContractError(
+                f"o snapshot {name} está arquivado: só o leitor Delta o lê, pela "
+                f"cópia em arquivo/{name}/"
+            )
         raise ContractError(f"o snapshot {name} não existe no arquivo de controle")
     return dict(versions)
 
@@ -2041,8 +2085,11 @@ def compact(
 
 
 # Os metadados da biblioteca que history lê de cada commit.
-_METADATA_KEYS = ("serialize_db_execution_id", "serialize_db_input_versions",
-                  "serialize_db_snapshot")
+_METADATA_KEYS = (
+    "serialize_db_execution_id",
+    "serialize_db_input_versions",
+    "serialize_db_snapshot",
+)
 
 
 def history(
@@ -2103,8 +2150,11 @@ def _copied_file(
         path=str(action["path"]),
         size=int(action["size_bytes"]),
         rows=int(action["num_records"]),
-        stats={"min": _present(action.get("min")), "max": _present(action.get("max")),
-               "null_count": _present(action.get("null_count"))},
+        stats={
+            "min": _present(action.get("min")),
+            "max": _present(action.get("max")),
+            "null_count": _present(action.get("null_count")),
+        },
     )
 
 
@@ -2164,8 +2214,10 @@ def _copy_destination(
     listed = set(pa.table(source.get_add_actions(flatten=True)).column("path").to_pylist())
     foreign = sorted(registered - listed)
     if foreign:
-        raise RegistrationRefused(f"{destination}: o destino registra {len(foreign)} arquivo(s) "
-                                  f"fora da versão {source.version()} da origem: {foreign[0]}")
+        raise RegistrationRefused(
+            f"{destination}: o destino registra {len(foreign)} arquivo(s) "
+            f"fora da versão {source.version()} da origem: {foreign[0]}"
+        )
     return registered
 
 
@@ -2251,16 +2303,29 @@ def deep_copy(
         started = time.perf_counter()
         actions = []
         for action in group:
-            storage.copy(storage.join(source_path, action["path"]),
-                         storage.join(target_path, action["path"]))
+            storage.copy(
+                storage.join(source_path, action["path"]), storage.join(target_path, action["path"])
+            )
             actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
         destination_table = open_table(destination, storage)
         # O esquema da versão no commit: o delta-rs grava o metaData novo quando ele difere do
         # destino, criado de outra versão.
-        _commit_actions(destination_table, str(metadata.name), partition_by, actions, value=value,
-                        metadata={}, schema=source.schema())
-        log.info("%s: %s copiada, %d arquivo(s) em %.1f s", metadata.name, label, len(actions),
-                 time.perf_counter() - started)
+        _commit_actions(
+            destination_table,
+            str(metadata.name),
+            partition_by,
+            actions,
+            value=value,
+            metadata={},
+            schema=source.schema(),
+        )
+        log.info(
+            "%s: %s copiada, %d arquivo(s) em %.1f s",
+            metadata.name,
+            label,
+            len(actions),
+            time.perf_counter() - started,
+        )
     # O esquema do destino contra o da versão: sem partição copiada, nenhum commit o trocou.
     copy = open_table(destination, storage)
     differences = _schema_differences(pa.schema(copy.schema()), contract)
@@ -2268,11 +2333,14 @@ def deep_copy(
         raise RegistrationRefused(
             f"{destination}: a cópia tem outro esquema que a versão {version} da origem, e "
             f"nenhuma partição copiada o trocou; copie para um destino novo: "
-            f"{'; '.join(differences)}")
+            f"{'; '.join(differences)}"
+        )
     by_delta, by_duckdb = _count_rows(destination, storage)
     if by_delta != total or by_duckdb != total:
-        raise RegistrationRefused(f"{destination}: a cópia tem {by_delta} linhas pelo delta-rs e "
-                                  f"{by_duckdb} pelo DuckDB, esperadas {total}")
+        raise RegistrationRefused(
+            f"{destination}: a cópia tem {by_delta} linhas pelo delta-rs e "
+            f"{by_duckdb} pelo DuckDB, esperadas {total}"
+        )
     return copy.version()
 
 

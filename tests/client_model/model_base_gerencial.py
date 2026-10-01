@@ -92,9 +92,7 @@ class Operacao(Base):
     operacao: Mapped[str] = mapped_column(String(50), comment="Código da operação")
     legado: Mapped[bool] = mapped_column(Boolean, comment="Se a operação vem do sistema legado")
     area: Mapped[str | None] = mapped_column(String(256), comment="Área responsável")
-    departamento: Mapped[str | None] = mapped_column(
-        String(20), comment="Departamento responsável"
-    )
+    departamento: Mapped[str | None] = mapped_column(String(20), comment="Departamento responsável")
     spread_basico: Mapped[float | None] = mapped_column(Double, comment="Spread básico")
     spread_risco: Mapped[float | None] = mapped_column(Double, comment="Spread de risco")
     spread_total: Mapped[float | None] = mapped_column(Double, comment="Spread total")

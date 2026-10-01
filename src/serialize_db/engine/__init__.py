@@ -46,9 +46,11 @@ from serialize_db.errors import ContractError
 __all__ = ["Appender", "BatchStream", "Engine", "duckdb", "redshift"]
 
 # A mensagem que recusa o que não é Arrow e aponta a conversão sem cópia.
-ARROW_ONLY = ("recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
-              "DataFrame vira pa.Table.from_pandas(frame, preserve_index=False) ou "
-              "pa.RecordBatch.from_pandas(frame, preserve_index=False)")
+ARROW_ONLY = (
+    "recebe pa.Table, pa.RecordBatch, pa.RecordBatchReader ou um iterável de lotes; um "
+    "DataFrame vira pa.Table.from_pandas(frame, preserve_index=False) ou "
+    "pa.RecordBatch.from_pandas(frame, preserve_index=False)"
+)
 
 
 class BatchStream(Protocol):

@@ -347,7 +347,27 @@ RATE_ORIGIN_ACCOUNTS = (10, 106, 31, 8, 34, 9, 4, 47, 103, 20, 5, 19, 43)
 RATE_DESTINATION_ACCOUNTS = (22, 25, 99, 24, 98, 50, 26, 21)
 RATE_FACTORS = (0.66, 0.55, -0.15, 1.0, 0.59895, -0.0465, -1.0, -0.0925, 0.0465)
 UPDATE_STATUS_IDS = (
-    1, 2, 5, 6, 7, 49, 50, 51, 52, 53, 127, 128, 129, 130, 151, 152, 178, 179, 180, 181, 182
+    1,
+    2,
+    5,
+    6,
+    7,
+    49,
+    50,
+    51,
+    52,
+    53,
+    127,
+    128,
+    129,
+    130,
+    151,
+    152,
+    178,
+    179,
+    180,
+    181,
+    182,
 )
 
 
@@ -504,7 +524,7 @@ def build_rel_contas_hierarquias(
     for account in ids:
         if account != root:
             ordered.append(account)
-    children = ordered[1:relation_count + 1]
+    children = ordered[1 : relation_count + 1]
     parents = []
     for position in range(relation_count):
         # O filho está na posição position + 1 da ordem, e o pai numa posição anterior.

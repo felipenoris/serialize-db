@@ -672,8 +672,9 @@ def checks(
         não rodam ficam fora da lista, e o relatório do motor as registra.
     :raises ContractError: um valor de ``partitions`` fora da regra da partição.
     """
-    found, _ = checks_and_not_run(table, partitions, foreign_keys, key_scope, pinned,
-                                  referenced, pinned_max_key)
+    found, _ = checks_and_not_run(
+        table, partitions, foreign_keys, key_scope, pinned, referenced, pinned_max_key
+    )
     return found
 
 

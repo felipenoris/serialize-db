@@ -195,9 +195,11 @@ def previous_entries(
 ) -> pa.Table:
     """Os lançamentos da última data-base, lidos da tabela ingerida no sandbox, na ordem da
     chave."""
-    statement = (sa.select(ENTRIES)
-                 .where(ENTRIES.c.data_base_str == previous)
-                 .order_by(ENTRIES.c.id_lancamento))
+    statement = (
+        sa.select(ENTRIES)
+        .where(ENTRIES.c.data_base_str == previous)
+        .order_by(ENTRIES.c.id_lancamento)
+    )
     return run.sandbox.query(statement)
 
 
@@ -371,8 +373,7 @@ def partition_counts(
     """As linhas de cada partição da tabela, pelo leitor Delta, em ordem de texto do valor."""
     partition_by = table_options(table).partition_by
     column = table.c[partition_by]
-    statement = (sa.select(column, sa.func.count().label("linhas"))
-                 .group_by(column).order_by(column))
+    statement = sa.select(column, sa.func.count().label("linhas")).group_by(column).order_by(column)
     rows = reader.query(statement).to_pylist()
     return {row[partition_by]: row["linhas"] for row in rows}
 
@@ -474,9 +475,9 @@ def test_monthly_pipeline_publishes_the_next_base_date(
     # O leitor Delta: as partições antigas com as linhas da carga e a nova com as geradas, e os
     # lançamentos novos com a data-base nova, o carimbo da execução, os ids acima do maior da base
     # e os meses projetados todos posteriores à data-base.
-    new_entries = (sa.select(ENTRIES.c.id_lancamento, ENTRIES.c.data_base, ENTRIES.c.data,
-                             ENTRIES.c.timestamp)
-                   .where(ENTRIES.c.data_base_str == NEXT_BASE_DATE))
+    new_entries = sa.select(
+        ENTRIES.c.id_lancamento, ENTRIES.c.data_base, ENTRIES.c.data, ENTRIES.c.timestamp
+    ).where(ENTRIES.c.data_base_str == NEXT_BASE_DATE)
     with db.open_delta(channel=delta.CURRENT_CHANNEL) as reader:
         for table in PRODUCED:
             counts = partition_counts(reader, table)
@@ -500,8 +501,18 @@ def test_following_month_runs_over_the_published_partition(
     em 2026-08-31, lê a partição publicada como a última data-base, gera a dela com um mês
     projetado a menos nos lançamentos e publica mais uma versão em cada tabela."""
     tables = source_tables()
-    arguments = ["run", "--root", db.root, "--environment", "prd", "--partition", NEXT_BASE_DATE,
-                 "--metadata", "client_model:Base.metadata", "test_pipeline:monthly_pipeline"]
+    arguments = [
+        "run",
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+        "--partition",
+        NEXT_BASE_DATE,
+        "--metadata",
+        "client_model:Base.metadata",
+        "test_pipeline:monthly_pipeline",
+    ]
     assert cli.main(arguments) == 0
     assert "Traceback" not in capsys.readouterr().err
 

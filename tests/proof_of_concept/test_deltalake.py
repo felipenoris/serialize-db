@@ -1318,8 +1318,12 @@ def test_dataset_filter_loses_rows_on_a_column_without_min_max(
     registered = folder("filtro_com_null_count")
     DeltaTable.create(registered, table.schema)
     pq.write_table(table, f"{registered}/f.parquet")
-    stats = {"numRecords": 5, "minValues": {"id": 1}, "maxValues": {"id": 5},
-             "nullCount": {"id": 0, "valor": 3}}
+    stats = {
+        "numRecords": 5,
+        "minValues": {"id": 1},
+        "maxValues": {"id": 5},
+        "nullCount": {"id": 0, "valor": 3},
+    }
     added = add_action("f.parquet", Path(registered, "f.parquet").stat().st_size, {}, stats)
     DeltaTable(registered).create_write_transaction([added], mode="append", schema=table.schema)
     assert counts(registered, pc.field("valor").is_null(), "valor IS NULL") == (3, 3)

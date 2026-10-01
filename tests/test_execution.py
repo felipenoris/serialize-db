@@ -100,12 +100,14 @@ def rows(
     """Linhas da partição ``value`` com os ids pedidos, no contrato da tabela."""
     if valor is None:
         valor = [entry_id / 2 for entry_id in ids]
-    data = pa.table({
-        "id_lancamento": pa.array(list(ids), pa.int64()),
-        "data_base": pa.array([datetime.date.fromisoformat(value)] * len(ids), pa.date32()),
-        "valor": pa.array(valor, pa.float64()),
-        "data_base_str": pa.array([value] * len(ids)),
-    })
+    data = pa.table(
+        {
+            "id_lancamento": pa.array(list(ids), pa.int64()),
+            "data_base": pa.array([datetime.date.fromisoformat(value)] * len(ids), pa.date32()),
+            "valor": pa.array(valor, pa.float64()),
+            "data_base_str": pa.array([value] * len(ids)),
+        }
+    )
     return schema.cast(data, table)
 
 
@@ -231,8 +233,14 @@ class FakeEngine:
         values = partitions or [None]
         totals = {value: {"linhas": 3} for value in values}
         nonfinite = {value: self.nonfinite.get(value, ()) for value in values}
-        return AuditReport(table=table.name, partitions=tuple(partitions or ()), results=(),
-                           not_run=(), nonfinite_columns=nonfinite, totals=totals)
+        return AuditReport(
+            table=table.name,
+            partitions=tuple(partitions or ()),
+            results=(),
+            not_run=(),
+            nonfinite_columns=nonfinite,
+            totals=totals,
+        )
 
     def export_partition(
         self,
@@ -244,9 +252,14 @@ class FakeEngine:
         columns_without_min_max: tuple = (),
     ) -> int:
         self.calls.append("export")
-        self.exports.append({"table": table.name, "value": value,
-                             "expected_rows": expected_rows,
-                             "columns_without_min_max": tuple(columns_without_min_max)})
+        self.exports.append(
+            {
+                "table": table.name,
+                "value": value,
+                "expected_rows": expected_rows,
+                "columns_without_min_max": tuple(columns_without_min_max),
+            }
+        )
         data = rows(table, value, range(1, 4))
         return delta.publish_partition(uri, table, value, data, metadata, self.storage)
 
@@ -282,8 +295,11 @@ def test_execution_opens_every_table_and_fixes_versions(
     engine = FakeEngine(db.storage)
     with caplog.at_level(logging.INFO, logger="serialize_db.execution"):
         with Execution(db, engine, "2026-08-31", "exec-2026-09-05") as run:
-            expected = {"cad_lancamentos": 4, "cad_lancamentos_projetados": None,
-                        "rel_composta": None}
+            expected = {
+                "cad_lancamentos": 4,
+                "cad_lancamentos_projetados": None,
+                "rel_composta": None,
+            }
             assert run.versions == expected
             assert run.execution_id == "exec-2026-09-05"
             assert run.sandbox is engine
@@ -305,8 +321,20 @@ def test_execution_opens_every_table_and_fixes_versions(
     assert not db.uri(ENTRIES).endswith("/")
 
 
-INVALID_PARTITIONS = ["", "2026/08/31", "a=b", "a b", "d'agua", "a:b", "a%b", "ação", ".x", "_x",
-                      "-x", "2026-08-31-mais"]
+INVALID_PARTITIONS = [
+    "",
+    "2026/08/31",
+    "a=b",
+    "a b",
+    "d'agua",
+    "a:b",
+    "a%b",
+    "ação",
+    ".x",
+    "_x",
+    "-x",
+    "2026-08-31-mais",
+]
 
 
 @pytest.mark.parametrize("value", INVALID_PARTITIONS)
@@ -363,8 +391,9 @@ def test_execution_without_partition_publishes_a_table_without_partition(
     execução seguinte a traz inteira ao sandbox, acrescenta uma linha e a publica, substituindo a
     versão anterior inteira."""
     composite = Composta.__table__
-    first_rows = pa.table({"id_a": pa.array([1, 2], pa.int64()),
-                           "id_b": pa.array([1, 1], pa.int64())})
+    first_rows = pa.table(
+        {"id_a": pa.array([1, 2], pa.int64()), "id_b": pa.array([1, 1], pa.int64())}
+    )
     with caplog.at_level(logging.INFO, logger="serialize_db.execution"):
         with Execution(db, engine_for(db, folder, "dom-1"), execution_id="dom-1") as run:
             assert run.partition is None
@@ -457,7 +486,8 @@ def test_ingest_of_several_tables_uses_extra_sessions(
         run.ingest(ENTRIES, PROJECTED, partitions=[MONTHS[0]])
         counts = run.sandbox.query(
             "SELECT (SELECT count(*) FROM cad_lancamentos) AS lancamentos, "
-            "(SELECT count(*) FROM cad_lancamentos_projetados) AS projetados")
+            "(SELECT count(*) FROM cad_lancamentos_projetados) AS projetados"
+        )
         assert counts.to_pylist() == [{"lancamentos": 10, "projetados": 5}]
 
     # No motor de mentira, uma tabela: a sessão principal, na thread de quem chama.
@@ -509,8 +539,9 @@ def test_messages_of_the_whole_table_name_it(
     inteira``, e não ``None``: a auditoria reprovada, a publicação sem a auditoria aprovada e a
     publicação com ``audit=False``."""
     composite = Composta.__table__
-    repeated = pa.table({"id_a": pa.array([1, 1], pa.int64()),
-                         "id_b": pa.array([1, 1], pa.int64())})
+    repeated = pa.table(
+        {"id_a": pa.array([1, 1], pa.int64()), "id_b": pa.array([1, 1], pa.int64())}
+    )
     with caplog.at_level(logging.INFO, logger="serialize_db.execution"):
         with Execution(db, engine_for(db, folder, "dom-1"), execution_id="dom-1") as run:
             create_and_append(run, composite, repeated)
@@ -558,8 +589,13 @@ def test_rerun_with_the_same_execution_id_produces_the_same_rows(
             run.audit(PROJECTED, ["2026-08-31"])
             versions = run.publish_delta(PROJECTED, partitions=["2026-08-31"])
         published = delta.open_table(db.uri(PROJECTED), db.storage).to_pyarrow_dataset().to_table()
-        attempts.append({"version": versions[PROJECTED.name], "rows": published.num_rows,
-                         "valor": sorted(published.column("valor").to_pylist())})
+        attempts.append(
+            {
+                "version": versions[PROJECTED.name],
+                "rows": published.num_rows,
+                "valor": sorted(published.column("valor").to_pylist()),
+            }
+        )
     first, second = attempts
     assert second["rows"] == first["rows"]
     assert second["valor"] == first["valor"]
@@ -615,8 +651,9 @@ def test_publish_delta_with_two_workers_matches_one(
     for workers in (1, 2):
         database = Database(str(folder / f"delta_{workers}"), "prd", Base.metadata)
         with Execution(database, FakeEngine(database.storage), "2026-08-31") as run:
-            results[workers] = run.publish_delta(ENTRIES, PROJECTED, partitions=["2026-08-31"],
-                                           audit=False, max_workers=workers)
+            results[workers] = run.publish_delta(
+                ENTRIES, PROJECTED, partitions=["2026-08-31"], audit=False, max_workers=workers
+            )
     assert results[1] == results[2] == {ENTRIES.name: 1, PROJECTED.name: 1}
 
     # Com um worker, a segunda tabela falha: a primeira terminou e a terceira nem começa. As três
@@ -629,8 +666,14 @@ def test_publish_delta_with_two_workers_matches_one(
     engine = FailingEngine(database.storage)
     with Execution(database, engine, "2026-08-31") as run:
         with pytest.raises(ExecutionConflict, match="conflito plantado") as failure:
-            run.publish_delta(entries_copy, projected_copy, extra, partitions=["2026-08-31"],
-                        audit=False, max_workers=1)
+            run.publish_delta(
+                entries_copy,
+                projected_copy,
+                extra,
+                partitions=["2026-08-31"],
+                audit=False,
+                max_workers=1,
+            )
     note = failure.value.__notes__[0]
     assert "cad_lancamentos: concluída" in note
     assert "cad_lancamentos_projetados: falhou" in note
@@ -640,8 +683,9 @@ def test_publish_delta_with_two_workers_matches_one(
     # A tabela sem partição com partitions é ContractError.
     with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
         with pytest.raises(ContractError, match="tabela sem partição"):
-            run.publish_delta(ENTRIES, Composta.__table__, partitions=["2026-08-31"], audit=False,
-                        max_workers=2)
+            run.publish_delta(
+                ENTRIES, Composta.__table__, partitions=["2026-08-31"], audit=False, max_workers=2
+            )
 
 
 def test_publish_delta_passes_the_nonfinite_columns_to_the_export(
@@ -881,8 +925,15 @@ def test_cli_run_parses_and_exits_by_result(
     sem ``--metadata`` e com o ``--export-mode`` que saiu da linha de comando, sem traceback."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    common = ["run", "--root", db.root, "--environment", "prd",
-              "--metadata", "test_execution:Base.metadata"]
+    common = [
+        "run",
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+        "--metadata",
+        "test_execution:Base.metadata",
+    ]
     projected = "test_execution:projected_pipeline"
 
     # O resultado do pipeline no código de saída.
@@ -941,8 +992,15 @@ def test_cli_run_without_partition(
     traceback."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    common = ["run", "--root", db.root, "--environment", "prd",
-              "--metadata", "test_execution:Base.metadata"]
+    common = [
+        "run",
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+        "--metadata",
+        "test_execution:Base.metadata",
+    ]
     assert cli.main([*common, "test_execution:composite_pipeline"]) == 0
     published = delta.open_table(db.uri(Composta.__table__), db.storage)
     assert published.to_pyarrow_dataset().to_table().num_rows == 2
@@ -964,8 +1022,15 @@ def test_cli_run_exits_with_2_on_a_used_snapshot_name(
     marcação e a saída da execução."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    common = ["run", "--root", db.root, "--environment", "prd",
-              "--metadata", "test_execution:Base.metadata"]
+    common = [
+        "run",
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+        "--metadata",
+        "test_execution:Base.metadata",
+    ]
     marked = "test_execution:marked_pipeline"
     assert cli.main([*common, "--partition", "2026-08-31", marked]) == 0
     projected_version = delta.open_table(db.uri(PROJECTED), db.storage).version()
@@ -1000,11 +1065,25 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
 
     monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    for name, value in (("HOST", "host"), ("USER", "usuario"), ("PASSWORD", "senha"),
-                        ("SCHEMA", "esquema"), ("SHARE_DATABASE", "compartilhado")):
+    for name, value in (
+        ("HOST", "host"),
+        ("USER", "usuario"),
+        ("PASSWORD", "senha"),
+        ("SCHEMA", "esquema"),
+        ("SHARE_DATABASE", "compartilhado"),
+    ):
         monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
-    common = ["run", "--root", db.root, "--environment", "prd", "--partition", "2026-08-31",
-              "--metadata", "test_execution:Base.metadata"]
+    common = [
+        "run",
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+        "--partition",
+        "2026-08-31",
+        "--metadata",
+        "test_execution:Base.metadata",
+    ]
     redshift_engine = [*common, "--engine", "redshift", "test_execution:redshift_engine_pipeline"]
     assert cli.main(redshift_engine) == 0
     assert exit_code([*common, "--redshift", "test_execution:projected_pipeline"]) == 2
@@ -1031,8 +1110,14 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     for name in ("WORKGROUP", "HOST", "USER", "PASSWORD", "PORT"):
         monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
-    common = ["--root", db.root, "--environment", "prd",
-              "--metadata", "test_execution:Base.metadata"]
+    common = [
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+        "--metadata",
+        "test_execution:Base.metadata",
+    ]
     run = ["run", *common, "--partition", "2026-08-31", "--engine", "redshift"]
     assert cli.main([*run, "test_execution:redshift_engine_pipeline"]) == 2
     audit = ["audit", *common, "--table", "cad_lancamentos", "--engine", "redshift"]
@@ -1105,8 +1190,17 @@ def test_cli_audit_of_a_table_without_partition(
     delta.create_table(uri, composite, db.storage)
     data = pa.table({"id_a": pa.array([1, 2], pa.int64()), "id_b": pa.array([1, 1], pa.int64())})
     delta.publish_partition(uri, composite, None, schema.cast(data, composite), {}, db.storage)
-    composite_audit = ["audit", "--metadata", "test_execution:Base.metadata",
-                       "--table", "rel_composta", "--root", db.root, "--environment", "prd"]
+    composite_audit = [
+        "audit",
+        "--metadata",
+        "test_execution:Base.metadata",
+        "--table",
+        "rel_composta",
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+    ]
     assert cli.main(composite_audit) == 0
     printed = capsys.readouterr().out
     assert "rel_composta na versão 1:" in printed
@@ -1146,8 +1240,17 @@ def defects_audit(
 ) -> list[str]:
     """Os argumentos de ``serialize-db audit`` da tabela de ``publish_defects``, a completar com
     as partições."""
-    return ["audit", "--metadata", "lancamentos_model:Base.metadata",
-            "--table", "cad_lancamentos_projetados", "--root", db.root, "--environment", "prd"]
+    return [
+        "audit",
+        "--metadata",
+        "lancamentos_model:Base.metadata",
+        "--table",
+        "cad_lancamentos_projetados",
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+    ]
 
 
 def test_cli_audit_prints_the_refused_ingest_as_a_failed_audit(
@@ -1224,8 +1327,13 @@ def test_cli_audit_on_redshift_prints_the_refused_ingest(
     erro do servidor como a reprovação da ingestão, sem as outras contagens e sem traceback. O
     relatório da sessão guarda a linha impressa, que no ambiente alvo traz a mensagem dele."""
     config = redshift_config()
-    for name, value in (("SCHEMA", config.schema), ("HOST", config.host), ("USER", config.user),
-                        ("PASSWORD", config.password), ("WORKGROUP", config.workgroup)):
+    for name, value in (
+        ("SCHEMA", config.schema),
+        ("HOST", config.host),
+        ("USER", config.user),
+        ("PASSWORD", config.password),
+        ("WORKGROUP", config.workgroup),
+    ):
         if value is None:
             monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
         else:
@@ -1258,8 +1366,14 @@ def test_cli_refuses_an_unknown_engine(
     recusa o nome desconhecido em vez de abrir o DuckDB."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.setenv("SERIALIZE_DB_ENGINE", "Redshift")
-    common = ["--root", db.root, "--environment", "prd",
-              "--metadata", "test_execution:Base.metadata"]
+    common = [
+        "--root",
+        db.root,
+        "--environment",
+        "prd",
+        "--metadata",
+        "test_execution:Base.metadata",
+    ]
     audit = ["audit", *common, "--table", "cad_lancamentos"]
     assert exit_code(audit) == 2
     assert exit_code([*audit, "--sql"]) == 2

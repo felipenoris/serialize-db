@@ -56,9 +56,12 @@ def _file_diff(
     do gerado; a linha sem ``\\n`` sai seguida de ``_NO_FINAL_NEWLINE``.
     """
     lines = []
-    diff = difflib.unified_diff(versioned.splitlines(keepends=True),
-                                generated.splitlines(keepends=True),
-                                fromfile=path, tofile=f"{path} (gerado)")
+    diff = difflib.unified_diff(
+        versioned.splitlines(keepends=True),
+        generated.splitlines(keepends=True),
+        fromfile=path,
+        tofile=f"{path} (gerado)",
+    )
     for line in diff:
         if line.endswith("\n"):
             lines.append(line.removesuffix("\n"))

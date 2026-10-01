@@ -194,7 +194,9 @@ def reason(
     """
     code = error_code(error)
     if code:
-        denied = any(word in code for word in ("AccessDenied", "Unauthorized", "Forbidden", "NotAuthorized"))
+        denied = any(
+            word in code for word in ("AccessDenied", "Unauthorized", "Forbidden", "NotAuthorized")
+        )
         return f"negado ({code})" if denied else f"o serviço respondeu {code}"
     if answered(error):
         return f"o serviço respondeu com erro ({type(error).__name__})"
@@ -268,7 +270,11 @@ def region() -> str | None:
     """Região como o boto3 a resolve, senão ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``."""
     import boto3
 
-    return boto3.Session().region_name or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    return (
+        boto3.Session().region_name
+        or os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -298,7 +304,11 @@ def split_proxy(
     if not parts.hostname:
         return "", "", ""
     address = parts.hostname + (f":{port}" if port else "")
-    return address, urllib.parse.unquote(parts.username or ""), urllib.parse.unquote(parts.password or "")
+    return (
+        address,
+        urllib.parse.unquote(parts.username or ""),
+        urllib.parse.unquote(parts.password or ""),
+    )
 
 
 def hide_credentials(
@@ -338,9 +348,13 @@ def duckdb_proxy(
 
     url = (environ.get(DUCKDB_PROXY_VARIABLE) or "").strip()
     if not url:
-        ignored = [name for name in ("http_proxy", "HTTPS_PROXY", "https_proxy") if environ.get(name)]
+        ignored = [
+            name for name in ("http_proxy", "HTTPS_PROXY", "https_proxy") if environ.get(name)
+        ]
         if ignored:
-            return DuckDBProxy({}, f"sem {DUCKDB_PROXY_VARIABLE}; o DuckDB ignora {', '.join(ignored)}")
+            return DuckDBProxy(
+                {}, f"sem {DUCKDB_PROXY_VARIABLE}; o DuckDB ignora {', '.join(ignored)}"
+            )
         return DuckDBProxy({}, "sem proxy no ambiente")
 
     address, user, secret = split_proxy(url)
@@ -353,7 +367,9 @@ def duckdb_proxy(
     if user:
         settings["http_proxy_username"] = user
         settings["http_proxy_password"] = secret
-    return DuckDBProxy(settings, f"{address}, {'com usuário e senha' if user else 'sem credenciais'}")
+    return DuckDBProxy(
+        settings, f"{address}, {'com usuário e senha' if user else 'sem credenciais'}"
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -368,8 +384,12 @@ def resolve(
 
     Todos privados indicam endpoint VPC de interface com DNS privado.
     """
-    addresses = sorted({info[4][0] for info in socket.getaddrinfo(name, port, type=socket.SOCK_STREAM)})
-    private = bool(addresses) and all(ipaddress.ip_address(address).is_private for address in addresses)
+    addresses = sorted(
+        {info[4][0] for info in socket.getaddrinfo(name, port, type=socket.SOCK_STREAM)}
+    )
+    private = bool(addresses) and all(
+        ipaddress.ip_address(address).is_private for address in addresses
+    )
     return addresses, private
 
 
@@ -426,7 +446,9 @@ def endpoint_reachable(
 
     # O endereço, e não o nome: com o nome, socket.create_connection tentaria cada endereço que ele
     # resolve, com o tempo limite em cada um.
-    where = parts.hostname if addresses[0] == parts.hostname else f"{parts.hostname} ({addresses[0]})"
+    where = (
+        parts.hostname if addresses[0] == parts.hostname else f"{parts.hostname} ({addresses[0]})"
+    )
     reading = tcp_probe(addresses[0], port, timeout)
     return reading.startswith("conectou"), f"{where}:{port} {reading}"
 
@@ -441,7 +463,11 @@ def public_label(
     # O serviço é o primeiro rótulo (s3.us-west-2...) ou o segundo (bucket.s3.us-west-2...).
     labels = name.lower().split(".")
     gateway = labels[0] in GATEWAY_SERVICES or (len(labels) > 1 and labels[1] in GATEWAY_SERVICES)
-    return "público: gateway endpoint ou internet" if gateway else "público: só pela internet ou pelo proxy"
+    return (
+        "público: gateway endpoint ou internet"
+        if gateway
+        else "público: só pela internet ou pelo proxy"
+    )
 
 
 def dns_rows(
@@ -465,7 +491,9 @@ def dns_rows(
 
         # Até quatro endereços por linha; um endpoint regional do S3 resolve para oito.
         shown = ", ".join(addresses[:4]) + (" ..." if len(addresses) > 4 else "")
-        kind = "privado: endpoint VPC de interface com DNS privado" if private else public_label(name)
+        kind = (
+            "privado: endpoint VPC de interface com DNS privado" if private else public_label(name)
+        )
         rows.append([name, shown, kind])
         private_by_name[name] = private
 
@@ -482,7 +510,11 @@ def mask(
     """Cópia de ``data`` com os valores das chaves que parecem segredo trocados por ``***``."""
     if isinstance(data, dict):
         return {
-            key: ("***" if isinstance(key, str) and SECRET_PATTERN.search(key) and value else mask(value))
+            key: (
+                "***"
+                if isinstance(key, str) and SECRET_PATTERN.search(key) and value
+                else mask(value)
+            )
             for key, value in data.items()
         }
     if isinstance(data, (list, tuple)):
@@ -526,7 +558,8 @@ def tabulate(
             widths[index] = max(widths.get(index, 0), len(cell))
 
     return "\n".join(
-        "".join(cell.ljust(widths[index] + 2) for index, cell in enumerate(fields[:-1])) + fields[-1]
+        "".join(cell.ljust(widths[index] + 2) for index, cell in enumerate(fields[:-1]))
+        + fields[-1]
         for fields in split
     )
 
@@ -560,7 +593,9 @@ def environment_rows(
             # Uma variável vazia não é ausente: um cliente que lê NO_PROXY antes de no_proxy fica
             # sem exceção alguma.
             rows.append([name, "(vazia)"])
-        elif name != name.upper() and name.upper() in names and value == os.environ.get(name.upper()):
+        elif (
+            name != name.upper() and name.upper() in names and value == os.environ.get(name.upper())
+        ):
             # A minúscula igual à maiúscula (no_proxy e NO_PROXY) sai uma vez: a lista de exceções
             # tem 1.500 caracteres.
             rows.append([name, f"(igual a {name.upper()})"])
@@ -603,7 +638,9 @@ class Report:
         sys.stdout = self.tee
         print("=" * 80)
         print(f"{name}: {subject}")
-        print(f"{time.strftime('%Y-%m-%d %H:%M:%S %z')}; {platform.platform()}; python {platform.python_version()}")
+        print(
+            f"{time.strftime('%Y-%m-%d %H:%M:%S %z')}; {platform.platform()}; python {platform.python_version()}"
+        )
         print(f"interpretador {sys.executable}")
         print("=" * 80)
 
@@ -725,7 +762,9 @@ class Report:
 
         self.h1("Chamadas que falharam")
         if self.failures:
-            print("Cada entrada é uma chamada cujo resultado falta acima; um bloco vazio em outro lugar significa que a chamada passou e não devolveu nada.\n")
+            print(
+                "Cada entrada é uma chamada cujo resultado falta acima; um bloco vazio em outro lugar significa que a chamada passou e não devolveu nada.\n"
+            )
             for label, detail in self.failures:
                 print(f"- {label}\n  {detail}")
         else:
@@ -740,7 +779,9 @@ class Report:
             code = 1
         else:
             code = 0
-        print(f"\ncódigo de saída {code}: {failed_checks} checagem(ns) reprovada(s), {len(self.failures)} chamada(s) falhada(s)")
+        print(
+            f"\ncódigo de saída {code}: {failed_checks} checagem(ns) reprovada(s), {len(self.failures)} chamada(s) falhada(s)"
+        )
 
         # O sys.stdout volta ao que o construtor desviou: no probe, o terminal; no pytest, o
         # capture.
@@ -834,7 +875,11 @@ def python_candidates() -> list[str]:
     """
     import shutil
 
-    candidates = [sys.executable, "/opt/conda/bin/python", shutil.which("python3", path=os.defpath) or ""]
+    candidates = [
+        sys.executable,
+        "/opt/conda/bin/python",
+        shutil.which("python3", path=os.defpath) or "",
+    ]
     seen: list[str] = []
     for candidate in candidates:
         if candidate and Path(candidate).exists() and candidate not in seen:
@@ -893,7 +938,14 @@ def find_values(
 
 # O dado que distingue uma conexão na tabela, na ordem de preferência: URI S3, workgroup, banco,
 # URL JDBC, host e versão do Glue.
-CONNECTION_DETAILS = ("s3_uri", "workgroup_name", "database_name", "jdbc_url", "host", "glue_version")
+CONNECTION_DETAILS = (
+    "s3_uri",
+    "workgroup_name",
+    "database_name",
+    "jdbc_url",
+    "host",
+    "glue_version",
+)
 
 
 def connection_rows(
@@ -908,15 +960,33 @@ def connection_rows(
     for item in connections:
         # Os endpoints com host, como host:porta separados por ponto e vírgula.
         endpoints = item.get("physical_endpoints") or []
-        shown = "; ".join(f"{endpoint.get('host')}:{endpoint.get('port')}" for endpoint in endpoints if endpoint.get("host")) or "-"
+        shown = (
+            "; ".join(
+                f"{endpoint.get('host')}:{endpoint.get('port')}"
+                for endpoint in endpoints
+                if endpoint.get("host")
+            )
+            or "-"
+        )
 
         # O detalhe vem dos dados da conexão; sem eles, do nome da conexão Glue do endpoint; sem
         # nada, do erro da leitura.
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
         detail = next((f"{key}={data[key]}" for key in CONNECTION_DETAILS if data.get(key)), None)
         detail = detail or next(
-            (f"glue_connection_name={endpoint['glue_connection_name']}" for endpoint in endpoints if endpoint.get("glue_connection_name")),
+            (
+                f"glue_connection_name={endpoint['glue_connection_name']}"
+                for endpoint in endpoints
+                if endpoint.get("glue_connection_name")
+            ),
             None,
         )
-        rows.append([str(item.get("name")), str(item.get("type")), shown, detail or item.get("data_error") or "-"])
+        rows.append(
+            [
+                str(item.get("name")),
+                str(item.get("type")),
+                shown,
+                detail or item.get("data_error") or "-",
+            ]
+        )
     return rows

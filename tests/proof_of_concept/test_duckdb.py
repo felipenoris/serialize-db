@@ -229,7 +229,9 @@ def peak_mb() -> float:
 # Roda num subprocesso, um cenário por chamada: a memória máxima do processo depende só do cenário.
 # A base é o pico depois das importações e da conexão, com o pyarrow importado antes dela, como no
 # SPOOL_PROBE; o cenário se mede pelo que acrescenta a ela.
-MEMORY_PROBE = PEAK_MB + r"""
+MEMORY_PROBE = (
+    PEAK_MB
+    + r"""
 import json, time
 import duckdb, pyarrow
 scenario = sys.argv[1]
@@ -249,6 +251,7 @@ print(json.dumps({
     "peak_mb": round(peak_mb()),
 }))
 """
+)
 
 
 def run_probe(
@@ -256,8 +259,9 @@ def run_probe(
     *arguments: str,
 ) -> dict[str, object]:
     """Roda ``script`` num Python novo com ``arguments`` e devolve o JSON que ele imprime."""
-    completed = subprocess.run([sys.executable, "-c", script, *arguments],
-                               capture_output=True, text=True, check=True)
+    completed = subprocess.run(
+        [sys.executable, "-c", script, *arguments], capture_output=True, text=True, check=True
+    )
     return json.loads(completed.stdout)
 
 
@@ -325,8 +329,10 @@ def test_streaming_query_bounds_memory() -> None:
         peaks[scenario] = run_probe(MEMORY_PROBE, scenario, sql)
     readings = {}
     for scenario, reading in peaks.items():
-        readings[scenario] = (f"{reading['peak_mb']} MB, {increment_mb(reading)} MB acima da base, "
-                              f"em {reading['seconds']} s")
+        readings[scenario] = (
+            f"{reading['peak_mb']} MB, {increment_mb(reading)} MB acima da base, "
+            f"em {reading['seconds']} s"
+        )
     record("duckdb.peak_rss_10M_rows", readings)
     assert peaks["stream"]["rows"] == peaks["table"]["rows"] == rows
     assert increment_mb(peaks["stream"]) < increment_mb(peaks["table"]) / 2
@@ -334,7 +340,9 @@ def test_streaming_query_bounds_memory() -> None:
 
 # O stream da sessão única: o leitor inteiro gravado num arquivo Arrow IPC com LZ4, e o arquivo lido
 # lote a lote. Roda num subprocesso, como MEMORY_PROBE, para a memória máxima ser só dele.
-SPOOL_PROBE = PEAK_MB + r"""
+SPOOL_PROBE = (
+    PEAK_MB
+    + r"""
 import json, os, threading, time
 import duckdb, pyarrow as pa
 folder = sys.argv[1]
@@ -386,6 +394,7 @@ print(json.dumps({
     "peak_mb": round(peak_mb()),
 }))
 """
+)
 
 
 @pytest.mark.local
@@ -520,8 +529,10 @@ def test_read_ahead_keeps_pulling_the_generator_after_a_failed_insert(
     time.sleep(0.5)
     con.unregister("entrada")
     assert len(delivered) > 1
-    record("duckdb.batches_pulled_ahead_of_a_failed_insert",
-           f"{at_failure} na falha, {len(delivered)} meio segundo depois")
+    record(
+        "duckdb.batches_pulled_ahead_of_a_failed_insert",
+        f"{at_failure} na falha, {len(delivered)} meio segundo depois",
+    )
 
 
 def test_insert_from_a_reader_trusts_the_batches(
@@ -538,7 +549,8 @@ def test_insert_from_a_reader_trusts_the_batches(
 
     # A ordem trocada corrompe em silêncio.
     swapped = pa.RecordBatch.from_pydict(
-        {"valor": pa.array([1.0]), "id": pa.array([1], pa.int64())})
+        {"valor": pa.array([1.0]), "id": pa.array([1], pa.int64())}
+    )
     insert_from_reader(con, pa.RecordBatchReader.from_batches(ID_AND_VALOR, [swapped]), "destino")
     corrupted = con.execute("SELECT id, valor FROM destino").fetchall()
     assert len(corrupted) == 1
@@ -547,7 +559,8 @@ def test_insert_from_a_reader_trusts_the_batches(
 
     # A coluna a mais falha.
     extra = pa.RecordBatch.from_pydict(
-        {"id": pa.array([1], pa.int64()), "valor": pa.array([1.0]), "x": ["z"]})
+        {"id": pa.array([1], pa.int64()), "valor": pa.array([1.0]), "x": ["z"]}
+    )
     with_extra = pa.RecordBatchReader.from_batches(ID_AND_VALOR, [extra])
     with pytest.raises(duckdb.InvalidInputException, match="3 children, expected 2"):
         insert_from_reader(con, with_extra, "destino")
@@ -555,7 +568,8 @@ def test_insert_from_a_reader_trusts_the_batches(
     # A nulidade declarada no esquema do leitor não é conferida; a coluna NOT NULL do DuckDB é.
     strict = pa.schema([pa.field("id", pa.int64(), nullable=False), ("valor", pa.float64())])
     with_null = pa.RecordBatch.from_pydict(
-        {"id": pa.array([1, None], pa.int64()), "valor": pa.array([1.0, 2.0])})
+        {"id": pa.array([1, None], pa.int64()), "valor": pa.array([1.0, 2.0])}
+    )
     con.execute("DELETE FROM destino")
     insert_from_reader(con, pa.RecordBatchReader.from_batches(strict, [with_null]), "destino")
     nulls = con.execute("SELECT count(*) FILTER (WHERE id IS NULL) FROM destino").fetchone()[0]
@@ -686,7 +700,8 @@ def test_copy_to_parquet_with_return_stats(
     # O esquema físico do arquivo: DECIMAL(18,2) como INT64, timestamp como INT64, toda coluna
     # optional.
     schema = con.execute(
-        f"SELECT name, type, repetition_type FROM parquet_schema('{path}')").fetchall()
+        f"SELECT name, type, repetition_type FROM parquet_schema('{path}')"
+    ).fetchall()
     physical = {name: kind for name, kind, _ in schema}
     repetition = {name: kind for name, _, kind in schema}
     assert physical["valor"] == "INT64"
@@ -962,8 +977,9 @@ def test_cursor_opens_while_the_connection_runs_a_query() -> None:
     worker.join(timeout=30)
     assert running
     assert opened < 0.1
-    record("duckdb.cursor_during_a_query",
-           f"{opened * 1e3:.2f} ms com a consulta da conexão em curso")
+    record(
+        "duckdb.cursor_during_a_query", f"{opened * 1e3:.2f} ms com a consulta da conexão em curso"
+    )
     cursor.close()
     con.close()
 
@@ -1047,7 +1063,8 @@ def test_audit_queries(
     )
 
     duplicates = con.execute(
-        "SELECT id, count(*) FROM lancamentos GROUP BY id HAVING count(*) > 1").fetchall()
+        "SELECT id, count(*) FROM lancamentos GROUP BY id HAVING count(*) > 1"
+    ).fetchall()
     assert duplicates == [(1, 2)]
 
     # O String(n) do contrato é medido em bytes, a medida do VARCHAR(n) do Redshift: strlen conta

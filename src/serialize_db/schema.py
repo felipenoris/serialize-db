@@ -161,14 +161,18 @@ def _decimal_type(
     # O DECIMAL do DuckDB, do Redshift e do Delta vai de 1 a 38 dígitos, e o decimal128 do PyArrow
     # levanta ValueError fora disso.
     if precision < 1 or precision > 38:
-        raise ContractError(f"{name}: Numeric de precisão {precision} fora de 1 a 38, o intervalo "
-                            "do DECIMAL dos motores e do Delta")
+        raise ContractError(
+            f"{name}: Numeric de precisão {precision} fora de 1 a 38, o intervalo "
+            "do DECIMAL dos motores e do Delta"
+        )
     # O DuckDB e o Delta aceitam a escala de 0 à precisão, e o Redshift até 37; o decimal128 do
     # PyArrow aceita a escala negativa e a acima da precisão.
     largest_scale = min(precision, 37)
     if scale < 0 or scale > largest_scale:
-        raise ContractError(f"{name}: Numeric({precision}, {scale}) com escala fora de 0 a "
-                            f"{largest_scale}, o intervalo do DECIMAL dos motores e do Delta")
+        raise ContractError(
+            f"{name}: Numeric({precision}, {scale}) com escala fora de 0 a "
+            f"{largest_scale}, o intervalo do DECIMAL dos motores e do Delta"
+        )
     return pa.decimal128(precision, scale)
 
 
@@ -197,8 +201,10 @@ def arrow_type(
     kind = column.type
     # Enum deriva de String, mas nem o DDL, nem cast, nem a auditoria conferem a lista de valores.
     if isinstance(kind, sa.Enum):
-        raise ContractError(f"{column.table.name}.{column.name}: tipo fora do contrato: {kind!r}; "
-                            "nada confere a lista do Enum, declare String(n)")
+        raise ContractError(
+            f"{column.table.name}.{column.name}: tipo fora do contrato: {kind!r}; "
+            "nada confere a lista do Enum, declare String(n)"
+        )
     # Numeric leva precisão e escala; Float e Double derivam de Numeric e ficam fora deste ramo.
     if isinstance(kind, sa.Numeric) and not isinstance(kind, sa.Float):
         return _decimal_type(column)
@@ -383,7 +389,8 @@ def table_options(
     partition_columns = info.get("partition_by") or []
     if len(partition_columns) > 1:
         raise ContractError(
-            f"{table.name}: uma coluna de partição no máximo, recebidas {partition_columns}")
+            f"{table.name}: uma coluna de partição no máximo, recebidas {partition_columns}"
+        )
     partition_by = partition_columns[0] if partition_columns else None
     return TableOptions(
         partition_by=partition_by,
@@ -464,7 +471,8 @@ def check_partition_value(
     if not isinstance(value, str) or not _PARTITION_VALUE.fullmatch(value):
         raise ContractError(
             f"valor {value!r} fora da regra da partição {PARTITION_VALUE}: letra ou dígito no "
-            "início, depois letras, dígitos, _, . e -")
+            "início, depois letras, dígitos, _, . e -"
+        )
     return value
 
 
@@ -495,7 +503,7 @@ def sql_type(
     :raises ContractError: um tipo fora do contrato.
     """
     kind = column.type
-    arrow = arrow_type(column)      # recusa o tipo fora do contrato antes de qualquer texto
+    arrow = arrow_type(column)  # recusa o tipo fora do contrato antes de qualquer texto
     if pa.types.is_decimal(arrow):
         return f"DECIMAL({arrow.precision}, {arrow.scale})"
     if isinstance(kind, sa.DateTime):
@@ -653,8 +661,10 @@ def _refuse_double_out_of_scale(
     rounded = pc.round(column, field.type.scale)
     # min_count=0: a tabela vazia de reader.schema.empty_table() passa; sem ele, pc.all dá nulo.
     if not pc.all(pc.equal(rounded, column), min_count=0).as_py():
-        raise ContractError(f"{table}.{field.name}: double fora da escala {field.type.scale}; "
-                            "arredonde no cliente antes de chamar")
+        raise ContractError(
+            f"{table}.{field.name}: double fora da escala {field.type.scale}; "
+            "arredonde no cliente antes de chamar"
+        )
 
 
 def _refuse_timestamp_with_time(
@@ -665,8 +675,9 @@ def _refuse_timestamp_with_time(
     """Um timestamp numa coluna Date entra só quando a ida e volta o devolve igual."""
     round_trip = column.cast(field.type).cast(column.type)
     if not pc.all(pc.equal(round_trip, column), min_count=0).as_py():
-        raise ContractError(f"{table}.{field.name}: timestamp com hora numa coluna Date; "
-                            "trunque no cliente")
+        raise ContractError(
+            f"{table}.{field.name}: timestamp com hora numa coluna Date; trunque no cliente"
+        )
 
 
 def _refuse_time_zone_change(
@@ -680,12 +691,16 @@ def _refuse_time_zone_change(
     PyArrow guarda a hora UTC, e o ``CAST`` do DuckDB, a hora no ``TimeZone`` da sessão.
     """
     if column.type.tz is not None and field.type.tz is None:
-        raise ContractError(f"{table}.{field.name}: timestamp com fuso {column.type.tz} numa "
-                            "coluna DateTime sem fuso; converta para o fuso desejado e retire o "
-                            "fuso no cliente")
+        raise ContractError(
+            f"{table}.{field.name}: timestamp com fuso {column.type.tz} numa "
+            "coluna DateTime sem fuso; converta para o fuso desejado e retire o "
+            "fuso no cliente"
+        )
     if column.type.tz is None and field.type.tz is not None:
-        raise ContractError(f"{table}.{field.name}: timestamp sem fuso numa coluna DateTime com "
-                            "fuso; declare o fuso no cliente")
+        raise ContractError(
+            f"{table}.{field.name}: timestamp sem fuso numa coluna DateTime com "
+            "fuso; declare o fuso no cliente"
+        )
 
 
 def _refuse_nested_json(
@@ -695,8 +710,10 @@ def _refuse_nested_json(
 ) -> None:
     """Um documento JSON chega serializado; struct, list e map são recusados."""
     if pa.types.is_nested(column.type):
-        raise ContractError(f"{table}.{field.name}: documento JSON como {column.type}; "
-                            "serialize com json.dumps antes de chamar")
+        raise ContractError(
+            f"{table}.{field.name}: documento JSON como {column.type}; "
+            "serialize com json.dumps antes de chamar"
+        )
 
 
 def _longest_text(
@@ -715,8 +732,10 @@ def _refuse_text_above_length(
     """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
     longest = _longest_text(column)
     if longest > limit:
-        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima de "
-                            f"String({limit}) em bytes; corte o valor ou aumente o comprimento")
+        raise ContractError(
+            f"{table}.{field.name}: texto de {longest} bytes acima de "
+            f"String({limit}) em bytes; corte o valor ou aumente o comprimento"
+        )
 
 
 def _refuse_text_above_varchar(
@@ -727,8 +746,10 @@ def _refuse_text_above_varchar(
     """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
     longest = _longest_text(column)
     if longest > TEXT_LIMIT:
-        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima do teto de "
-                            f"{TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor")
+        raise ContractError(
+            f"{table}.{field.name}: texto de {longest} bytes acima do teto de "
+            f"{TEXT_LIMIT} bytes do VARCHAR do Redshift; corte o valor"
+        )
 
 
 def _refuse_json_above_limit(
@@ -740,8 +761,10 @@ def _refuse_json_above_limit(
     que a staging ``VARCHAR`` da publicação no Redshift guarda."""
     longest = _longest_text(column)
     if longest > TEXT_LIMIT:
-        raise ContractError(f"{table}.{field.name}: documento JSON de {longest} bytes acima do "
-                            f"teto de {TEXT_LIMIT} bytes do Redshift; reduza o documento")
+        raise ContractError(
+            f"{table}.{field.name}: documento JSON de {longest} bytes acima do "
+            f"teto de {TEXT_LIMIT} bytes do Redshift; reduza o documento"
+        )
 
 
 def _refuse_text_above_uuid(
@@ -752,8 +775,10 @@ def _refuse_text_above_uuid(
     """Texto acima dos 36 bytes do ``VARCHAR(36)`` numa coluna ``Uuid``."""
     longest = _longest_text(column)
     if longest > UUID_LENGTH:
-        raise ContractError(f"{table}.{field.name}: texto de {longest} bytes acima dos "
-                            f"{UUID_LENGTH} bytes de um Uuid; passe o uuid.UUID ou str(valor)")
+        raise ContractError(
+            f"{table}.{field.name}: texto de {longest} bytes acima dos "
+            f"{UUID_LENGTH} bytes de um Uuid; passe o uuid.UUID ou str(valor)"
+        )
 
 
 def _refuse_silent_losses(
@@ -1012,14 +1037,14 @@ def _column_problems(
     # O autoincrement padrão é a string "auto", e um dialeto emitiria SERIAL por ele.
     integer_key = column.primary_key and isinstance(column.type, sa.Integer)
     if integer_key and column.autoincrement in ("auto", True):
-        problems.append(f"{table}.{column.name}: chave inteira com autoincrement; "
-                        "declare autoincrement=False")
+        problems.append(
+            f"{table}.{column.name}: chave inteira com autoincrement; declare autoincrement=False"
+        )
     if column.identity is not None:
         problems.append(f"{table}.{column.name}: Identity fora do contrato")
     if _string_without_length(column.type):
         kind = type(column.type).__name__
-        problems.append(f"{table}.{column.name}: {kind} sem comprimento; "
-                        "declare String(n) ou Text")
+        problems.append(f"{table}.{column.name}: {kind} sem comprimento; declare String(n) ou Text")
     return problems
 
 
@@ -1042,7 +1067,8 @@ def _key_problems(
             problems.append(
                 f"{table.name}: chave estrangeira em {columns} aponta "
                 f"{constraint.referred_table.name} {list(referenced)}, sem chave primária nem "
-                "UniqueConstraint nessas colunas")
+                "UniqueConstraint nessas colunas"
+            )
     if not options.keys:
         problems.append(f"{table.name}: sem chave primária e sem keys")
     return problems
@@ -1072,14 +1098,17 @@ def _partition_problems(
     column = table.c.get(options.partition_by)
     if column is None:
         problems.append(
-            f"{table.name}: partition_by aponta {options.partition_by}, que a tabela não tem")
+            f"{table.name}: partition_by aponta {options.partition_by}, que a tabela não tem"
+        )
     elif not _partition_type(column.type):
         problems.append(
-            f"{table.name}.{options.partition_by}: coluna de partição fora de String(n)")
+            f"{table.name}.{options.partition_by}: coluna de partição fora de String(n)"
+        )
     if options.partition_source and options.partition_source not in table.c:
         problems.append(
             f"{table.name}: partition_source aponta {options.partition_source}, "
-            "que a tabela não tem")
+            "que a tabela não tem"
+        )
     return problems
 
 

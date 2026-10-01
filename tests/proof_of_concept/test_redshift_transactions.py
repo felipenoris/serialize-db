@@ -554,11 +554,13 @@ def test_temporary_staging_filled_inside_the_transaction(
     staging = f"serialize_db_poc_{session.session_id}_temporaria_dentro"
     prefix = "redshift.transactions.temporaria_dentro"
     with Participant("A") as a:
-        a.run([
-            begin(),
-            *fill_temporary_staging(staging, "exec-a"),
-            *swap_from_staging(tables, staging, "exec-a", 2),
-        ])
+        a.run(
+            [
+                begin(),
+                *fill_temporary_staging(staging, "exec-a"),
+                *swap_from_staging(tables, staging, "exec-a", 2),
+            ]
+        )
         a.end_transaction()
     a.report(prefix)
     record(f"{prefix}.confirmada", a.committed)

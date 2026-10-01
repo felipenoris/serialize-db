@@ -72,9 +72,13 @@ class Conta(Base):
     numero: Mapped[str] = mapped_column(sa.String(20), unique=True)
 
 
-LANCAMENTO_INFO = {"serialize_db": {"partition_by": ["data_base_str"],
-                                    "partition_source": "data_base",
-                                    "sort_key": ["data_base", "id_lancamento"]}}
+LANCAMENTO_INFO = {
+    "serialize_db": {
+        "partition_by": ["data_base_str"],
+        "partition_source": "data_base",
+        "sort_key": ["data_base", "id_lancamento"],
+    }
+}
 
 
 class Lancamento(Base):
@@ -167,19 +171,22 @@ def entry_rows(
     ids = list(range(start, start + count))
     if valor is None:
         valor = [entry_id / 4 for entry_id in ids]
-    data = pa.table({
-        "id_lancamento": pa.array(ids, pa.int64()),
-        "id_conta": pa.array([account_of(entry_id) for entry_id in ids], pa.int64()),
-        "data_base": pa.array([datetime.date.fromisoformat(value)] * count, pa.date32()),
-        "valor": pa.array(valor, pa.float64()),
-        "preco": pa.array([decimal.Decimal(entry_id) / 100 for entry_id in ids],
-                          pa.decimal128(18, 2)),
-        "area": pa.array([area] * count, pa.string()),
-        "meta": pa.array([json.dumps({"k": entry_id}) for entry_id in ids]),
-        "to": pa.array(["SP"] * count),
-        "codigo": pa.array([f"L{entry_id:06d}" for entry_id in ids]),
-        "data_base_str": pa.array([value] * count),
-    })
+    data = pa.table(
+        {
+            "id_lancamento": pa.array(ids, pa.int64()),
+            "id_conta": pa.array([account_of(entry_id) for entry_id in ids], pa.int64()),
+            "data_base": pa.array([datetime.date.fromisoformat(value)] * count, pa.date32()),
+            "valor": pa.array(valor, pa.float64()),
+            "preco": pa.array(
+                [decimal.Decimal(entry_id) / 100 for entry_id in ids], pa.decimal128(18, 2)
+            ),
+            "area": pa.array([area] * count, pa.string()),
+            "meta": pa.array([json.dumps({"k": entry_id}) for entry_id in ids]),
+            "to": pa.array(["SP"] * count),
+            "codigo": pa.array([f"L{entry_id:06d}" for entry_id in ids]),
+            "data_base_str": pa.array([value] * count),
+        }
+    )
     return schema.cast(data, table)
 
 
@@ -225,8 +232,10 @@ def totals_of(
     name: str,
 ) -> dict:
     """As linhas, os ids distintos e a soma de ``valor`` da tabela ``name`` do sandbox."""
-    totals = engine.query(f'SELECT count(*) AS linhas, count(DISTINCT id_lancamento) AS ids, '
-                          f'sum(valor) AS soma FROM "{name}"')
+    totals = engine.query(
+        f"SELECT count(*) AS linhas, count(DISTINCT id_lancamento) AS ids, "
+        f'sum(valor) AS soma FROM "{name}"'
+    )
     return totals.to_pylist()[0]
 
 
@@ -281,8 +290,10 @@ def test_engine_config_and_single_session(
     banco e o transbordo."""
     engine = setup.engine
     assert isinstance(engine, Engine)
-    settings_query = ("SELECT name, value FROM duckdb_settings() "
-                      "WHERE name IN ('threads', 'preserve_insertion_order')")
+    settings_query = (
+        "SELECT name, value FROM duckdb_settings() "
+        "WHERE name IN ('threads', 'preserve_insertion_order')"
+    )
     rows = engine.query(settings_query).to_pylist()
     settings = {row["name"]: row["value"] for row in rows}
     assert settings == {"threads": "2", "preserve_insertion_order": "false"}
@@ -329,8 +340,9 @@ def test_engine_config_and_single_session(
     monkeypatch.setattr(resources, "_CGROUP_ROOT", machine / "cgroup")
     limits_query = "SELECT current_setting('memory_limit') AS m, current_setting('threads') AS t"
     for memory_limit, expected in [(None, "1.0 GiB"), ("768MiB", "768.0 MiB")]:
-        other_config = DuckDBConfig(memory_limit=memory_limit,
-                                    temp_directory=str(setup.folder / "outro"))
+        other_config = DuckDBConfig(
+            memory_limit=memory_limit, temp_directory=str(setup.folder / "outro")
+        )
         other = DuckDBEngine(other_config, "exec-2026-09-06", setup.storage)
         limits = other.query(limits_query).to_pylist()[0]
         other.cleanup()
@@ -424,7 +436,8 @@ def stored_key(
 ) -> str:
     """A chave que o secret do S3 guarda, do ``secret_string`` de ``duckdb_secrets()``."""
     rows = connection.execute(
-        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'").fetchall()
+        "SELECT secret_string FROM duckdb_secrets() WHERE name = 'serialize_db_s3'"
+    ).fetchall()
     return re.search(r"(?:^|;)key_id=([^;]*)", rows[0][0]).group(1)
 
 
@@ -500,7 +513,8 @@ def test_session_recreates_the_s3_secret_when_the_key_changes(
 def unreachable_endpoint() -> dict[str, str]:
     """O endpoint de credenciais que não responde, pedido pela credencial vencida."""
     raise botocore.exceptions.CredentialRetrievalError(
-        provider="container-role", error_msg="o endpoint de credenciais não respondeu")
+        provider="container-role", error_msg="o endpoint de credenciais não respondeu"
+    )
 
 
 def test_stream_raises_the_error_of_the_session_entry(
@@ -512,9 +526,15 @@ def test_stream_raises_the_error_of_the_session_entry(
     em vez de esperar pelo primeiro lote."""
     opening = botocore.credentials.Credentials("AKIAABERTURA", "segredo", "token")
     expired = botocore.credentials.RefreshableCredentials.create_from_metadata(
-        metadata={"access_key": "AKIAVENCIDA", "secret_key": "segredo", "token": "token",
-                  "expiry_time": "2026-01-01T00:00:00+00:00"},
-        refresh_using=unreachable_endpoint, method="container-role")
+        metadata={
+            "access_key": "AKIAVENCIDA",
+            "secret_key": "segredo",
+            "token": "token",
+            "expiry_time": "2026-01-01T00:00:00+00:00",
+        },
+        refresh_using=unreachable_endpoint,
+        method="container-role",
+    )
     with engine_over_s3(local_location, monkeypatch, opening, expired) as engine:
         with pytest.raises(botocore.exceptions.CredentialRetrievalError):
             engine.query("SELECT 1")
@@ -590,10 +610,14 @@ def test_ingest_pins_the_version(
         engine.ingest(PROJECTED, setup.uri(PROJECTED), None)
 
 
-@pytest.mark.parametrize(("name", "wanted", "opened_months"), [
-    ("contiguas", MONTHS[1:3], MONTHS[1:3]),
-    ("salteadas", [MONTHS[1], MONTHS[3]], MONTHS[1:4]),
-], ids=["contiguas", "salteadas"])
+@pytest.mark.parametrize(
+    ("name", "wanted", "opened_months"),
+    [
+        ("contiguas", MONTHS[1:3], MONTHS[1:3]),
+        ("salteadas", [MONTHS[1], MONTHS[3]], MONTHS[1:4]),
+    ],
+    ids=["contiguas", "salteadas"],
+)
 def test_ingest_opens_only_the_range_of_partitions(
     setup: Setup,
     name: str,
@@ -635,13 +659,19 @@ def test_materialized_ingest_applies_the_contract(
     assert viewed.num_rows == 10
     types = engine.query(
         "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns "
-        "WHERE column_name IN ('meta', 'valor', 'preco') ORDER BY 1, 2").to_pylist()
+        "WHERE column_name IN ('meta', 'valor', 'preco') ORDER BY 1, 2"
+    ).to_pylist()
     by_table = {}
     for row in types:
-        by_table.setdefault(row["table_name"], {})[row["column_name"]] = (row["data_type"],
-                                                                          row["is_nullable"])
-    assert by_table[ENTRIES.name] == {"meta": ("JSON", "YES"), "preco": ("DECIMAL(18,2)", "YES"),
-                                      "valor": ("DOUBLE", "NO")}
+        by_table.setdefault(row["table_name"], {})[row["column_name"]] = (
+            row["data_type"],
+            row["is_nullable"],
+        )
+    assert by_table[ENTRIES.name] == {
+        "meta": ("JSON", "YES"),
+        "preco": ("DECIMAL(18,2)", "YES"),
+        "valor": ("DOUBLE", "NO"),
+    }
     assert by_table["cad_view"]["meta"] == ("VARCHAR", "YES")
     assert by_table["cad_view"]["valor"] == ("DOUBLE", "YES")
     assert materialized.column("meta").to_pylist() == viewed.column("meta").to_pylist()
@@ -736,9 +766,12 @@ def test_statement_parameters_expand_in_lists(
     create_and_append(engine, ENTRIES, entry_rows(MONTHS[0], 1, 30))
     statement = (
         sa.select(ENTRIES.c.id_lancamento)
-        .where(ENTRIES.c.id_conta.in_([1, 2]), ENTRIES.c.id_lancamento.notin_([1, 4]),
-               ENTRIES.c.area.in_(sa.bindparam("areas", expanding=True)),
-               ENTRIES.c.data_base_str == sa.bindparam("particao"))
+        .where(
+            ENTRIES.c.id_conta.in_([1, 2]),
+            ENTRIES.c.id_lancamento.notin_([1, 4]),
+            ENTRIES.c.area.in_(sa.bindparam("areas", expanding=True)),
+            ENTRIES.c.data_base_str == sa.bindparam("particao"),
+        )
         .order_by(ENTRIES.c.id_lancamento)
     )
     params = {"areas": ["TI", "RH"], "particao": MONTHS[0]}
@@ -767,8 +800,10 @@ def test_query_keeps_percent_literals(
     create_and_append(engine, ENTRIES, pa.concat_tables([abc, xyz]))
     statement = sa.select(sa.func.count().label("n")).where(ENTRIES.c.area.like("A%"))
     assert engine.query(statement).column("n")[0].as_py() == 3
-    text = ('SELECT count(*) AS n FROM "cad_lancamentos" '
-            'WHERE "area" LIKE \'X%\' AND "id_lancamento" > :minimo')
+    text = (
+        'SELECT count(*) AS n FROM "cad_lancamentos" '
+        'WHERE "area" LIKE \'X%\' AND "id_lancamento" > :minimo'
+    )
     assert engine.query(text, {"minimo": 10}).column("n")[0].as_py() == 1
 
 
@@ -779,8 +814,9 @@ def create_numbers(
     engine: DuckDBEngine,
 ) -> None:
     """Cria ``numeros`` no sandbox: ``id`` de 0 a 2.999.999 e o texto ``s``."""
-    engine.query("CREATE TABLE numeros AS "
-                 "SELECT range AS id, 'x' || range AS s FROM range(3_000_000)")
+    engine.query(
+        "CREATE TABLE numeros AS SELECT range AS id, 'x' || range AS s FROM range(3_000_000)"
+    )
 
 
 def test_stream_delivers_each_batch_while_the_query_runs(
@@ -849,17 +885,20 @@ def test_stream_delivers_each_batch_while_the_query_runs(
     # A consulta que falha no meio roda num motor de uma thread: com duas, o DuckDB 1.5.5 entregou
     # INTERRUPT Error: Interrupted! no lugar do erro de conversão em 3 de 21 execuções de
     # 2026-09-28 (plan/POC.md).
-    failing = ("SELECT CAST(CASE WHEN id = 2_900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END "
-               "AS INTEGER) AS n FROM numeros")
+    failing = (
+        "SELECT CAST(CASE WHEN id = 2_900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END "
+        "AS INTEGER) AS n FROM numeros"
+    )
     one_thread_config = DuckDBConfig(threads=1, temp_directory=str(setup.folder / "uma_thread"))
     with DuckDBEngine(one_thread_config, EXECUTION_ID, setup.storage) as one_thread:
         threads = one_thread.query("SELECT current_setting('threads') AS t").to_pylist()
         assert threads == [{"t": 1}]
         create_numbers(one_thread)
         for budget in (64 * 2**20, 10_000):
-            with (pytest.raises(OSError, match="Could not convert string 'x' to INT32"),
-                  DuckDBStream(one_thread, failing, [], batch_size=100_000,
-                               budget=budget) as stream):
+            with (
+                pytest.raises(OSError, match="Could not convert string 'x' to INT32"),
+                DuckDBStream(one_thread, failing, [], batch_size=100_000, budget=budget) as stream,
+            ):
                 stream.read_all()
             assert spool_files(one_thread) == []
 
@@ -887,16 +926,20 @@ def test_stream_spills_after_the_budget_and_keeps_the_order(
     assert spool_files(engine) == []
 
     # Os lotes que foram ao arquivo e o pico em memória vão para o relatório.
-    record("engine.stream.spilled_batches",
-           f"{spilled} de 30 lotes no arquivo, com {peak / 1e6:.1f} MB de pico em memória")
+    record(
+        "engine.stream.spilled_batches",
+        f"{spilled} de 30 lotes no arquivo, com {peak / 1e6:.1f} MB de pico em memória",
+    )
 
 
 def sorting(
     observer: DuckDBEngine,
 ) -> bool:
     """Se alguma consulta do banco ordena agora: memória ``ORDER_BY`` em ``duckdb_memory()``."""
-    query = ("SELECT count(*) AS n FROM duckdb_memory() "
-             "WHERE tag = 'ORDER_BY' AND memory_usage_bytes > 0")
+    query = (
+        "SELECT count(*) AS n FROM duckdb_memory() "
+        "WHERE tag = 'ORDER_BY' AND memory_usage_bytes > 0"
+    )
     return observer.query(query).column("n")[0].as_py() > 0
 
 
@@ -970,7 +1013,8 @@ def test_create_table_creates_the_empty_table_of_the_model(
     assert count_of(engine, PROJECTED.name) == 0
     columns = engine.query(
         "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
-        f"WHERE table_name = '{PROJECTED.name}' ORDER BY ordinal_position").to_pylist()
+        f"WHERE table_name = '{PROJECTED.name}' ORDER BY ordinal_position"
+    ).to_pylist()
     by_name = {row["column_name"]: (row["data_type"], row["is_nullable"]) for row in columns}
     assert by_name["preco"] == ("DECIMAL(18,2)", "YES")
     assert by_name["meta"] == ("JSON", "YES")
@@ -1113,7 +1157,8 @@ def test_appender_and_create_table_after_a_stream_do_not_wait_for_its_query(
     engine.query(
         "CREATE TABLE fonte AS SELECT range AS id_lancamento, 1 AS id_conta, "
         "DATE '2026-08-31' AS data_base, range / 4 AS valor, 'L' || range AS codigo, "
-        "'2026-08-31' AS data_base_str FROM range(3_000_000)")
+        "'2026-08-31' AS data_base_str FROM range(3_000_000)"
+    )
     engine.create_table(PROJECTED)
     other = PROJECTED.to_metadata(sa.MetaData(), name="cad_segunda")
     with engine.stream("SELECT * FROM fonte") as stream, engine.appender(PROJECTED) as appender:
@@ -1135,7 +1180,8 @@ def pipeline_table(
 ) -> sa.Table:
     """A saída do pipeline de três estágios: as colunas da fonte e o ``dobro`` do valor."""
     return sa.Table(
-        name, sa.MetaData(),
+        name,
+        sa.MetaData(),
         sa.Column("id", sa.BigInteger),
         sa.Column("valor", sa.Numeric(18, 2)),
         sa.Column("s", sa.String(20)),
@@ -1153,9 +1199,16 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(
     engine.query(
         "CREATE TABLE fonte AS SELECT range AS id, "
         "CAST(((range * 7) % 1000) / 100.0 AS DECIMAL(18, 2)) AS valor, "
-        "'x' || range AS s FROM range(3_000_000)")
-    target = pa.schema([("id", pa.int64()), ("valor", pa.decimal128(18, 2)), ("s", pa.string()),
-                        ("dobro", pa.float64())])
+        "'x' || range AS s FROM range(3_000_000)"
+    )
+    target = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("valor", pa.decimal128(18, 2)),
+            ("s", pa.string()),
+            ("dobro", pa.float64()),
+        ]
+    )
     engine.query(schema.ddl(pipeline_table("sequencial"), "duckdb"))
     sql = "SELECT id, valor, s FROM fonte"
 
@@ -1198,8 +1251,10 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(
     # do cliente, a escrita do arquivo na thread do appender, e o INSERT único no close.
     started = time.perf_counter()
     engine.create_table(pipeline_table("encadeado"))
-    with (engine.stream(sql, batch_size=200_000) as stream,
-          engine.appender(pipeline_table("encadeado")) as appender):
+    with (
+        engine.stream(sql, batch_size=200_000) as stream,
+        engine.appender(pipeline_table("encadeado")) as appender,
+    ):
         for batch in stream:
             appender.write(work(batch))
     timings["encadeado"] = time.perf_counter() - started
@@ -1207,8 +1262,9 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(
     # As três versões dão as mesmas linhas e somas; os tempos vão para o relatório.
     totals = {}
     for name in ("por_tabela", "sequencial", "encadeado"):
-        query = (f"SELECT count(*) AS n, sum(valor) AS v, sum(dobro::DECIMAL(18, 2)) AS d "
-                 f"FROM {name}")
+        query = (
+            f"SELECT count(*) AS n, sum(valor) AS v, sum(dobro::DECIMAL(18, 2)) AS d FROM {name}"
+        )
         totals[name] = engine.query(query).to_pylist()[0]
     assert totals["por_tabela"] == totals["sequencial"] == totals["encadeado"]
     assert totals["encadeado"]["n"] == 3_000_000
@@ -1307,8 +1363,9 @@ def test_two_writers_on_the_same_table_both_enter(
         table: sa.Table,
     ) -> None:
         barrier.wait(timeout=10)
-        engine.query(sa.update(table).where(table.c.id_lancamento <= 10_000)
-                     .values(valor=table.c.valor + 1))
+        engine.query(
+            sa.update(table).where(table.c.id_lancamento <= 10_000).values(valor=table.c.valor + 1)
+        )
 
     def run_together(
         *tasks: tuple,
@@ -1321,8 +1378,9 @@ def test_two_writers_on_the_same_table_both_enter(
     # Dois appenders, cada um numa sessão a mais.
     sessions = PROJECTED.to_metadata(sa.MetaData(), name="escritores_sessoes")
     engine.create_table(sessions)
-    run_together((write_in_a_new_session, sessions, first),
-                 (write_in_a_new_session, sessions, second))
+    run_together(
+        (write_in_a_new_session, sessions, first), (write_in_a_new_session, sessions, second)
+    )
     assert totals_of(engine, sessions.name) == both
 
     # Dois appenders na sessão principal.
@@ -1335,8 +1393,11 @@ def test_two_writers_on_the_same_table_both_enter(
     updated = PROJECTED.to_metadata(sa.MetaData(), name="escritores_update")
     create_and_append(engine, updated, first)
     run_together((write_in_a_new_session, updated, second), (update_first_half, updated))
-    assert totals_of(engine, updated.name) == {"linhas": 40_000, "ids": 40_000,
-                                               "soma": both_sum + 10_000}
+    assert totals_of(engine, updated.name) == {
+        "linhas": 40_000,
+        "ids": 40_000,
+        "soma": both_sum + 10_000,
+    }
 
 
 def test_query_and_append_match_stream_and_appender(
@@ -1426,7 +1487,8 @@ def test_audit_finds_each_defect(
         connection.execute(
             'INSERT INTO "cad_lancamentos_projetados" BY NAME SELECT 999 AS id_lancamento, '
             "9 AS id_conta, DATE '2026-05-31' AS data_base, 1.0 AS valor, 'L999' AS codigo, "
-            "'d''agua' AS data_base_str")
+            "'d''agua' AS data_base_str"
+        )
     report = engine.audit(PROJECTED, [MONTHS[2]], setup.uri(PROJECTED), version)
     counters = report.totals[MONTHS[2]]
     assert counters["texto_area"] == 1
@@ -1446,7 +1508,8 @@ def test_audit_finds_each_defect(
     engine.query(
         'INSERT INTO "cad_lancamentos_projetados" BY NAME SELECT 1000 AS id_lancamento, '
         "9 AS id_conta, DATE '2026-05-31' AS data_base, 1.0 AS valor, 'L1000' AS codigo, "
-        "NULL AS data_base_str")
+        "NULL AS data_base_str"
+    )
     assert engine.audit(PROJECTED, None).totals[None]["nulo_data_base_str"] == 1
 
 
@@ -1461,8 +1524,9 @@ def test_audit_unique_key_against_the_pinned_version(
     version = delta.publish_partition(uri, PROJECTED, MONTHS[0], published, METADATA, setup.storage)
     repeated = entry_rows(MONTHS[1], 100, 1, PROJECTED).to_pylist()[0]
     repeated["codigo"] = published.column("codigo")[0].as_py()
-    create_and_append(setup.engine, PROJECTED,
-                      pa.Table.from_pylist([repeated], schema=published.schema))
+    create_and_append(
+        setup.engine, PROJECTED, pa.Table.from_pylist([repeated], schema=published.schema)
+    )
     report = setup.engine.audit(PROJECTED, [MONTHS[1]], uri, version)
     sample = result_of(report, "chave_codigo_tabela").sample
     assert sample.column("codigo").to_pylist() == ["L000001"]
@@ -1549,9 +1613,11 @@ def exported_totals(
 ) -> list[tuple]:
     """Linhas, somas de ``preco`` e de ``id_lancamento`` e linhas com ``NaN`` em ``valor`` da tabela
     Delta."""
-    query = ("SELECT count(*), sum(preco), sum(id_lancamento), "
-             "count(*) FILTER (WHERE isnan(valor)) "
-             f"FROM delta_scan('{uri}')")
+    query = (
+        "SELECT count(*), sum(preco), sum(id_lancamento), "
+        "count(*) FILTER (WHERE isnan(valor)) "
+        f"FROM delta_scan('{uri}')"
+    )
     return scan(storage, query)
 
 
@@ -1567,8 +1633,9 @@ def test_export_partition_registers_the_copy_file(
     create_and_append(engine, PROJECTED, entry_rows(MONTHS[1], 1, 1000, PROJECTED, valor=with_nan))
     uri = setup.uri(PROJECTED)
     delta.create_table(uri, PROJECTED, setup.storage)
-    version = engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000,
-                                      columns_without_min_max=["valor"])
+    version = engine.export_partition(
+        PROJECTED, uri, MONTHS[1], METADATA, expected_rows=1000, columns_without_min_max=["valor"]
+    )
     assert version == 1
     assert exported_totals(setup.storage, uri) == [(1000, decimal.Decimal("5005.00"), 500500, 1)]
     stats = pa.table(delta.open_table(uri, setup.storage).get_add_actions(flatten=True))
@@ -1576,8 +1643,7 @@ def test_export_partition_registers_the_copy_file(
     assert stats.column("max.id_lancamento").to_pylist() == [1000]
 
     # A poda pela estatística da chave, e o arquivo com o execution_id no nome.
-    query = (f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') "
-             "WHERE id_lancamento > 5000")
+    query = f"EXPLAIN ANALYZE SELECT count(*) FROM delta_scan('{uri}') WHERE id_lancamento > 5000"
     # O EXPLAIN ANALYZE devolve uma linha, com o plano na segunda coluna.
     plan = scan(setup.storage, query)[0][1]
     assert "Scanning Files: 0/1" in plan
@@ -1594,8 +1660,7 @@ def test_export_partition_registers_the_copy_file(
 
     # O valor numa tabela sem partição recusa antes do COPY, sem arquivo na pasta da tabela.
     accounts_uri = setup.uri(ACCOUNTS)
-    engine.ingest(ACCOUNTS, accounts_uri, published_accounts(setup, ["A", "B"]),
-                  materialize=True)
+    engine.ingest(ACCOUNTS, accounts_uri, published_accounts(setup, ["A", "B"]), materialize=True)
     with pytest.raises(ContractError, match="tabela sem partição recebeu o valor"):
         engine.export_partition(ACCOUNTS, accounts_uri, MONTHS[1], METADATA)
     account_files = setup.storage.list_files(setup.storage.relative(accounts_uri), ".parquet")
@@ -1624,17 +1689,24 @@ def test_example_pipeline_in_a_file_backed_database(
         .where(ENTRIES.c.data_base_str == sa.bindparam("particao"), ACCOUNTS.c.numero != "C")
     )
     params = {"particao": MONTHS[-1]}
-    with (engine.stream(statement, params, batch_size=50) as stream,
-          engine.appender(PROJECTED) as appender):
+    with (
+        engine.stream(statement, params, batch_size=50) as stream,
+        engine.appender(PROJECTED) as appender,
+    ):
         for batch in stream:
             appender.write(batch)
     report = engine.audit(PROJECTED, [MONTHS[-1]], projected_uri, 0, foreign_keys=True)
     assert report.passed, report.results
     expected_rows = report.rows(MONTHS[-1])
     nonfinite = report.nonfinite_columns.get(MONTHS[-1], ())
-    version = engine.export_partition(PROJECTED, projected_uri, MONTHS[-1], METADATA,
-                                      expected_rows=expected_rows,
-                                      columns_without_min_max=nonfinite)
+    version = engine.export_partition(
+        PROJECTED,
+        projected_uri,
+        MONTHS[-1],
+        METADATA,
+        expected_rows=expected_rows,
+        columns_without_min_max=nonfinite,
+    )
     assert version == 1
 
     # O join deixa de fora os lançamentos da conta 3, a de número "C".

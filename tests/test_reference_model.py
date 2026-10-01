@@ -39,7 +39,8 @@ def arrow_type_in_files(
         if isinstance(column.type, sa_type):
             return arrow_type
     raise AssertionError(
-        f"{column.table.name}.{column.name}: o tipo {column.type!r} não está em ARROW_TYPES")
+        f"{column.table.name}.{column.name}: o tipo {column.type!r} não está em ARROW_TYPES"
+    )
 
 
 def column_fields() -> list[tuple[str, sa.Column, pa.Field]]:

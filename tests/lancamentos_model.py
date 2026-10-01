@@ -31,9 +31,13 @@ class Conta(Base):
     numero: Mapped[str] = mapped_column(sa.String(20), unique=True)
 
 
-LANCAMENTO_INFO = {"serialize_db": {"partition_by": ["data_base_str"],
-                                    "partition_source": "data_base",
-                                    "sort_key": ["data_base", "id_lancamento"]}}
+LANCAMENTO_INFO = {
+    "serialize_db": {
+        "partition_by": ["data_base_str"],
+        "partition_source": "data_base",
+        "sort_key": ["data_base", "id_lancamento"],
+    }
+}
 
 
 class Lancamento(Base):
@@ -96,19 +100,21 @@ def entry_rows(
         valor = [entry_id / 4 for entry_id in ids]
     stamps = [noon.replace(microsecond=entry_id % 1000) for entry_id in ids]
     prices = [decimal.Decimal(entry_id) / 100 for entry_id in ids]
-    data = pa.table({
-        "id_lancamento": pa.array(ids, pa.int64()),
-        "id_conta": pa.array([account_of(entry_id) for entry_id in ids], pa.int64()),
-        "data_base": pa.array([day] * count, pa.date32()),
-        "carimbo": pa.array(stamps, pa.timestamp("us")),
-        "valor": pa.array(valor, pa.float64()),
-        "preco": pa.array(prices, pa.decimal128(18, 2)),
-        "area": pa.array(["TI"] * count, pa.string()),
-        "meta": pa.array([json.dumps({"k": entry_id}) for entry_id in ids]),
-        "to": pa.array(["SP"] * count),
-        "codigo": pa.array([f"L{entry_id:06d}" for entry_id in ids]),
-        "data_base_str": pa.array([value] * count),
-    })
+    data = pa.table(
+        {
+            "id_lancamento": pa.array(ids, pa.int64()),
+            "id_conta": pa.array([account_of(entry_id) for entry_id in ids], pa.int64()),
+            "data_base": pa.array([day] * count, pa.date32()),
+            "carimbo": pa.array(stamps, pa.timestamp("us")),
+            "valor": pa.array(valor, pa.float64()),
+            "preco": pa.array(prices, pa.decimal128(18, 2)),
+            "area": pa.array(["TI"] * count, pa.string()),
+            "meta": pa.array([json.dumps({"k": entry_id}) for entry_id in ids]),
+            "to": pa.array(["SP"] * count),
+            "codigo": pa.array([f"L{entry_id:06d}" for entry_id in ids]),
+            "data_base_str": pa.array([value] * count),
+        }
+    )
     return schema.cast(data, table)
 
 

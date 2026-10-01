@@ -287,16 +287,22 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         read = f"SELECT count(*), max(valor) FROM delta_scan('{table_uri}')"
         try:
             enabled = connection.execute(
-                "SELECT current_setting('enable_external_file_cache')").fetchone()[0]
+                "SELECT current_setting('enable_external_file_cache')"
+            ).fetchone()[0]
             connection.execute(read).fetchall()
             after_first = connection.execute(cache).fetchone()
             connection.execute(read).fetchall()
             after_second = connection.execute(cache).fetchone()
         finally:
             connection.close()
-        record("duckdb.external_file_cache", {
-            "padrao": enabled, "primeira_leitura": after_first, "segunda_leitura": after_second,
-        })
+        record(
+            "duckdb.external_file_cache",
+            {
+                "padrao": enabled,
+                "primeira_leitura": after_first,
+                "segunda_leitura": after_second,
+            },
+        )
         assert enabled is True
         assert after_first[1] > 0, after_first
         assert after_second == after_first, (after_first, after_second)
@@ -344,8 +350,6 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
 
         # delete_objects apaga até 1.000 chaves por chamada; Quiet omite as chaves apagadas da
         # resposta.
-        s3.delete_objects(
-            Bucket=storage.bucket, Delete={"Objects": copied_keys, "Quiet": True}
-        )
+        s3.delete_objects(Bucket=storage.bucket, Delete={"Objects": copied_keys, "Quiet": True})
         remaining = s3.list_objects_v2(Bucket=storage.bucket, Prefix=target_prefix + "/")
         assert "Contents" not in remaining

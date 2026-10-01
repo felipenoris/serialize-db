@@ -23,6 +23,7 @@ Exemplo:
     export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
     .venv/bin/python probes/operacao/probe_vacuum_orphans.py s3://bucket/origem/db_projetado
 """
+
 from __future__ import annotations
 
 import sys
@@ -96,13 +97,17 @@ def main() -> None:
     table_path = storage.relative(uri)
     registered = lib.logged_files(uri, storage)[value]
     totals = lib.delta_totals(storage, uri)
-    print(f"no log: {registered}; {totals[0]} linhas; versão "
-          f"{delta.open_table(uri, storage).version()}")
+    print(
+        f"no log: {registered}; {totals[0]} linhas; versão "
+        f"{delta.open_table(uri, storage).version()}"
+    )
 
     # Os órfãos: cópias do arquivo registrado na pasta da partição e num prefixo dentro dela.
     partition_folder = f"{lib.PARTITION_BY}={value}"
-    orphans = [f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}.parquet",
-               f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}/0000_part_00.parquet"]
+    orphans = [
+        f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}.parquet",
+        f"{partition_folder}/orfao-{uuid.uuid4().hex[:8]}/0000_part_00.parquet",
+    ]
     for orphan in orphans:
         storage.copy(storage.join(table_path, registered[0]), storage.join(table_path, orphan))
         print(f"órfão gravado: {orphan}")

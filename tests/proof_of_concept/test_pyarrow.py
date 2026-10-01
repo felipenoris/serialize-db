@@ -172,18 +172,23 @@ def test_safe_cast_refuses_data_loss() -> None:
 def test_arrow_table_round_trips_through_pandas_without_copy() -> None:
     """``to_pandas(types_mapper=pd.ArrowDtype)`` e ``from_pandas`` compartilham os buffers e mantêm
     os tipos do contrato; o backend numpy os perde."""
-    schema = pa.schema([
-        pa.field("id_operacao", pa.int64(), nullable=False),
-        pa.field("data_ref", pa.date32(), nullable=False),
-        pa.field("valor", pa.decimal128(18, 2), nullable=False),
-        pa.field("descricao", pa.string()),
-    ])
-    table = pa.table({
-        "id_operacao": [1, 2],
-        "data_ref": [dt.date(2026, 8, 1), dt.date(2026, 8, 2)],
-        "valor": [decimal.Decimal("10.50"), decimal.Decimal("99999.99")],
-        "descricao": ["a", None],
-    }, schema=schema)
+    schema = pa.schema(
+        [
+            pa.field("id_operacao", pa.int64(), nullable=False),
+            pa.field("data_ref", pa.date32(), nullable=False),
+            pa.field("valor", pa.decimal128(18, 2), nullable=False),
+            pa.field("descricao", pa.string()),
+        ]
+    )
+    table = pa.table(
+        {
+            "id_operacao": [1, 2],
+            "data_ref": [dt.date(2026, 8, 1), dt.date(2026, 8, 2)],
+            "valor": [decimal.Decimal("10.50"), decimal.Decimal("99999.99")],
+            "descricao": ["a", None],
+        },
+        schema=schema,
+    )
 
     # A ida com ArrowDtype não copia: os buffers do DataFrame são os da tabela, e os tipos são os do
     # contrato.
