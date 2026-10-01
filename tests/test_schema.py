@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import decimal
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -915,7 +916,7 @@ def test_check_schema_files_reports_stale_files_and_the_final_newline(
     path = Path(directory, "cad_a.duckdb.sql")
     path.write_text(path.read_text(encoding="utf-8").removesuffix("\n"), encoding="utf-8")
     diff = schema.check_schema_files(full, directory)
-    assert diff[0] == f"--- {path}"
+    assert diff[0] == f"--- {os.path.join(directory, 'cad_a.duckdb.sql')}"
     assert diff[-3:] == ["-)", "\\ Sem quebra de linha no fim do arquivo", "+)"]
     schema.write_schema_files(full, directory)
     assert schema.check_schema_files(full, directory) == []
@@ -926,7 +927,7 @@ def test_check_schema_files_reports_stale_files_and_the_final_newline(
     stale = ["cad_b.delta.json", "cad_b.duckdb.sql", "cad_b.redshift.sql"]
     diff = schema.check_schema_files(reduced, directory)
     assert [line for line in diff if line.startswith("--- ")] == [
-        f"--- {directory}/{name}" for name in stale]
+        f"--- {os.path.join(directory, name)}" for name in stale]
     assert '-CREATE TABLE "cad_b" (' in diff
     added = [line for line in diff if line.startswith("+") and not line.startswith("+++ ")]
     assert added == []

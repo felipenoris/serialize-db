@@ -8,7 +8,7 @@ e o 409 como ``ConflictError``, e outro erro do serviço como veio. Os que grava
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``) e, com ``SERIALIZE_DB_TEST_S3_ROOT``, os
 mesmos no bucket (marcador ``s3``): a escrita condicional do arquivo de controle, a listagem, a
 cópia e a exclusão, e a conexão do DuckDB com a extensão ``delta`` da pasta configurada; e, só na
-pasta local, o modo dos arquivos gravados.
+pasta local e fora do Windows, o modo dos arquivos gravados.
 """
 
 from __future__ import annotations
@@ -17,7 +17,9 @@ import dataclasses
 import hashlib
 import os
 import stat
+import sys
 import uuid
+from pathlib import Path
 
 import botocore.credentials
 import botocore.exceptions
@@ -65,7 +67,8 @@ def storage(request: pytest.FixtureRequest) -> Storage:
 
 def test_storage_for_uri(clean_aws: pytest.MonkeyPatch) -> None:
     """``s3://``, ``file://`` e caminho dão o sistema de arquivos certo e o caminho nele, sem rede,
-    com o ``%20`` do ``file://`` como espaço; o S3 sem região e outro esquema são erro."""
+    com o ``%20`` do ``file://`` como espaço e, na pasta local, ``/`` como separador também no
+    Windows; o S3 sem região e outro esquema são erro."""
     # O S3, com a região da variável.
     clean_aws.setenv("AWS_REGION", "sa-east-1")
     s3 = Storage.for_uri("s3://bucket/projeto/delta/")
@@ -75,15 +78,19 @@ def test_storage_for_uri(clean_aws: pytest.MonkeyPatch) -> None:
     assert s3.path == "bucket/projeto/delta"
     assert s3.is_s3
 
-    # O file:// e o caminho relativo, resolvidos para caminhos absolutos; o %XX do file://
-    # decodificado.
-    local = Storage.for_uri("file:///tmp/serialize-db/delta")
+    # O file:// e o caminho relativo, resolvidos para caminhos absolutos escritos com /, também
+    # no Windows, onde a URI leva a unidade (file:///D:/tmp/...); o %XX do file:// decodificado.
+    folder = Path(os.path.realpath("/tmp/serialize-db/delta"))
+    local = Storage.for_uri(folder.as_uri())
     assert isinstance(local.filesystem, pafs.LocalFileSystem)
     assert not local.is_s3
-    assert local.uri == local.path == os.path.realpath("/tmp/serialize-db/delta")
-    assert Storage.for_uri("relativa/delta").uri == os.path.realpath("relativa/delta")
-    spaced = Storage.for_uri("file:///tmp/meu%20banco/delta")
-    assert spaced.uri == spaced.path == os.path.realpath("/tmp/meu banco/delta")
+    assert local.uri == local.path == folder.as_posix()
+    relative = Path(os.path.realpath("relativa/delta"))
+    assert Storage.for_uri("relativa/delta").uri == relative.as_posix()
+    spaced_folder = Path(os.path.realpath("/tmp/meu banco/delta"))
+    assert "meu%20banco" in spaced_folder.as_uri()
+    spaced = Storage.for_uri(spaced_folder.as_uri())
+    assert spaced.uri == spaced.path == spaced_folder.as_posix()
 
     # Outro esquema e o S3 sem região são erro.
     with pytest.raises(ValueError, match="esquema"):
@@ -313,6 +320,7 @@ def file_mode(storage: Storage, path: str) -> int:
 
 
 @pytest.mark.local
+@pytest.mark.skipif(sys.platform == "win32", reason="o Windows não tem as permissões do POSIX")
 def test_local_files_get_the_mode_of_a_new_file(local_location: LocalLocation) -> None:
     """Na pasta local, sob a umask 0o022, ``create_text`` e ``write_text`` de um arquivo novo dão
     o modo de um arquivo novo, ``rw-r--r--``, sem execução, e ``write_text`` sobre um arquivo

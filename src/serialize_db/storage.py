@@ -243,7 +243,7 @@ class Storage:
 
     uri: str
     """A raiz como o delta-rs e o DuckDB a recebem, sem barra final: ``s3://bucket/prefixo`` ou o
-    caminho absoluto da pasta local."""
+    caminho absoluto da pasta local, com ``/`` também no Windows (``C:/dados/delta``)."""
     filesystem: pafs.FileSystem
     """``S3FileSystem`` ou ``LocalFileSystem``."""
     path: str
@@ -263,8 +263,9 @@ class Storage:
 
             Storage.for_uri("file:///dados/delta").uri   # "/dados/delta"
 
-        :param uri: a raiz do banco; o caminho local é resolvido para absoluto, e o de uma URI
-            ``file://`` tem o ``%XX`` decodificado, como em ``Path.from_uri``.
+        :param uri: a raiz do banco; o caminho local é resolvido para absoluto, com ``/`` como
+            separador também no Windows, onde o PyArrow lista os arquivos com ``/``, e o de uma
+            URI ``file://`` tem o ``%XX`` decodificado, como em ``Path.from_uri``.
         :return: o armazenamento da raiz.
         :raises ValueError: no S3 sem região, porque o PyArrow a buscaria na rede e o delta-rs
             cairia em ``us-east-1``; e em outro esquema.
@@ -769,10 +770,12 @@ def _s3_storage(uri: str) -> Storage:
 
 
 def _local_storage(uri: str) -> Storage:
-    """O armazenamento numa pasta local, com o caminho absoluto resolvido; o de uma URI
-    ``file://`` sai de ``Path.from_uri``, que decodifica o ``%XX``."""
+    """O armazenamento numa pasta local, com o caminho absoluto resolvido e escrito com ``/``; o
+    de uma URI ``file://`` sai de ``Path.from_uri``, que decodifica o ``%XX``."""
     local_path = Path.from_uri(uri) if uri.startswith("file://") else Path(uri)
-    resolved = str(local_path.expanduser().resolve())
+    # O as_posix troca o \ do Windows por /, o separador dos caminhos que o PyArrow lista e que
+    # join e relative montam; no Linux e no macOS, o texto não muda.
+    resolved = local_path.expanduser().resolve().as_posix()
     return Storage(resolved, pafs.LocalFileSystem(), resolved)
 
 

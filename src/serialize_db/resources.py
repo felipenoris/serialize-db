@@ -84,16 +84,16 @@ def available_memory() -> int:
 
         available_memory() / 2**30   # 14.7 numa máquina de 16 GiB com pouco em uso
 
-    :return: em bytes, a menor entre a física, a disponível no sistema (``MemAvailable`` de
+    :return: em bytes, a menor entre a física, a disponível no sistema (no Windows,
+        ``ullAvailPhys`` de ``GlobalMemoryStatusEx``, que conta como livre a lista de espera, as
+        páginas em cache que o sistema reaproveita; no Linux, ``MemAvailable`` de
         ``/proc/meminfo``, que conta como livre o cache de arquivos que o kernel devolve) e a
         folga do cgroup (o limite menos o uso, com o cache de arquivos de volta, menos a memória
-        compartilhada, ``shmem``, que o kernel conta no cache e não devolve sem swap). No
-        Windows, a disponível de ``GlobalMemoryStatusEx`` (``ullAvailPhys``), que conta como livre
-        a lista de espera, as páginas em cache que o sistema reaproveita.
+        compartilhada, ``shmem``, que o kernel conta no cache e não devolve sem swap).
     """
+    readings = [physical_memory()]
     if sys.platform == "win32":
-        return _windows_memory_status().ullAvailPhys
-    readings = [os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")]
+        readings.append(_windows_memory_status().ullAvailPhys)
     system = _meminfo_available()
     if system is not None:
         readings.append(system)
@@ -101,6 +101,15 @@ def available_memory() -> int:
     if room is not None:
         readings.append(room)
     return min(readings)
+
+
+def physical_memory() -> int:
+    """A memória física da máquina, em bytes: ``ullTotalPhys`` de ``GlobalMemoryStatusEx`` no
+    Windows e ``os.sysconf`` nos outros sistemas; protegida, para o relatório de
+    ``scripts/migrate_parquet_to_delta.py``."""
+    if sys.platform == "win32":
+        return _windows_memory_status().ullTotalPhys
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
 
 
 def environment_limits() -> dict[str, object]:

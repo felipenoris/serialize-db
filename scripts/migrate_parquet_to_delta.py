@@ -62,7 +62,7 @@ from serialize_db.engine.duckdb import environment_limits
 from serialize_db.errors import ContractError
 from serialize_db.execution import Database
 from serialize_db.load import LoadReport
-from serialize_db.resources import available_cpus, available_memory, peak_rss_mb
+from serialize_db.resources import available_cpus, available_memory, peak_rss_mb, physical_memory
 
 # ---------------------------------------------------------------- o relatório
 
@@ -170,7 +170,6 @@ def print_report(report: LoadReport) -> None:
 def describe_environment(arguments: argparse.Namespace) -> dict[str, object]:
     """A máquina, as versões, os limites do DuckDB lidos do ambiente e os parâmetros da execução,
     que o relatório leva: a memória e os núcleos mudam com a instância."""
-    physical_memory = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     packages = ("duckdb", "deltalake", "pyarrow")
     return {
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -178,7 +177,7 @@ def describe_environment(arguments: argparse.Namespace) -> dict[str, object]:
         "python": platform.python_version(),
         "cpus": os.cpu_count(),
         "cpus_available": available_cpus(),
-        "memory_total_mb": round(physical_memory / 2**20),
+        "memory_total_mb": round(physical_memory() / 2**20),
         "memory_available_mb": round(available_memory() / 2**20),
         "packages": {name: importlib.metadata.version(name) for name in packages},
         "duckdb_limits": environment_limits(),

@@ -46,6 +46,7 @@ import datetime
 import json
 import logging
 import math
+import sys
 import time
 import uuid
 from collections.abc import Callable, Collection, Mapping
@@ -497,7 +498,10 @@ def _stat_converter(field_type: pa.DataType) -> Callable[[str], object] | None:
 
 
 def _relative_file(filename: str, uri: str) -> str:
-    """O caminho de um arquivo relativo à pasta da tabela, como o log o guarda."""
+    """O caminho de um arquivo relativo à pasta da tabela, como o log o guarda, com ``/``."""
+    # No Windows, o DuckDB junta a pasta da partição ao destino do COPY com \.
+    if sys.platform == "win32":
+        filename = filename.replace("\\", "/")
     prefix = uri.rstrip("/") + "/"
     if not filename.startswith(prefix):
         raise RegistrationRefused(f"{filename}: fora da pasta da tabela {uri}")
