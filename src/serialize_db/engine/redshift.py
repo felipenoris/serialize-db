@@ -1540,7 +1540,8 @@ class RedshiftEngine:
         version: int,
         partitions: Sequence[str] | None,
     ) -> list[str | None]:
-        """As partições com arquivo na versão fixada: as pedidas, ou todas."""
+        """As partições com arquivo na versão fixada: as pedidas, com um valor repetido contado
+        uma vez, ou todas."""
         partition_by = table_options(table).partition_by
         if partition_by is None and partitions is not None:
             raise ContractError(
@@ -1551,7 +1552,7 @@ class RedshiftEngine:
         )
         if partitions is None:
             return available
-        wanted = sorted(check_partition_value(value) for value in partitions)
+        wanted = sorted({check_partition_value(value) for value in partitions})
         return [value for value in wanted if value in available]
 
     def ingest(
@@ -1578,8 +1579,8 @@ class RedshiftEngine:
             ``exec_<id>_``.
         :param uri: a URI da tabela Delta.
         :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
-        :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
-            nenhuma.
+        :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
+            ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: não muda nada, porque o Redshift não lê o Delta no lugar, e a
             tabela é sempre carregada.
         :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,

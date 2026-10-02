@@ -552,6 +552,22 @@ def test_publish_delta_requires_the_audit(
             run.publish_delta(PROJECTED, audit=False)
 
 
+def test_the_empty_list_of_partitions_is_refused(
+    db: Database,
+) -> None:
+    """``audit`` e ``publish_delta`` recusam a lista de partições vazia com ``ContractError``: o
+    ``IN ()`` falso aprovaria sem auditar, e a publicação reconciliaria sem exportar; o motor não
+    é chamado e a tabela não é criada."""
+    engine = FakeEngine(db.storage)
+    with Execution(db, engine, "2026-08-31") as run:
+        with pytest.raises(ContractError, match="audit recebeu a lista de partições vazia"):
+            run.audit(PROJECTED, [])
+        with pytest.raises(ContractError, match="publish_delta recebeu a lista de partições"):
+            run.publish_delta(PROJECTED, partitions=[], audit=False)
+    assert "audit" not in engine.calls
+    assert not delta.table_exists(db.uri(PROJECTED), db.storage)
+
+
 def test_messages_of_the_whole_table_name_it(
     db: Database,
     folder: Path,
@@ -819,6 +835,24 @@ def test_snapshot_refuses_a_used_name_before_any_commit(
                 run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
         assert not delta.table_exists(db.uri(PROJECTED), db.storage)
     assert delta.read_snapshots(db.storage, "prd")[0] == control
+
+
+def test_snapshot_is_marked_once_per_execution(
+    db: Database,
+) -> None:
+    """A segunda chamada de ``run.snapshot`` na mesma execução é ``ContractError``, com o nome
+    marcado na mensagem, com outro nome ou com o mesmo; a execução segue marcada com o primeiro,
+    gravado nos commits e na saída."""
+    with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
+        run.snapshot("2026T3")
+        for name in ("2026T4", "2026T3"):
+            with pytest.raises(ContractError, match="já está marcada com o snapshot 2026T3"):
+                run.snapshot(name)
+        run.publish_delta(PROJECTED, partitions=["2026-08-31"], audit=False)
+    history = delta.open_table(db.uri(PROJECTED), db.storage).history(limit=1)[0]
+    assert history["serialize_db_snapshot"] == "2026T3"
+    control, _ = delta.read_snapshots(db.storage, "prd")
+    assert list(control["snapshots"]) == ["2026T3"]
 
 
 # ---------------------------------------------------------------- a linha de comando

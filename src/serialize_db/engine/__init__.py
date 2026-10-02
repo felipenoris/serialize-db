@@ -262,8 +262,8 @@ class Engine(Protocol):
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da tabela Delta.
         :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
-        :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
-            nenhuma.
+        :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
+            ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, o
             motor que lê o Delta no lugar cria uma view.
         :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,

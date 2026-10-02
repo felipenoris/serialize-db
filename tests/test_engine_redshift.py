@@ -1118,6 +1118,25 @@ def test_ingest_loads_each_partition_through_the_staging(
 
 
 @pytest.mark.local
+def test_ingest_counts_a_repeated_partition_once(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
+    """A partição repetida em ``partitions`` entra uma vez: um ``COPY`` e um ``INSERT``."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    uri = storage.uri_of("prd/cad_lancamentos")
+    delta.create_table(uri, ENTRIES, storage)
+    rows = entry_rows(MONTHS[0], 1, 10)
+    delta.publish_partition(uri, ENTRIES, MONTHS[0], rows, METADATA, storage)
+    connection = FakeConnection(storage)
+    engine = fake_engine(monkeypatch, connection, storage)
+    engine.ingest(ENTRIES, uri, 1, partitions=[MONTHS[0], MONTHS[0]])
+    texts = connection.texts()
+    assert len([text for text in texts if text.startswith("COPY")]) == 1
+    assert len([text for text in texts if text.startswith("INSERT")]) == 1
+
+
+@pytest.mark.local
 def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     monkeypatch: pytest.MonkeyPatch,
     local_location: LocalLocation,

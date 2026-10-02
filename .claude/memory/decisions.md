@@ -1657,3 +1657,28 @@ table, out of the count of conferred tables and out of the script's JSON;
 that refuses to open) and the new assertions of the existing cases fail on the previous code.
 `src/serialize_db/load.py`, `src/serialize_db/cli.py`, `scripts/migrate_parquet_to_delta.py`,
 `docs/operacao.md`, `README.md`, `plan/PLAN-STAGE-7.md`, `plan/POC.md`
+
+## The empty partition list, the second snapshot and the repeated partition (2026-10-02)
+
+The second review, after the merge of PR #120, kept three notes from before its window that the
+code confirmed: `run.audit(table, [])` approved without auditing and `run.publish_delta(table,
+partitions=[])` reconciled the table without exporting a partition, because the `IN ()` of the
+empty list is false and every count is zero; `run.snapshot` called twice in one execution wrote
+only the last name, while the commits between the calls carried the first; and the Redshift
+engine's `ingest` loaded a partition repeated in `partitions` twice, one `COPY` per value of the
+list, while the DuckDB engine's did not. None of the three appears in the current pipeline; all
+three are call errors that passed silently. Offered on a decision card fixing them in PR #121
+(recommended) or leaving them as notes in `plan/OPEN_QUESTIONS.md`, the user chose "Corrigir"
+(03:15 UTC): `audit` and `publish_delta` refuse the empty list with `ContractError`
+(`<tabela>: audit recebeu a lista de partições vazia`, `<tabela>: publish_delta recebeu a lista
+de partições vazia`), before the engine is called and before the table is created; the second
+`run.snapshot` of an execution is `ContractError` under the lock, naming the snapshot already
+marked (`<ambiente>: a execução já está marcada com o snapshot <nome>, e marca um só`), and the
+execution stays marked with the first name; `RedshiftEngine._partitions_to_load` counts a
+repeated value once, so the partition gets one `COPY` and one `INSERT`. The three tests
+(`test_the_empty_list_of_partitions_is_refused`, `test_snapshot_is_marked_once_per_execution`,
+`test_ingest_counts_a_repeated_partition_once`) fail on the previous code, and the three notes
+left `plan/OPEN_QUESTIONS.md`.
+`src/serialize_db/execution.py`, `src/serialize_db/engine/__init__.py`,
+`src/serialize_db/engine/duckdb.py`, `src/serialize_db/engine/redshift.py`,
+`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`

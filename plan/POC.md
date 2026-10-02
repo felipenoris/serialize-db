@@ -3172,6 +3172,16 @@ e os 3 de `tests/test_migrate_parquet_to_delta.py` passam. O que a implementaç�
   `serialize-db load --tables cad_aliquotas --partitions 9999-12-31` criava
   `prd/cad_aliquotas/_delta_log` e imprimia `0 partição(ões) conferida(s)`. Desde a decisão do
   usuário de 2026-10-02, a tabela fica inteira de fora, sem criação, motor nem relatório.
+- **Três erros de chamada que passavam calados** (2026-10-01): `run.audit(tabela, [])` aprovava
+  sem auditar e `run.publish_delta(tabela, partitions=[])` reconciliava a tabela sem exportar
+  partição, porque o `IN ()` da lista vazia é falso e toda contagem dá zero; `run.snapshot`
+  chamado duas vezes na mesma execução gravava só o último nome, e os commits entre as chamadas
+  levavam o primeiro; o `ingest` do motor Redshift carregava duas vezes a partição repetida em
+  `partitions`, um `COPY` por valor da lista, e o do DuckDB não. Desde a decisão do usuário de
+  2026-10-02, a lista vazia e a segunda chamada de `run.snapshot` são `ContractError`, e a
+  partição repetida entra uma vez no Redshift (`test_the_empty_list_of_partitions_is_refused`,
+  `test_snapshot_is_marked_once_per_execution` e `test_ingest_counts_a_repeated_partition_once`
+  reprovam no código anterior).
 
 ## O que a implementação da etapa 9 mostrou
 

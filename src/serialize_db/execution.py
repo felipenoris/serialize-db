@@ -784,10 +784,14 @@ class Execution:
             suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
             ``partition_source``.
         :return: o relatório aprovado.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+        :raises ContractError: um valor de ``partitions`` fora da regra da partição, ou a lista
+            vazia, que aprovaria sem auditar.
         :raises AuditFailed: a reprovação.
         """
         checked = _checked_partitions(partitions)
+        # A lista vazia é recusada: o IN () falso aprovaria sem auditar.
+        if checked == []:
+            raise ContractError(f"{table.name}: audit recebeu a lista de partições vazia")
         version = self._version(table)
         uri = self._uri(table) if version is not None else None
         with self._step("audit"):
@@ -825,7 +829,8 @@ class Execution:
         table: sa.Table,
         partitions: list[str] | None,
     ) -> list[str | None]:
-        """As partições a publicar: as pedidas, ou ``[None]`` numa tabela sem partição."""
+        """As partições a publicar: as pedidas, ou ``[None]`` numa tabela sem partição; a lista
+        vazia é ``ContractError``."""
         partition_by = table_options(table).partition_by
         if partition_by is None:
             if partitions is not None:
@@ -837,6 +842,9 @@ class Execution:
             raise ContractError(
                 f"{table.name}: publish_delta de uma tabela particionada exige partitions"
             )
+        # A lista vazia é recusada: reconciliaria a tabela sem exportar partição.
+        if not partitions:
+            raise ContractError(f"{table.name}: publish_delta recebeu a lista de partições vazia")
         return list(partitions)
 
     def _approved(
@@ -955,8 +963,8 @@ class Execution:
             log.
         :param max_workers: quantas tabelas correm ao mesmo tempo.
         :return: ``{tabela: versão}``, com a versão do último commit de cada tabela.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição,
-            ``partitions`` numa tabela sem partição, ou ``None`` numa tabela particionada.
+        :raises ContractError: um valor de ``partitions`` fora da regra da partição, a lista
+            vazia, ``partitions`` numa tabela sem partição, ou ``None`` numa tabela particionada.
         :raises AuditFailed: uma tabela sem a auditoria aprovada nessas partições, na mesma ordem,
             na própria execução.
         :raises ExecutionConflict: uma alteração de dados na tabela desde a versão fixada,
@@ -988,7 +996,8 @@ class Execution:
         """Marca a execução: ``serialize_db_snapshot`` nos commits seguintes e, no encerramento sem
         erro, a entrada do snapshot com a versão de toda tabela do ambiente.
 
-        O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois.
+        O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois. Uma
+        execução marca um snapshot só: a segunda chamada é recusada.
 
         O nome é imutável: a entrada gravada não muda, e o nome não volta a ser usado, nem depois
         do arquivamento. Refazer os dados de um snapshot é uma execução nova marcada com outro
@@ -1004,8 +1013,9 @@ class Execution:
             ``archived`` no arquivo de controle do ambiente.
         :raises ContractError: o nome fora da regra da partição, ou já usado em ``snapshots`` ou
             em ``archived``, na chamada e antes de qualquer commit que venha depois dela, com o
-            ``serialize-db channel`` na mensagem; o nome que outro escritor grava depois da
-            chamada é recusado na saída do ``with``, depois dos commits.
+            ``serialize-db channel`` na mensagem; a segunda chamada na execução já marcada, com o
+            nome marcado na mensagem; o nome que outro escritor grava depois da chamada é
+            recusado na saída do ``with``, depois dos commits.
         """
         check_partition_value(name)
         # O nome já usado é recusado agora, antes dos commits da execução; a saída o confere de
@@ -1018,4 +1028,11 @@ class Execution:
                 "nome e aponte o canal para ele com serialize-db channel"
             )
         with self._lock:
+            # Uma execução marca um snapshot só: os commits entre duas chamadas levariam o
+            # primeiro nome, e a entrada do snapshot o último.
+            if self._snapshot is not None:
+                raise ContractError(
+                    f"{self.db.environment}: a execução já está marcada com o snapshot "
+                    f"{self._snapshot}, e marca um só"
+                )
             self._snapshot = name

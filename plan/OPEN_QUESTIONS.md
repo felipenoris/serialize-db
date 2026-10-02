@@ -217,14 +217,14 @@ pediam decisão foram decididos pelo usuário no mesmo dia: cinco estão na etap
 um e em `.claude/memory/decisions.md`, e o terceiro, a variável das sondas da operação, no
 `SUITE.md` do usuário.
 
-Notas anteriores à janela, sem decisão pedida: `publish_delta(tabela, partitions=[])` reconcilia
-sem exportar e `audit(tabela, [])` aprova sem auditar; `run.snapshot` chamado duas vezes grava só o
-último nome; o `ingest` do motor Redshift carrega duas vezes uma partição repetida em `partitions`,
-e o do DuckDB não; a coluna de partição `Text` dá `TypeError` em `Execution`, que `check_models`
-acusa antes; `max_workers=0` sobe o `ValueError` do `ThreadPoolExecutor`; `transaction()` do motor
-Redshift não é reentrante, e a composição de `append` com um `BEGIN` do cliente em `session()` não
-está escrita; `Storage.for_uri("file:relativo")` vira uma pasta literal, e `relative` compara
-texto, o que recusaria um destino com `\` no Windows, não lido lá.
+Notas anteriores à janela, sem decisão pedida: a coluna de partição `Text` dá `TypeError` em
+`Execution`, que `check_models` acusa antes; `max_workers=0` sobe o `ValueError` do
+`ThreadPoolExecutor`; `transaction()` do motor Redshift não é reentrante, e a composição de
+`append` com um `BEGIN` do cliente em `session()` não está escrita;
+`Storage.for_uri("file:relativo")` vira uma pasta literal, e `relative` compara texto, o que
+recusaria um destino com `\` no Windows, não lido lá. As três notas que valiam correção, a lista
+vazia em `publish_delta` e `audit`, o `run.snapshot` repetido e a partição repetida no `ingest` do
+Redshift, saíram com a decisão do usuário de 2026-10-02.
 
 ## Decisões de API pendentes por etapa
 
