@@ -606,9 +606,9 @@ def initial_load(
     :raises ExecutionConflict: outro registro da mesma partição a partir da mesma versão.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
-    :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que o
-        processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
-        (``environment_limits``).
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura do DuckDB sem ``memory_limit`` em ``config``, e, com ou
+        sem ele, no registro de cada partição, antes do commit (``environment_limits``).
     """
     options = table_options(table)
     # A partição pedida que a origem não tem recusa a carga antes de criar a tabela.

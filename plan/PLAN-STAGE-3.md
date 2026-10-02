@@ -257,8 +257,10 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
   ambiente, a versão relida é a do próprio commit. O commit confere conflito como o
   `write_deltalake`: um segundo registro da mesma partição, a partir da versão que o primeiro
   substituiu, é `CommitFailedError`, e a primitiva o converte em `ExecutionConflict`.
-- **`read_back`** roda depois do commit, numa conexão de
-  `storage.duckdb_connect(config=environment_limits())`, como `rewrite`:
+- **`read_back`** roda depois do commit, numa conexão do DuckDB com os limites que
+  `register_files` e `rewrite` leem do ambiente antes do commit (`environment_limits`), para a
+  memória que o ambiente recusa (`SandboxError`) cair sem nada gravado (decisão do usuário de
+  2026-10-02):
   `count(*)` e mínimo e máximo de cada coluna da primeira chave do modelo por partição no delta-rs
   (o scanner de `to_pyarrow_dataset`, lote a lote, com a memória de um lote) e no `delta_scan` do
   DuckDB, a soma de `numRecords` das ações `add` da partição, e o mínimo e o máximo que o log
@@ -403,6 +405,7 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Esquema da cópia | `test_deep_copy_carries_the_schema_of_the_copied_version` | A cópia de uma versão com uma coluna nova só no `metaData` sobre a cópia da anterior, sem partição a copiar, é `RegistrationRefused` (`canal ausente da cópia`), sem commit; com a partição nova, o commit dela leva o esquema da versão, igual ao da origem com os metadados, e os dois leitores leem a coluna nova. |
 | Caminhos fora da raiz | `test_deep_copy_and_rewrite_refuse_paths_outside_the_root` | `deep_copy` com o destino ou a origem fora da raiz e `rewrite` de uma tabela fora dela são `ValueError` antes de gravar: nada aparece fora da raiz nem no destino dentro dela. |
 | Limites do DuckDB | `test_duckdb_connections_take_the_environment_limits` | Cada conexão do DuckDB que a camada abre, na releitura, na reescrita e na releitura dela, na exportação por reescrita e na contagem da cópia profunda, recebe só o `threads` e o `memory_limit`, com o `threads` de `available_cpus()`. |
+| Memória lida antes do commit | `test_the_memory_is_read_before_the_commit` | Com `environment_limits` recusando (`SandboxError`), o registro, a reescrita, a cópia profunda e a exportação por reescrita sobem a recusa sem versão gravada, sem a cópia criada e sem arquivo exportado; o caso reprova no código anterior, que registrava a versão e recusava na releitura. |
 
 ## A implementação
 

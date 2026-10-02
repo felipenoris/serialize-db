@@ -1615,3 +1615,25 @@ consequence of that choice. Asked on a second card about the `dev` group, the wo
 commands in its "Testes do pacote" section once PR #115, which revised it, merged (03:51 UTC);
 the item left `plan/OPEN_QUESTIONS.md` with them.
 `pyproject.toml`, `plan/CURRENT_STATE.md`, `plan/OPEN_QUESTIONS.md`, `README.md`
+
+## The memory read before the commit (2026-10-02)
+
+The second review, after the merge of PR #120, read that the `SandboxError` of the decision of
+2026-10-01 reached `register_files` after the commit: the re-read that `register_files` runs on
+each committed partition opens a DuckDB connection with `environment_limits()`, so a reading under
+2 MiB or negative refused the re-read with the version already written (reproduced with the
+reading forced: `SandboxError` in the re-read, version 1 written with its 5 rows), and the
+`:raises SandboxError:` fields of `register_files`, `export_partition` and `publish_delta` did not
+say so; before that decision the negative reading opened DuckDB at its default and the re-read
+ran. Offered on a decision card the reading before the commit (recommended) or documenting the
+refusal after it, the user chose "Recusar antes" (01:07 UTC): `register_files` and `rewrite` read
+`environment_limits()` before opening the table and committing, `deep_copy` before creating the
+destination and `_export_by_rewrite` before creating the folder, the private `_read_back` and
+`_duckdb_reading` take the limits as `config` while the public `read_back` keeps reading them
+itself, the callers' fields (`export_partition` of both engines, `publish_delta`, `initial_load`)
+say the refusal comes with nothing written, and `test_the_memory_is_read_before_the_commit`
+asserts the version, the archive and the exported folder untouched, failing on the previous code
+(`assert 2 == 1`).
+`src/serialize_db/delta.py`, `src/serialize_db/engine/duckdb.py`,
+`src/serialize_db/engine/redshift.py`, `src/serialize_db/execution.py`, `src/serialize_db/load.py`,
+`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `plan/POC.md`

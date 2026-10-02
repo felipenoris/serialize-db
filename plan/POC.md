@@ -2234,6 +2234,13 @@ implementação de `serialize_db.storage` e `serialize_db.delta` leu a API do de
   porque ela lê só as chaves; uma coluna aninhada a mais era recusada pelo nome da folha (`x` de
   `aninhada.x`, `element` de uma lista). A conferência lê o caminho da folha e recusa a coluna
   aninhada como fora do contrato (`coluna aninhada s.valor fora do contrato`).
+- **O `SandboxError` da releitura depois do commit** (2026-10-01). `register_files` lia os limites
+  do DuckDB na conexão da releitura, depois do commit: com a leitura forçada a recusar, a versão
+  ficou gravada com o arquivo e as 5 linhas, e a releitura não rodou; antes da decisão de
+  2026-10-01, a leitura negativa abria o DuckDB no padrão dele e a releitura rodava. Os limites
+  passaram a ser lidos antes do commit, e a cópia profunda e a exportação por reescrita os leem
+  antes de criar o destino (`test_the_memory_is_read_before_the_commit`, que reprova no código
+  anterior; decisão do usuário de 2026-10-02).
 
 **Consequência**: [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) troca a interface e os rascunhos pela seção
 "A implementação" e registra o que a implementação fixou: os métodos de caminho de `Storage`

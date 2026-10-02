@@ -967,6 +967,9 @@ class Execution:
         :raises RegistrationRefused: uma conferência do arquivo exportado reprovou antes do commit,
             ou a releitura reprovou depois dele e a tabela voltou à versão anterior.
         :raises LogUnavailable: um arquivo do log entre a versão fixada e a atual não existe.
+        :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
+            negativa, lida no registro de cada partição antes do commit (``environment_limits``),
+            sem nada gravado.
         """
         checked = _checked_partitions(partitions)
         tasks = []

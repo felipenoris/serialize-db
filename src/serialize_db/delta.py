@@ -991,7 +991,7 @@ def register_files(
 
     A ação leva ``numRecords``, o ``nullCount`` e o mínimo e o máximo das colunas inteiras, de data,
     ``Double`` e texto. Depois do commit, ``read_back`` relê a versão pelos dois leitores e a
-    desfaz na diferença.
+    desfaz na diferença, com os limites do DuckDB lidos antes do commit.
 
     Exemplo:
 
@@ -1019,6 +1019,9 @@ def register_files(
     :raises RegistrationRefused: uma conferência reprovou, sem commit, e o arquivo fica órfão até
         ``vacuum(full=True)``; ou a releitura reprovou e desfez o commit.
     :raises ExecutionConflict: um segundo registro da mesma partição a partir da mesma versão.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, lida antes do commit para a conexão da releitura
+        (``environment_limits``), sem nada gravado.
     """
     value = checked_value(table, value)
     partition_by = table_options(table).partition_by
@@ -1032,12 +1035,15 @@ def register_files(
     actions = []
     for file in files:
         actions.append(_add_action(file, contract, partition_by, value, columns_without_min_max))
+    # Os limites da releitura lidos antes do commit: a memória que o ambiente recusa não deixa
+    # uma versão gravada sem releitura.
+    config = environment_limits()
     dt = open_table(uri, storage)
     _commit_actions(dt, table.name, partition_by, actions, value=value, metadata=metadata)
     # create_write_transaction não atualiza o objeto: a versão vem de uma leitura nova do log, que
     # com uma execução por ambiente é a do próprio commit.
     version = open_table(uri, storage).version()
-    read_back(uri, table, value, total, storage)
+    _read_back(uri, table, value, total, storage, config)
     return version
 
 
@@ -1071,8 +1077,10 @@ def _duckdb_reading(
     value: str | None,
     keys: tuple[str, ...],
     storage: Storage,
+    config: Mapping[str, object],
 ) -> _Reading:
-    """A leitura pelo ``delta_scan`` do DuckDB, numa conexão própria."""
+    """A leitura pelo ``delta_scan`` do DuckDB, numa conexão própria com os limites de
+    ``config``."""
     measures = ["count(*)"]
     for name in keys:
         measures.append(f"min({quoted(name)})")
@@ -1081,7 +1089,7 @@ def _duckdb_reading(
     text = (
         f"SELECT {', '.join(measures)} FROM delta_scan({literal(uri)}, version := {version}){where}"
     )
-    connection = storage.duckdb_connect(config=environment_limits())
+    connection = storage.duckdb_connect(config=config)
     try:
         row = connection.execute(text).fetchone()
     finally:
@@ -1226,12 +1234,25 @@ def read_back(
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
         2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
     """
+    _read_back(uri, table, value, expected_rows, storage, environment_limits())
+
+
+def _read_back(
+    uri: str,
+    table: sa.Table,
+    value: str | None,
+    expected_rows: int,
+    storage: Storage,
+    config: Mapping[str, object],
+) -> None:
+    """``read_back`` com os limites do DuckDB já lidos, que ``register_files`` e ``rewrite`` leem
+    antes do commit, para a recusa do ambiente cair sem nada gravado."""
     dt = open_table(uri, storage)
     version = dt.version()
     keys = table_options(table).keys[0]
     log_reading = _log_reading(dt, table, value, keys)
     arrow_reading = _arrow_reading(dt, table, value, keys)
-    duckdb_reading = _duckdb_reading(uri, version, table, value, keys, storage)
+    duckdb_reading = _duckdb_reading(uri, version, table, value, keys, storage, config)
     problems = _read_back_problems(
         table, keys, expected_rows, log_reading, arrow_reading, duckdb_reading
     )
@@ -1562,7 +1583,8 @@ def rewrite(
         sem commit; ou a releitura reprovou e desfez o commit.
     :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
+        2 MiB, ou negativa, na abertura da conexão da reescrita, antes de qualquer escrita; a
+        releitura usa os mesmos limites (``environment_limits``).
     """
     expressions = dict(expressions or {})
     _check_expressions(table, expressions)
@@ -1571,7 +1593,8 @@ def rewrite(
     dt = open_table(uri, storage)
     source = f"delta_scan({literal(uri)}, version := {dt.version()})"
     select = _rewrite_select(table, expressions, source)
-    connection = storage.duckdb_connect(config=environment_limits())
+    config = environment_limits()
+    connection = storage.duckdb_connect(config=config)
     try:
         nonfinite = _nonfinite_by_partition(connection, table, select)
         written = _copy_rewrite(connection, uri, table, select)
@@ -1583,7 +1606,7 @@ def rewrite(
         dt, table.name, partition_by, actions, value=None, metadata={}, schema=delta_schema(table)
     )
     version = open_table(uri, storage).version()
-    read_back(uri, table, None, total, storage)
+    _read_back(uri, table, None, total, storage, config)
     return version
 
 
@@ -2191,10 +2214,12 @@ def _copied_file(
 def _count_rows(
     uri: str,
     storage: Storage,
+    config: Mapping[str, object],
 ) -> tuple[int, int]:
-    """As linhas da tabela pelos dois leitores: o dataset do delta-rs e o ``delta_scan``."""
+    """As linhas da tabela pelos dois leitores: o dataset do delta-rs e o ``delta_scan``, numa
+    conexão com os limites de ``config``."""
     by_delta = open_table(uri, storage).to_pyarrow_dataset().count_rows()
-    connection = storage.duckdb_connect(config=environment_limits())
+    connection = storage.duckdb_connect(config=config)
     try:
         row = connection.execute(f"SELECT count(*) FROM delta_scan({literal(uri)})").fetchone()
     finally:
@@ -2312,7 +2337,8 @@ def deep_copy(
     :raises ExecutionConflict: o commit de uma partição falhou no delta-rs com
         ``CommitFailedError``.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
+        2 MiB, ou negativa, lida antes de criar o destino, para a conexão da contagem final
+        (``environment_limits``).
     """
     # Os dois caminhos conferidos antes de gravar: a criação do destino e as cópias gravam onde
     # recebem, fora da raiz também.
@@ -2323,6 +2349,9 @@ def deep_copy(
     partition_columns = metadata.partition_columns
     partition_by = partition_columns[0] if partition_columns else None
     contract = pa.schema(source.schema())
+    # Os limites da contagem final lidos antes de criar o destino: a memória que o ambiente recusa
+    # não deixa cópia pela metade.
+    config = environment_limits()
     registered = _copy_destination(destination, source, storage)
     total = 0
     for value, group in _actions_by_partition(source, partition_by).items():
@@ -2367,7 +2396,7 @@ def deep_copy(
             f"nenhuma partição copiada o trocou; copie para um destino novo: "
             f"{'; '.join(differences)}"
         )
-    by_delta, by_duckdb = _count_rows(destination, storage)
+    by_delta, by_duckdb = _count_rows(destination, storage, config)
     if by_delta != total or by_duckdb != total:
         raise RegistrationRefused(
             f"{destination}: a cópia tem {by_delta} linhas pelo delta-rs e "
@@ -2404,6 +2433,8 @@ def _export_by_rewrite(
     coluna de partição dentro dele."""
     partition_by = table_options(table).partition_by
     select = f"SELECT * FROM delta_scan({literal(uri)}, version := {dt.version()})"
+    # Os limites lidos antes de criar a pasta: a memória que o ambiente recusa não deixa pasta.
+    config = environment_limits()
     # Na pasta local, o COPY do DuckDB não cria as pastas acima do destino, e o COPY particionado
     # aceita a pasta dele já criada e vazia.
     storage.ensure_folder(storage.relative(destination))
@@ -2413,7 +2444,7 @@ def _export_by_rewrite(
     else:
         target = destination
         options = f"FORMAT parquet, PARTITION_BY ({quoted(partition_by)}), RETURN_STATS"
-    connection = storage.duckdb_connect(config=environment_limits())
+    connection = storage.duckdb_connect(config=config)
     try:
         rows = connection.execute(f"COPY ({select}) TO {literal(target)} ({options})").fetchall()
     finally:

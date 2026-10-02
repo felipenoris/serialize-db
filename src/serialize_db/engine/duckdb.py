@@ -1477,6 +1477,8 @@ class DuckDBEngine:
             releitura desfez o commit.
         :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
+        :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
+            negativa, lida no registro antes do commit (``environment_limits``), sem nada gravado.
         """
         # O valor conferido antes do COPY: o arquivo de um valor recusado no registro ficaria
         # na pasta da tabela, fora do log.

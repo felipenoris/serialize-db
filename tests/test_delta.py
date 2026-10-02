@@ -51,6 +51,7 @@ from serialize_db.errors import (
     ExecutionConflict,
     LogUnavailable,
     RegistrationRefused,
+    SandboxError,
     SchemaDiffRefused,
 )
 from serialize_db.resources import available_cpus
@@ -1501,3 +1502,36 @@ def test_duckdb_connections_take_the_environment_limits(
         assert config is not None
         assert sorted(config) == ["memory_limit", "threads"]
         assert config["threads"] == available_cpus()
+
+
+def test_the_memory_is_read_before_the_commit(
+    storage: Storage,
+    uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A memória que o ambiente recusa (``SandboxError``) é lida antes do commit: o registro, a
+    reescrita, a cópia profunda e a exportação por reescrita sobem a recusa sem gravar versão,
+    sem criar a cópia e sem arquivo exportado; o arquivo do registro fica órfão, como numa
+    conferência reprovada."""
+    publish(storage, uri, "2026-07-31", 1, 10)
+
+    def refusing() -> dict[str, object]:
+        raise SandboxError("memória disponível de 1.5 MiB: o DuckDB não abre com memory_limit")
+
+    monkeypatch.setattr(delta, "environment_limits", refusing)
+    data = rows("2026-08-31", 11, 10).drop_columns(["data_str"])
+    file = write_external_file(storage, uri, "data_str=2026-08-31/novo.parquet", data)
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        delta.register_files(uri, OPERACOES, [file], "2026-08-31", METADATA, storage)
+    assert delta.open_table(uri, storage).version() == 1
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        delta.rewrite(uri, OPERACOES, storage)
+    assert delta.open_table(uri, storage).version() == 1
+    archive = storage.uri_of("prd/arquivo/2026T3/cad_operacoes")
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        delta.deep_copy(uri, 1, archive, storage)
+    assert not delta.table_exists(archive, storage)
+    exported = storage.uri_of("prd/exportacao/cad_operacoes")
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        delta.export_snapshot(uri, OPERACOES, exported, storage, mode="rewrite")
+    assert storage.list_files(storage.relative(exported)) == []
