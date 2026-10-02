@@ -635,6 +635,9 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A double of a concurrent writer changes the bytes it writes**: the local fingerprint is the
   content's `sha256`, and a double that rewrote the same control file read as no change once
   `run.snapshot` read the file before the commits (2026-09-28).
+- **A Parquet footer is read by each leaf's `path`, never its `name`**: the leaf of a column
+  nested in a struct repeats the inner field's name, so `valor` inside `s` passed
+  `register_files`, registered and read null (2026-10-01).
 
 ## Naming conventions
 

@@ -267,6 +267,17 @@ def resolve_metadata(
     return target
 
 
+def partition_argument(
+    text: str,
+) -> str:
+    """Um valor de ``--partitions`` pela regra da partição, como o ``--partitions`` de
+    ``serialize-db load``; o valor fora dela é erro de uso, com o código 2."""
+    try:
+        return schema.check_partition_value(text)
+    except ContractError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Os argumentos da linha de comando do script."""
     parser = argparse.ArgumentParser(
@@ -299,6 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--partitions",
         nargs="+",
         metavar="AAAA-MM-DD",
+        type=partition_argument,
         default=None,
         help="só estas partições, gravadas e conferidas, que toda tabela particionada precisa ter "
         "na origem; as tabelas sem partição ficam de fora",

@@ -2228,6 +2228,12 @@ implementação de `serialize_db.storage` e `serialize_db.delta` leu a API do de
 - **O `hive_partitioning` na leitura da exportação.** O `read_parquet` das pastas exportadas leu
   `data_str=2026-07-31` como `DATE`; com `hive_types_autocast = false`, como texto, a mesma leitura de
   `test_deltalake.py::test_initial_load_from_parquet_folders`.
+- **A folha de uma coluna aninhada no rodapé** (2026-10-01). A conferência do esquema indexava o
+  rodapé por `ColumnSchema.name`, o nome da folha: um arquivo com `valor` dentro de um struct `s`
+  registrou a versão 1, e o delta-rs leu 20 nulos em 20 linhas, sem que `read_back` o pegasse,
+  porque ela lê só as chaves; uma coluna aninhada a mais era recusada pelo nome da folha (`x` de
+  `aninhada.x`, `element` de uma lista). A conferência lê o caminho da folha e recusa a coluna
+  aninhada como fora do contrato (`coluna aninhada s.valor fora do contrato`).
 
 **Consequência**: [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) troca a interface e os rascunhos pela seção
 "A implementação" e registra o que a implementação fixou: os métodos de caminho de `Storage`
@@ -5757,10 +5763,13 @@ passou nas três.
 - **A terceira rodada passou com 354 aprovados e 75 pulados, em 143,8 s.** Os pulados são os
   casos `s3` e `redshift`, sem as variáveis, o do modo dos arquivos e o da memória física sem
   `/proc`, que no Windows é a disponível.
-- **A rodada de 2026-10-01 sobre o PR #120 passou com 355 aprovados e 75 pulados no Windows,
-  em 148,5 s, e com 356 aprovados e 74 pulados no Ubuntu, em 133,0 s.** O caso a mais, nas
-  duas plataformas, é o de `test_storage.py` que prova a troca de `write_text` que falha sem
-  deixar o temporário; o pulado a mais do Windows é o do modo dos arquivos.
+- **A rodada de 2026-10-01 sobre o merge do PR #120 (f167867) passou com 362 aprovados e 76
+  pulados no Windows, em 150,8 s, e com 363 aprovados e 75 pulados no Ubuntu, em 129,7 s.** Os
+  nove casos a mais sobre a terceira rodada são os do PR: a partição pedida que a origem não tem
+  (dois em `test_load.py` e um do script), a coluna fora do contrato no registro (o caso `local`
+  aprovado e o `s3` pulado, o pulado a mais de cada plataforma), a troca de `write_text` que
+  falha sem deixar o temporário, a coluna do Delta fora do modelo no `ingest` materializado, a
+  auditoria com lista numa tabela sem partição e a memória abaixo de 2 MiB.
 
 **Consequências**: no Windows, `resources.py` lê a memória e o pico pela API do sistema, e
 `physical_memory`, protegida, dá a memória física ao script de migração; `available_memory` fica

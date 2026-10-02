@@ -630,7 +630,7 @@ class Storage:
         Na pasta local, a comparação da impressão digital seguida de ``os.replace`` de um arquivo
         temporário, que não é atômica entre processos e basta à pasta local, o ambiente dos testes
         e do desenvolvimento; o arquivo substituído mantém o modo, o novo nasce como em
-        ``create_text``, e a troca que falha não deixa o temporário na pasta.
+        ``create_text``, e a escrita ou a troca que falha não deixa o temporário na pasta.
 
         Exemplo:
 
@@ -687,9 +687,10 @@ class Storage:
         # O arquivo temporário na mesma pasta, que os.replace troca de uma vez, nasce como um
         # arquivo novo e recebe o modo do arquivo que substitui, quando ele existe.
         temporary = full.with_name(f"{full.name}.{uuid.uuid4().hex}.tmp")
-        _write_new_file(temporary, content)
-        # A troca que falha não deixa o temporário na pasta, onde list_files o listaria.
+        # A escrita ou a troca que falha não deixa o temporário na pasta, onde list_files o
+        # listaria; o nome com o uuid é só deste escritor, e a abertura exclusiva não o encontra.
         try:
+            _write_new_file(temporary, content)
             if full.exists():
                 os.chmod(temporary, stat.S_IMODE(full.stat().st_mode))
             os.replace(temporary, full)

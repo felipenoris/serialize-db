@@ -7,7 +7,8 @@ o pipeline crie vale para os comandos seguintes, de qualquer thread, e nenhuma p
 código do cliente com o lock tomado. ``session()`` dá a conexão crua ao bloco, com o lock tomado e
 reentrante na mesma thread; ``new_session()`` abre um motor sobre ``cursor()`` da conexão, uma
 sessão a mais sobre o mesmo banco, com o seu lock. Os limites da instância saem do ambiente na
-abertura, quando a configuração os omite (``environment_limits``): ``threads`` são as CPUs que o
+abertura, quando a configuração os omite (``available_cpus`` e ``memory_limit_setting`` de
+``serialize_db.resources``, os valores de ``environment_limits``): ``threads`` são as CPUs que o
 processo pode usar, e ``memory_limit`` é metade da memória que ele ainda pode usar, recusada com
 ``SandboxError`` quando não dá 1 MiB.
 
@@ -657,7 +658,7 @@ class DuckDBConfig:
     apagado em ``cleanup``; ``":memory:"`` só por pedido; outro caminho é usado e mantido."""
     threads: int | None = None
     """As threads da instância; ``None`` são as CPUs que o processo pode usar na abertura
-    (``environment_limits``)."""
+    (``available_cpus``)."""
     memory_limit: str | None = None
     """Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode usar na
     abertura (``environment_limits``), recusada com ``SandboxError`` quando não dá 1 MiB. O valor

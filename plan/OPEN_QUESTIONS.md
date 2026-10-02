@@ -52,6 +52,10 @@ foi medido em [`POC.md`](POC.md).
   do modelo); o caso não rodou no alvo nem no substituto, e nenhum teste o cobre, porque a
   mensagem do alvo não foi lida ([etapa 5](PLAN-STAGE-5.md)). No DuckDB, o caso tem teste
   (`test_materialized_ingest_refuses_a_delta_column_outside_the_model`).
+- **A `NOT NULL` ausente no `COPY` do appender Redshift.** A docstring de `RedshiftAppender` e a
+  [etapa 5](PLAN-STAGE-5.md) dizem que a coluna `NOT NULL` que o lote não trouxe faz a carga
+  falhar, pela documentação do `FILLRECORD` da AWS; o caso não rodou no alvo, e o substituto não o
+  prova, porque a recusa dele seria a do `NOT NULL` do DuckDB.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
@@ -209,8 +213,9 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
 
 A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões e os planos, rodou as
 suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; os seis itens que
-pediam decisão foram decididos pelo usuário no mesmo dia, e cada decisão está na etapa que a
-descreve e em `.claude/memory/decisions.md`.
+pediam decisão foram decididos pelo usuário no mesmo dia: cinco estão na etapa que descreve cada
+um e em `.claude/memory/decisions.md`, e o terceiro, a variável das sondas da operação, no
+`SUITE.md` do usuário.
 
 Notas anteriores à janela, sem decisão pedida: `publish_delta(tabela, partitions=[])` reconcilia
 sem exportar e `audit(tabela, [])` aprova sem auditar; `run.snapshot` chamado duas vezes grava só o

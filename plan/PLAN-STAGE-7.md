@@ -92,10 +92,12 @@ partição com e sem a ordem, cada variante num processo novo com o pico do proc
 saiu do script na mesma decisão: a bateria de 2026-09-24 mediu as quatro partições de
 `cad_lancamentos` nas duas variantes, a ordem pela `sort_key` está decidida, e os números estão em
 [`POC.md`](POC.md) e abaixo. `tests/test_migrate_parquet_to_delta.py` cobre o script sobre a base
-fictícia (6 casos, marcador `local`): a linha de comando sobre a base inteira, duas vezes, com o
-ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; o relatório parcial de uma
-carga interrompida numa partição fora do contrato; a recusa do modelo com violações, sem ler a
-origem, e a de uma tabela fora do modelo e de um `--metadata` que não importa; o ambiente `dsv` com
+fictícia (9 casos, marcador `local`): a linha de comando sobre a base inteira, duas vezes, com o
+ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; a carga e o relatório só das
+partições de `--partitions`, e a recusa da partição pedida que a origem não tem, antes de gravar;
+o relatório parcial de uma carga interrompida numa partição fora do contrato; a recusa do modelo
+com violações, sem ler a origem, e a de uma tabela fora do modelo, de um `--metadata` que não
+importa e de um valor de `--partitions` fora da regra da partição; o ambiente `dsv` com
 `SERIALIZE_DB_ENVIRONMENT` vazia; e a diferença impressa com a tabela sem partição como tabela
 inteira e o lado em que a partição falta como ausente. A versão que
 rodou no ambiente alvo em 2026-09-23 registrava o mínimo e o máximo de toda coluna `Double`, e o
@@ -258,7 +260,7 @@ na documentação do `pdoc`. O que a implementação mudou do plano:
 
 `tests/test_load.py` sobre a base fictícia de `tests/source_db_projetado.py`, gravada sob a raiz
 local, e sobre origens montadas no teste (26 casos), e `tests/test_migrate_parquet_to_delta.py`
-sobre o script (8), todos com o marcador `local`.
+sobre o script (9), todos com o marcador `local`.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |
@@ -280,7 +282,7 @@ sobre o script (8), todos com o marcador `local`.
 | Órfãos | `test_foreign_key_orphans_are_reported_not_blocking` | A carga da base inteira passa sem conferir chave estrangeira; uma conta apagada deixa órfãos que a auditoria do motor DuckDB registra em `orfao_id_conta`, com as outras chaves aprovadas. |
 | Linha de comando | `test_cli_load_loads_the_base_and_reports` | `serialize-db load` sobre a base inteira, duas vezes; a partição 2026-02-28 de `cad_contratos` gravada e conferida sozinha, sem `DIFERENÇA` e com a saída 0; 1 na partição fora do contrato; 2 no modelo fora do contrato, na tabela fora do modelo, na origem ausente ou num esquema que a biblioteca não lê e no conflito; nenhum traceback. |
 | Tabela inteira | `test_cli_load_names_the_unpartitioned_table` | Com o `load_report` trocado por um que acusa uma linha a mais na origem de `cad_contas`, a tabela sem partição sai como `tabela inteira` na linha da carga e como `DIFERENÇA na tabela inteira` na diferença, e a saída é 1. |
-| O script | `test_main_migrates_the_whole_base`, `test_main_confers_only_the_requested_partitions`, `test_main_refuses_a_requested_partition_absent_from_the_source`, `test_report_keeps_the_progress_of_an_interrupted_load`, `test_main_refuses_a_model_with_violations`, `test_empty_environment_variable_counts_as_absent`, `test_print_report_names_the_unpartitioned_table`, `test_print_report_names_the_missing_side` | O relatório JSON da base inteira, duas vezes; a carga e o relatório só da partição de `--partitions`, com a saída 0; a recusa da partição pedida que a origem não tem, com a saída 1 antes de gravar ou imprimir uma tabela; o relatório parcial da carga interrompida; a recusa do modelo com violações, sem ler a origem, e a de uma tabela fora do modelo e de um `--metadata` que não importa; a tabela no ambiente `dsv` com `SERIALIZE_DB_ENVIRONMENT` vazia; `DIFERENÇA na tabela inteira` na tabela sem partição; `origem ausente` e `Delta ausente` no lado em que a partição falta, sem `None` na saída. |
+| O script | `test_main_migrates_the_whole_base`, `test_main_confers_only_the_requested_partitions`, `test_main_refuses_a_requested_partition_absent_from_the_source`, `test_report_keeps_the_progress_of_an_interrupted_load`, `test_main_refuses_a_model_with_violations`, `test_empty_environment_variable_counts_as_absent`, `test_print_report_names_the_unpartitioned_table`, `test_print_report_names_the_missing_side` | O relatório JSON da base inteira, duas vezes; a carga e o relatório só da partição de `--partitions`, com a saída 0; a recusa da partição pedida que a origem não tem, com a saída 1 antes de gravar ou imprimir uma tabela; o relatório parcial da carga interrompida; a recusa do modelo com violações, sem ler a origem, e a de uma tabela fora do modelo, de um `--metadata` que não importa e de um valor de `--partitions` fora da regra da partição, erros de uso com a saída 2; a tabela no ambiente `dsv` com `SERIALIZE_DB_ENVIRONMENT` vazia; `DIFERENÇA na tabela inteira` na tabela sem partição; `origem ausente` e `Delta ausente` no lado em que a partição falta, sem `None` na saída. |
 
 ## Decisões pendentes
 

@@ -261,7 +261,8 @@ def test_main_refuses_a_model_with_violations(
     capsys: pytest.CaptureFixture,
 ) -> None:
     """O modelo de referência viola o contrato: saída 2 com a lista, sem ler a origem; uma
-    tabela fora do modelo e um ``--metadata`` que não importa são erros de uso."""
+    tabela fora do modelo, um ``--metadata`` que não importa e um valor de ``--partitions`` fora
+    da regra da partição são erros de uso."""
     never_written = folder / "nunca-gravada"
     arguments = [
         "--metadata",
@@ -306,6 +307,24 @@ def test_main_refuses_a_model_with_violations(
         )
     assert refusal.value.code == 2
     assert "No module named 'nao_existe'" in capsys.readouterr().err
+    assert not never_written.exists()
+
+    # O valor de --partitions fora da regra da partição sai como erro de uso, como na CLI.
+    with pytest.raises(SystemExit) as refusal:
+        migrate.main(
+            [
+                "--metadata",
+                "client_model:Base.metadata",
+                "--source",
+                str(base.root),
+                "--root",
+                str(never_written),
+                "--partitions",
+                "2026 Q1",
+            ]
+        )
+    assert refusal.value.code == 2
+    assert "2026 Q1" in capsys.readouterr().err
     assert not never_written.exists()
 
 

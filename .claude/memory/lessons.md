@@ -687,3 +687,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   reached `plan/POC.md`, `plan/OPEN_QUESTIONS.md` and the thread before the probe's `TABLE_PREFIX`
   and the server's history were read. This is the rule of 2026-09-20 that reads a label against each
   item it covers. `plan/POC.md`
+- **A Parquet footer is read by each leaf's `path`, never its `name`** (2026-10-01). The second
+  review after PR #120 wrote a file with the contract column `valor` inside a struct `s`:
+  `_check_footer_schema` keyed the footer by `ColumnSchema.name`, the leaf's name, so the file had
+  every contract column, registered as version 1, and both readers read `valor` as 20 nulls of 20;
+  `read_back` compares only the keys and did not catch it, and a nested extra column was refused
+  by the leaf's name (`x`, `element`). The check now reads `ColumnSchema.path` and refuses any
+  dotted path as a column outside the contract, which has no nested type; the case
+  `coluna aninhada` of `test_register_files_refuses_each_defect` fails on the old code.
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`

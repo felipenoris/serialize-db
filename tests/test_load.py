@@ -948,6 +948,17 @@ def test_cli_load_loads_the_base_and_reports(
     printed_errors += capsys.readouterr().err
     assert "gs://bucket/origem: esquema fora dos armazenamentos" in printed_errors
 
+    # A raiz num esquema que a biblioteca não lê é erro de uso do argparse, em todo subcomando.
+    with pytest.raises(SystemExit) as refusal:
+        cli.main([*common, "--root", "gs://bucket/raiz"])
+    assert refusal.value.code == 2
+    assert "gs://bucket/raiz: esquema fora dos armazenamentos" in capsys.readouterr().err
+    history = ["history", *common[1:3], "--root", "gs://bucket/raiz", "--table", "cad_contas"]
+    with pytest.raises(SystemExit) as refusal:
+        cli.main(history)
+    assert refusal.value.code == 2
+    assert "gs://bucket/raiz: esquema fora dos armazenamentos" in capsys.readouterr().err
+
     # O conflito com outro registro da mesma partição.
     monkeypatch.setattr(load, "initial_load", conflicting_load)
     assert cli.main([*common, "--root", root, "--tables", "cad_contas"]) == 2

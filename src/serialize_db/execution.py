@@ -250,6 +250,8 @@ class Database:
             que não existe.
         :raises duckdb.Error: a extensão ``delta`` ausente da pasta configurada, ou uma versão
             do snapshot que a tabela não tem mais, na criação da view.
+        :raises SandboxError: sem ``memory_limit`` em ``config``, a memória que o processo ainda
+            pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB (``environment_limits``).
         """
         return DeltaReader(self, snapshot, channel, config)
 

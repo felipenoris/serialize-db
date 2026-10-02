@@ -803,26 +803,36 @@ def _check_footer_schema(
     contract: pa.Schema,
     partition_by: str | None,
 ) -> None:
-    """O esquema do rodapé contra o do contrato, nome a nome.
+    """O esquema do rodapé contra o do contrato, pelo nome de cada coluna de primeiro nível.
 
     Nenhuma coluna do contrato ausente, porque o leitor a leria nula sem erro; o tipo físico entre
     os que os leitores leem como o lógico; a coluna de partição fora do arquivo, porque ela vive na
     ação, e nenhuma coluna fora do contrato, porque o ``COPY`` do Redshift, que lista as colunas do
     rodapé, mandaria uma e outra para a staging, que não as tem; e as colunas do contrato na ordem
     dele, que nenhum leitor do pacote exige: os dois leitores e o ``COPY`` ligam cada coluna do
-    arquivo à de mesmo nome.
+    arquivo à de mesmo nome. O rodapé lista as folhas, e a folha de uma coluna aninhada leva em
+    ``name`` o nome do campo interno, que pode repetir o de uma coluna do contrato, e os leitores
+    leriam a coluna do contrato nula; o caminho da folha, com ponto, a distingue, e a coluna
+    aninhada é recusada como fora do contrato, que não tem tipo aninhado.
     """
     physical = {}
+    nested = []
     order = []
     for index in range(len(footer.schema)):
         column = footer.schema.column(index)
-        physical[column.name] = column.physical_type
-        if column.name in contract.names:
-            order.append(column.name)
+        name, _, inner = column.path.partition(".")
+        if inner:
+            nested.append(column.path)
+            continue
+        physical[name] = column.physical_type
+        if name in contract.names:
+            order.append(name)
     if partition_by in physical:
         raise RegistrationRefused(
             f"{file.path}: a coluna de partição {partition_by} está dentro do arquivo"
         )
+    if nested:
+        raise RegistrationRefused(f"{file.path}: coluna aninhada {nested[0]} fora do contrato")
     for name in physical:
         if name not in contract.names:
             raise RegistrationRefused(f"{file.path}: coluna {name} fora do contrato")
@@ -975,8 +985,9 @@ def register_files(
     arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo: o
     arquivo existe com o tamanho declarado; o esquema do rodapé tem cada coluna do contrato, na
     ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição
-    nem coluna fora do contrato; as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o
-    caminho está na pasta da partição; as linhas do rodapé são as declaradas.
+    nem coluna fora do contrato, a aninhada inclusive, cuja folha pode repetir o nome de uma
+    coluna do contrato; as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está
+    na pasta da partição; as linhas do rodapé são as declaradas.
 
     A ação leva ``numRecords``, o ``nullCount`` e o mínimo e o máximo das colunas inteiras, de data,
     ``Double`` e texto. Depois do commit, ``read_back`` relê a versão pelos dois leitores e a
