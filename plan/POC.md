@@ -3166,6 +3166,12 @@ e os 3 de `tests/test_migrate_parquet_to_delta.py` passam. O que a implementaç�
   recusas sem commit, o `Double` não finito e o relatório; os da medição saíram com ela, e o da
   conexão por tabela com os limites do ambiente é do motor (`tests/test_engine_duckdb.py`), que a
   carga abre por chamada.
+- **A tabela sem partição sob `partitions` criava a tabela Delta vazia** (2026-10-01):
+  `initial_load` com `partitions` numa tabela sem partição criava a tabela na versão 0 e abria um
+  motor sem nada a gravar, e `load_report` abria outro para um relatório sem partição;
+  `serialize-db load --tables cad_aliquotas --partitions 9999-12-31` criava
+  `prd/cad_aliquotas/_delta_log` e imprimia `0 partição(ões) conferida(s)`. Desde a decisão do
+  usuário de 2026-10-02, a tabela fica inteira de fora, sem criação, motor nem relatório.
 
 ## O que a implementação da etapa 9 mostrou
 

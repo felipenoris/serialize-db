@@ -15,7 +15,7 @@ versões, os limites do DuckDB lidos do ambiente e os argumentos, cada tabela co
 Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``, e a origem fica
 intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas, que toda
 tabela particionada precisa ter na origem: uma que falta recusa a execução antes de qualquer
-gravação.
+gravação, e a tabela sem partição fica inteira de fora, sem carga, relatório nem entrada no JSON.
 
 Uma partição fora do contrato interrompe a execução sem commit, com a tabela, a partição e a
 coluna na mensagem, e a execução seguinte recomeça dela; o script sai com 1 nesse caso, na
@@ -358,6 +358,11 @@ def main(
         for table in ordered:
             load.check_requested_partitions(arguments.source, table, arguments.partitions)
         for table in ordered:
+            # A tabela sem partição fica inteira de fora do pedido por partições.
+            unpartitioned = schema.table_options(table).partition_by is None
+            if arguments.partitions is not None and unpartitioned:
+                print(f"{table.name}: tabela sem partição, fora de --partitions")
+                continue
             print(f"{table.name}:")
             progress = None
             if arguments.report:

@@ -943,7 +943,9 @@ def _load(
     """A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada uma: 1 na
     partição pedida que a origem não tem, recusada antes de qualquer gravação, na partição fora do
     contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato, na tabela fora do
-    modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito."""
+    modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito. Com
+    ``--partitions``, a tabela sem partição sai numa linha como fora do pedido, sem carga nem
+    relatório."""
     problems = schema.check_models(args.metadata)
     if problems:
         print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ", file=sys.stderr)
@@ -956,16 +958,23 @@ def _load(
         return 2
     db = Database(args.root, args.environment, args.metadata)
     matches = True
+    conferred = 0
     try:
         tables = load.load_order(_selected_tables(args.metadata, args.tables))
         # A partição pedida que a origem não tem recusa a carga antes de qualquer gravação.
         for table in tables:
             load.check_requested_partitions(args.source, table, args.partitions)
         for table in tables:
+            # A tabela sem partição fica inteira de fora do pedido por partições.
+            unpartitioned = schema.table_options(table).partition_by is None
+            if args.partitions is not None and unpartitioned:
+                print(f"{table.name}: tabela sem partição, fora de --partitions")
+                continue
             loaded = load.initial_load(db, table, args.source, args.partitions)
             report = load.load_report(db, table, args.source, args.partitions)
             _print_load_report(report, loaded)
             matches = matches and report.matches
+            conferred += 1
     except (argparse.ArgumentTypeError, FileNotFoundError) as error:
         print(f"serialize-db load: {error}", file=sys.stderr)
         return 2
@@ -979,7 +988,7 @@ def _load(
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")
     verdict = "contagens e somas iguais" if matches else "com diferenças"
-    print(f"{len(tables)} tabela(s) conferida(s), {verdict}")
+    print(f"{conferred} tabela(s) conferida(s), {verdict}")
     return 0 if matches else 1
 
 

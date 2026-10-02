@@ -219,7 +219,8 @@ def test_initial_load_loads_every_partition_once(
     """A primeira passagem grava toda partição num commit cada, com o nome, a partição, as
     retenções e o ``execution_id`` da carga no log; a segunda não grava nada; uma tabela sem
     partição carrega uma vez, com o valor ``None``; ``partitions`` filtra as partições
-    encontradas, deixa as tabelas sem partição de fora, e a passagem seguinte carrega o resto."""
+    encontradas, deixa a tabela sem partição inteira de fora, sem criá-la, e a passagem seguinte
+    carrega o resto."""
     origin = origin_of(base)
     table = TABLES["cad_contratos"]
     assert load.initial_load(db, table, origin, config=config) == PARTITION_VALUES
@@ -255,6 +256,7 @@ def test_initial_load_loads_every_partition_once(
     assert load.initial_load(db, operations, origin, partitions=only, config=config) == only
     rates = TABLES["cad_aliquotas"]
     assert load.initial_load(db, rates, origin, partitions=only, config=config) == []
+    assert not delta.table_exists(db.uri(rates), db.storage)
     rest = load.initial_load(db, operations, origin, config=config)
     assert rest == ["2026-01-31", "2026-03-31", "2026-06-30"]
 
@@ -700,7 +702,8 @@ def test_requested_partition_absent_from_the_source_is_refused(
 ) -> None:
     """``initial_load`` e ``load_report`` recusam com ``ContractError`` um valor de ``partitions``
     que a origem não tem, antes de criar a tabela, e ``check_requested_partitions`` o recusa sem
-    abrir um motor; a tabela sem partição fica de fora com qualquer pedido, sem recusa."""
+    abrir um motor; a tabela sem partição fica inteira de fora com qualquer pedido, sem recusa
+    nem criação."""
     origin = origin_of(base)
     operations = TABLES["cad_operacoes"]
     requested = ["2026-02-28", "9999-12-31"]
@@ -721,8 +724,42 @@ def test_requested_partition_absent_from_the_source_is_refused(
     rates = TABLES["cad_aliquotas"]
     load.check_requested_partitions(origin, rates, requested)
     assert load.initial_load(db, rates, origin, partitions=requested, config=config) == []
+    assert not delta.table_exists(db.uri(rates), db.storage)
     rates_report = load.load_report(db, rates, origin, partitions=requested, config=config)
     assert rates_report.partitions == ()
+
+
+def refuse_engine(
+    *args: object,
+    **kwargs: object,
+) -> DuckDBEngine:
+    """O dublê de ``DuckDBEngine`` que acusa a abertura de um motor."""
+    raise AssertionError("um motor foi aberto")
+
+
+def test_unpartitioned_table_under_partitions_is_left_out(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Com ``partitions``, ``initial_load`` e ``load_report`` deixam a tabela sem partição inteira
+    de fora: a tabela não é criada, nenhum motor é aberto e o relatório sai vazio e aprovado; a
+    pasta da tabela ausente na origem continua ``FileNotFoundError``."""
+    origin = origin_of(base)
+    rates = TABLES["cad_aliquotas"]
+    monkeypatch.setattr(load, "DuckDBEngine", refuse_engine)
+    assert load.initial_load(db, rates, origin, partitions=["2026-02-28"], config=config) == []
+    assert not delta.table_exists(db.uri(rates), db.storage)
+    report = load.load_report(db, rates, origin, partitions=["2026-02-28"], config=config)
+    assert report.table == "cad_aliquotas"
+    assert report.partitions == ()
+    assert report.skipped == ()
+    assert report.conversions == ()
+    assert report.matches
+    with pytest.raises(FileNotFoundError):
+        load.initial_load(db, rates, str(folder), partitions=["2026-02-28"], config=config)
 
 
 def test_load_report_reads_only_what_the_load_reads(
@@ -855,9 +892,9 @@ def test_cli_load_loads_the_base_and_reports(
 ) -> None:
     """``serialize-db load`` sobre a base inteira: as tabelas sem partição antes das
     particionadas, as três entradas fora do modelo, saída 0; a segunda execução não grava nada;
-    uma partição só, gravada e conferida sozinha, saída 0; 1 na partição fora do contrato; 2 no
-    modelo fora do contrato, na tabela fora do modelo, na origem ausente ou num esquema que a
-    biblioteca não lê e no conflito, sem traceback."""
+    uma partição só, gravada e conferida sozinha, com a tabela sem partição fora, saída 0; 1 na
+    partição fora do contrato; 2 no modelo fora do contrato, na tabela fora do modelo, na origem
+    ausente ou num esquema que a biblioteca não lê e no conflito, sem traceback."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
@@ -893,12 +930,15 @@ def test_cli_load_loads_the_base_and_reports(
         "--root",
         partial_root,
         "--tables",
+        "cad_contas",
         "cad_contratos",
         "--partitions",
         "2026-02-28",
     ]
     assert cli.main(partial) == 0
     printed = capsys.readouterr().out
+    assert "cad_contas: tabela sem partição, fora de --partitions" in printed
+    assert not (Path(partial_root) / "prd" / "cad_contas").exists()
     assert "cad_contratos: 1 partição(ões) gravada(s): 2026-02-28" in printed
     assert "1 partição(ões) conferida(s), contagens e somas iguais" in printed
     assert "DIFERENÇA" not in printed

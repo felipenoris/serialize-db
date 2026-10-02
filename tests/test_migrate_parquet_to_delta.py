@@ -160,7 +160,8 @@ def test_main_confers_only_the_requested_partitions(
     capsys: pytest.CaptureFixture,
 ) -> None:
     """Com ``--partitions``, a carga e o relatório ficam nas partições pedidas: as outras da
-    origem, fora do Delta, não contam como diferença, e a saída é 0."""
+    origem, fora do Delta, não contam como diferença, a tabela sem partição fica inteira de fora,
+    sem pasta no Delta nem entrada no JSON, e a saída é 0."""
     report_path = folder / "relatorio.json"
     arguments = [
         "--metadata",
@@ -170,6 +171,7 @@ def test_main_confers_only_the_requested_partitions(
         "--root",
         str(folder / "delta"),
         "--tables",
+        "cad_contas",
         "cad_contratos",
         "--partitions",
         "2026-02-28",
@@ -178,9 +180,12 @@ def test_main_confers_only_the_requested_partitions(
     ]
     assert migrate.main(arguments) == 0
     printed = capsys.readouterr().out
+    assert "cad_contas: tabela sem partição, fora de --partitions" in printed
+    assert list((folder / "delta").glob("**/cad_contas")) == []
     assert "relatório: 1 partições conferidas, contagens e somas iguais" in printed
     assert "DIFERENÇA" not in printed
     document = json.loads(report_path.read_text())
+    assert [table["table"] for table in document["tables"]] == ["cad_contratos"]
     conferred = [partition["value"] for partition in document["tables"][0]["partitions"]]
     assert conferred == ["2026-02-28"]
 
