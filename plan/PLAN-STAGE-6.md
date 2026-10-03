@@ -216,19 +216,33 @@ as chamadas.
 | Ingestão paralela | `test_ingest_of_several_tables_uses_extra_sessions` | Uma tabela na sessão principal, na thread de quem chama, sem `new_session`; várias em sessões a mais, fora da thread principal, lidas pela sessão principal; a falha de uma leva o resultado das outras na nota. |
 
 `tests/test_pipeline.py` roda a execução completa sobre a base de testes em Delta, a base fictícia
-de `tests/source_db_projetado.py` carregada por `import_table` com o modelo cliente:
-`monthly_pipeline(run)`, no formato `modulo:funcao` de `serialize-db run`, ingere as tabelas do
-modelo (as particionadas só na última data-base, materializadas pela DDL e pelo `INSERT` do
-`delta_scan`), gera a partição do mês seguinte de `cad_operacoes`, `cad_contratos` e
-`rel_contrato_operacao` por `INSERT ... SELECT` com os ids de `next_ids`, e a de `cad_lancamentos`
-em pyarrow, a partir da última partição ingerida, acrescentada por `run.sandbox.append` à tabela
-do `ingest`; roda `saldos_por_conta` de `client_model.statements` sobre a partição nova, confere o
-rateio por contrato num `join` de três tabelas, audita as quatro com `foreign_keys=True` e as
-publica por `publish_delta`. `test_monthly_pipeline_publishes_the_next_base_date` confere os saldos
-e as contagens contra a base em memória, as auditorias sem verificação por rodar, a versão a mais de
-cada tabela só com a partição nova alterada, os metadados do commit e a releitura pelo leitor Delta;
+de `tests/source_db_projetado.py` carregada por `import_table` com o modelo cliente, e os
+comentários do pipeline trazem as recomendações de uso do pacote. `monthly_pipeline(run)`, no
+formato `modulo:funcao` de `serialize-db run`, copia os contratos do mês, entregues em um CSV por
+sistema em `<ambiente>/recebidos/<partição>/`, para a pasta da execução,
+`<ambiente>/execucoes/<execution_id>/entradas/`, e lê a cópia com os tipos do contrato; ingere só
+o que lê, `cad_contas` como view e a última data-base de `cad_operacoes`, `rel_contrato_operacao`
+e `cad_lancamentos`, materializada pela DDL e pelo `INSERT` do `delta_scan`, e cria
+`cad_contratos` vazia por `create_table`; gera a partição do mês seguinte de `cad_contratos` da
+cópia, por `run.sandbox.append`, a de `cad_operacoes` e `rel_contrato_operacao` por
+`INSERT ... SELECT`, e a de `cad_lancamentos` em pyarrow, a partir da última partição ingerida,
+acrescentada por `run.sandbox.append` à tabela do `ingest`, com os ids de `next_ids` em toda linha
+nova; roda `saldos_por_conta` de `client_model.statements` e o rateio por contrato num `join` de
+três tabelas sobre a partição nova e grava os dois em `relatorios/` na pasta da execução; audita
+as quatro tabelas com `foreign_keys=True` e as publica por `publish_delta`. Na falha depois da
+ingestão, a partição gerada de cada tabela vai a `geracao/` na pasta da execução, lida por
+`stream` e gravada lote a lote, e a exceção sobe. A pasta da execução é código cliente, sem API no
+pacote. `test_monthly_pipeline_publishes_the_next_base_date` confere os saldos e as contagens
+contra a base em memória, as auditorias sem verificação por rodar, a versão a mais de cada tabela
+só com a partição nova alterada, os metadados do commit, a pasta da execução e a releitura pelo
+leitor Delta, com os contratos iguais aos entregues;
 `test_following_month_runs_over_the_published_partition` roda o mesmo pipeline por
-`serialize-db run` e, em seguida, a execução do mês seguinte sobre a partição publicada.
+`serialize-db run`, acha a pasta da execução pelo `execution_id` do commit e, em seguida, roda a
+execução do mês seguinte sobre a partição publicada;
+`test_a_rerun_of_the_published_month_replaces_its_partition` reexecuta o mês publicado, que lê a
+data-base anterior a ele e troca a partição por outra com as mesmas contagens; e
+`test_a_repeated_contract_fails_the_audit_and_keeps_the_generated_partition` entrega um contrato
+repetido, que a auditoria reprova sem commit, com a partição gerada na pasta da execução.
 
 ## A implementação
 

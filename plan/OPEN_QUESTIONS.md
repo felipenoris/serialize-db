@@ -154,6 +154,11 @@ foi medido em [`POC.md`](POC.md).
   como usuário do proxy, com ou sem usuário no endereço. Espera o usuário: no Windows, ler o
   usuário e a senha do proxy só do endereço, ou de variáveis `SERIALIZE_DB_`, ou manter a leitura
   enquanto o Windows é só a máquina de quem desenvolve.
+- **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
+  da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
+  ([`POC.md`](POC.md)), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
+  entrega em outro bucket fica com o `boto3` do cliente. Espera o usuário: levar a pasta e a cópia
+  de fora da raiz ao pacote quando um segundo pipeline repetir o código, ou mantê-las no cliente.
 
 ## Achados das sondas de consistência de leitura e escrita
 
