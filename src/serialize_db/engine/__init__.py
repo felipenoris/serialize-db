@@ -260,7 +260,7 @@ class Engine(Protocol):
             engine.ingest(Lancamento.__table__, uri, 143, partitions=["2026-08-31"])
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
-        :param uri: a URI da tabela Delta.
+        :param uri: a URI da pasta da tabela Delta de origem.
         :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
             ``None`` lê todas, e a lista vazia, nenhuma.
@@ -289,7 +289,7 @@ class Engine(Protocol):
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
-        :param uri: a URI da tabela Delta.
+        :param uri: a URI da pasta da tabela Delta lida.
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core.
         :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``).
@@ -469,6 +469,9 @@ class Engine(Protocol):
     ) -> int:
         """Leva a partição do sandbox ao Delta num commit.
 
+        O motor grava a partição em arquivos novos na pasta dela na tabela Delta, e o commit os
+        registra no log da tabela.
+
         Exemplo:
 
         .. code-block:: python
@@ -477,7 +480,7 @@ class Engine(Protocol):
                                     delta.commit_metadata("exec-42", versions), expected_rows=1000)
 
         :param table: a tabela do modelo, no sandbox.
-        :param uri: a URI da tabela Delta, sob a raiz do armazenamento.
+        :param uri: a URI da pasta da tabela Delta de destino, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
         :param metadata: os metadados do commit, de ``delta.commit_metadata``.
         :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos

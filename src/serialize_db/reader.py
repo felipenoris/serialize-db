@@ -7,14 +7,14 @@ snapshot da base Delta, e ``RedshiftReader`` roda o mesmo statement nas tabelas 
 raiz Delta. O resultado é Arrow, como nos motores: ``query`` devolve a ``pa.Table``, que
 ``to_pandas(types_mapper=pd.ArrowDtype)`` leva ao pandas, e ``stream`` entrega os lotes.
 
-O leitor Delta lê, sem argumento, o snapshot do canal ``default`` do ambiente, que ``serialize-db
-channel`` move; ``snapshot=`` lê um snapshot pelo nome, o arquivado pela cópia em
-``arquivo/<nome>/``; ``channel="current"`` lê a versão atual de cada tabela. Cada view fica presa
-à versão lida na abertura, e a leitura entre tabelas é consistente num snapshot. O ``delta_scan``
-poda as partições por ``=``, por ``BETWEEN`` e pelo ``IN`` ao lado de um intervalo, e abre todos
-os arquivos com um ``IN`` de mais de um valor sozinho; ``materialize`` copia uma tabela, ou parte
-das partições dela, para o banco local. O leitor Redshift lê as tabelas que
-``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas
+O leitor Delta lê, sem argumento, o snapshot do canal ``default`` do ambiente, que
+``serialize-db channel`` move; ``snapshot=`` lê um snapshot pelo nome, o arquivado pela cópia em
+``<raiz>/<ambiente>/arquivo/<nome>/``; ``channel="current"`` lê a versão atual de cada tabela.
+Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é consistente num
+snapshot. O ``delta_scan`` poda as partições por ``=``, por ``BETWEEN`` e pelo ``IN`` ao lado de
+um intervalo, e abre todos os arquivos com um ``IN`` de mais de um valor sozinho; ``materialize``
+copia uma tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas
+que ``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas
 tabelas durante uma publicação pode ler versões diferentes.
 
 Exemplo:
@@ -256,7 +256,7 @@ class DeltaReader:
 
         :param delta_db: o banco Delta lido, com a raiz, o ambiente e os modelos.
         :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
-            ``arquivo/<nome>/``. ``None`` lê o canal.
+            ``<raiz>/<ambiente>/arquivo/<nome>/``. ``None`` lê o canal.
         :param channel: o canal do ambiente, ``"default"``, o mesmo que sem argumento, ou
             ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente.
             ``None`` com ``snapshot`` ``None`` é o canal ``default``.
@@ -275,8 +275,8 @@ class DeltaReader:
         """O snapshot lido; ``None`` no canal ``current``."""
         self.versions = source.versions
         """A versão de cada tabela com view, pelo nome da tabela; no snapshot arquivado, a versão
-        de cada cópia em ``arquivo/<nome>/``. A tabela do modelo ausente do snapshot não tem
-        view."""
+        de cada cópia em ``<raiz>/<ambiente>/arquivo/<nome>/``. A tabela do modelo ausente do
+        snapshot não tem view."""
         self.materialized: dict[str, list[str] | None] = {}
         """As tabelas copiadas para o banco local por ``materialize``, com as partições de cada
         uma; ``None`` na tabela inteira."""

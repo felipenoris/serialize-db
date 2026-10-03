@@ -1,28 +1,29 @@
 """A carga inicial: a base Parquet de origem vira tabelas Delta, uma partição por commit.
 
-A origem é a base atual em Parquet: uma pasta por tabela sob a raiz, as tabelas particionadas em
-pastas Hive ``<coluna>=<valor>/`` com vários ``chunk_<n>.parquet`` cada, as sem partição com os
-arquivos na raiz da tabela (``tests/source_db_projetado.py`` reproduz a estrutura lida nas duas
-bases reais). A carga só lê a origem, e a raiz Delta é a de ``Database``: cada tabela vai para
-``<raiz>/<ambiente>/<tabela>``.
+A origem é a base atual em Parquet: uma pasta por tabela sob a raiz de origem (``source``),
+``<origem>/<tabela>/``, as tabelas particionadas em pastas Hive ``<coluna>=<valor>/`` com vários
+``chunk_<n>.parquet`` cada, as sem partição com os arquivos na pasta da tabela
+(``tests/source_db_projetado.py`` reproduz a estrutura lida nas duas bases reais). A carga só lê a
+origem, e a raiz Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``.
 
-``import_table`` cria a tabela Delta do contrato, descobre as partições da pasta da tabela, pula as
-que já estão no log e, para cada uma das outras, num motor DuckDB próprio da chamada, aberto com os
-limites lidos do ambiente e fechado no fim: lê a pasta inteira por ``read_parquet`` sem
-``hive_partitioning`` (que converteria ``data_str`` a ``DATE``), leva cada coluna ao tipo do
-contrato por ``CAST`` (as chaves de ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a
-microssegundos) e põe o valor do caminho na coluna de partição; confere numa consulta que a coluna
-de origem da partição (``data``, ``data_base``) é igual ao valor do caminho em toda linha, que
-nenhuma coluna ``NOT NULL`` tem nulo e que nenhum texto passa do limite da coluna em bytes, o de
-``cast`` e da auditoria, e conta os valores não finitos de cada coluna ``Double``; grava a partição
-na ordem da ``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo da pasta dela e o registra
-por ``serialize_db.delta.register_files``, com as conferências do rodapé, a releitura e as colunas
-não finitas sem mínimo e máximo (issue #59). Uma partição fora do contrato é ``ContractError`` antes
-de qualquer gravação, com a tabela, a partição e a coluna; a chamada seguinte recomeça dela. Um
-valor que não converte para o tipo do contrato, ou uma coluna do contrato ausente dos arquivos,
-falha no ``COPY`` com o erro do DuckDB, também sem commit. As entradas da pasta da tabela fora do
-padrão, e as da raiz fora do modelo (``alembic_version``, ``meta_update_status``, ``schema.json``),
-ficam fora da carga e entram no relatório.
+``import_table`` cria a tabela Delta do contrato, descobre as partições da pasta da tabela na
+origem, pula as que já estão no log da tabela Delta e, para cada uma das outras, num motor
+DuckDB próprio da chamada, aberto com os limites lidos do ambiente e fechado no fim: lê a pasta
+inteira por ``read_parquet`` sem ``hive_partitioning`` (que converteria ``data_str`` a
+``DATE``), leva cada coluna ao tipo do contrato por ``CAST`` (as chaves de ``int32`` a
+``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos) e põe o valor do caminho na
+coluna de partição; confere numa consulta que a coluna de origem da partição (``data``,
+``data_base``) é igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem
+nulo e que nenhum texto passa do limite da coluna em bytes, o de ``cast`` e da auditoria, e conta
+os valores não finitos de cada coluna ``Double``; grava a partição na ordem da ``sort_key`` por
+``COPY ... RETURN_STATS`` num arquivo novo da pasta dela na tabela Delta e o registra por
+``serialize_db.delta.register_files``, com as conferências do rodapé, a releitura e as colunas
+não finitas sem mínimo e máximo (issue #59). Uma partição fora do contrato é ``ContractError``
+antes de qualquer gravação, com a tabela, a partição e a coluna; a chamada seguinte recomeça
+dela. Um valor que não converte para o tipo do contrato, ou uma coluna do contrato ausente dos
+arquivos, falha no ``COPY`` com o erro do DuckDB, também sem commit. As entradas da pasta da
+tabela fora do padrão, e as da raiz de origem fora do modelo (``alembic_version``,
+``meta_update_status``, ``schema.json``), ficam fora da carga e entram no relatório.
 
 ``import_report`` compara contagem e somas por partição entre a origem, lida pasta a pasta como a
 carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e as ``Double`` da
@@ -293,7 +294,7 @@ def partition_query(
     table: sa.Table,
     value: str | None,
 ) -> str:
-    """O ``SELECT`` do DuckDB que leva a partição ao contrato.
+    """O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato.
 
     A pasta inteira por ``read_parquet`` sem ``hive_partitioning`` e cada coluna em ``CAST`` para
     o tipo de ``sql_type`` no dialeto do DuckDB; todo identificador entre aspas, porque ``to`` é
@@ -575,7 +576,7 @@ def import_table(
     partitions: Sequence[str] | None = None,
     config: DuckDBConfig | None = None,
 ) -> list[str | None]:
-    """Grava no Delta cada partição da tabela ainda fora do log.
+    """Importa da base Parquet para a tabela Delta cada partição ainda fora do log da tabela.
 
     A tabela nasce por ``create_table`` quando não existe. A segunda chamada não grava nada. Com
     ``partitions``, uma tabela sem partição fica inteira de fora: nada é criado nem aberto.
@@ -624,7 +625,7 @@ def import_table(
     dt = delta.create_table(uri, table, storage)
     # As partições pedidas que a origem tem e o log ainda não.
     already = set(delta.partition_values(dt, options.partition_by))
-    log.info("%s: %d partições na origem, %d no log", table.name, len(found), len(already))
+    log.info("%s: %d partições na origem, %d no Delta", table.name, len(found), len(already))
     missing = []
     for value in _wanted_values(found, partitions):
         if value not in already:
@@ -816,7 +817,7 @@ def import_report(
     partitions: Sequence[str] | None = None,
     config: DuckDBConfig | None = None,
 ) -> ImportReport:
-    """Contagem e somas por partição na origem e no Delta, e o veredito.
+    """Contagem e somas por partição na base Parquet de origem e na tabela Delta, e o veredito.
 
     A origem é lida como ``import_table`` a lê: só as pastas que ``discover_partitions`` acha, uma
     a uma, pelos arquivos ``.parquet`` diretos de cada uma e sem ``hive_partitioning``. O Delta é

@@ -18,7 +18,10 @@ Redshift, um por lista de colunas dos arquivos, e ``snapshot`` marca no arquivo 
 ambiente as versões de um snapshot do banco, que ``vacuum_keeping_snapshots`` preserva;
 ``set_channel`` aponta um canal do ambiente para um snapshot, e ``channel_snapshot`` e
 ``snapshot_versions`` leem o canal e as versões para o leitor e a publicação. ``compact``,
-``deep_copy`` e ``export_snapshot`` são a operação.
+``deep_copy`` e ``export_snapshot`` são a operação: ``compact`` junta os arquivos pequenos das
+partições na própria tabela, ``deep_copy`` copia uma versão para uma tabela nova noutra pasta,
+como a do arquivo de um snapshot (``<ambiente>/arquivo/<nome>/<tabela>``), e ``export_snapshot``
+grava uma versão em arquivos Parquet sem o log, noutra pasta.
 
 Exemplo, numa pasta local:
 
@@ -468,7 +471,8 @@ def publish_partition(
     storage: Storage,
     columns_without_min_max: Collection[str] = (),
 ) -> int:
-    """Substitui a partição pelos dados num commit, pelo escritor do delta-rs.
+    """Substitui a partição da tabela Delta pelos dados num commit, pelo escritor do delta-rs,
+    que grava arquivos novos na pasta da partição.
 
     ``write_deltalake(mode="overwrite", predicate=...)`` sobre o objeto ``DeltaTable``, que depois
     da escrita está na versão do próprio commit mesmo com o commit de outro escritor no meio.
@@ -1754,13 +1758,15 @@ def copy_manifest(
         for manifest in copy_manifest(uri, 58, ["2026-08-31"], folder, storage):
             print(manifest.uri, manifest.columns)
 
-    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param uri: a URI da pasta da tabela Delta cujos arquivos os manifestos listam, sob a raiz
+        do banco.
     :param version: a versão cujos arquivos entram.
     :param partitions: os valores das partições pedidas, todas com ``None``; numa tabela sem
         partição, todo arquivo entra.
-    :param destination: a URI da pasta dos manifestos sob a raiz, em ``publicacao/`` ou
-        ``staging/``; um manifesto existente com o mesmo nome é substituído, e o ``COPY`` usa só
-        os devolvidos.
+    :param destination: a URI da pasta dos manifestos sob a raiz, em
+        ``<ambiente>/publicacao/`` na publicação ou em ``<ambiente>/staging/`` no ``ingest`` do
+        motor Redshift; um manifesto existente com o mesmo nome é substituído, e o ``COPY`` usa
+        só os devolvidos.
     :param storage: o armazenamento da raiz do banco.
     :return: um ``CopyManifest`` por lista de colunas, na ordem dos nomes dos manifestos; vazia,
         sem manifesto gravado, quando nenhum arquivo entra.
@@ -1852,7 +1858,7 @@ def snapshot(
     :return: o controle novo.
     :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle;
         ou um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a pasta
-        ``arquivo/<nome>/``, com o ``serialize-db channel`` na mensagem.
+        ``<ambiente>/arquivo/<nome>/``, com o ``serialize-db channel`` na mensagem.
     :raises ConflictError: outro escritor entre a leitura e a escrita.
     """
     check_partition_value(name)
@@ -1893,7 +1899,8 @@ def archive_snapshot(
     controle, na escrita condicional.
 
     A entrada arquivada deixa de prender as versões no ``vacuum``, que lê só ``snapshots``, e
-    continua a ocupar o nome: ``snapshot`` o recusa, porque ele dá a pasta ``arquivo/<nome>/``.
+    continua a ocupar o nome: ``snapshot`` o recusa, porque ele dá a pasta
+    ``<ambiente>/arquivo/<nome>/``.
 
     Exemplo:
 
@@ -2038,7 +2045,7 @@ def snapshot_versions(
     :param name: o nome do snapshot.
     :return: a versão de cada tabela, pelo nome da tabela, numa cópia da entrada.
     :raises ContractError: o nome ausente de ``snapshots``; a mensagem diz quando ele está em
-        ``archived``, que só o leitor Delta lê, pela cópia em ``arquivo/<nome>/``.
+        ``archived``, que só o leitor Delta lê, pela cópia em ``<ambiente>/arquivo/<nome>/``.
     """
     versions = control.get("snapshots", {}).get(name)
     if versions is None:
@@ -2309,7 +2316,8 @@ def deep_copy(
     e as estatísticas da ação de origem, as dos tipos exatos, num commit ``overwrite`` por partição,
     como ``register_files``, com o esquema da versão; no fim, o esquema da cópia é conferido contra
     o da versão, e a contagem dela pelos dois leitores contra a soma das ações. A memória é a do
-    log. Cada partição copiada vai ao log com o número de arquivos e o tempo da cópia.
+    log. Cada partição copiada vai ao log ``serialize_db.delta`` com o número de arquivos e o
+    tempo da cópia.
 
     A repetição continua uma cópia interrompida: com tabela em ``destination``, a partição cujos
     arquivos ela já registra é pulada, sem commit, e as outras são copiadas. Numa tabela criada de
@@ -2460,8 +2468,8 @@ def export_snapshot(
     version: int | None = None,
     mode: Literal["copy", "rewrite"] = "copy",
 ) -> list[str]:
-    """Exporta uma versão da tabela como arquivos Parquet, sem o log, nas pastas
-    ``<coluna>=<valor>/`` numa tabela particionada.
+    """Exporta uma versão da tabela Delta para arquivos Parquet sem o log, em ``destination``,
+    nas pastas ``<coluna>=<valor>/`` numa tabela particionada.
 
     Exemplo:
 
@@ -2470,9 +2478,9 @@ def export_snapshot(
         export_snapshot(uri, Operacao.__table__, storage.uri_of("prd/exportacao/2026T3"), storage,
                         version=143)
 
-    :param uri: a URI da pasta da tabela, sob a raiz do banco.
+    :param uri: a URI da pasta da tabela Delta exportada, sob a raiz do banco.
     :param table: a tabela do modelo, lida só no modo ``rewrite``.
-    :param destination: a URI da pasta da exportação, sob a raiz do banco.
+    :param destination: a URI da pasta que recebe os arquivos Parquet, sob a raiz do banco.
     :param storage: o armazenamento da raiz do banco.
     :param version: a versão exportada; ``version=None`` é a atual.
     :param mode: ``copy`` copia os arquivos que o log lista, sem ler dados (no S3, o

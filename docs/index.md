@@ -50,6 +50,44 @@ com `serialize-db publish_redshift`, a carga inicial da base Parquet atual,
 `serialize_db.cli`, e o acesso de leitura à base com o modelo, `serialize_db.reader`, por
 `db.open_delta()` e `db.open_redshift()`.
 
+### Origem e destino dos dados
+
+Cada tabela Delta fica em `<raiz>/<ambiente>/<tabela>`, e o ambiente (`prd`, `dsv`) também prefixa
+a tabela publicada no Redshift, `<ambiente>_<tabela>`. Cada operação lê de uma origem e grava num
+destino:
+
+| Operação | Origem | Destino |
+| --- | --- | --- |
+| `serialize-db import`, `serialize_db.parquet_import.import_table` | A base Parquet de `--source`, uma pasta por tabela, `<origem>/<tabela>/`, com as partições em `<coluna>=<valor>/`; a carga só a lê. | A tabela Delta, um commit por partição. |
+| `run.ingest` | A versão fixada da tabela Delta. | O sandbox, com o nome do modelo: a view ou a tabela no banco DuckDB da execução, ou a tabela `exec_<id>_<tabela>` no esquema do Redshift. |
+| `run.publish_delta` | As partições auditadas da tabela do sandbox. | A tabela Delta: os arquivos que o motor grava na pasta da partição, registrados num commit por partição. |
+| `run.snapshot`, `serialize-db snapshot` | A versão de cada tabela do ambiente. | A entrada do snapshot em `<raiz>/<ambiente>/_serialize_db/snapshots.json`. |
+| `serialize-db publish_redshift` | As versões Delta de um snapshot, pelo nome ou pelo canal; com `--channel current`, a versão atual de cada tabela. | A tabela `<ambiente>_<tabela>` no esquema do Redshift e a linha dela em `serialize_db_publications`. |
+| `db.open_delta()` | As versões Delta de um snapshot, pelo canal ou pelo nome; o arquivado, pela cópia em `<raiz>/<ambiente>/arquivo/<nome>/`. | Uma view por tabela num DuckDB no processo do cliente, lida em Arrow. |
+| `db.open_redshift()`, `serialize_db.reader.open_redshift` | As tabelas `<ambiente>_<tabela>` do Redshift. | O resultado em Arrow no processo do cliente. |
+| `serialize-db archive` | As versões Delta de um snapshot. | Uma tabela Delta nova por tabela, em `<raiz>/<ambiente>/arquivo/<nome>/<tabela>`. |
+| `serialize-db export` | Uma versão da tabela Delta. | Arquivos Parquet sem o log, na pasta de `--destination`, sob a raiz. |
+
+Os arquivos intermediários também ficam sob a raiz. O motor Redshift grava os manifestos do `COPY`
+do `ingest`, os arquivos do `UNLOAD` e o Parquet do `appender` em
+`<raiz>/<ambiente>/staging/<execution_id>/`, que o fim da execução esvazia; o leitor de
+`db.open_redshift()` grava os arquivos do `UNLOAD` de `stream` em
+`<raiz>/<ambiente>/staging/<id do leitor>/`, que o `close` esvazia. Os manifestos da publicação
+ficam em `<raiz>/<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/`, e nenhum subcomando os
+apaga.
+
+### O log dos módulos
+
+Cada módulo registra as suas mensagens no `logging` do Python, pelo logger com o nome dele:
+`serialize_db.execution` (a abertura e o resumo de cada execução, o relatório de cada auditoria com
+o SQL e as amostras), `serialize_db.publication` (a linha de cada tabela publicada),
+`serialize_db.parquet_import`, `serialize_db.delta`, `serialize_db.reader`,
+`serialize_db.engine.duckdb` e `serialize_db.engine.redshift`. A linha de comando imprime o log no
+stderr a partir do nível `INFO`; um programa que chama o pacote vê os avisos (`WARNING`) sem
+configurar nada, e o resto depois de `logging.basicConfig(level=logging.INFO)`. O log Delta, ou
+log da tabela, é outra coisa: a pasta `_delta_log` da tabela, onde cada commit registra os arquivos
+da versão.
+
 ## Instalação
 
 Um projeto cliente declara o pacote como dependência uma vez, pela pasta do repositório ou pelo
@@ -351,12 +389,14 @@ arquivamento.
 
 ### Importar a base Parquet atual
 
-`serialize_db.parquet_import` leva a base Parquet de hoje, uma pasta por tabela com as partições
-Hive `<coluna>=<valor>/`, para as tabelas Delta do ambiente, uma partição por commit, sem tocar a
-origem. `serialize_db.parquet_import.import_table` cria a tabela do contrato, pula as partições já
-no log, confere cada uma das outras (o valor do caminho na coluna de origem, os nulos das colunas
-`NOT NULL`, os textos acima do limite que `cast` e a auditoria medem) e a grava pelo `COPY` do
-DuckDB, na ordem da `sort_key`, registrando o arquivo no log;
+`serialize_db.parquet_import` leva a base Parquet de hoje, uma pasta por tabela sob a raiz de
+origem, `<origem>/<tabela>/`, com as partições Hive `<coluna>=<valor>/`, para as tabelas Delta do
+ambiente, `<raiz>/<ambiente>/<tabela>`, uma partição por commit, sem tocar a origem.
+`serialize_db.parquet_import.import_table` cria a tabela do contrato, pula as partições já no log
+da tabela Delta, confere cada uma das outras (o valor do caminho na coluna de origem, os nulos das
+colunas `NOT NULL`, os textos acima do limite que `cast` e a auditoria medem) e a grava pelo `COPY`
+do DuckDB num arquivo novo da pasta da partição, na ordem da `sort_key`, registrando o arquivo no
+log da tabela;
 `serialize_db.parquet_import.import_report` confere contagem e somas por partição entre a origem e o
 Delta:
 
@@ -429,16 +469,17 @@ motor. Fora de uma execução, como nos testes, o motor se constrói à mão, co
 cada tabela em cada chamada, e a página de cada motor traz o exemplo.
 
 O terceiro argumento do `Execution`, opcional, é a partição da execução, `run.partition`:
-`run.previous_partitions` devolve as partições até ela, e o log a registra. `run.audit` e
-`run.publish_delta` recebem as partições por argumento.
+`run.previous_partitions` devolve as partições até ela, e o log `serialize_db.execution` a registra
+na abertura e no fim da execução. `run.audit` e `run.publish_delta` recebem as partições por
+argumento.
 
 `run.publish_delta` exige a auditoria aprovada das partições na própria execução e recusa com
 `serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
-abertura. Cada partição sai do sandbox num arquivo que o motor grava e entra no log por
-`serialize_db.delta.register_files`, depois das conferências. `run.snapshot("2026T3")` marca a
-execução: os commits levam o nome, e o encerramento sem erro grava as versões de todas as tabelas no
-arquivo de controle do ambiente; um nome já usado, mesmo arquivado, é
-`serialize_db.errors.ContractError` na chamada, antes de qualquer commit;
+abertura. Cada partição sai do sandbox num arquivo que o motor grava na pasta da partição na tabela
+Delta e entra no log da tabela por `serialize_db.delta.register_files`, depois das conferências.
+`run.snapshot("2026T3")` marca a execução: os commits levam o nome, e o encerramento sem erro grava
+as versões de todas as tabelas no arquivo de controle do ambiente; um nome já usado, mesmo
+arquivado, é `serialize_db.errors.ContractError` na chamada, antes de qualquer commit;
 `serialize-db channel --name default --snapshot 2026T3` aponta depois o canal `default`, o snapshot
 que o leitor Delta lê sem argumento e que `serialize-db publish_redshift --channel default` publica.
 Refazer os dados de um snapshot é uma execução nova, marcada com outro nome
@@ -516,8 +557,8 @@ o imprime.
 `run.publish_delta` leva cada partição auditada ao Delta pelo `export_partition` do motor: o motor
 DuckDB registra o arquivo que o seu `COPY` gravou, e o motor Redshift os arquivos do seu `UNLOAD`,
 depois das conferências do rodapé; a partição com uma coluna `Double` de valor não finito sai do
-Redshift por `serialize_db.delta.publish_partition`, com um aviso no log, porque o rodapé do
-`UNLOAD` deixa o `NaN` fora do máximo.
+Redshift por `serialize_db.delta.publish_partition`, com um aviso no log
+`serialize_db.engine.redshift`, porque o rodapé do `UNLOAD` deixa o `NaN` fora do máximo.
 
 ### Rodar o pipeline no sandbox Redshift
 
@@ -628,13 +669,14 @@ serialize-db run --root s3://bucket/projeto/delta --environment prd \
 
 ### Publicar para os clientes no Redshift
 
-`serialize_db.publication` publica as tabelas `<ambiente>_<tabela>` no esquema do Redshift a
-partir do Delta, uma transação por tabela: a linha de `serialize_db_publications` lida no início
-diz a versão publicada, `serialize_db.delta.version_diff` diz as partições alteradas desde ela,
-cada uma entra por `COPY ... MANIFEST`, um por lista de colunas dos arquivos, numa staging
-temporária e `INSERT ... SELECT`, e a linha de controle é gravada por último; cada tabela publicada
-vai ao log com as partições, o tempo e o pico de memória residente do processo. A tabela de controle
-é criada uma vez, pelo usuário:
+`serialize_db.publication` publica as tabelas `<ambiente>_<tabela>` no esquema do Redshift a partir
+do Delta, uma transação por tabela: a linha de `serialize_db_publications` lida no início diz a
+versão publicada, `serialize_db.delta.version_diff` diz as partições alteradas desde ela, cada uma
+entra por `COPY ... MANIFEST`, um por lista de colunas dos arquivos, numa staging temporária e
+`INSERT ... SELECT`, e a linha de controle é gravada por último; cada tabela publicada vai ao log
+`serialize_db.publication` com as partições, o tempo e o pico de memória residente do processo. Os
+manifestos do `COPY` ficam em `<raiz>/<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/`, e a
+publicação não os apaga. A tabela de controle é criada uma vez, pelo usuário:
 
 ```shell
 serialize-db publish_redshift --init
@@ -674,10 +716,10 @@ inteira na mesma publicação.
 
 ### Ler a base com o modelo
 
-`serialize_db.reader` lê a base para quem tem o modelo, com o mesmo statement Core nas duas
-origens e o resultado em Arrow. `db.open_delta()` abre um DuckDB no processo com uma view por
-tabela do modelo sobre o snapshot do canal `default`; `snapshot=` lê um snapshot pelo nome, o
-arquivado pela cópia em `arquivo/<nome>/`, e `channel="current"` a versão atual de cada tabela.
+`serialize_db.reader` lê a base para quem tem o modelo, com o mesmo statement Core nas duas origens
+e o resultado em Arrow. `db.open_delta()` abre um DuckDB no processo com uma view por tabela do
+modelo sobre o snapshot do canal `default`; `snapshot=` lê um snapshot pelo nome, o arquivado pela
+cópia em `<raiz>/<ambiente>/arquivo/<nome>/`, e `channel="current"` a versão atual de cada tabela.
 `db.open_redshift()` e `serialize_db.reader.open_redshift` leem as tabelas publicadas
 `<ambiente>_<tabela>`, a segunda para o cliente sem a raiz Delta:
 

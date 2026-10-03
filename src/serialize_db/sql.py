@@ -361,7 +361,9 @@ def referenced_tables(
 
     Num statement Core entram as tabelas lidas e o alvo de um ``INSERT``, ``UPDATE`` ou
     ``DELETE`` (``include_crud=True``), só as ``sa.Table``; num texto gerado, cada nome que segue
-    o sentinela ``{prefix}``. O log da execução as registra por comando.
+    o sentinela ``{prefix}``. O leitor Delta (``serialize_db.reader.DeltaReader``) confere por
+    ela as tabelas do modelo que um statement Core cita e recusa com ``ContractError`` a que não
+    tem view.
 
     Exemplo:
 

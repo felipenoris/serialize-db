@@ -1335,7 +1335,8 @@ class RedshiftEngine:
 
         Uma conexão derrubada pelo servidor (``InterfaceError`` do driver) é reaberta uma vez, com
         credencial nova, e o comando é repetido, fora de transação. A reconexão perde a tabela
-        temporária que o pipeline tenha criado na sessão, e o log avisa da perda.
+        temporária que o pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift``
+        avisa da perda.
 
         Exemplo:
 
@@ -1563,11 +1564,14 @@ class RedshiftEngine:
         partitions: list[str] | None = None,
         materialize: bool = False,
     ) -> None:
-        """A tabela ``exec_<id>_<tabela>`` com as partições pedidas da versão fixada: por
-        partição, um ``COPY ... MANIFEST FILLRECORD`` por lista de colunas dos arquivos, com a
-        lista, numa staging sem a coluna de partição, e um ``INSERT`` com o valor dela.
+        """Carrega as partições pedidas da versão fixada da tabela Delta na tabela
+        ``exec_<id>_<tabela>`` do esquema: por partição, um ``COPY ... MANIFEST FILLRECORD`` por
+        lista de colunas dos arquivos, com a lista, numa staging sem a coluna de partição, e um
+        ``INSERT`` com o valor dela.
 
-        Um commit na tabela depois da abertura não muda o que foi carregado.
+        O ``COPY`` lê os arquivos da versão na pasta da tabela Delta, listados nos manifestos que o
+        motor grava sob o ``staging_prefix``. Um commit na tabela depois da abertura não muda o que
+        foi carregado.
 
         Exemplo:
 
@@ -1577,7 +1581,7 @@ class RedshiftEngine:
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox, com o prefixo
             ``exec_<id>_``.
-        :param uri: a URI da tabela Delta.
+        :param uri: a URI da pasta da tabela Delta de origem.
         :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
             ``None`` lê todas, e a lista vazia, nenhuma.
@@ -1646,7 +1650,7 @@ class RedshiftEngine:
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
-        :param uri: a URI da tabela Delta.
+        :param uri: a URI da pasta da tabela Delta lida.
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core, sobre a
             staging.
@@ -2266,11 +2270,13 @@ class RedshiftEngine:
         """Leva a partição do sandbox ao Delta.
 
         A partição sai por ``UNLOAD ... MANIFEST VERBOSE``, sem ``PARTITION BY``, para um prefixo
-        novo por chamada dentro da pasta da partição, e os arquivos entram no log por
-        ``register_files``, como o Redshift os gravou, com as conferências e a releitura. Com
-        ``columns_without_min_max``, o ``UNLOAD`` vai ao ``staging/`` e a partição volta por
-        ``publish_partition``, com um aviso no log, porque o rodapé do ``UNLOAD`` deixa o ``NaN``
-        fora do máximo e o leitor podaria a linha (issue #59).
+        novo por chamada na pasta da tabela Delta, ``<coluna>=<valor>/<execution_id>_<uuid>/``
+        (sem ``<coluna>=<valor>/`` numa tabela sem partição), e os arquivos entram no log da
+        tabela por ``register_files``, como o Redshift os gravou, com as conferências e a
+        releitura. Com ``columns_without_min_max``, o ``UNLOAD`` vai a
+        ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a partição volta por
+        ``publish_partition``, com um aviso no log ``serialize_db.engine.redshift``, porque o rodapé
+        do ``UNLOAD`` deixa o ``NaN`` fora do máximo e o leitor podaria a linha (issue #59).
 
         Exemplo:
 
@@ -2280,7 +2286,7 @@ class RedshiftEngine:
                                     delta.commit_metadata("exec-42", versions))
 
         :param table: a tabela do modelo, no sandbox.
-        :param uri: a URI da tabela Delta, sob a raiz do armazenamento.
+        :param uri: a URI da pasta da tabela Delta de destino, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
         :param metadata: os metadados do commit, de ``delta.commit_metadata``.
         :param expected_rows: a contagem da auditoria, que o registro confere nos arquivos antes
@@ -2319,8 +2325,8 @@ class RedshiftEngine:
         """Apaga as tabelas ``exec_<id>_*`` que a execução criou, uma por comando, os objetos do
         ``staging_prefix`` (``<ambiente>/staging/<execution_id>/`` no sandbox, ``<id do leitor>/``
         sob o ``unload_to`` do leitor; nenhum sem armazenamento) e fecha a sessão; uma tabela que o
-        ``DROP`` não alcança fica nomeada no log. Numa sessão a mais, fecha só a conexão dela. A
-        segunda chamada não faz nada.
+        ``DROP`` não alcança fica nomeada no log ``serialize_db.engine.redshift``. Numa sessão a
+        mais, fecha só a conexão dela. A segunda chamada não faz nada.
 
         Exemplo:
 

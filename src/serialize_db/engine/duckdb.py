@@ -662,7 +662,7 @@ class DuckDBConfig:
     memory_limit: str | None = None
     """Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode usar na
     abertura (``environment_limits``), recusada com ``SandboxError`` quando não dá 1 MiB. O valor
-    aplicado vai para o log."""
+    aplicado vai ao log ``serialize_db.engine.duckdb``."""
     temp_directory: str | None = None
     """A pasta do banco, do transbordo do DuckDB e dos arquivos de ``stream`` e ``appender``;
     ``None`` é uma pasta nova de ``tempfile.mkdtemp``, apagada em ``cleanup``."""
@@ -1012,7 +1012,7 @@ class DuckDBEngine:
             engine.ingest(Lancamento.__table__, uri, 143, partitions=previous, materialize=True)
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
-        :param uri: a URI da tabela Delta.
+        :param uri: a URI da pasta da tabela Delta de origem.
         :param version: a versão fixada da tabela, lida por
             ``delta_scan(uri, version := v)``; ``None``, a tabela sem versão no Delta.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
@@ -1068,7 +1068,7 @@ class DuckDBEngine:
             engine.query(sa.select(sa.func.max(previous.c.id_lancamento)))
 
         :param table: a tabela do modelo, que dá as colunas.
-        :param uri: a URI da tabela Delta.
+        :param uri: a URI da pasta da tabela Delta lida.
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core, que
             compila para ``delta_scan(uri, version := v)``.
@@ -1451,9 +1451,10 @@ class DuckDBEngine:
     ) -> int:
         """Leva a partição do sandbox ao Delta.
 
-        A partição sai por ``COPY ... (RETURN_STATS)`` num arquivo novo dentro da pasta dela e entra
-        no log por ``register_files``, com as conferências, o commit e a releitura, em memória
-        constante.
+        A partição sai por ``COPY ... (RETURN_STATS)`` num arquivo novo na pasta da tabela Delta,
+        ``<coluna>=<valor>/<execution_id>_<uuid>.parquet`` (sem ``<coluna>=<valor>/`` numa tabela
+        sem partição), e entra no log da tabela por ``register_files``, com as conferências, o
+        commit e a releitura, em memória constante.
 
         Exemplo:
 
@@ -1463,7 +1464,7 @@ class DuckDBEngine:
                                     delta.commit_metadata("exec-42", versions))
 
         :param table: a tabela do modelo, no sandbox.
-        :param uri: a URI da tabela Delta, sob a raiz do armazenamento.
+        :param uri: a URI da pasta da tabela Delta de destino, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
         :param metadata: os metadados do commit, de ``delta.commit_metadata``.
         :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
