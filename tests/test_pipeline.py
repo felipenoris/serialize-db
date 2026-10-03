@@ -136,7 +136,7 @@ def ingest_model(
     particionadas só na última data-base, materializadas, porque recebem as linhas da nova."""
     unpartitioned = []
     partitioned = []
-    for table in run.db.tables():
+    for table in run.delta_db.tables():
         if table_options(table).partition_by is None:
             unpartitioned.append(table)
         else:

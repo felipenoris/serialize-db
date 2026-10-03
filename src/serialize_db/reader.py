@@ -106,56 +106,56 @@ class _Source:
 
 
 def _current_source(
-    db: Database,
+    delta_db: Database,
 ) -> _Source:
     """A versão atual de cada tabela do modelo que existe no ambiente, como ``Execution`` na
     abertura."""
     versions = {}
     uris = {}
-    for table in db.tables():
-        uri = db.uri(table)
-        if delta.table_exists(uri, db.storage):
-            versions[table.name] = delta.open_table(uri, db.storage).version()
+    for table in delta_db.tables():
+        uri = delta_db.uri(table)
+        if delta.table_exists(uri, delta_db.storage):
+            versions[table.name] = delta.open_table(uri, delta_db.storage).version()
             uris[table.name] = uri
-    return _Source(None, versions, uris, f"a versão atual do ambiente {db.environment}")
+    return _Source(None, versions, uris, f"a versão atual do ambiente {delta_db.environment}")
 
 
 def _snapshot_source(
-    db: Database,
+    delta_db: Database,
     name: str,
     entry: Mapping[str, int],
 ) -> _Source:
     """As versões da entrada do snapshot, nas tabelas do modelo que ela tem."""
     versions = {}
     uris = {}
-    for table in db.tables():
+    for table in delta_db.tables():
         if table.name in entry:
             versions[table.name] = entry[table.name]
-            uris[table.name] = db.uri(table)
+            uris[table.name] = delta_db.uri(table)
     return _Source(name, versions, uris, f"o snapshot {name}")
 
 
 def _archived_source(
-    db: Database,
+    delta_db: Database,
     name: str,
     entry: Mapping[str, int],
 ) -> _Source:
     """As cópias de ``arquivo/<nome>/<tabela>`` das tabelas do modelo que a entrada arquivada tem,
     na versão atual de cada cópia, que não muda depois do ``archive``."""
-    storage = db.storage
+    storage = delta_db.storage
     versions = {}
     uris = {}
-    for table in db.tables():
+    for table in delta_db.tables():
         if table.name not in entry:
             continue
-        uri = storage.uri_of(storage.join(db.archive_prefix(name), table.name))
+        uri = storage.uri_of(storage.join(delta_db.archive_prefix(name), table.name))
         versions[table.name] = delta.open_table(uri, storage).version()
         uris[table.name] = uri
     return _Source(name, versions, uris, f"o snapshot arquivado {name}")
 
 
 def _resolve_source(
-    db: Database,
+    delta_db: Database,
     snapshot: str | None,
     channel: str | None,
 ) -> _Source:
@@ -166,14 +166,14 @@ def _resolve_source(
             f"open_delta recebe snapshot={snapshot!r} ou channel={channel!r}, não os dois"
         )
     if channel == delta.CURRENT_CHANNEL:
-        return _current_source(db)
-    control, _ = delta.read_snapshots(db.storage, db.environment)
+        return _current_source(delta_db)
+    control, _ = delta.read_snapshots(delta_db.storage, delta_db.environment)
     if snapshot is None:
         snapshot = delta.channel_snapshot(control, channel or delta.DEFAULT_CHANNEL)
     archived = control.get("archived", {})
     if snapshot in archived:
-        return _archived_source(db, snapshot, archived[snapshot])
-    return _snapshot_source(db, snapshot, delta.snapshot_versions(control, snapshot))
+        return _archived_source(delta_db, snapshot, archived[snapshot])
+    return _snapshot_source(delta_db, snapshot, delta.snapshot_versions(control, snapshot))
 
 
 # ---------------------------------------------------------------- o stream do leitor Delta
@@ -247,14 +247,14 @@ class DeltaReader:
 
     def __init__(
         self,
-        db: Database,
+        delta_db: Database,
         snapshot: str | None = None,
         channel: str | None = None,
         config: DuckDBConfig | None = None,
     ) -> None:
         """Lê as versões, abre o motor e cria as views; ``db.open_delta`` é a entrada.
 
-        :param db: o banco, com a raiz, o ambiente e os modelos.
+        :param delta_db: o banco Delta lido, com a raiz, o ambiente e os modelos.
         :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
             ``arquivo/<nome>/``. ``None`` lê o canal.
         :param channel: o canal do ambiente, ``"default"``, o mesmo que sem argumento, ou
@@ -270,7 +270,7 @@ class DeltaReader:
         :raises SandboxError: sem ``memory_limit`` em ``config``, a memória que o processo ainda
             pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB (``environment_limits``).
         """
-        source = _resolve_source(db, snapshot, channel)
+        source = _resolve_source(delta_db, snapshot, channel)
         self.snapshot = source.snapshot
         """O snapshot lido; ``None`` no canal ``current``."""
         self.versions = source.versions
@@ -283,11 +283,11 @@ class DeltaReader:
         self.reader_id = _new_reader_id()
         """O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, que nomeia o banco
         temporário e a pasta de transbordo do motor."""
-        self._db = db
+        self._delta_db = delta_db
         self._uris = source.uris
         self._source = source.description
         self._lock = threading.Lock()
-        self._engine = DuckDBEngine(config or DuckDBConfig(), self.reader_id, db.storage)
+        self._engine = DuckDBEngine(config or DuckDBConfig(), self.reader_id, delta_db.storage)
         # O finalizador guarda o motor, não o leitor: a coleta de um leitor sem close, ou o fim
         # normal do interpretador, apaga o banco temporário e a pasta de transbordo dele.
         self._finalizer = weakref.finalize(self, self._engine.cleanup)
@@ -311,7 +311,7 @@ class DeltaReader:
     def _open_views(self) -> None:
         """Uma view por tabela do modelo presente nas versões, as tabelas em paralelo."""
         tasks = []
-        for table in self._db.tables():
+        for table in self._delta_db.tables():
             if table.name in self.versions:
                 tasks.append((table.name, functools.partial(self._create_view, table)))
         if tasks:
@@ -420,7 +420,7 @@ class DeltaReader:
         if isinstance(statement_or_sql, str):
             return
         for name in sorted(sql.referenced_tables(statement_or_sql)):
-            if name in self._db.metadata.tables:
+            if name in self._delta_db.metadata.tables:
                 self._check_view(name)
 
     def query(

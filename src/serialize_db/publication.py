@@ -729,7 +729,7 @@ def _partitions_to_publish(
 
 
 def _write_manifests(
-    db: Database,
+    delta_db: Database,
     table: sa.Table,
     values: Sequence[str | None],
     execution_id: str,
@@ -737,12 +737,12 @@ def _write_manifests(
 ) -> dict[str | None, list[delta.CopyManifest]]:
     """Os manifestos do ``COPY`` de cada partição com arquivo, um por lista de colunas dos
     arquivos, em ``<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``."""
-    storage = db.storage
-    uri = db.uri(table)
+    storage = delta_db.storage
+    uri = delta_db.uri(table)
     manifests = {}
     for value in values:
         tag = value if value is not None else "tabela"
-        folder = storage.join(db.publication_prefix(execution_id), table.name, tag)
+        folder = storage.join(delta_db.publication_prefix(execution_id), table.name, tag)
         partitions = [value] if value is not None else None
         manifests[value] = delta.copy_manifest(
             uri, version, partitions, storage.uri_of(folder), storage
@@ -777,7 +777,7 @@ def _run_publication(
 
 def _publication_transaction(
     connection: _Connection,
-    db: Database,
+    delta_db: Database,
     config: RedshiftConfig,
     table: sa.Table,
     execution_id: str,
@@ -786,7 +786,7 @@ def _publication_transaction(
     """A transação da publicação de uma tabela: a linha de controle lida, as partições trocadas e
     a linha gravada; devolve as partições trocadas, ou ``None`` quando a versão já está
     publicada e nada muda."""
-    environment = db.environment
+    environment = delta_db.environment
     connection.execute("BEGIN")
     try:
         published = _read_control(connection, config.schema, environment, table)
@@ -794,9 +794,9 @@ def _publication_transaction(
             connection.rollback()
             return None
         changed, with_files = _partitions_to_publish(
-            db.uri(table), table, published, version, db.storage
+            delta_db.uri(table), table, published, version, delta_db.storage
         )
-        manifests = _write_manifests(db, table, with_files, execution_id, version)
+        manifests = _write_manifests(delta_db, table, with_files, execution_id, version)
         statements = publication_statements(
             config.schema,
             environment,
@@ -823,7 +823,7 @@ def _publication_transaction(
 
 
 def _publish_table(
-    db: Database,
+    delta_db: Database,
     config: RedshiftConfig,
     table: sa.Table,
     execution_id: str,
@@ -834,8 +834,10 @@ def _publish_table(
     started = time.perf_counter()
     connection = _Connection(config)
     try:
-        _reconcile(connection, config, db.environment, table)
-        changed = _publication_transaction(connection, db, config, table, execution_id, version)
+        _reconcile(connection, config, delta_db.environment, table)
+        changed = _publication_transaction(
+            connection, delta_db, config, table, execution_id, version
+        )
     finally:
         connection.close()
     if changed is None:
@@ -853,7 +855,7 @@ def _publish_table(
 
 
 def _version_to_publish(
-    db: Database,
+    delta_db: Database,
     table: sa.Table,
     versions: Mapping[str, int] | None,
 ) -> int:
@@ -866,13 +868,13 @@ def _version_to_publish(
                 f"{table.name}: a tabela está fora das versões pedidas, e não há o que publicar"
             )
         return version
-    uri = db.uri(table)
-    if not delta.table_exists(uri, db.storage):
+    uri = delta_db.uri(table)
+    if not delta.table_exists(uri, delta_db.storage):
         raise PublicationError(
-            f"{table.name}: a tabela não existe no ambiente {db.environment}, "
+            f"{table.name}: a tabela não existe no ambiente {delta_db.environment}, "
             "e não há o que publicar"
         )
-    return delta.open_table(uri, db.storage).version()
+    return delta.open_table(uri, delta_db.storage).version()
 
 
 def create_publications_table(
@@ -899,7 +901,7 @@ def create_publications_table(
 
 
 def publish_redshift(
-    db: Database,
+    delta_db: Database,
     config: RedshiftConfig,
     tables: Sequence[sa.Table],
     execution_id: str,
@@ -923,7 +925,8 @@ def publish_redshift(
         publish_redshift(db, config, [Lancamento.__table__], "exec-2026-09-05")
         # {"cad_lancamentos": 58}
 
-    :param db: o banco, com a raiz Delta e o ambiente, que prefixa o nome das tabelas publicadas.
+    :param delta_db: o banco Delta, com a raiz e o ambiente, que prefixa o nome das tabelas
+        publicadas.
     :param config: a configuração do Redshift, com a conexão, o esquema e o ``iam_role`` do
         ``COPY``.
     :param tables: as tabelas do modelo a publicar.
@@ -951,8 +954,8 @@ def publish_redshift(
         connection.close()
     tasks = []
     for table in tables:
-        version = _version_to_publish(db, table, versions)
-        task = functools.partial(_publish_table, db, config, table, execution_id, version)
+        version = _version_to_publish(delta_db, table, versions)
+        task = functools.partial(_publish_table, delta_db, config, table, execution_id, version)
         tasks.append((table.name, task))
     return run_in_pool(tasks, max_workers)
 
@@ -992,7 +995,7 @@ def unpublish_redshift(
 
 
 def publication_status(
-    db: Database,
+    delta_db: Database,
     config: RedshiftConfig,
 ) -> list[PublicationStatus]:
     """A versão publicada contra a atual de cada tabela do ambiente que existe no Delta, com as
@@ -1005,10 +1008,12 @@ def publication_status(
         for status in publication_status(db, config):
             print(status.table, status.published_version, status.current_version)
 
-    :param db: o banco, com a raiz Delta e o ambiente, que prefixa o nome das tabelas publicadas.
+    :param delta_db: o banco Delta, com a raiz e o ambiente, que prefixa o nome das tabelas
+        publicadas.
     :param config: a configuração do Redshift, com a conexão e o esquema.
-    :return: uma ``PublicationStatus`` por tabela, na ordem de ``db.tables()``; as partições
-        pendentes são todas na tabela nunca publicada, as de ``version_diff`` nas outras.
+    :return: uma ``PublicationStatus`` por tabela, na ordem de ``delta_db.tables()``; as
+        partições pendentes são todas na tabela nunca publicada, as de ``version_diff`` nas
+        outras.
     :raises PublicationError: sem a tabela de controle.
     :raises LogUnavailable: um arquivo do log entre a versão publicada e a atual não existe.
     :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
@@ -1016,26 +1021,30 @@ def publication_status(
     connection = _Connection(config)
     try:
         _check_control_table(connection, config.schema)
-        existing = [table for table in db.tables() if delta.table_exists(db.uri(table), db.storage)]
-        return [_table_status(connection, db, config, table) for table in existing]
+        existing = [
+            table
+            for table in delta_db.tables()
+            if delta.table_exists(delta_db.uri(table), delta_db.storage)
+        ]
+        return [_table_status(connection, delta_db, config, table) for table in existing]
     finally:
         connection.close()
 
 
 def _table_status(
     connection: _Connection,
-    db: Database,
+    delta_db: Database,
     config: RedshiftConfig,
     table: sa.Table,
 ) -> PublicationStatus:
     """A situação da publicação de uma tabela que existe no Delta: as partições pendentes são
     todas na tabela nunca publicada, e as de ``version_diff`` na publicada numa versão antiga."""
-    uri = db.uri(table)
-    current = delta.open_table(uri, db.storage).version()
-    published = _read_control(connection, config.schema, db.environment, table)
+    uri = delta_db.uri(table)
+    current = delta.open_table(uri, delta_db.storage).version()
+    published = _read_control(connection, config.schema, delta_db.environment, table)
     pending: list[str | None] = []
     if published is None or published < current:
-        pending, _ = _partitions_to_publish(uri, table, published, current, db.storage)
+        pending, _ = _partitions_to_publish(uri, table, published, current, delta_db.storage)
     return PublicationStatus(
-        _published_name(db.environment, table), published, current, tuple(pending)
+        _published_name(delta_db.environment, table), published, current, tuple(pending)
     )

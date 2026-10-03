@@ -883,9 +883,9 @@ def conflicting_pipeline(
     run: Execution,
 ) -> None:
     """Um pipeline que publica depois de outra execução gravar a mesma tabela."""
-    uri = run.db.uri(ENTRIES)
+    uri = run.delta_db.uri(ENTRIES)
     written = rows(ENTRIES, run.partition, range(900, 902))
-    delta.publish_partition(uri, ENTRIES, run.partition, written, {}, run.db.storage)
+    delta.publish_partition(uri, ENTRIES, run.partition, written, {}, run.delta_db.storage)
     run.publish_delta(ENTRIES, partitions=[run.partition], audit=False)
 
 
@@ -927,7 +927,7 @@ def raced_snapshot_pipeline(
     """Um pipeline que marca o snapshot ``2026T4``, que outro escritor grava antes da saída da
     execução."""
     run.snapshot("2026T4")
-    delta.snapshot(run.db.storage, run.db.environment, "2026T4", {"cad_lancamentos": 4})
+    delta.snapshot(run.delta_db.storage, run.delta_db.environment, "2026T4", {"cad_lancamentos": 4})
 
 
 def redshift_engine_pipeline(

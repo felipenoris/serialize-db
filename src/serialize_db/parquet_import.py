@@ -456,13 +456,13 @@ def _copy_partition(
 
 def _source_setup(
     connection: duckdb.DuckDBPyConnection,
-    db: Database,
+    delta_db: Database,
     source: str,
 ) -> None:
     """As extensões e o secret da origem no S3 quando a raiz Delta é uma pasta local; com a raiz no
     S3, a conexão do motor já os tem."""
     source_storage = Storage.for_uri(source)
-    if source_storage.is_s3 and not db.storage.is_s3:
+    if source_storage.is_s3 and not delta_db.storage.is_s3:
         source_storage.duckdb_setup(connection)
 
 
@@ -569,7 +569,7 @@ def _import_partition(
 
 
 def import_table(
-    db: Database,
+    delta_db: Database,
     table: sa.Table,
     source: str,
     partitions: Sequence[str] | None = None,
@@ -587,8 +587,8 @@ def import_table(
         import_table(db, Operacao.__table__, "/dados/db_projetado")   # ["2026-02-28", "2026-03-31"]
         import_table(db, Operacao.__table__, "/dados/db_projetado")   # []
 
-    :param db: o banco Delta em que os dados são importados, com a raiz e o ambiente; a tabela
-        Delta fica em ``<raiz>/<ambiente>/<tabela>``.
+    :param delta_db: o banco Delta em que os dados são importados, com a raiz e o ambiente;
+        a tabela Delta fica em ``<raiz>/<ambiente>/<tabela>``.
     :param table: a tabela do modelo.
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
@@ -619,8 +619,8 @@ def import_table(
     # A tabela sem partição fica inteira de fora do pedido por partições: nada criado nem aberto.
     if partitions is not None and options.partition_by is None:
         return []
-    uri = db.uri(table)
-    storage = db.storage
+    uri = delta_db.uri(table)
+    storage = delta_db.storage
     dt = delta.create_table(uri, table, storage)
     # As partições pedidas que a origem tem e o log ainda não.
     already = set(delta.partition_values(dt, options.partition_by))
@@ -635,7 +635,7 @@ def import_table(
     # O motor da chamada, com o secret da origem no S3, grava as partições em série, um commit cada.
     with DuckDBEngine(config or DuckDBConfig(), execution_id, storage) as engine:
         with engine.session() as connection:
-            _source_setup(connection, db, source)
+            _source_setup(connection, delta_db, source)
         for value in missing:
             _import_partition(engine, storage, table, uri, value, found[value], metadata)
     return missing
@@ -717,15 +717,15 @@ def _source_totals(
 
 def _delta_totals(
     connection: duckdb.DuckDBPyConnection,
-    db: Database,
+    delta_db: Database,
     table: sa.Table,
     sums: list[str],
     doubles: list[str],
 ) -> dict[str | None, _Totals]:
     """Contagem, somas e não finitos por partição no Delta; vazio na tabela ainda fora dele, que
     tem toda partição só na origem."""
-    uri = db.uri(table)
-    if not delta.table_exists(uri, db.storage):
+    uri = delta_db.uri(table)
+    if not delta.table_exists(uri, delta_db.storage):
         return {}
     partition_by = table_options(table).partition_by
     return _aggregate(connection, f"delta_scan({literal(uri)})", partition_by, sums, doubles)
@@ -810,7 +810,7 @@ def _conversions(
 
 
 def import_report(
-    db: Database,
+    delta_db: Database,
     table: sa.Table,
     source: str,
     partitions: Sequence[str] | None = None,
@@ -834,8 +834,8 @@ def import_report(
         only = import_report(db, Operacao.__table__, "/dados/db_projetado", ["2026-02-28"])
         [partition.value for partition in only.partitions]   # ["2026-02-28"]
 
-    :param db: o banco Delta em que os dados foram importados, com a raiz e o ambiente; a tabela
-        Delta fica em ``<raiz>/<ambiente>/<tabela>``.
+    :param delta_db: o banco Delta em que os dados foram importados, com a raiz e o ambiente;
+        a tabela Delta fica em ``<raiz>/<ambiente>/<tabela>``.
     :param table: a tabela do modelo.
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
@@ -866,11 +866,11 @@ def import_report(
     wanted = {value: found[value] for value in _wanted_values(found, partitions)}
     execution_id = f"relatorio-{uuid.uuid4().hex[:8]}"
     # A origem e o Delta agregados na mesma sessão, com o secret da origem quando ela está no S3.
-    with DuckDBEngine(config or DuckDBConfig(), execution_id, db.storage) as engine:
+    with DuckDBEngine(config or DuckDBConfig(), execution_id, delta_db.storage) as engine:
         with engine.session() as connection:
-            _source_setup(connection, db, source)
+            _source_setup(connection, delta_db, source)
             in_source = _source_totals(connection, wanted, sums, doubles)
-            whole_delta = _delta_totals(connection, db, table, sums, doubles)
+            whole_delta = _delta_totals(connection, delta_db, table, sums, doubles)
     # Do Delta, só as partições pedidas, filtradas depois da agregação da tabela inteira.
     in_delta = {value: whole_delta[value] for value in _wanted_values(whole_delta, partitions)}
     reports = _partition_reports(in_source, in_delta)

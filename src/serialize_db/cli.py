@@ -623,13 +623,13 @@ def _print_report(
 
 def _audit_engine(
     args: argparse.Namespace,
-    db: Database,
+    delta_db: Database,
     execution_id: str,
 ) -> Engine:
     """O sandbox próprio da auditoria: o motor de ``--engine``; outro nome é ``ContractError``,
     nunca o DuckDB."""
     if args.engine == "duckdb":
-        return DuckDBEngine(DuckDBConfig(), execution_id, db.storage)
+        return DuckDBEngine(DuckDBConfig(), execution_id, delta_db.storage)
     if args.engine == "redshift":
         # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
@@ -637,8 +637,8 @@ def _audit_engine(
         return RedshiftEngine(
             RedshiftConfig.from_environment(),
             execution_id,
-            db.storage,
-            db.staging_prefix(execution_id),
+            delta_db.storage,
+            delta_db.staging_prefix(execution_id),
         )
     raise ContractError(f"motor {args.engine!r}: use 'duckdb' ou 'redshift'")
 
@@ -824,7 +824,7 @@ def _publish_redshift(
 
 
 def _versions_to_publish(
-    db: Database,
+    delta_db: Database,
     args: argparse.Namespace,
     tables: list[sa.Table],
 ) -> dict[str, int]:
@@ -832,10 +832,10 @@ def _versions_to_publish(
     ``--channel``, e a versão atual de cada tabela do ambiente com ``--channel current``; a
     tabela pedida sem versão é ``PublicationError`` com a origem."""
     if args.channel == delta.CURRENT_CHANNEL:
-        versions = _current_versions(db)
-        source = f"da versão atual do ambiente {db.environment}"
+        versions = _current_versions(delta_db)
+        source = f"da versão atual do ambiente {delta_db.environment}"
     else:
-        control, _ = delta.read_snapshots(db.storage, db.environment)
+        control, _ = delta.read_snapshots(delta_db.storage, delta_db.environment)
         name = args.snapshot or delta.channel_snapshot(control, args.channel)
         versions = delta.snapshot_versions(control, name)
         source = f"do snapshot {name}"
@@ -998,20 +998,20 @@ def _import(
 
 
 def _existing_tables(
-    db: Database,
+    delta_db: Database,
 ) -> dict[str, tuple[sa.Table, str]]:
     """As tabelas do modelo que existem no ambiente: ``{nome: (tabela, URI)}``."""
     found = {}
-    for table in db.tables():
-        uri = db.uri(table)
-        if delta.table_exists(uri, db.storage):
+    for table in delta_db.tables():
+        uri = delta_db.uri(table)
+        if delta.table_exists(uri, delta_db.storage):
             found[table.name] = (table, uri)
     return found
 
 
 def _existing_table(
     args: argparse.Namespace,
-    db: Database,
+    delta_db: Database,
     command: str,
 ) -> tuple[sa.Table, str] | None:
     """A tabela de ``--table`` no modelo e a URI dela no ambiente, ou ``None`` com a mensagem
@@ -1022,21 +1022,21 @@ def _existing_table(
             f"serialize-db {command}: a tabela {args.table} não está nos modelos", file=sys.stderr
         )
         return None
-    uri = db.uri(table)
-    if not delta.table_exists(uri, db.storage):
+    uri = delta_db.uri(table)
+    if not delta.table_exists(uri, delta_db.storage):
         print(f"serialize-db {command}: {table.name} não existe em {uri}", file=sys.stderr)
         return None
     return table, uri
 
 
 def _current_versions(
-    db: Database,
+    delta_db: Database,
 ) -> dict[str, int]:
     """A versão atual de cada tabela do modelo que existe no ambiente: a entrada de ``snapshot``
     e as versões do canal ``current`` de ``publish_redshift``."""
     versions = {}
-    for name, (_, uri) in _existing_tables(db).items():
-        versions[name] = delta.open_table(uri, db.storage).version()
+    for name, (_, uri) in _existing_tables(delta_db).items():
+        versions[name] = delta.open_table(uri, delta_db.storage).version()
     return versions
 
 

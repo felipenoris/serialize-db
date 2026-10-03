@@ -1704,3 +1704,20 @@ resumed one. `discover_partitions`, `partition_query`, `check_requested_partitio
 `src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `tests/test_parquet_import.py`,
 `scripts/migrate_parquet_to_delta.py`, `docs/index.md`, `docs/operacao.md`, `README.md`,
 `plan/PLAN.md`, `plan/PLAN-STAGE-7.md`
+
+## The `delta_db` argument (2026-10-03)
+
+The same day the user suggested `delta_db` for the `db` argument of the import, asked whether `db`
+is the Delta base in every function that takes a `Database`, and instructed: `delta_db` in every
+`Database` argument of a function that serves only Delta bases. The assistant's reading, sent to
+the user before the change: the functions that read or write the Delta through the `Database`
+take `delta_db` (`Execution`, `DeltaReader`, `import_table`, `import_report`, `publish_redshift`,
+`publication_status` and the private helpers of `execution`, `parquet_import`, `publication`,
+`reader` and `cli` that receive the same object), and `unpublish_redshift` keeps `db`, because it
+uses the `Database` only for the environment that prefixes the published tables' names. The
+attribute `run.db` is `run.delta_db` and `DeltaReader._db` is `_delta_db`, with no alias; the
+client's variables and the examples (`db = Database(...)`, `db.open_delta()`) and the test
+fixtures' `target.db` stay.
+`src/serialize_db/execution.py`, `src/serialize_db/reader.py`, `src/serialize_db/publication.py`,
+`src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `plan/PLAN-STAGE-6.md`,
+`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`
