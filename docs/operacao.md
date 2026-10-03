@@ -245,7 +245,7 @@ As opções de cada subcomando de `serialize-db`. Um valor de partição, um `--
 | `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. Fora dos armazenamentos da biblioteca, ou no S3 sem região, é erro de uso, em todo subcomando. |
 | `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
 
-`run`, `load` e as rotinas de operação (`snapshot`, `channel`, `vacuum`, `compact`, `archive`,
+`run`, `import` e as rotinas de operação (`snapshot`, `channel`, `vacuum`, `compact`, `archive`,
 `export` e `history`) recebem as três; `audit` e `publish_redshift` também, com `--root` e, em
 `publish_redshift`, `--metadata` dispensáveis nos casos descritos nas seções deles; `schema` e `sql`
 recebem só `--metadata`.
@@ -284,7 +284,7 @@ recebem só `--metadata`.
 | `--sql` | desligada | Imprime o texto das verificações, sem conexão nem armazenamento. |
 | `--root` | `SERIALIZE_DB_ROOT` | Obrigatória sem `--sql`. |
 
-### `load`
+### `import`
 
 | Opção | Padrão | Descrição |
 | --- | --- | --- |

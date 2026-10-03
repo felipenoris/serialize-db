@@ -61,7 +61,7 @@ estatísticas a partir do `RETURN_STATS`), `copy_partition_file` e `register_par
 `COPY ... RETURN_STATS` na pasta da partição e o `create_write_transaction` da ação). A etapa as
 trouxe para `serialize_db.delta` (`_stat_converter`, `file_from_return_stats`, `_action_stats` e
 `register_files`), e a [etapa 7](PLAN-STAGE-7.md) tirou as cópias do script, que é fino sobre
-`serialize_db.load` desde a decisão do usuário de 2026-09-24.
+`serialize_db.parquet_import` desde a decisão do usuário de 2026-09-24.
 
 ## As conferências do registro de arquivos
 

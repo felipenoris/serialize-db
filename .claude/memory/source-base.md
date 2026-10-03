@@ -1,6 +1,6 @@
 # The Parquet source base and its fixture
 
-Read before stage 7 (`serialize_db.load`), `tests/source_db_projetado.py`, `tests/reference_model/` or `probes/parquet_source.py`; the user's decisions on the load are in `decisions.md`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before stage 7 (`serialize_db.parquet_import`), `tests/source_db_projetado.py`, `tests/reference_model/` or `probes/parquet_source.py`; the user's decisions on the load are in `decisions.md`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## The development base, read on 2026-09-20
 

@@ -85,7 +85,7 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `plan/PLAN-STAGE-4.md`, `plan/POC.md`
 - `read_parquet('<tabela>/*/*.parquet', hive_partitioning = true)` fails with `Hive partition
   mismatch` when the table folder holds a subfolder outside the Hive pattern, such as `backup/`,
-  and a folder such as `data_str=2026 Q1` enters as a partition; `load_report` reads the folders
+  and a folder such as `data_str=2026 Q1` enters as a partition; `import_report` reads the folders
   `discover_partitions` returns, one by one, since 2026-09-28. `plan/PLAN-STAGE-7.md`
 
 ## Proxy

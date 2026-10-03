@@ -103,13 +103,13 @@ foi medido em [`POC.md`](POC.md).
   continuação de uma cópia interrompida do `archive` só o substituto exercitou. Em 2026-09-28, a
   carga parou em `cad_lancamentos` 2026-07-31 com o `RegistrationRefused` de uma origem que mudava
   durante a leitura, e em 2026-09-29, com a origem estável, passou inteira numa raiz recarregada
-  ([`POC.md`](POC.md)): a continuação de uma carga parada, que `tests/test_load.py` cobre na pasta
-  local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo. As sondas de
-  `probes/operacao/` rodam essas leituras sobre as primeiras partições de `cad_lancamentos` da
-  origem, a continuação do `archive` inclusive, e passaram na pasta local e no substituto em
-  2026-09-30 ([`POC.md`](POC.md)); esperam a rodada no alvo, pelos comandos de `SUITE.md`, seção
-  "Sondas da operação". O `COPY` da publicação de uma partição compactada, que o `compact`
-  regrava em ZSTD, também não rodou lá.
+  ([`POC.md`](POC.md)): a continuação de uma carga parada, que `tests/test_parquet_import.py` cobre
+  na pasta local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo. As
+  sondas de `probes/operacao/` rodam essas leituras sobre as primeiras partições de
+  `cad_lancamentos` da origem, a continuação do `archive` inclusive, e passaram na pasta local e no
+  substituto em 2026-09-30 ([`POC.md`](POC.md)); esperam a rodada no alvo, pelos comandos de
+  `SUITE.md`, seção "Sondas da operação". O `COPY` da publicação de uma partição compactada, que o
+  `compact` regrava em ZSTD, também não rodou lá.
 
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
   baterias de 2026-09-25, de 2026-09-26, de 2026-09-27 e de 2026-09-28 às 23:09
@@ -130,10 +130,10 @@ foi medido em [`POC.md`](POC.md).
   valores no statement: a compilação com `literal_binds` os escreve como `NULL`, e o `stream` do
   motor Redshift pelo `UNLOAD` roda com eles nulos, sem erro; o `construct_params()` de um `IN`
   expansível compilado com `render_postcompile` levanta `InvalidRequestError` no motor DuckDB e
-  no cursor do motor Redshift. O `Double` deixou de derivar de `Numeric`, e o `load_report` para
+  no cursor do motor Redshift. O `Double` deixou de derivar de `Numeric`, e o `import_report` para
   de somar as colunas `Double`. A reflexão do duckdb-engine 0.17.0 também falha na 2.1, fora do
   pacote. Espera o usuário: adaptar o pacote à 2.1 (`bound_statement`, de `serialize_db.sql`, que
-  passa os valores por `params()`, e as colunas que o `load_report` soma) ou manter a 2.0.54.
+  passa os valores por `params()`, e as colunas que o `import_report` soma) ou manter a 2.0.54.
 - **O dialeto do DuckDB.** O `duckdb-engine` 0.17.0, o compilador do `render` e do motor DuckDB
   fixado em `pyproject.toml`, é de 2025-03-29, sem lançamento desde então, com 55 issues e 43 PRs
   abertos e a correção da reflexão da `pg_collation` parada num PR de 2026-03-28; o
@@ -166,7 +166,7 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
 - **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
   `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: numa partição com os dois,
   todos saem com o sinal do primeiro que apareceu. Atinge o `export_partition` do motor DuckDB,
-  `initial_load`, `rewrite` e `export_snapshot(mode="rewrite")`; `publish_partition` e `compact`,
+  `import_table`, `rewrite` e `export_snapshot(mode="rewrite")`; `publish_partition` e `compact`,
   pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift não foi lido. A diferença
   aparece em `1 / x`, em `math.copysign` e no texto do valor, nunca numa comparação ou numa soma.
   Opções: `DICTIONARY_SIZE_LIMIT 0` no `COPY` (sem dicionário em coluna alguma, arquivo maior), ou

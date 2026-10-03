@@ -9,8 +9,9 @@ argumentos, o retorno e as exceções de cada função, está no menu: `serializ
 `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
 `serialize_db.engine` (com os motores `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`), `serialize_db.resources`, `serialize_db.execution`,
-`serialize_db.load`, `serialize_db.publication`, `serialize_db.reader`, `serialize_db.errors` e
-`serialize_db.cli`, com o runbook da operação e as opções de cada subcomando da linha de comando.
+`serialize_db.parquet_import`, `serialize_db.publication`, `serialize_db.reader`,
+`serialize_db.errors` e `serialize_db.cli`, com o runbook da operação e as opções de cada subcomando
+da linha de comando.
 
 ## Como o pacote funciona
 
@@ -43,10 +44,11 @@ de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3
 `serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`, a execução, `serialize_db.execution`, com `serialize-db run` e
 `serialize-db audit`, a publicação para os clientes no Redshift, `serialize_db.publication`,
-com `serialize-db publish_redshift`, a carga inicial da base Parquet atual, `serialize_db.load`, com
-`serialize-db load`, a operação, `serialize-db snapshot`, `vacuum`, `compact`, `archive`,
-`export`, `history` e `channel`, com o runbook na página de `serialize_db.cli`, e o acesso de
-leitura à base com o modelo, `serialize_db.reader`, por `db.open_delta()` e `db.open_redshift()`.
+com `serialize-db publish_redshift`, a carga inicial da base Parquet atual,
+`serialize_db.parquet_import`, com `serialize-db import`, a operação, `serialize-db snapshot`,
+`vacuum`, `compact`, `archive`, `export`, `history` e `channel`, com o runbook na página de
+`serialize_db.cli`, e o acesso de leitura à base com o modelo, `serialize_db.reader`, por
+`db.open_delta()` e `db.open_redshift()`.
 
 ## Instalação
 
@@ -347,24 +349,25 @@ ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva. O nome do
 imutável: a entrada não muda depois de gravada, e o nome não volta a ser usado, nem depois do
 arquivamento.
 
-### Carregar a base Parquet atual
+### Importar a base Parquet atual
 
-`serialize_db.load` leva a base Parquet de hoje, uma pasta por tabela com as partições Hive
-`<coluna>=<valor>/`, para as tabelas Delta do ambiente, uma partição por commit, sem tocar a origem.
-`serialize_db.load.initial_load` cria a tabela do contrato, pula as partições já no log, confere
-cada uma das outras (o valor do caminho na coluna de origem, os nulos das colunas `NOT NULL`, os
-textos acima do limite que `cast` e a auditoria medem) e a grava pelo `COPY` do DuckDB, na ordem da
-`sort_key`, registrando o arquivo no log; `serialize_db.load.load_report` confere contagem e somas
-por partição entre a origem e o Delta:
+`serialize_db.parquet_import` leva a base Parquet de hoje, uma pasta por tabela com as partições
+Hive `<coluna>=<valor>/`, para as tabelas Delta do ambiente, uma partição por commit, sem tocar a
+origem. `serialize_db.parquet_import.import_table` cria a tabela do contrato, pula as partições já
+no log, confere cada uma das outras (o valor do caminho na coluna de origem, os nulos das colunas
+`NOT NULL`, os textos acima do limite que `cast` e a auditoria medem) e a grava pelo `COPY` do
+DuckDB, na ordem da `sort_key`, registrando o arquivo no log;
+`serialize_db.parquet_import.import_report` confere contagem e somas por partição entre a origem e o
+Delta:
 
 ```python
-from serialize_db import load
+from serialize_db import parquet_import
 from serialize_db.execution import Database
 
 db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
-for table in load.load_order(db.tables()):
-    load.initial_load(db, table, "s3://bucket/projeto/db_projetado")   # as partições gravadas
-    report = load.load_report(db, table, "s3://bucket/projeto/db_projetado")
+for table in parquet_import.import_order(db.tables()):
+    parquet_import.import_table(db, table, "s3://bucket/projeto/db_projetado")   # as partições gravadas
+    report = parquet_import.import_report(db, table, "s3://bucket/projeto/db_projetado")
     assert report.matches, report
 ```
 
@@ -378,14 +381,14 @@ perdas que `cast` recusa: um `double` com mais casas que a escala de um `Numeric
 arredondado, um `timestamp` com hora numa coluna `Date` perde a hora, um `timestamp` com fuso numa
 coluna `DateTime` sem fuso entra na hora do `TimeZone` da conexão, o fuso da máquina, e um
 `timestamp` `INT96` com nanossegundos numa coluna `DateTime` entra truncado a microssegundos.
-`load_report` mostra o arredondamento quando ele muda a soma da coluna, e não vê a hora, o fuso nem
-os nanossegundos. A linha `conversões` do relatório lista cada coluna cujo tipo no arquivo difere do
-contrato, como `carimbo: INT96 -> timestamp[us]`, lida no rodapé do primeiro arquivo da primeira
-partição conferida: ela não diz quais conversões perdem dado nem se algum valor perdeu, e não vê o
-tipo de outro arquivo. Na linha de comando:
+`import_report` mostra o arredondamento quando ele muda a soma da coluna, e não vê a hora, o fuso
+nem os nanossegundos. A linha `conversões` do relatório lista cada coluna cujo tipo no arquivo
+difere do contrato, como `carimbo: INT96 -> timestamp[us]`, lida no rodapé do primeiro arquivo da
+primeira partição conferida: ela não diz quais conversões perdem dado nem se algum valor perdeu, e
+não vê o tipo de outro arquivo. Na linha de comando:
 
 ```shell
-serialize-db load --root s3://bucket/projeto/delta --environment prd \
+serialize-db import --root s3://bucket/projeto/delta --environment prd \
     --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
 ```
 
@@ -722,7 +725,7 @@ do Polars pulam esse arquivo num filtro de valor. Quando o log também não tem 
 coluna, o dataset e o Polars com `use_pyarrow=True` pulam o arquivo num `IS NULL`, e o `IS NOT NULL`
 do dataset traz os nulos dele; o DuckDB sobre esse dataset erra parte dos filtros (deltalake 1.6.4 e
 1.6.6, em 2026-09-25). `serialize_db.delta.register_files`, que o `export_partition` dos motores e o
-`initial_load` usam, deixa sem mínimo e máximo as colunas `Numeric`, `DateTime` e `Boolean` e o
+`import_table` usam, deixa sem mínimo e máximo as colunas `Numeric`, `DateTime` e `Boolean` e o
 texto dos arquivos do `UNLOAD`; ele e `serialize_db.delta.publish_partition` deixam sem os dois as
 `Double` com valor não finito na partição. O filtro nas outras colunas e a leitura sem filtro saem
 certos.

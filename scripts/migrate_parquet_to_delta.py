@@ -2,16 +2,16 @@
 com o relatório da execução em JSON.
 
 O script é a ferramenta de operação da carga inicial (``plan/PLAN-STAGE-7.md``) sobre
-``serialize_db.load``: ``initial_load`` grava cada partição ainda fora do log, com a conferência
-da partição, o ``COPY ... RETURN_STATS`` na ordem da ``sort_key`` e o registro pelo
-``register_files``, e ``load_report`` confere contagem e somas por partição entre a origem e o
+``serialize_db.parquet_import``: ``import_table`` grava cada partição ainda fora do log, com a
+conferência da partição, o ``COPY ... RETURN_STATS`` na ordem da ``sort_key`` e o registro pelo
+``register_files``, e ``import_report`` confere contagem e somas por partição entre a origem e o
 Delta. Para cada tabela do modelo, as sem partição primeiro e as particionadas depois, na ordem do
-modelo (``load_order``), o script chama ``initial_load`` partição por partição, imprime as linhas,
+modelo (``import_order``), o script chama ``import_table`` partição por partição, imprime as linhas,
 o tempo e o pico de memória do processo até ali e, com ``--report``, regrava o JSON depois de cada
 partição gravada, com a tabela da vez em ``in_progress``: um processo morto no meio da carga, pela
 falta de memória por exemplo, deixa o que já conferiu e gravou. O relatório final leva a máquina, as
 versões, os limites do DuckDB lidos do ambiente e os argumentos, cada tabela com o relatório de
-``load_report`` e as partições gravadas agora, e o que a raiz da origem tem fora do modelo. A raiz
+``import_report`` e as partições gravadas agora, e o que a raiz da origem tem fora do modelo. A raiz
 Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``, e a origem fica
 intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas, que toda
 tabela particionada precisa ter na origem: uma que falta recusa a execução antes de qualquer
@@ -60,11 +60,11 @@ from pathlib import Path
 import pyarrow as pa
 import sqlalchemy as sa
 
-from serialize_db import delta, load, schema
+from serialize_db import delta, parquet_import, schema
 from serialize_db.engine.duckdb import environment_limits
 from serialize_db.errors import ContractError
 from serialize_db.execution import Database
-from serialize_db.load import LoadReport
+from serialize_db.parquet_import import ImportReport
 from serialize_db.resources import available_cpus, available_memory, peak_rss_mb, physical_memory
 
 # ---------------------------------------------------------------- o relatório
@@ -82,9 +82,9 @@ class PartitionLoad:
 
 @dataclasses.dataclass(frozen=True)
 class TableReport:
-    """O relatório de uma tabela: o de ``load_report`` e as partições gravadas agora."""
+    """O relatório de uma tabela: o de ``import_report`` e as partições gravadas agora."""
 
-    report: LoadReport
+    report: ImportReport
     loaded: tuple[PartitionLoad, ...]
 
     def as_document(self) -> dict[str, object]:
@@ -121,17 +121,17 @@ def load_table(
     partitions: Sequence[str] | None,
     progress: Callable[[list[PartitionLoad]], None] | None = None,
 ) -> list[PartitionLoad]:
-    """A carga da tabela partição por partição, cada uma numa chamada de ``initial_load``, com a
+    """A carga da tabela partição por partição, cada uma numa chamada de ``import_table``, com a
     linha impressa e ``progress`` chamado depois de cada partição gravada; devolve o que gravou
     agora."""
-    found, _ = load.discover_partitions(source, table)
+    found, _ = parquet_import.discover_partitions(source, table)
     wanted = [value for value in found if partitions is None or value in partitions]
     loaded: list[PartitionLoad] = []
     for value in wanted:
         started = time.perf_counter()
         selected = None if value is None else [value]
-        # initial_load devolve a lista vazia quando o log já tem a partição.
-        if not load.initial_load(db, table, source, selected):
+        # import_table devolve a lista vazia quando o log já tem a partição.
+        if not parquet_import.import_table(db, table, source, selected):
             continue
         rows = partition_rows(db, table, value)
         item = PartitionLoad(value, rows, time.perf_counter() - started, peak_rss_mb())
@@ -160,7 +160,7 @@ def side_text(
 
 
 def print_report(
-    report: LoadReport,
+    report: ImportReport,
 ) -> None:
     """As linhas do relatório de uma tabela, depois das partições gravadas."""
     for partition in report.partitions:
@@ -271,7 +271,7 @@ def partition_argument(
     text: str,
 ) -> str:
     """Um valor de ``--partitions`` pela regra da partição, como o ``--partitions`` de
-    ``serialize-db load``; o valor fora dela é erro de uso, com o código 2."""
+    ``serialize-db import``; o valor fora dela é erro de uso, com o código 2."""
     try:
         return schema.check_partition_value(text)
     except ContractError as error:
@@ -353,10 +353,10 @@ def main(
     # no começo da tabela e depois de cada partição.
     reports: list[TableReport] = []
     try:
-        ordered = load.load_order(tables)
+        ordered = parquet_import.import_order(tables)
         # A partição pedida que a origem não tem recusa a execução antes de qualquer gravação.
         for table in ordered:
-            load.check_requested_partitions(arguments.source, table, arguments.partitions)
+            parquet_import.check_requested_partitions(arguments.source, table, arguments.partitions)
         for table in ordered:
             # A tabela sem partição fica inteira de fora do pedido por partições.
             unpartitioned = schema.table_options(table).partition_by is None
@@ -371,7 +371,7 @@ def main(
                 )
                 progress([])
             loaded = load_table(db, table, arguments.source, arguments.partitions, progress)
-            report = load.load_report(db, table, arguments.source, arguments.partitions)
+            report = parquet_import.import_report(db, table, arguments.source, arguments.partitions)
             print_report(report)
             reports.append(TableReport(report, tuple(loaded)))
     except ContractError as error:
@@ -381,7 +381,7 @@ def main(
         print(f"FileNotFoundError: {error}", file=sys.stderr)
         return 2
     # O relatório final leva o que a origem tem fora do modelo; o veredito dá o código de saída.
-    outside = load.entries_outside_the_model(arguments.source, metadata)
+    outside = parquet_import.entries_outside_the_model(arguments.source, metadata)
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")
     if arguments.report:

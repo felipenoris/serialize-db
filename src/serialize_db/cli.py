@@ -1,7 +1,7 @@
 """A linha de comando ``serialize-db``.
 
 Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da etapa 1,
-``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``load`` o da etapa 7,
+``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``import`` o da etapa 7,
 ``publish_redshift`` o da etapa 8, ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e
 ``history`` os da etapa 9 e ``channel`` o da etapa 10, com o runbook abaixo, seguido das opções de
 cada subcomando.
@@ -12,7 +12,7 @@ compara com a geração nova. ``run`` abre uma execução, com a partição de `
 partição, e entrega a ``modulo:funcao`` do pipeline;
 ``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
 versão atual do Delta, no motor de ``--engine``;
-``load`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
+``import`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
 ambiente, as sem partição antes das particionadas, e confere contagem e somas por partição;
 ``publish_redshift`` publica no Redshift o snapshot de ``--snapshot`` ou do canal de
 ``--channel`` (``current`` é a versão atual de cada tabela), mostra o estado da publicação
@@ -46,7 +46,7 @@ Exemplo:
     serialize-db run --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata pipeline.dominios:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
-    serialize-db load --root s3://bucket/delta --environment prd \\
+    serialize-db import --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
     serialize-db publish_redshift --init
     serialize-db publish_redshift --root s3://bucket/delta --environment prd \\
@@ -98,7 +98,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import sqlalchemy as sa
 
-from serialize_db import audit, delta, load, schema, sql
+from serialize_db import audit, delta, parquet_import, schema, sql
 from serialize_db.audit import AuditReport
 from serialize_db.engine import Engine
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
@@ -110,7 +110,7 @@ from serialize_db.errors import (
     PublicationError,
 )
 from serialize_db.execution import Database, Execution
-from serialize_db.load import LoadReport
+from serialize_db.parquet_import import ImportReport
 from serialize_db.resources import peak_rss_mb
 from serialize_db.storage import Storage
 
@@ -222,7 +222,7 @@ def _add_database_arguments(
     parser: argparse.ArgumentParser,
 ) -> None:
     """``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
-    ``SERIALIZE_DB_*``: os de ``run``, de ``load`` e das rotinas de operação. ``--root`` passa
+    ``SERIALIZE_DB_*``: os de ``run``, de ``import`` e das rotinas de operação. ``--root`` passa
     por ``_root_argument`` em todo subcomando que a recebe."""
     root = os.environ.get("SERIALIZE_DB_ROOT")
     parser.add_argument(
@@ -327,24 +327,24 @@ def _add_publish_redshift_parser(
     publish.set_defaults(handler=_publish_redshift)
 
 
-def _add_load_parser(
+def _add_import_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """``load``: a carga inicial da base Parquet de origem nas tabelas Delta do ambiente."""
-    load_command = commands.add_parser("load", help="a carga inicial da base Parquet de origem")
-    _add_database_arguments(load_command)
-    load_command.add_argument(
+    """``import``: a carga inicial da base Parquet de origem nas tabelas Delta do ambiente."""
+    import_command = commands.add_parser("import", help="a carga inicial da base Parquet de origem")
+    _add_database_arguments(import_command)
+    import_command.add_argument(
         "--source",
         required=True,
         help="a raiz da base Parquet de origem, pasta local ou s3://bucket/prefixo",
     )
-    load_command.add_argument(
+    import_command.add_argument(
         "--tables",
         nargs="+",
         default=None,
         help="só estas tabelas do modelo; sem elas, todas, as sem partição antes das particionadas",
     )
-    load_command.add_argument(
+    import_command.add_argument(
         "--partitions",
         nargs="+",
         type=_name_argument,
@@ -352,7 +352,7 @@ def _add_load_parser(
         help="só estas partições, gravadas e conferidas, que toda tabela particionada precisa ter "
         "na origem; as tabelas sem partição ficam de fora",
     )
-    load_command.set_defaults(handler=_load)
+    import_command.set_defaults(handler=_import)
 
 
 def _add_operation_parsers(
@@ -472,7 +472,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_run_parser(commands)
     _add_audit_parser(commands)
     _add_publish_redshift_parser(commands)
-    _add_load_parser(commands)
+    _add_import_parser(commands)
     _add_operation_parsers(commands)
 
     schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
@@ -907,16 +907,16 @@ def _side_text(
     return f"{side} {rows} linhas {dict(sums)} não finitos {dict(nonfinite)}"
 
 
-def _print_load_report(
-    report: LoadReport,
-    loaded: list[str | None],
+def _print_import_report(
+    report: ImportReport,
+    imported: list[str | None],
 ) -> None:
     """As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o veredito,
     as conversões de tipo e o que ficou fora do padrão."""
-    written = f"{report.table}: {len(loaded)} partição(ões) gravada(s)"
-    if loaded:
+    written = f"{report.table}: {len(imported)} partição(ões) gravada(s)"
+    if imported:
         # A tabela sem partição é gravada de uma vez, com o valor None.
-        labels = ["tabela inteira" if value is None else value for value in loaded]
+        labels = ["tabela inteira" if value is None else value for value in imported]
         written += ": " + ", ".join(labels)
     print(written)
     for partition in report.partitions:
@@ -937,7 +937,7 @@ def _print_load_report(
         print(f"  fora do padrão: {entry}")
 
 
-def _load(
+def _import(
     args: argparse.Namespace,
 ) -> int:
     """A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada uma: 1 na
@@ -948,43 +948,45 @@ def _load(
     relatório."""
     problems = schema.check_models(args.metadata)
     if problems:
-        print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ", file=sys.stderr)
+        print(
+            "serialize-db import: modelo fora do contrato:", *problems, sep="\n  ", file=sys.stderr
+        )
         return 2
     # A origem num esquema que a biblioteca não lê, ou no S3 sem região, é erro de uso.
     try:
         Storage.for_uri(args.source)
     except ValueError as error:
-        print(f"serialize-db load: {error}", file=sys.stderr)
+        print(f"serialize-db import: {error}", file=sys.stderr)
         return 2
     db = Database(args.root, args.environment, args.metadata)
     matches = True
     conferred = 0
     try:
-        tables = load.load_order(_selected_tables(args.metadata, args.tables))
+        tables = parquet_import.import_order(_selected_tables(args.metadata, args.tables))
         # A partição pedida que a origem não tem recusa a carga antes de qualquer gravação.
         for table in tables:
-            load.check_requested_partitions(args.source, table, args.partitions)
+            parquet_import.check_requested_partitions(args.source, table, args.partitions)
         for table in tables:
             # A tabela sem partição fica inteira de fora do pedido por partições.
             unpartitioned = schema.table_options(table).partition_by is None
             if args.partitions is not None and unpartitioned:
                 print(f"{table.name}: tabela sem partição, fora de --partitions")
                 continue
-            loaded = load.initial_load(db, table, args.source, args.partitions)
-            report = load.load_report(db, table, args.source, args.partitions)
-            _print_load_report(report, loaded)
+            imported = parquet_import.import_table(db, table, args.source, args.partitions)
+            report = parquet_import.import_report(db, table, args.source, args.partitions)
+            _print_import_report(report, imported)
             matches = matches and report.matches
             conferred += 1
     except (argparse.ArgumentTypeError, FileNotFoundError) as error:
-        print(f"serialize-db load: {error}", file=sys.stderr)
+        print(f"serialize-db import: {error}", file=sys.stderr)
         return 2
     except ContractError as error:
-        print(f"serialize-db load: {error}", file=sys.stderr)
+        print(f"serialize-db import: {error}", file=sys.stderr)
         return 1
     except ExecutionConflict as error:
-        print(f"serialize-db load: conflito: {error}", file=sys.stderr)
+        print(f"serialize-db import: conflito: {error}", file=sys.stderr)
         return 2
-    outside = load.entries_outside_the_model(args.source, args.metadata)
+    outside = parquet_import.entries_outside_the_model(args.source, args.metadata)
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")
     verdict = "contagens e somas iguais" if matches else "com diferenças"

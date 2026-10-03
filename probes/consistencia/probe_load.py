@@ -1,8 +1,8 @@
 """A carga inicial da base Parquet fictícia de ``tests/source_db_projetado.py`` em Delta por
-``initial_load``, tabela a tabela na ordem de ``load_order``, com o conteúdo de cada tabela
+``import_table``, tabela a tabela na ordem de ``import_order``, com o conteúdo de cada tabela
 comparado valor a valor entre os arquivos de origem, lidos por ``read_parquet`` e levados ao
 contrato, e a tabela Delta lida pelo dataset do delta-rs e pelo ``delta_scan``; a segunda
-passagem sem commit e ``load_report`` fechando.
+passagem sem commit e ``import_report`` fechando.
 
 .. code-block:: shell
 
@@ -25,7 +25,7 @@ import source_db_projetado as source  # noqa: E402
 from client_model import Base  # noqa: E402
 from consistency_lib import compare, finish, print_notes, probe_folder, report  # noqa: E402
 from consistency_lib import to_contract  # noqa: E402
-from serialize_db import delta, load  # noqa: E402
+from serialize_db import delta, parquet_import  # noqa: E402
 from serialize_db.engine.duckdb import DuckDBConfig  # noqa: E402
 from serialize_db.execution import Database  # noqa: E402
 from serialize_db.schema import table_options  # noqa: E402
@@ -93,8 +93,8 @@ def check_table(
     table: sa.Table,
 ) -> list[str]:
     """Uma tabela: a carga, a segunda passagem, os dois leitores contra a origem e o relatório."""
-    loaded = load.initial_load(db, table, root, config=config)
-    again = load.initial_load(db, table, root, config=config)
+    loaded = parquet_import.import_table(db, table, root, config=config)
+    again = parquet_import.import_table(db, table, root, config=config)
     problems = []
     if again:
         problems.append(f"a segunda passagem carregou {again}")
@@ -104,9 +104,9 @@ def check_table(
         found, _ = with_key(table, found)
         differences = compare(expected, found, key=key, label=f"{table.name} {reader_name}")
         problems += [p for p in differences if KEY_COLUMN not in p]
-    report_rows = load.load_report(db, table, root, config=config)
+    report_rows = parquet_import.import_report(db, table, root, config=config)
     if not report_rows.matches:
-        problems.append(f"load_report não fecha: {report_rows}")
+        problems.append(f"import_report não fecha: {report_rows}")
     print(f"   {table.name}: {expected.num_rows} linhas, carga {loaded}")
     return problems
 
@@ -116,7 +116,7 @@ def main() -> None:
     base = source.write_source(folder / "origem")
     db = Database(str(folder / "delta"), "prd", Base.metadata)
     config = DuckDBConfig(temp_directory=str(folder / "sandbox"))
-    tables = load.load_order(list(Base.metadata.tables.values()))
+    tables = parquet_import.import_order(list(Base.metadata.tables.values()))
     print("tabelas:", [t.name for t in tables])
     connection = db.storage.duckdb_connect()
     all_problems = []

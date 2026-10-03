@@ -216,7 +216,7 @@ as chamadas.
 | Ingestão paralela | `test_ingest_of_several_tables_uses_extra_sessions` | Uma tabela na sessão principal, na thread de quem chama, sem `new_session`; várias em sessões a mais, fora da thread principal, lidas pela sessão principal; a falha de uma leva o resultado das outras na nota. |
 
 `tests/test_pipeline.py` roda a execução completa sobre a base de testes em Delta, a base fictícia
-de `tests/source_db_projetado.py` carregada por `initial_load` com o modelo cliente:
+de `tests/source_db_projetado.py` carregada por `import_table` com o modelo cliente:
 `monthly_pipeline(run)`, no formato `modulo:funcao` de `serialize-db run`, ingere as tabelas do
 modelo (as particionadas só na última data-base, materializadas pela DDL e pelo `INSERT` do
 `delta_scan`), gera a partição do mês seguinte de `cad_operacoes`, `cad_contratos` e
