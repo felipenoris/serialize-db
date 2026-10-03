@@ -15,9 +15,9 @@ requires-python = ">=3.13"
 # do motor Redshift, da publicação e do leitor Redshift, fixado porque o motor lê o type_modifier
 # do row_desc privado do driver (serialize_db.engine.redshift).
 dependencies = [
-    "boto3==1.43.102",
+    "boto3==1.43.108",
     "deltalake==1.6.6",
-    "duckdb==1.5.5",
+    "duckdb==1.5.6",
     "duckdb-engine==0.17.0",
     "pyarrow==25.0.1",
     "redshift-connector==2.1.17",
@@ -33,14 +33,14 @@ serialize-db = "serialize_db:main"
 dev = [
     "boto3>=1.40",
     "deltalake==1.6.6",
-    "duckdb==1.5.5",
+    "duckdb==1.5.6",
     "pandas==3.0.6",
     "pyarrow==25.0.1",
     "pytest>=8.4",
     "redshift-connector>=2.1",
-    "ruff==0.16.9",
+    "ruff==0.16.10",
     "sqlalchemy==2.0.54",
-    "sqlglot==30.19.0",
+    "sqlglot==30.21.0",
 ]
 # O substituto local do S3 e do Redshift (tests/emulator.py), que roda as suítes do ambiente alvo
 # fora dele com SERIALIZE_DB_TEST_EMULATOR: o servidor do moto roda sobre o Flask. Fica fora do dev

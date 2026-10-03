@@ -5845,3 +5845,78 @@ contratos do mês chegam em um CSV por sistema em `<ambiente>/recebidos/<partiç
 recomendações de uso do pacote; revisados `plan/PLAN-STAGE-6.md` e `plan/CURRENT_STATE.md`. A
 pasta da execução fica no código cliente, sem API no pacote, e a decisão de levá-la ao pacote
 espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a troca das versões das dependências de 2026-10-03 mostrou
+
+Em 2026-10-03, no contêiner de desenvolvimento (Linux x86_64, 4 vCPUs e 16 GB, Python 3.13.14), a
+API JSON do PyPI tinha versões novas de cinco dependências fixadas em `pyproject.toml`: boto3
+1.43.108 (o pino era 1.43.102), DuckDB 1.5.6 (1.5.5), de 2026-09-28, SQLAlchemy 2.1.3 (2.0.54), de
+2026-10-02, ruff 0.16.10 (0.16.9) e sqlglot 30.21.0 (30.19.0). As outras estavam na última versão:
+deltalake 1.6.6, duckdb-engine 0.17.0, PyArrow 25.0.1, redshift-connector 2.1.17,
+sqlalchemy-redshift 1.0.0, pandas 3.0.6, flask 3.1.3, flask-cors 6.0.5, moto 5.2.3 e pdoc 16.0.0;
+os limites inferiores resolveram pytest 9.1.1 e ipykernel 7.4.0, e o intervalo do `uv_build`, a
+0.12.23. O botocore, que o boto3 traz sem pino, veio 1.43.108 também com o pino antigo. Cada
+combinação rodou numa cópia do repositório, sem as variáveis `AWS_*`, nas três sessões de testes
+(sem variável, com `SERIALIZE_DB_TEST_LOCAL_ROOT` e com ela e `SERIALIZE_DB_TEST_EMULATOR`), depois
+do `ruff check` e do `ruff format --check`.
+
+- **Os pinos da `main`.** 255 aprovados e 435 pulados sem variável, 571 e 119 com a raiz local, e
+  687 aprovados, 2 pulados e 1 reprovado com o substituto: o caso de estudo do GIL,
+  `test_gil_reacquisition_waits_the_switch_interval`, que reprova em algumas sessões e passa nas
+  outras, como na seção das correções dos achados da revisão, acima.
+- **boto3, ruff e sqlglot.** Com boto3 1.43.108, ruff 0.16.10 e sqlglot 30.21.0, os mesmos números,
+  com o caso do GIL reprovado na sessão sem variável e aprovado com o substituto (688 aprovados e 2
+  pulados). O `ruff check` e o `ruff format --check` da 0.16.10 passaram nos 89 arquivos.
+- **DuckDB 1.5.6.** Com as três trocas acima e o DuckDB 1.5.6, os mesmos números, com o caso do GIL
+  reprovado só sem variável. O `INSTALL` trouxe as extensões `delta` 6059958 e `httpfs` 4bc690d para
+  `.duckdb/v1.5.6/linux_amd64/`; as da 1.5.5, `45c4087` e `827222f`, ficam em `.duckdb/v1.5.5/`, e a
+  pasta preparada para a 1.5.5 não tem extensão para a 1.5.6. O anúncio da 1.5.6 lista correções de
+  resultado (o `LIMIT` empurrado por uma projeção volátil, o `UNNEST`, a eliminação de Top-N em
+  janelas, a poda de partições Hive, a contagem de valores do Parquet v2) e as aspas em todo
+  identificador das mensagens de erro; nenhum teste do pacote mudou de resultado.
+- **SQLAlchemy 2.1.3.** Com as três trocas e a 2.1.3: 251 aprovados, 4 reprovados e 435 pulados sem
+  variável; 565, 6 e 119 com a raiz local; 679, 9 e 2 com o substituto. A 2.1.3 corrigiu o `NULL`
+  dos valores de `params()` sob `literal_binds` (#13635), e os valores saem como literais. Seguem:
+  - o `construct_params()` de um statement com valores de `params()`, compilado com
+    `render_postcompile`, levanta `InvalidRequestError` ("can't construct new parameters when
+    render_postcompile is used"), porque junta os valores guardados no statement e recusa qualquer
+    conjunto: `test_statement_parameters_expand_in_lists`, do motor DuckDB, e o estudo
+    `test_in_list_needs_render_postcompile_on_the_engine_path`. Numa sonda, o
+    `construct_expanded_state()` do statement compilado sem `render_postcompile` deu o mesmo texto e
+    os mesmos valores na 2.0.54 e na 2.1.3, pelo `duckdb_engine.Dialect` com `qmark` e pelo
+    `RedshiftDialect_redshift_connector` com `named`;
+  - o `_backslash_escapes` do dialeto PostgreSQL, que os dialetos do DuckDB e do Redshift herdam,
+    passou de verdadeiro a falso, e o literal deixou de dobrar a contrabarra: `'a\:b'` no lugar de
+    `'a\\:b'`. No substituto, que lê a contrabarra como escape, como o Redshift (leitura de
+    2026-09-23), o `stream` pelo `UNLOAD` leu 0 linhas onde o `query` leu 1, sem erro
+    (`test_stream_literal_values_on_the_target` e
+    `test_stream_and_query_agree_on_a_colon_inside_a_literal`), e `test_stream_literal_values` e
+    `test_literal_text_keeps_the_backslash_before_a_colon_in_a_value` acharam o texto sem a
+    contrabarra dobrada;
+  - o `Double` fora de `Numeric` tirou de novo a coluna `fator` das somas do `import_report`
+    (`test_import_report_matches_and_detects_a_difference`);
+  - o `params()` mantém o `required` do `bindparam`: o guarda do estudo
+    `test_stream_by_unload_with_literal_values` achou `texto` depois dele, e, numa sonda, um
+    statement que o cliente passou por `params(x=1)` foi recusado por `bound_statement` com
+    `SqlError`, e o `render` o escreveu com `:x` no lugar de `1`;
+  - a reflexão do duckdb-engine 0.17.0 seguiu falhando na `pg_catalog.pg_collation`
+    (`test_create_all_and_reflection`).
+- **A contrabarra do `render` no DuckDB com a 2.0.54.** O `_backslash_escapes` verdadeiro dobra a
+  contrabarra da constante `a\b` no texto de `render(..., "duckdb")`, `'a\\b'`, e o DuckDB, que não
+  a trata como escape, lê as duas: o `WHERE "t"."b" = 'a\\b'` não achou a linha `a\b` na 2.0.54 e a
+  achou na 2.1.3. Os motores passam os valores como parâmetros; nenhum teste cobre uma constante
+  com contrabarra no `render`.
+- **O ajuste do pacote.** Em duas cópias a mais com boto3, ruff e sqlglot novos, com
+  `construct_expanded_state()` nos dois motores, `(sa.Numeric, sa.Float)` nas somas do
+  `import_report` e `_backslash_escapes` explícito, verdadeiro nos dialetos do Redshift de
+  `serialize_db.sql` e de `serialize_db.engine.redshift` e falso no do DuckDB de
+  `serialize_db.sql`: com a 2.1.3, 253, 569 e 685 aprovados nas três sessões, e só
+  reprovaram os estudos da reflexão, do `render_postcompile` e, com o substituto, do `required`
+  depois do `params()`; com a 2.0.54, 255, 571 e 688 aprovados, sem reprovação. A sonda do
+  `render` deu, nas duas versões, o texto do DuckDB com uma contrabarra e o do Redshift com duas.
+
+**Consequências**: `pyproject.toml` fixa boto3 1.43.108, DuckDB 1.5.6, ruff 0.16.10 e sqlglot
+30.21.0, e a pasta preparada para o ambiente alvo precisa do `prepare_offline.sh` de novo, pelas
+extensões da 1.5.6. A SQLAlchemy fica em 2.0.54, e o item dela em
+[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) traz a 2.1.3; a contrabarra do `render` no DuckDB entra lá
+como item próprio, à espera do usuário.
