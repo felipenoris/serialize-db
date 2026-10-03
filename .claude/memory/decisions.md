@@ -1740,3 +1740,26 @@ and the consistency probe's section E (`check_export_parquet`) follow; the dated
 `tests/proof_of_concept/test_deltalake.py`, `probes/consistencia/probe_delta_ops.py`,
 `docs/index.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `plan/serialize-db.md`,
 `plan/OPEN_QUESTIONS.md`
+
+## The execution's folder in the pipeline test (2026-10-03)
+
+On 2026-10-03 the user stated that pipelines will commonly take a set of files as input, and that
+they plan to keep, under each `execution_id`, a folder, possibly on S3, with a copy of the input
+files presented to the pipeline and the files of its intermediate stages, to trace the data's
+origins and debug processing errors; they asked whether the package deserves an API for it or
+client code should read the `execution_id` and organize the files. The assistant's opinion: client
+code first, with the folder `<raiz>/<ambiente>/execucoes/<execution_id>/`, and a package API once
+a second pipeline repeats that code; `Storage.copy` copies only within the root. Whether the
+package takes the folder and the copy from outside the root awaits the user in
+`plan/OPEN_QUESTIONS.md` ("A pasta da execução no pacote"). The user then asked for the
+illustration in `tests/test_pipeline.py`, with comments carrying the package's usage
+recommendations. Offered on a decision card the month's contracts (recommended: the file kept as it
+arrived and its content in the Delta, linked by the `execution_id`) and one CSV per account group
+with the expected balances, which the pipeline only checks, the user chose the contracts: they
+arrive in one CSV per `sistema` in `<raiz>/<ambiente>/recebidos/<partição>/`, and the pipeline
+copies the files to the execution's `entradas/` and appends the copies' rows to the new partition
+of `cad_contratos`; `relatorios/` receives the balances and the apportionment, and `geracao/` the
+generated partition of each table on failure. The assistant's choices, named in the report: the
+ingestion cut to what the pipeline reads, the `last_base_date` fix with the rerun case, and the
+item in `plan/OPEN_QUESTIONS.md`.
+`tests/test_pipeline.py`, `plan/PLAN-STAGE-6.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
