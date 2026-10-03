@@ -242,7 +242,7 @@ As opções de cada subcomando de `serialize-db`. Um valor de partição, um `--
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
 | `--metadata modulo:atributo` | obrigatória | O caminho importável do `MetaData` dos modelos, como `pipeline.models:Base.metadata`. |
-| `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. |
+| `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. Fora dos armazenamentos da biblioteca, ou no S3 sem região, é erro de uso, em todo subcomando. |
 | `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
 
 `run`, `load` e as rotinas de operação (`snapshot`, `channel`, `vacuum`, `compact`, `archive`,
@@ -290,7 +290,7 @@ recebem só `--metadata`.
 | --- | --- | --- |
 | `--source` | obrigatória | A raiz da base Parquet de origem, pasta local ou `s3://bucket/prefixo`. |
 | `--tables` | todas do modelo | As tabelas carregadas, na ordem da carga: as sem partição antes das particionadas. |
-| `--partitions` | todas | As partições carregadas e conferidas no relatório, que toda tabela particionada da carga precisa ter na origem: uma que falta é recusada antes de qualquer gravação, com a saída 1; com ela, as tabelas sem partição ficam de fora. |
+| `--partitions` | todas | As partições carregadas e conferidas no relatório, que toda tabela particionada da carga precisa ter na origem: uma que falta é recusada antes de qualquer gravação, com a saída 1; com ela, a tabela sem partição fica inteira de fora, sem carga nem relatório, numa linha da saída. |
 
 ### `publish_redshift`
 

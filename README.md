@@ -297,12 +297,12 @@ export AWS_DEFAULT_REGION=sa-east-1
 PYTHONPATH=tests .venv/bin/python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --environment prd --source s3://bucket/prefixo/db_projetado --root s3://bucket/prefixo/delta --tables cad_contratos --report relatorio.json
 ```
 
-`--partitions AAAA-MM-DD` carrega e confere só as partições listadas e deixa de fora as tabelas sem
-partição; uma partição que a origem não tem, em qualquer tabela da carga, é recusada antes de
-qualquer gravação, com a saída 1. `--tables` carrega só as tabelas listadas, as sem partição antes
-das particionadas. A segunda
-execução não grava nada: a carga recomeça das partições fora do log. A auditoria de chaves
-estrangeiras vem depois da carga, por `serialize-db audit --foreign-keys`.
+`--partitions AAAA-MM-DD` carrega e confere só as partições listadas e deixa a tabela sem partição
+inteira de fora, numa linha da saída; uma partição que a origem não tem, em qualquer tabela da
+carga, é recusada antes de qualquer gravação, com a saída 1, e o valor fora da regra da partição é
+erro de uso, com a saída 2. `--tables` carrega só as tabelas listadas, as sem partição antes das
+particionadas. A segunda execução não grava nada: a carga recomeça das partições fora do log. A
+auditoria de chaves estrangeiras vem depois da carga, por `serialize-db audit --foreign-keys`.
 
 # Exemplos: conectividade com o Redshift
 

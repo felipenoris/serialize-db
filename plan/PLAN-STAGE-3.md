@@ -86,7 +86,11 @@ o rodapé de cada arquivo, um GET por arquivo:
    2026-09-28, mandaria uma e outra para a staging, que não as tem; e as colunas do contrato na
    ordem dele, que nenhum leitor exige desde a lista de colunas do `COPY`. Nenhum nulo numa coluna
    `NOT NULL`, pela contagem de nulos de cada grupo de linhas do rodapé: o DuckDB grava toda
-   coluna como `optional`, e o leitor devolveria o nulo que o `write_deltalake` recusa.
+   coluna como `optional`, e o leitor devolveria o nulo que o `write_deltalake` recusa. A
+   conferência lê o caminho de cada folha do rodapé, não o `name`: a folha de uma coluna aninhada
+   repete o nome do campo interno, e a coluna do contrato dentro de um struct passava, registrava
+   e era lida nula pelos dois leitores; a coluna aninhada é recusada como fora do contrato, que não
+   tem tipo aninhado (leitura de 2026-10-01).
 3. O valor de partição do caminho Hive igual ao de `value`.
 4. A soma de `num_records` dos rodapés igual à que `files` declara e a `expected_rows`, quando o
    chamador tem a contagem da fonte.
@@ -171,7 +175,8 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
   local, `create_text` é `os.open(O_CREAT | O_EXCL)` no modo 0o666 menos a umask, sem execução,
   e `if_match` compara a impressão digital (`sha256` do conteúdo) antes de gravar num arquivo
   temporário `<nome>.<uuid>.tmp`, aberto do mesmo modo e com o modo do arquivo que substitui quando
-  ele existe, e trocar por `os.replace`, cuja falha apaga o temporário; a comparação e a troca não
+  ele existe, e trocar por `os.replace`; a escrita ou a troca que falha o apaga; a comparação e a
+  troca não
   são atômicas entre processos, o que basta à pasta local, o ambiente dos testes e do
   desenvolvimento. O `NamedTemporaryFile` daria 0o600 ao arquivo novo e ao substituído.
   No S3, `put_object` do `boto3` com `IfNoneMatch="*"` (`create_text`) ou `IfMatch=<etag>`, atômico no servidor, e
@@ -252,8 +257,10 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
   ambiente, a versão relida é a do próprio commit. O commit confere conflito como o
   `write_deltalake`: um segundo registro da mesma partição, a partir da versão que o primeiro
   substituiu, é `CommitFailedError`, e a primitiva o converte em `ExecutionConflict`.
-- **`read_back`** roda depois do commit, numa conexão de
-  `storage.duckdb_connect(config=environment_limits())`, como `rewrite`:
+- **`read_back`** roda depois do commit, numa conexão do DuckDB com os limites que
+  `register_files` e `rewrite` leem do ambiente antes do commit (`environment_limits`), para a
+  memória que o ambiente recusa (`SandboxError`) cair sem nada gravado (decisão do usuário de
+  2026-10-02):
   `count(*)` e mínimo e máximo de cada coluna da primeira chave do modelo por partição no delta-rs
   (o scanner de `to_pyarrow_dataset`, lote a lote, com a memória de um lote) e no `delta_scan` do
   DuckDB, a soma de `numRecords` das ações `add` da partição, e o mínimo e o máximo que o log
@@ -374,7 +381,7 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Tabela inteira nas mensagens | `test_messages_of_a_table_without_partition_name_the_whole_table` | Numa tabela sem partição, o conflito por `publish_partition` e por `register_files` e a releitura que desfaz o commit começam por `dom_canais tabela inteira:`, e não por uma `partição None`. |
 | Registro | `test_register_files_registers_an_unload_like_file` | Um arquivo `INT96` e `FIXED_LEN_BYTE_ARRAY` registrado; os dois leitores devolvem as linhas e `timestamp[us]`; o mínimo e o máximo da chave na ação. |
 | Contagem de nulos do rodapé | `test_file_from_footer_leaves_out_the_null_count_the_footer_lacks` | A coluna sem estatística no rodapé, o timestamp `INT96`, fica fora do `null_count` de `file_from_footer` e do `nullCount` do log, e o `IS NULL` pelo `DeltaTable.scan` lê os nulos dela; a chave entra com o zero. |
-| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, linhas, partição do caminho, `expected_rows` diferente, caminho absoluto, coluna do contrato ausente, tipo físico fora dos admitidos, coluna de partição dentro do arquivo, coluna fora do contrato, colunas fora de ordem e nulo numa coluna `NOT NULL`, cada recusa conferida por um trecho da mensagem da sua conferência (`DEFECT_MESSAGES`), para que o caso reprove quando outra conferência recusa antes; a versão não muda e o arquivo fica órfão. |
+| Conferências | `test_register_files_refuses_each_defect`, parametrizado | Tamanho, linhas, partição do caminho, `expected_rows` diferente, caminho absoluto, coluna do contrato ausente, tipo físico fora dos admitidos, coluna de partição dentro do arquivo, coluna fora do contrato, coluna aninhada, colunas fora de ordem e nulo numa coluna `NOT NULL`, cada recusa conferida por um trecho da mensagem da sua conferência (`DEFECT_MESSAGES`), para que o caso reprove quando outra conferência recusa antes; a versão não muda e o arquivo fica órfão. |
 | Releitura | `test_read_back_restores_on_a_difference` | Um máximo falso da chave, abaixo do real, faz `read_back` voltar a versão por `restore`. |
 | `Double` não finito | `test_nonfinite_double_columns_leave_min_max_out` | Uma coluna em `columns_without_min_max` numa partição: `publish_partition` grava o rodapé e o log sem o mínimo e o máximo dela, `register_files` grava o log sem os dois (o infinito inclusive), a outra partição sai com eles, e o `delta_scan` devolve as linhas do `NaN` e do infinito num filtro por intervalo e não abre o arquivo da outra partição. |
 | Estatísticas | `test_file_from_return_stats_and_registered_stats_prune` | O arquivo do `COPY ... RETURN_STATS` do DuckDB entra com o mínimo e o máximo dos tipos exatos; `EXPLAIN ANALYZE` mostra `Scanning Files: 0/n` para uma chave acima do máximo e um texto acima do máximo; as colunas `decimal` e `timestamp` entram sem mínimo e máximo. |
@@ -398,6 +405,7 @@ com a varredura de reserva são os casos de `tests/test_delta.py`.
 | Esquema da cópia | `test_deep_copy_carries_the_schema_of_the_copied_version` | A cópia de uma versão com uma coluna nova só no `metaData` sobre a cópia da anterior, sem partição a copiar, é `RegistrationRefused` (`canal ausente da cópia`), sem commit; com a partição nova, o commit dela leva o esquema da versão, igual ao da origem com os metadados, e os dois leitores leem a coluna nova. |
 | Caminhos fora da raiz | `test_deep_copy_and_rewrite_refuse_paths_outside_the_root` | `deep_copy` com o destino ou a origem fora da raiz e `rewrite` de uma tabela fora dela são `ValueError` antes de gravar: nada aparece fora da raiz nem no destino dentro dela. |
 | Limites do DuckDB | `test_duckdb_connections_take_the_environment_limits` | Cada conexão do DuckDB que a camada abre, na releitura, na reescrita e na releitura dela, na exportação por reescrita e na contagem da cópia profunda, recebe só o `threads` e o `memory_limit`, com o `threads` de `available_cpus()`. |
+| Memória lida antes do commit | `test_the_memory_is_read_before_the_commit` | Com `environment_limits` recusando (`SandboxError`), o registro, a reescrita, a cópia profunda e a exportação por reescrita sobem a recusa sem versão gravada, sem a cópia criada e sem arquivo exportado; o caso reprova no código anterior, que registrava a versão e recusava na releitura. |
 
 ## A implementação
 
@@ -413,7 +421,10 @@ mostraram" e "O que a implementação da etapa 3 mostrou".
 Desde a decisão do usuário de 2026-10-01, a conferência 2 também recusa a coluna fora do contrato,
 que o `COPY` do Redshift, listando as colunas do rodapé desde 2026-09-28, mandaria para a staging,
 que não a tem; antes ela passava, porque os leitores a ignoram. O caso `coluna a mais` de
-`test_register_files_refuses_each_defect` a cobre, e reprova no código anterior.
+`test_register_files_refuses_each_defect` a cobre, e reprova no código anterior. A revisão de
+2026-10-01 depois do merge leu a conferência indexada pelo `name` da folha, e a coluna do contrato
+dentro de um struct registrava e era lida nula; ela lê o caminho da folha e recusa a coluna
+aninhada, o caso `coluna aninhada` do mesmo teste, que reprova no código anterior.
 
 ## Decisões pendentes
 

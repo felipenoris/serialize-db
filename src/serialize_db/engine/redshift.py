@@ -983,8 +983,9 @@ class RedshiftAppender:
     manifesto com ele como a única entrada, obrigatória, e roda, sob o lock e numa transação, o
     ``COPY ... MANIFEST`` na tabela (por uma staging temporária e ``JSON_PARSE`` quando a tabela
     tem coluna JSON), com a lista das colunas do arquivo: a coluna anulável que o lote não trouxe
-    fica nula, a ``NOT NULL`` ausente faz a carga falhar, e o arquivo ausente faz o ``COPY``
-    falhar. A tabela não muda antes dele, e um erro não deixa linha. Uma exceção dentro do
+    fica nula, a ``NOT NULL`` ausente faz a carga falhar (documentação da AWS, não lida no alvo),
+    e o arquivo ausente faz o ``COPY`` falhar. A tabela não muda antes dele, e um erro não deixa
+    linha. Uma exceção dentro do
     ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo sem
     inserir nada, e a segunda chamada de ``close`` não faz nada.
     """
@@ -1088,7 +1089,7 @@ class RedshiftAppender:
         target = engine.qualified(self._name)
         # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo, as do primeiro
         # lote, à de mesmo nome; a coluna anulável que o lote não trouxe fica nula, e a NOT NULL
-        # ausente faz a carga falhar.
+        # ausente faz a carga falhar (documentação da AWS, não lida no alvo).
         columns = self._schema.names
         if not _json_columns(self._table):
             engine.execute(copy_text(target, manifest, credentials, manifest=True, columns=columns))
@@ -1539,7 +1540,8 @@ class RedshiftEngine:
         version: int,
         partitions: Sequence[str] | None,
     ) -> list[str | None]:
-        """As partições com arquivo na versão fixada: as pedidas, ou todas."""
+        """As partições com arquivo na versão fixada: as pedidas, com um valor repetido contado
+        uma vez, ou todas."""
         partition_by = table_options(table).partition_by
         if partition_by is None and partitions is not None:
             raise ContractError(
@@ -1550,7 +1552,7 @@ class RedshiftEngine:
         )
         if partitions is None:
             return available
-        wanted = sorted(check_partition_value(value) for value in partitions)
+        wanted = sorted({check_partition_value(value) for value in partitions})
         return [value for value in wanted if value in available]
 
     def ingest(
@@ -1577,8 +1579,8 @@ class RedshiftEngine:
             ``exec_<id>_``.
         :param uri: a URI da tabela Delta.
         :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
-        :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
-            nenhuma.
+        :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
+            ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: não muda nada, porque o Redshift não lê o Delta no lugar, e a
             tabela é sempre carregada.
         :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
@@ -2294,9 +2296,9 @@ class RedshiftEngine:
         :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
         :raises SandboxError: sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
-            ``UNLOAD``; ou, na troca dos arquivos pelo ``Double`` não finito, a memória que o
-            processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
-            (``environment_limits``).
+            ``UNLOAD``; ou a memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa,
+            lida no registro antes do commit, sem nada gravado, e na troca dos arquivos pelo
+            ``Double`` não finito, na abertura do DuckDB (``environment_limits``).
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         # O valor conferido antes do UNLOAD: os arquivos de um valor recusado no registro

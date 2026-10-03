@@ -1615,3 +1615,70 @@ consequence of that choice. Asked on a second card about the `dev` group, the wo
 commands in its "Testes do pacote" section once PR #115, which revised it, merged (03:51 UTC);
 the item left `plan/OPEN_QUESTIONS.md` with them.
 `pyproject.toml`, `plan/CURRENT_STATE.md`, `plan/OPEN_QUESTIONS.md`, `README.md`
+
+## The memory read before the commit (2026-10-02)
+
+The second review, after the merge of PR #120, read that the `SandboxError` of the decision of
+2026-10-01 reached `register_files` after the commit: the re-read that `register_files` runs on
+each committed partition opens a DuckDB connection with `environment_limits()`, so a reading under
+2 MiB or negative refused the re-read with the version already written (reproduced with the
+reading forced: `SandboxError` in the re-read, version 1 written with its 5 rows), and the
+`:raises SandboxError:` fields of `register_files`, `export_partition` and `publish_delta` did not
+say so; before that decision the negative reading opened DuckDB at its default and the re-read
+ran. Offered on a decision card the reading before the commit (recommended) or documenting the
+refusal after it, the user chose "Recusar antes" (01:07 UTC): `register_files` and `rewrite` read
+`environment_limits()` before opening the table and committing, `deep_copy` before creating the
+destination and `_export_by_rewrite` before creating the folder, the private `_read_back` and
+`_duckdb_reading` take the limits as `config` while the public `read_back` keeps reading them
+itself, the callers' fields (`export_partition` of both engines, `publish_delta`, `initial_load`)
+say the refusal comes with nothing written, and `test_the_memory_is_read_before_the_commit`
+asserts the version, the archive and the exported folder untouched, failing on the previous code
+(`assert 2 == 1`).
+`src/serialize_db/delta.py`, `src/serialize_db/engine/duckdb.py`,
+`src/serialize_db/engine/redshift.py`, `src/serialize_db/execution.py`, `src/serialize_db/load.py`,
+`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+
+## The unpartitioned table under `partitions` (2026-10-02)
+
+The second review, after the merge of PR #120, read that `initial_load` with `partitions` on an
+unpartitioned table created the empty Delta table (version 0) and opened a DuckDB engine with
+nothing to write, and that `load_report` opened another for a report without a partition, while
+the runbook said only that the table "fica de fora"; reproduced in the session's container with
+`serialize-db load --tables cad_aliquotas --partitions 9999-12-31`, which created
+`prd/cad_aliquotas/_delta_log` and printed `0 partição(ões) conferida(s), contagens e somas
+iguais`. The migration script already filtered before `initial_load` and created nothing, but
+opened the report's engine. Offered on a decision card leaving the table out entirely
+(recommended) or keeping the empty table and documenting it, the user chose "Fora inteira"
+(01:48 UTC): `initial_load` returns the empty list and `load_report` the empty report right after
+`check_requested_partitions`'s check, before `create_table` and before the engine; `serialize-db
+load` and the script print `<tabela>: tabela sem partição, fora de --partitions` and skip the
+table, out of the count of conferred tables and out of the script's JSON;
+`test_unpartitioned_table_under_partitions_is_left_out` (with `DuckDBEngine` replaced by a double
+that refuses to open) and the new assertions of the existing cases fail on the previous code.
+`src/serialize_db/load.py`, `src/serialize_db/cli.py`, `scripts/migrate_parquet_to_delta.py`,
+`docs/operacao.md`, `README.md`, `plan/PLAN-STAGE-7.md`, `plan/POC.md`
+
+## The empty partition list, the second snapshot and the repeated partition (2026-10-02)
+
+The second review, after the merge of PR #120, kept three notes from before its window that the
+code confirmed: `run.audit(table, [])` approved without auditing and `run.publish_delta(table,
+partitions=[])` reconciled the table without exporting a partition, because the `IN ()` of the
+empty list is false and every count is zero; `run.snapshot` called twice in one execution wrote
+only the last name, while the commits between the calls carried the first; and the Redshift
+engine's `ingest` loaded a partition repeated in `partitions` twice, one `COPY` per value of the
+list, while the DuckDB engine's did not. None of the three appears in the current pipeline; all
+three are call errors that passed silently. Offered on a decision card fixing them in PR #121
+(recommended) or leaving them as notes in `plan/OPEN_QUESTIONS.md`, the user chose "Corrigir"
+(03:15 UTC): `audit` and `publish_delta` refuse the empty list with `ContractError`
+(`<tabela>: audit recebeu a lista de partições vazia`, `<tabela>: publish_delta recebeu a lista
+de partições vazia`), before the engine is called and before the table is created; the second
+`run.snapshot` of an execution is `ContractError` under the lock, naming the snapshot already
+marked (`<ambiente>: a execução já está marcada com o snapshot <nome>, e marca um só`), and the
+execution stays marked with the first name; `RedshiftEngine._partitions_to_load` counts a
+repeated value once, so the partition gets one `COPY` and one `INSERT`. The three tests
+(`test_the_empty_list_of_partitions_is_refused`, `test_snapshot_is_marked_once_per_execution`,
+`test_ingest_counts_a_repeated_partition_once`) fail on the previous code, and the three notes
+left `plan/OPEN_QUESTIONS.md`.
+`src/serialize_db/execution.py`, `src/serialize_db/engine/__init__.py`,
+`src/serialize_db/engine/duckdb.py`, `src/serialize_db/engine/redshift.py`,
+`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`

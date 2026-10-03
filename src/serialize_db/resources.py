@@ -1,10 +1,12 @@
 """As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada.
 
 O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem destas leituras, não
-de um valor fixo no código: ``environment_limits``, que ``serialize_db.engine.duckdb`` publica, os
-monta para toda conexão do DuckDB do pacote, a do motor e as de ``serialize_db.delta``; a memória
-que o processo ainda pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de ``memory_limit``
-ao DuckDB, é recusada com ``SandboxError``. No Linux, as leituras respeitam o cgroup do processo,
+de um valor fixo no código: o motor DuckDB lê ``available_cpus`` e ``memory_limit_setting`` na
+abertura, e ``environment_limits``, que ``serialize_db.engine.duckdb`` publica, monta os dois para
+as conexões de ``serialize_db.delta``, da troca do motor Redshift e do script de migração; a
+memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de
+``memory_limit`` ao DuckDB, é recusada com ``SandboxError``.
+No Linux, as leituras respeitam o cgroup do processo,
 v1 e v2, com que um contêiner limita as CPUs e a memória abaixo das da máquina, e o menor limite
 no caminho do cgroup até a raiz é o que vale. No Windows, a memória é a disponível que a API do
 sistema informa, lida pelo ``ctypes``; nos outros sistemas fora do Linux, é a física. Fora do
@@ -117,8 +119,10 @@ def physical_memory() -> int:
 
 
 def environment_limits() -> dict[str, object]:
-    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada. O motor os aplica
-    na abertura quando a configuração os omite, e ``serialize_db.delta`` em cada conexão sua.
+    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada, para as conexões
+    de ``serialize_db.delta``, da troca do motor Redshift e do script de migração; o motor DuckDB
+    lê os mesmos valores por ``available_cpus`` e ``memory_limit_setting`` quando a configuração
+    os omite.
 
     Exemplo:
 

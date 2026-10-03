@@ -577,7 +577,8 @@ def initial_load(
 ) -> list[str | None]:
     """Grava no Delta cada partição da tabela ainda fora do log.
 
-    A tabela nasce por ``create_table`` quando não existe. A segunda chamada não grava nada.
+    A tabela nasce por ``create_table`` quando não existe. A segunda chamada não grava nada. Com
+    ``partitions``, uma tabela sem partição fica inteira de fora: nada é criado nem aberto.
 
     Exemplo:
 
@@ -592,7 +593,8 @@ def initial_load(
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
     :param partitions: os valores a gravar, que toda tabela particionada precisa ter na origem, e
-        que deixam de fora uma tabela sem partição; ``None`` grava todas.
+        que deixam uma tabela sem partição inteira de fora, sem criar a tabela nem abrir o motor;
+        ``None`` grava todas.
     :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
         sistema e os limites lidos do ambiente.
     :return: os valores gravados, na ordem da gravação; ``None`` é a tabela sem partição.
@@ -606,14 +608,17 @@ def initial_load(
     :raises ExecutionConflict: outro registro da mesma partição a partir da mesma versão.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
-    :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que o
-        processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
-        (``environment_limits``).
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, na abertura do DuckDB sem ``memory_limit`` em ``config``, e, com ou
+        sem ele, no registro de cada partição, antes do commit (``environment_limits``).
     """
     options = table_options(table)
     # A partição pedida que a origem não tem recusa a carga antes de criar a tabela.
     found, _ = discover_partitions(source, table)
     _check_requested(table, found, partitions)
+    # A tabela sem partição fica inteira de fora do pedido por partições: nada criado nem aberto.
+    if partitions is not None and options.partition_by is None:
+        return []
     uri = db.uri(table)
     storage = db.storage
     dt = delta.create_table(uri, table, storage)
@@ -835,8 +840,9 @@ def load_report(
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
     :param partitions: os valores a conferir, que toda tabela particionada precisa ter na origem,
-        filtram as partições da origem e do Delta e deixam de fora uma tabela sem partição, como
-        em ``initial_load``; ``None`` confere todas.
+        filtram as partições da origem e do Delta e deixam uma tabela sem partição inteira de
+        fora, com o relatório vazio e sem abrir o motor, como em ``initial_load``; ``None``
+        confere todas.
     :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
         sistema e os limites lidos do ambiente.
     :return: o relatório, com o veredito em ``matches``; uma partição presente num lado só tem
@@ -854,6 +860,9 @@ def load_report(
     # As pastas da origem que a carga lê: as pedidas em partitions, ou todas sem elas.
     found, skipped = discover_partitions(source, table)
     _check_requested(table, found, partitions)
+    # A tabela sem partição fica inteira de fora do pedido por partições: o relatório vazio.
+    if partitions is not None and table_options(table).partition_by is None:
+        return LoadReport(table.name, (), (), ())
     wanted = {value: found[value] for value in _wanted_values(found, partitions)}
     execution_id = f"relatorio-{uuid.uuid4().hex[:8]}"
     # A origem e o Delta agregados na mesma sessão, com o secret da origem quando ela está no S3.

@@ -187,6 +187,19 @@ def _name_argument(
         raise argparse.ArgumentTypeError(str(error)) from None
 
 
+def _root_argument(
+    text: str,
+) -> str:
+    """A raiz de ``--root`` ou de ``SERIALIZE_DB_ROOT``, conferida por ``Storage.for_uri``: outro
+    esquema que não uma pasta local, ``file://`` ou ``s3://``, ou o S3 sem região, é erro de uso,
+    antes do subcomando."""
+    try:
+        Storage.for_uri(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+    return text
+
+
 def _environment_default() -> str:
     """O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, com a
     variável vazia lida como ausente, ou ``dsv``."""
@@ -209,7 +222,8 @@ def _add_database_arguments(
     parser: argparse.ArgumentParser,
 ) -> None:
     """``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
-    ``SERIALIZE_DB_*``: os de ``run``, de ``load`` e das rotinas de operação."""
+    ``SERIALIZE_DB_*``: os de ``run``, de ``load`` e das rotinas de operação. ``--root`` passa
+    por ``_root_argument`` em todo subcomando que a recebe."""
     root = os.environ.get("SERIALIZE_DB_ROOT")
     parser.add_argument(
         "--metadata",
@@ -219,6 +233,7 @@ def _add_database_arguments(
     )
     parser.add_argument(
         "--root",
+        type=_root_argument,
         default=root,
         required=not root,
         help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo; "
@@ -267,7 +282,7 @@ def _add_publish_redshift_parser(
         default=None,
         help="modulo:atributo com o MetaData dos modelos; dispensado por --init",
     )
-    publish.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
+    publish.add_argument("--root", type=_root_argument, default=os.environ.get("SERIALIZE_DB_ROOT"))
     publish.add_argument("--environment", type=_name_argument, default=_environment_default())
     which = publish.add_mutually_exclusive_group()
     which.add_argument(
@@ -443,7 +458,9 @@ def _add_audit_parser(
         action="store_true",
         help="imprime o texto das verificações, sem conexão nem armazenamento",
     )
-    audit_command.add_argument("--root", default=os.environ.get("SERIALIZE_DB_ROOT"))
+    audit_command.add_argument(
+        "--root", type=_root_argument, default=os.environ.get("SERIALIZE_DB_ROOT")
+    )
     audit_command.add_argument("--environment", type=_name_argument, default=_environment_default())
     audit_command.set_defaults(handler=_audit)
 
@@ -926,7 +943,9 @@ def _load(
     """A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada uma: 1 na
     partição pedida que a origem não tem, recusada antes de qualquer gravação, na partição fora do
     contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato, na tabela fora do
-    modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito."""
+    modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito. Com
+    ``--partitions``, a tabela sem partição sai numa linha como fora do pedido, sem carga nem
+    relatório."""
     problems = schema.check_models(args.metadata)
     if problems:
         print("serialize-db load: modelo fora do contrato:", *problems, sep="\n  ", file=sys.stderr)
@@ -939,16 +958,23 @@ def _load(
         return 2
     db = Database(args.root, args.environment, args.metadata)
     matches = True
+    conferred = 0
     try:
         tables = load.load_order(_selected_tables(args.metadata, args.tables))
         # A partição pedida que a origem não tem recusa a carga antes de qualquer gravação.
         for table in tables:
             load.check_requested_partitions(args.source, table, args.partitions)
         for table in tables:
+            # A tabela sem partição fica inteira de fora do pedido por partições.
+            unpartitioned = schema.table_options(table).partition_by is None
+            if args.partitions is not None and unpartitioned:
+                print(f"{table.name}: tabela sem partição, fora de --partitions")
+                continue
             loaded = load.initial_load(db, table, args.source, args.partitions)
             report = load.load_report(db, table, args.source, args.partitions)
             _print_load_report(report, loaded)
             matches = matches and report.matches
+            conferred += 1
     except (argparse.ArgumentTypeError, FileNotFoundError) as error:
         print(f"serialize-db load: {error}", file=sys.stderr)
         return 2
@@ -962,7 +988,7 @@ def _load(
     if outside:
         print(f"fora do modelo: {', '.join(outside)}")
     verdict = "contagens e somas iguais" if matches else "com diferenças"
-    print(f"{len(tables)} tabela(s) conferida(s), {verdict}")
+    print(f"{conferred} tabela(s) conferida(s), {verdict}")
     return 0 if matches else 1
 
 

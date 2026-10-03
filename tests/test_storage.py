@@ -14,6 +14,7 @@ pasta local e fora do Windows, o modo dos arquivos gravados.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import os
 import stat
@@ -28,6 +29,7 @@ import pyarrow.fs as pafs
 import pytest
 
 from conftest import LocalLocation, duckdb_test_config, require_duckdb_extension
+from serialize_db import storage as storage_module
 from serialize_db.errors import ConflictError
 from serialize_db.storage import (
     Storage,
@@ -405,13 +407,30 @@ def test_local_files_get_the_mode_of_a_new_file(
 @pytest.mark.local
 def test_local_replace_that_fails_leaves_no_temporary_file(
     local_location: LocalLocation,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Na pasta local, ``write_text`` sobre um caminho ocupado por uma pasta falha no
-    ``os.replace`` e não deixa o arquivo temporário ao lado: a pasta fica como estava."""
+    ``os.replace``, e a escrita do temporário que falha depois de criá-lo, como num disco cheio,
+    falha antes da troca: nos dois casos, a pasta fica sem o arquivo temporário."""
     storage = Storage.for_uri(local_location.child(f"storage/{uuid.uuid4().hex[:8]}"))
     os.makedirs(f"{storage.path}/prd/controle.json")
     with pytest.raises(OSError):
         storage.write_text("prd/controle.json", "{}")
+    assert storage.list_files("prd") == []
+
+    # O dublê cria o temporário pela função original e falha como um disco cheio.
+    original_write = storage_module._write_new_file
+
+    def write_then_fail(
+        full: Path,
+        content: bytes,
+    ) -> None:
+        original_write(full, content)
+        raise OSError(errno.ENOSPC, "sem espaço no disco")
+
+    monkeypatch.setattr(storage_module, "_write_new_file", write_then_fail)
+    with pytest.raises(OSError, match="sem espaço no disco"):
+        storage.write_text("prd/outro.json", "{}")
     assert storage.list_files("prd") == []
 
 

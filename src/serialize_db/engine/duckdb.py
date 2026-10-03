@@ -7,7 +7,8 @@ o pipeline crie vale para os comandos seguintes, de qualquer thread, e nenhuma p
 código do cliente com o lock tomado. ``session()`` dá a conexão crua ao bloco, com o lock tomado e
 reentrante na mesma thread; ``new_session()`` abre um motor sobre ``cursor()`` da conexão, uma
 sessão a mais sobre o mesmo banco, com o seu lock. Os limites da instância saem do ambiente na
-abertura, quando a configuração os omite (``environment_limits``): ``threads`` são as CPUs que o
+abertura, quando a configuração os omite (``available_cpus`` e ``memory_limit_setting`` de
+``serialize_db.resources``, os valores de ``environment_limits``): ``threads`` são as CPUs que o
 processo pode usar, e ``memory_limit`` é metade da memória que ele ainda pode usar, recusada com
 ``SandboxError`` quando não dá 1 MiB.
 
@@ -657,7 +658,7 @@ class DuckDBConfig:
     apagado em ``cleanup``; ``":memory:"`` só por pedido; outro caminho é usado e mantido."""
     threads: int | None = None
     """As threads da instância; ``None`` são as CPUs que o processo pode usar na abertura
-    (``environment_limits``)."""
+    (``available_cpus``)."""
     memory_limit: str | None = None
     """Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode usar na
     abertura (``environment_limits``), recusada com ``SandboxError`` quando não dá 1 MiB. O valor
@@ -1014,8 +1015,8 @@ class DuckDBEngine:
         :param uri: a URI da tabela Delta.
         :param version: a versão fixada da tabela, lida por
             ``delta_scan(uri, version := v)``; ``None``, a tabela sem versão no Delta.
-        :param partitions: os valores de partição a ler; ``None`` lê todas, e a lista vazia,
-            nenhuma.
+        :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
+            ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: ``True`` copia os dados para a tabela do modelo no sandbox; com
             ``False``, a view lê o Delta no lugar, com os tipos do ``delta_scan`` e toda coluna
             da versão, uma que o modelo não tem incluída.
@@ -1476,6 +1477,8 @@ class DuckDBEngine:
             releitura desfez o commit.
         :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
+        :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
+            negativa, lida no registro antes do commit (``environment_limits``), sem nada gravado.
         """
         # O valor conferido antes do COPY: o arquivo de um valor recusado no registro ficaria
         # na pasta da tabela, fora do log.

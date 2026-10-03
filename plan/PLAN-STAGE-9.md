@@ -52,6 +52,9 @@ do `pdoc`. O que a implementação mudou do plano:
   ações, e não `read_back`: a versão arquivada pode ter um esquema anterior ao modelo atual, e
   `register_files` conferiria o rodapé contra o contrato de hoje. O esquema diferente que nenhuma
   partição copiada trocou é `RegistrationRefused`, com a instrução de copiar para um destino novo.
+  Os limites do DuckDB da contagem final saem do ambiente antes da criação do destino, para a
+  memória que o ambiente recusa (`SandboxError`) não deixar cópia pela metade (decisão do usuário
+  de 2026-10-02).
   A cópia termina numa versão por partição, não na
   0, e `_commit_actions` recebe o nome e a coluna de partição no lugar da tabela do SQLAlchemy.
   A origem ou o destino fora da raiz é `ValueError` antes de qualquer escrita.

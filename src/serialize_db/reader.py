@@ -377,7 +377,8 @@ class DeltaReader:
 
         Cada tabela troca numa transação, e as tabelas correm em paralelo, cada uma numa sessão a
         mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do
-        ``ingest`` do motor, o intervalo ao lado do ``IN``.
+        ``ingest`` do motor, o intervalo ao lado do ``IN``. A cópia é o ``SELECT *`` da versão:
+        uma coluna da versão que o modelo não tem entra na tabela, como na view.
 
         Exemplo:
 
@@ -392,9 +393,8 @@ class DeltaReader:
             copia a tabela inteira.
         :raises ContractError: uma tabela sem view no leitor, ``partitions`` numa tabela sem
             partição ou um valor fora da regra da partição, antes de qualquer troca.
-        :raises duckdb.Error: a falha da cópia de uma tabela, também por uma coluna da versão
-            que o modelo não tem; a tabela fica com o objeto anterior, view ou tabela, enquanto
-            as outras terminam.
+        :raises duckdb.Error: a falha da cópia de uma tabela, que fica com o objeto anterior,
+            view ou tabela, enquanto as outras terminam.
         """
         filters = {}
         for table in tables:

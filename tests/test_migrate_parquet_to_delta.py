@@ -160,7 +160,8 @@ def test_main_confers_only_the_requested_partitions(
     capsys: pytest.CaptureFixture,
 ) -> None:
     """Com ``--partitions``, a carga e o relatório ficam nas partições pedidas: as outras da
-    origem, fora do Delta, não contam como diferença, e a saída é 0."""
+    origem, fora do Delta, não contam como diferença, a tabela sem partição fica inteira de fora,
+    sem pasta no Delta nem entrada no JSON, e a saída é 0."""
     report_path = folder / "relatorio.json"
     arguments = [
         "--metadata",
@@ -170,6 +171,7 @@ def test_main_confers_only_the_requested_partitions(
         "--root",
         str(folder / "delta"),
         "--tables",
+        "cad_contas",
         "cad_contratos",
         "--partitions",
         "2026-02-28",
@@ -178,9 +180,12 @@ def test_main_confers_only_the_requested_partitions(
     ]
     assert migrate.main(arguments) == 0
     printed = capsys.readouterr().out
+    assert "cad_contas: tabela sem partição, fora de --partitions" in printed
+    assert list((folder / "delta").glob("**/cad_contas")) == []
     assert "relatório: 1 partições conferidas, contagens e somas iguais" in printed
     assert "DIFERENÇA" not in printed
     document = json.loads(report_path.read_text())
+    assert [table["table"] for table in document["tables"]] == ["cad_contratos"]
     conferred = [partition["value"] for partition in document["tables"][0]["partitions"]]
     assert conferred == ["2026-02-28"]
 
@@ -261,7 +266,8 @@ def test_main_refuses_a_model_with_violations(
     capsys: pytest.CaptureFixture,
 ) -> None:
     """O modelo de referência viola o contrato: saída 2 com a lista, sem ler a origem; uma
-    tabela fora do modelo e um ``--metadata`` que não importa são erros de uso."""
+    tabela fora do modelo, um ``--metadata`` que não importa e um valor de ``--partitions`` fora
+    da regra da partição são erros de uso."""
     never_written = folder / "nunca-gravada"
     arguments = [
         "--metadata",
@@ -306,6 +312,24 @@ def test_main_refuses_a_model_with_violations(
         )
     assert refusal.value.code == 2
     assert "No module named 'nao_existe'" in capsys.readouterr().err
+    assert not never_written.exists()
+
+    # O valor de --partitions fora da regra da partição sai como erro de uso, como na CLI.
+    with pytest.raises(SystemExit) as refusal:
+        migrate.main(
+            [
+                "--metadata",
+                "client_model:Base.metadata",
+                "--source",
+                str(base.root),
+                "--root",
+                str(never_written),
+                "--partitions",
+                "2026 Q1",
+            ]
+        )
+    assert refusal.value.code == 2
+    assert "2026 Q1" in capsys.readouterr().err
     assert not never_written.exists()
 
 
