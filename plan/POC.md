@@ -5801,3 +5801,47 @@ com a menor das leituras, as do `/proc` e do cgroup também, quando existem. A r
 e na exportação. A esteira roda no Ubuntu e no Windows. No Linux, os caminhos e as leituras não
 mudam. O S3, o Redshift, os probes, `prepare_offline.sh` e o projeto cliente não rodaram no
 Windows, e a variável `username` do proxy fica pendente em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a pasta da execução no teste do pipeline mostrou
+
+Em 2026-10-03, na pasta local do contêiner de desenvolvimento (Linux x86_64, DuckDB 1.5.5,
+deltalake 1.6.6, pyarrow 25.0.1, SQLAlchemy 2.0.54, Python 3.13.14), a pergunta do usuário sobre
+uma API que guarde, por `execution_id`, a cópia das entradas e os arquivos intermediários de um
+pipeline levou a pasta da execução a `tests/test_pipeline.py`, como código cliente:
+`<ambiente>/execucoes/<execution_id>/`, com `entradas/`, `relatorios/` e, na falha, `geracao/`. Os
+contratos do mês chegam em um CSV por sistema em `<ambiente>/recebidos/<partição>/`.
+
+- **O CSV dos contratos ida e volta pelo pyarrow**: os 41 contratos de 2026-06-30, sem
+  `id_contrato` e `data`, gravados por `pyarrow.csv.write_csv` em um arquivo por sistema (15, 43 e
+  89, com 14, 14 e 13 linhas) e lidos por `read_csv` com os tipos de `arrow_schema(cad_contratos)`
+  em `column_types`, voltaram iguais (`Table.equals`), com os 11 `-0.0` de `taxa_juros_fixos` e
+  os nulos de `estagio` (1) e de `data_assinatura` (22).
+- **A inferência de tipos do CSV decide pelo conteúdo, com ou sem aspas**: sem `column_types`, a
+  coluna `"01","02"` foi lida como `int64`. O `to` dos contratos tem os códigos `01`, `02` e `05`
+  ao lado de `RC`, `RI`, `ZB`, `ZD` e `ZT`.
+- **O nulo e o texto vazio**: `write_csv` grava o nulo como campo vazio e o texto vazio como `""`.
+  Na leitura de uma coluna `string`, o padrão dá texto vazio aos dois, `strings_can_be_null=True`
+  dá nulo aos dois, e só com `quoted_strings_can_be_null=False` também os dois voltam separados.
+  O teste entrega um `fonte_familia` vazio, que sem a segunda opção chegou nulo ao Delta.
+- **A reexecução de um mês publicado**: `run.previous_partitions(tabela, n)` conta a partição da
+  execução quando ela já está na versão fixada, e o `last_base_date` do teste, que pedia uma, leu
+  2026-07-31 como a data-base anterior a 2026-07-31; a reexecução levou a partição para ela mesma e
+  parou em `AuditFailed: cad_operacoes em ['2026-07-31']: reprovada em ['chave_data_operacao']`.
+  Com as duas últimas e a anterior à da execução, a reexecução leu 2026-06-30 e publicou uma
+  versão a mais de cada tabela, com as mesmas contagens e só a partição dela alterada.
+- **A ingestão só do que o pipeline lê**: `cad_contas` como view e a última data-base de
+  `cad_operacoes`, `rel_contrato_operacao` e `cad_lancamentos`, materializada, com `cad_contratos`
+  criada vazia por `create_table`, no lugar das 11 tabelas de antes. As auditorias com
+  `foreign_keys=True` rodaram toda verificação, com `not_run` vazio, e leram `dom_veiculos`,
+  `dom_mensuracoes`, `dom_segmentos` e `dom_negocios` na versão fixada.
+- **A falha**: um contrato repetido na entrega reprovou `cad_contratos` em
+  `chave_data_sistema_contrato`, e nenhuma tabela ganhou versão. A pasta da execução guardou as três
+  cópias da entrega, os dois relatórios, com o rateio do contrato repetido somando 2, e a partição
+  gerada de cada tabela, lida por `stream` e gravada por `pq.ParquetWriter`, com 42 contratos.
+- **Os tempos**: os quatro casos levaram 11,5 s, dos quais 4,2 s na carga da base fictícia, e a
+  execução com a pasta, 1,4 s.
+
+**Consequências**: `tests/test_pipeline.py` passa a ter quatro casos, com os comentários das
+recomendações de uso do pacote; revisados `plan/PLAN-STAGE-6.md` e `plan/CURRENT_STATE.md`. A
+pasta da execução fica no código cliente, sem API no pacote, e a decisão de levá-la ao pacote
+espera o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
