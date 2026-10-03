@@ -1682,3 +1682,42 @@ left `plan/OPEN_QUESTIONS.md`.
 `src/serialize_db/execution.py`, `src/serialize_db/engine/__init__.py`,
 `src/serialize_db/engine/duckdb.py`, `src/serialize_db/engine/redshift.py`,
 `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## The name of the initial load's module (2026-10-03)
+
+On 2026-10-03 the user opened a refactoring of the name `load`: a reader of `serialize_db.load`
+cannot infer that the module turns the Parquet source base into Delta tables, and `initial_load`
+names neither what is loaded nor its source and destination. Offered on a decision card the
+"import" vocabulary (recommended: the pair of `serialize-db export` and of the project goal of
+importing and exporting the base in Parquet), `parquet_to_delta.convert_table` (convert evokes the
+in-place `convert_to_deltalake` of delta-rs) and `migration.migrate_table` (suggests a schema
+migration), the user chose "import": the module is `serialize_db.parquet_import`, with
+`import_table`, `import_report`, `ImportReport` and `import_order` in place of `initial_load`,
+`load_report`, `LoadReport` and `load_order`, and `serialize-db import` in place of
+`serialize-db load`, with no alias, as with the publication names of 2026-09-27. `initial_` left
+the name because the function writes the partitions the log lacks, on the first run or on a
+resumed one. `discover_partitions`, `partition_query`, `check_requested_partitions`,
+`PartitionReport`, `scripts/migrate_parquet_to_delta.py`, the probe files `SUITE.md` calls, the
+`carga-` prefix of the `execution_id` and the prose "carga inicial" stay; the dated records
+(`plan/POC.md`, `plan/readings/`, the entries above) keep the old names. The user also asked the
+`db` argument's docstring to say it is the Delta base the data is imported into.
+`src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `tests/test_parquet_import.py`,
+`scripts/migrate_parquet_to_delta.py`, `docs/index.md`, `docs/operacao.md`, `README.md`,
+`plan/PLAN.md`, `plan/PLAN-STAGE-7.md`
+
+## The `delta_db` argument (2026-10-03)
+
+The same day the user suggested `delta_db` for the `db` argument of the import, asked whether `db`
+is the Delta base in every function that takes a `Database`, and instructed: `delta_db` in every
+`Database` argument of a function that serves only Delta bases. The assistant's reading, sent to
+the user before the change: the functions that read or write the Delta through the `Database`
+take `delta_db` (`Execution`, `DeltaReader`, `import_table`, `import_report`, `publish_redshift`,
+`publication_status` and the private helpers of `execution`, `parquet_import`, `publication`,
+`reader` and `cli` that receive the same object), and `unpublish_redshift` keeps `db`, because it
+uses the `Database` only for the environment that prefixes the published tables' names. The
+attribute `run.db` is `run.delta_db` and `DeltaReader._db` is `_delta_db`, with no alias; the
+client's variables and the examples (`db = Database(...)`, `db.open_delta()`) and the test
+fixtures' `target.db` stay.
+`src/serialize_db/execution.py`, `src/serialize_db/reader.py`, `src/serialize_db/publication.py`,
+`src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `plan/PLAN-STAGE-6.md`,
+`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`

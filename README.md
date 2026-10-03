@@ -275,9 +275,9 @@ apontam para o mesmo esquema, com significados diferentes.
 
 # Migração da base Parquet para o Delta
 
-A carga inicial é `serialize_db.load` (a etapa 7): cada partição da base de origem vira um commit
-numa tabela Delta sob `<raiz>/<ambiente>/<tabela>`, e o relatório confere contagem e somas por
-partição. `serialize-db load` roda as duas, e
+A carga inicial é `serialize_db.parquet_import` (a etapa 7): cada partição da base de origem vira um
+commit numa tabela Delta sob `<raiz>/<ambiente>/<tabela>`, e o relatório confere contagem e somas
+por partição. `serialize-db import` roda as duas, e
 [`scripts/migrate_parquet_to_delta.py`](scripts/migrate_parquet_to_delta.py) é a ferramenta de
 operação sobre o pacote, com as linhas, o tempo e o pico de memória de cada partição impressos e o
 `--report` JSON regravado a cada partição gravada. O que a carga faz e o que recusa estão nas
@@ -285,7 +285,7 @@ docstrings do módulo e no cabeçalho do script. Sobre a base fictícia, gravada
 
 ```
 PYTHONPATH=tests uv run python -c "from pathlib import Path; import source_db_projetado; source_db_projetado.write_source(Path('/pasta/db_projetado'))"
-PYTHONPATH=tests uv run serialize-db load --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prd
+PYTHONPATH=tests uv run serialize-db import --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prd
 PYTHONPATH=tests uv run python scripts/migrate_parquet_to_delta.py --metadata client_model:Base.metadata --source /pasta/db_projetado --root /pasta/delta --environment prd
 ```
 

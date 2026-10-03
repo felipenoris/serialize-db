@@ -6,7 +6,7 @@ arquivos na raiz da tabela (``tests/source_db_projetado.py`` reproduz a estrutur
 bases reais). A carga só lê a origem, e a raiz Delta é a de ``Database``: cada tabela vai para
 ``<raiz>/<ambiente>/<tabela>``.
 
-``initial_load`` cria a tabela Delta do contrato, descobre as partições da pasta da tabela, pula as
+``import_table`` cria a tabela Delta do contrato, descobre as partições da pasta da tabela, pula as
 que já estão no log e, para cada uma das outras, num motor DuckDB próprio da chamada, aberto com os
 limites lidos do ambiente e fechado no fim: lê a pasta inteira por ``read_parquet`` sem
 ``hive_partitioning`` (que converteria ``data_str`` a ``DATE``), leva cada coluna ao tipo do
@@ -24,25 +24,25 @@ falha no ``COPY`` com o erro do DuckDB, também sem commit. As entradas da pasta
 padrão, e as da raiz fora do modelo (``alembic_version``, ``meta_update_status``, ``schema.json``),
 ficam fora da carga e entram no relatório.
 
-``load_report`` compara contagem e somas por partição entre a origem, lida pasta a pasta como a
+``import_report`` compara contagem e somas por partição entre a origem, lida pasta a pasta como a
 carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e as ``Double`` da
 mesma forma só nos valores finitos, com os não finitos contados à parte, porque a soma em ponto
 flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um infinito para ``DECIMAL`` falha. A
-carga só termina quando ``matches`` é verdadeiro; ``serialize-db load`` roda as duas, com as mesmas
-partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição pedida que a
-origem não tem, recusada em toda tabela antes de qualquer gravação.
+carga só termina quando ``matches`` é verdadeiro; ``serialize-db import`` roda as duas, com as
+mesmas partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição pedida que
+a origem não tem, recusada em toda tabela antes de qualquer gravação.
 
 Exemplo:
 
 .. code-block:: python
 
-    from serialize_db import load
+    from serialize_db import parquet_import
     from serialize_db.execution import Database
 
     db = Database("s3://bucket/projeto/delta", "prd", Base.metadata)
-    for table in load.load_order(db.tables()):
-        load.initial_load(db, table, "s3://bucket/projeto/db_projetado")
-        report = load.load_report(db, table, "s3://bucket/projeto/db_projetado")
+    for table in parquet_import.import_order(db.tables()):
+        parquet_import.import_table(db, table, "s3://bucket/projeto/db_projetado")
+        report = parquet_import.import_report(db, table, "s3://bucket/projeto/db_projetado")
         assert report.matches, report
 """
 
@@ -79,17 +79,17 @@ from serialize_db.schema import (
 from serialize_db.storage import Storage
 
 __all__ = [
-    "LoadReport",
+    "ImportReport",
     "PartitionReport",
     "check_requested_partitions",
     "discover_partitions",
-    "initial_load",
-    "load_order",
-    "load_report",
+    "import_order",
+    "import_report",
+    "import_table",
     "partition_query",
 ]
 
-log = logging.getLogger("serialize_db.load")
+log = logging.getLogger("serialize_db.parquet_import")
 
 # A pasta de uma partição na origem: a coluna de partição e um valor da regra da partição.
 _PARTITION_FOLDER = re.compile(rf"(?P<column>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>{PARTITION_VALUE})")
@@ -134,7 +134,7 @@ class PartitionReport:
 
 
 @dataclasses.dataclass(frozen=True)
-class LoadReport:
+class ImportReport:
     """O relatório de uma tabela: as partições conferidas, as entradas da pasta fora do padrão e
     as conversões de tipo da origem para o contrato.
 
@@ -142,7 +142,7 @@ class LoadReport:
 
     .. code-block:: python
 
-        report = load_report(db, Lancamento.__table__, "s3://bucket/projeto/db_projetado")
+        report = import_report(db, Lancamento.__table__, "s3://bucket/projeto/db_projetado")
         report.matches       # True
         report.conversions   # ("id_lancamento: int32 -> int64", "timestamp: INT96 -> ...")
     """
@@ -151,7 +151,7 @@ class LoadReport:
     """O nome da tabela."""
     partitions: tuple[PartitionReport, ...]
     """Uma conferência por partição que ``discover_partitions`` acha na origem ou que está no
-    Delta, só as pedidas quando ``load_report`` recebe ``partitions``, em ordem de texto do
+    Delta, só as pedidas quando ``import_report`` recebe ``partitions``, em ordem de texto do
     valor."""
     skipped: tuple[str, ...]
     """As entradas da pasta da tabela na origem que não são pasta de partição, fora das contas;
@@ -252,7 +252,7 @@ def entries_outside_the_model(
     return tuple(outside)
 
 
-def load_order(
+def import_order(
     tables: Sequence[sa.Table],
 ) -> list[sa.Table]:
     """As tabelas na ordem da carga.
@@ -261,7 +261,7 @@ def load_order(
 
     .. code-block:: python
 
-        [table.name for table in load_order(db.tables())][-1]   # "cad_lancamentos"
+        [table.name for table in import_order(db.tables())][-1]   # "cad_lancamentos"
 
     :param tables: as tabelas do modelo.
     :return: as sem partição na ordem dada, depois as particionadas na ordem dada.
@@ -456,13 +456,13 @@ def _copy_partition(
 
 def _source_setup(
     connection: duckdb.DuckDBPyConnection,
-    db: Database,
+    delta_db: Database,
     source: str,
 ) -> None:
     """As extensões e o secret da origem no S3 quando a raiz Delta é uma pasta local; com a raiz no
     S3, a conexão do motor já os tem."""
     source_storage = Storage.for_uri(source)
-    if source_storage.is_s3 and not db.storage.is_s3:
+    if source_storage.is_s3 and not delta_db.storage.is_s3:
         source_storage.duckdb_setup(connection)
 
 
@@ -498,10 +498,10 @@ def check_requested_partitions(
     table: sa.Table,
     partitions: Sequence[str] | None,
 ) -> None:
-    """Recusa um valor de ``partitions`` que a origem não tem, como ``initial_load`` e
-    ``load_report`` o recusam, sem abrir um motor.
+    """Recusa um valor de ``partitions`` que a origem não tem, como ``import_table`` e
+    ``import_report`` o recusam, sem abrir um motor.
 
-    ``serialize-db load`` e o script de migração conferem com ela toda tabela da carga antes de
+    ``serialize-db import`` e o script de migração conferem com ela toda tabela da carga antes de
     gravar qualquer partição.
 
     Exemplo:
@@ -526,7 +526,7 @@ def check_requested_partitions(
     _check_requested(table, found, partitions)
 
 
-def _load_partition(
+def _import_partition(
     engine: DuckDBEngine,
     storage: Storage,
     table: sa.Table,
@@ -568,8 +568,8 @@ def _load_partition(
         )
 
 
-def initial_load(
-    db: Database,
+def import_table(
+    delta_db: Database,
     table: sa.Table,
     source: str,
     partitions: Sequence[str] | None = None,
@@ -584,11 +584,11 @@ def initial_load(
 
     .. code-block:: python
 
-        initial_load(db, Operacao.__table__, "/dados/db_projetado")   # ["2026-02-28", "2026-03-31"]
-        initial_load(db, Operacao.__table__, "/dados/db_projetado")   # []
+        import_table(db, Operacao.__table__, "/dados/db_projetado")   # ["2026-02-28", "2026-03-31"]
+        import_table(db, Operacao.__table__, "/dados/db_projetado")   # []
 
-    :param db: o banco, com a raiz Delta e o ambiente; a tabela Delta fica em
-        ``<raiz>/<ambiente>/<tabela>``.
+    :param delta_db: o banco Delta em que os dados são importados, com a raiz e o ambiente;
+        a tabela Delta fica em ``<raiz>/<ambiente>/<tabela>``.
     :param table: a tabela do modelo.
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
@@ -619,8 +619,8 @@ def initial_load(
     # A tabela sem partição fica inteira de fora do pedido por partições: nada criado nem aberto.
     if partitions is not None and options.partition_by is None:
         return []
-    uri = db.uri(table)
-    storage = db.storage
+    uri = delta_db.uri(table)
+    storage = delta_db.storage
     dt = delta.create_table(uri, table, storage)
     # As partições pedidas que a origem tem e o log ainda não.
     already = set(delta.partition_values(dt, options.partition_by))
@@ -635,9 +635,9 @@ def initial_load(
     # O motor da chamada, com o secret da origem no S3, grava as partições em série, um commit cada.
     with DuckDBEngine(config or DuckDBConfig(), execution_id, storage) as engine:
         with engine.session() as connection:
-            _source_setup(connection, db, source)
+            _source_setup(connection, delta_db, source)
         for value in missing:
-            _load_partition(engine, storage, table, uri, value, found[value], metadata)
+            _import_partition(engine, storage, table, uri, value, found[value], metadata)
     return missing
 
 
@@ -717,15 +717,15 @@ def _source_totals(
 
 def _delta_totals(
     connection: duckdb.DuckDBPyConnection,
-    db: Database,
+    delta_db: Database,
     table: sa.Table,
     sums: list[str],
     doubles: list[str],
 ) -> dict[str | None, _Totals]:
     """Contagem, somas e não finitos por partição no Delta; vazio na tabela ainda fora dele, que
     tem toda partição só na origem."""
-    uri = db.uri(table)
-    if not delta.table_exists(uri, db.storage):
+    uri = delta_db.uri(table)
+    if not delta.table_exists(uri, delta_db.storage):
         return {}
     partition_by = table_options(table).partition_by
     return _aggregate(connection, f"delta_scan({literal(uri)})", partition_by, sums, doubles)
@@ -809,16 +809,16 @@ def _conversions(
     return tuple(found)
 
 
-def load_report(
-    db: Database,
+def import_report(
+    delta_db: Database,
     table: sa.Table,
     source: str,
     partitions: Sequence[str] | None = None,
     config: DuckDBConfig | None = None,
-) -> LoadReport:
+) -> ImportReport:
     """Contagem e somas por partição na origem e no Delta, e o veredito.
 
-    A origem é lida como ``initial_load`` a lê: só as pastas que ``discover_partitions`` acha, uma
+    A origem é lida como ``import_table`` a lê: só as pastas que ``discover_partitions`` acha, uma
     a uma, pelos arquivos ``.parquet`` diretos de cada uma e sem ``hive_partitioning``. O Delta é
     lido por ``delta_scan``, num motor DuckDB próprio da chamada. As colunas ``Numeric`` somam
     como ``DECIMAL(38, 6)``; as ``Double`` da mesma forma só nos valores finitos, com os não
@@ -828,20 +828,20 @@ def load_report(
 
     .. code-block:: python
 
-        report = load_report(db, Operacao.__table__, "/dados/db_projetado")
+        report = import_report(db, Operacao.__table__, "/dados/db_projetado")
         report.matches                          # True
         report.partitions[0].source_sums        # {"valor": Decimal("45.150000")}
-        only = load_report(db, Operacao.__table__, "/dados/db_projetado", ["2026-02-28"])
+        only = import_report(db, Operacao.__table__, "/dados/db_projetado", ["2026-02-28"])
         [partition.value for partition in only.partitions]   # ["2026-02-28"]
 
-    :param db: o banco, com a raiz Delta e o ambiente; a tabela Delta fica em
-        ``<raiz>/<ambiente>/<tabela>``.
+    :param delta_db: o banco Delta em que os dados foram importados, com a raiz e o ambiente;
+        a tabela Delta fica em ``<raiz>/<ambiente>/<tabela>``.
     :param table: a tabela do modelo.
     :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
         ``file://`` ou ``s3://``.
     :param partitions: os valores a conferir, que toda tabela particionada precisa ter na origem,
         filtram as partições da origem e do Delta e deixam uma tabela sem partição inteira de
-        fora, com o relatório vazio e sem abrir o motor, como em ``initial_load``; ``None``
+        fora, com o relatório vazio e sem abrir o motor, como em ``import_table``; ``None``
         confere todas.
     :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
         sistema e os limites lidos do ambiente.
@@ -862,16 +862,16 @@ def load_report(
     _check_requested(table, found, partitions)
     # A tabela sem partição fica inteira de fora do pedido por partições: o relatório vazio.
     if partitions is not None and table_options(table).partition_by is None:
-        return LoadReport(table.name, (), (), ())
+        return ImportReport(table.name, (), (), ())
     wanted = {value: found[value] for value in _wanted_values(found, partitions)}
     execution_id = f"relatorio-{uuid.uuid4().hex[:8]}"
     # A origem e o Delta agregados na mesma sessão, com o secret da origem quando ela está no S3.
-    with DuckDBEngine(config or DuckDBConfig(), execution_id, db.storage) as engine:
+    with DuckDBEngine(config or DuckDBConfig(), execution_id, delta_db.storage) as engine:
         with engine.session() as connection:
-            _source_setup(connection, db, source)
+            _source_setup(connection, delta_db, source)
             in_source = _source_totals(connection, wanted, sums, doubles)
-            whole_delta = _delta_totals(connection, db, table, sums, doubles)
+            whole_delta = _delta_totals(connection, delta_db, table, sums, doubles)
     # Do Delta, só as partições pedidas, filtradas depois da agregação da tabela inteira.
     in_delta = {value: whole_delta[value] for value in _wanted_values(whole_delta, partitions)}
     reports = _partition_reports(in_source, in_delta)
-    return LoadReport(table.name, reports, skipped, _conversions(source, wanted, table))
+    return ImportReport(table.name, reports, skipped, _conversions(source, wanted, table))

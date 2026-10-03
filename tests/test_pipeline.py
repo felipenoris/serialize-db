@@ -1,19 +1,19 @@
 """Uma execução completa do pipeline mensal sobre a base de testes em Delta, no motor DuckDB.
 
 A condição inicial é a base fictícia de ``tests/source_db_projetado.py`` carregada no Delta por
-``serialize_db.load.initial_load``, as 12 tabelas do modelo cliente (``tests/client_model/``) com
-as quatro partições de cada tabela particionada; ela é gravada uma vez por módulo sob
-``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``), e cada teste trabalha numa cópia própria,
-para publicar a partição nova sem tocar a base dos outros. ``monthly_pipeline`` é o pipeline, no
-formato ``modulo:funcao`` que ``serialize-db run`` recebe: a execução na partição do mês seguinte
-à última data-base publicada; a ingestão de toda tabela do modelo, as sem partição inteiras e as
-particionadas só na última data-base, materializadas; a geração da partição nova de
-``cad_operacoes``, ``rel_contrato_operacao`` e ``cad_contratos`` a partir da última, por
-``INSERT ... SELECT`` no sandbox com os ids de ``next_ids``; a de ``cad_lancamentos`` em Python,
-com pyarrow, a partir da última partição lida da tabela ingerida, acrescentada a ela por
-``run.sandbox.append``; o ``SELECT`` com ``join`` dos saldos por conta do modelo cliente sobre a
-partição nova; o ``join`` de contratos, relação e operações que confere o rateio da partição nova;
-a auditoria com as chaves estrangeiras; e a publicação no Delta.
+``serialize_db.parquet_import.import_table``, as 12 tabelas do modelo cliente
+(``tests/client_model/``) com as quatro partições de cada tabela particionada; ela é gravada uma
+vez por módulo sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``), e cada teste trabalha
+numa cópia própria, para publicar a partição nova sem tocar a base dos outros.
+``monthly_pipeline`` é o pipeline, no formato ``modulo:funcao`` que ``serialize-db run`` recebe: a
+execução na partição do mês seguinte à última data-base publicada; a ingestão de toda tabela do
+modelo, as sem partição inteiras e as particionadas só na última data-base, materializadas; a
+geração da partição nova de ``cad_operacoes``, ``rel_contrato_operacao`` e ``cad_contratos`` a
+partir da última, por ``INSERT ... SELECT`` no sandbox com os ids de ``next_ids``; a de
+``cad_lancamentos`` em Python, com pyarrow, a partir da última partição lida da tabela ingerida,
+acrescentada a ela por ``run.sandbox.append``; o ``SELECT`` com ``join`` dos saldos por conta do
+modelo cliente sobre a partição nova; o ``join`` de contratos, relação e operações que confere o
+rateio da partição nova; a auditoria com as chaves estrangeiras; e a publicação no Delta.
 
 Os testes conferem os saldos e as contagens contra a base fictícia em memória, o rateio de cada
 contrato, as auditorias aprovadas com toda verificação rodada, a versão nova de cada tabela só com
@@ -42,7 +42,7 @@ import source_db_projetado as source
 from client_model import Base, Contrato, Lancamento, Operacao, RelContratoOperacao
 from client_model.statements import STATEMENTS
 from conftest import LocalLocation
-from serialize_db import cli, delta, load
+from serialize_db import cli, delta, parquet_import
 from serialize_db.audit import AuditReport
 from serialize_db.engine.duckdb import DuckDBConfig
 from serialize_db.execution import Database, Execution
@@ -136,7 +136,7 @@ def ingest_model(
     particionadas só na última data-base, materializadas, porque recebem as linhas da nova."""
     unpartitioned = []
     partitioned = []
-    for table in run.db.tables():
+    for table in run.delta_db.tables():
         if table_options(table).partition_by is None:
             unpartitioned.append(table)
         else:
@@ -281,8 +281,8 @@ def delta_base(
     root = folder / "delta"
     db = Database(str(root), "prd", Base.metadata)
     config = DuckDBConfig(temp_directory=str(folder / "carga"))
-    for table in load.load_order(db.tables()):
-        load.initial_load(db, table, str(parquet.root), config=config)
+    for table in parquet_import.import_order(db.tables()):
+        parquet_import.import_table(db, table, str(parquet.root), config=config)
     return root
 
 

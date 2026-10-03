@@ -297,12 +297,12 @@ class Database:
 
 def _checked_partition(
     value: str,
-    db: Database,
+    delta_db: Database,
 ) -> str:
     """A partição da execução: a regra da partição e o ``String(n)`` de cada coluna de partição do
     modelo, medido em bytes."""
     check_partition_value(value)
-    for table in db.tables():
+    for table in delta_db.tables():
         column = table_options(table).partition_by
         if column is None:
             continue
@@ -382,7 +382,7 @@ class Execution:
 
     def __init__(
         self,
-        db: Database,
+        delta_db: Database,
         engine: str | Engine,
         partition: str | None = None,
         execution_id: str | None = None,
@@ -391,7 +391,7 @@ class Execution:
         """Guarda os parâmetros da execução, com a partição e o ``execution_id`` conferidos; nada
         é aberto antes da entrada do ``with``.
 
-        :param db: o banco da execução.
+        :param delta_db: o banco Delta da execução.
         :param engine: o nome do motor, ``"duckdb"`` ou ``"redshift"``, ou um motor já
             construído, para os testes; um nome desconhecido é ``ContractError`` na entrada do
             ``with``.
@@ -407,10 +407,10 @@ class Execution:
         :raises ContractError: a partição ou o ``execution_id`` fora da regra da partição, ou a
             partição acima do ``String(n)`` de uma coluna de partição.
         """
-        self.db = db
-        """O banco: a raiz, o ambiente e os modelos do cliente."""
+        self.delta_db = delta_db
+        """O banco Delta: a raiz, o ambiente e os modelos do cliente."""
         if partition is not None:
-            _checked_partition(partition, db)
+            _checked_partition(partition, delta_db)
         self.partition = partition
         """A partição da execução, ou ``None`` na execução sem partição."""
         self.execution_id = check_partition_value(execution_id or _new_execution_id())
@@ -453,9 +453,9 @@ class Execution:
 
     def _open_tables(self) -> None:
         """Abre toda tabela do ambiente que existe e fixa a versão; a ausente fica ``None``."""
-        storage = self.db.storage
-        for table in self.db.tables():
-            uri = self.db.uri(table)
+        storage = self.delta_db.storage
+        for table in self.delta_db.tables():
+            uri = self.delta_db.uri(table)
             if not delta.table_exists(uri, storage):
                 self.versions[table.name] = None
                 continue
@@ -469,7 +469,7 @@ class Execution:
         if not isinstance(self._engine, str):
             return self._engine
         if self._engine == "duckdb":
-            return DuckDBEngine(DuckDBConfig(), self.execution_id, self.db.storage)
+            return DuckDBEngine(DuckDBConfig(), self.execution_id, self.delta_db.storage)
         if self._engine == "redshift":
             # O módulo do Redshift entra só com o motor: importar o pacote não carrega o driver.
             from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
@@ -479,8 +479,8 @@ class Execution:
             return RedshiftEngine(
                 self.redshift,
                 self.execution_id,
-                self.db.storage,
-                self.db.staging_prefix(self.execution_id),
+                self.delta_db.storage,
+                self.delta_db.staging_prefix(self.execution_id),
             )
         raise ContractError(f"motor {self._engine!r}: use 'duckdb' ou 'redshift'")
 
@@ -530,7 +530,7 @@ class Execution:
         for name, version in self.versions.items():
             if version is not None:
                 versions[name] = version
-        delta.snapshot(self.db.storage, self.db.environment, self._snapshot, versions)
+        delta.snapshot(self.delta_db.storage, self.delta_db.environment, self._snapshot, versions)
         log.info("snapshot %s gravado: %s", self._snapshot, versions)
 
     # ------------------------------------------------------------ a leitura
@@ -539,7 +539,7 @@ class Execution:
         self,
         table: sa.Table,
     ) -> str:
-        return self.db.uri(table)
+        return self.delta_db.uri(table)
 
     def _version(
         self,
@@ -557,7 +557,7 @@ class Execution:
         ``publish_delta`` avançou a versão fixada; quem chama segura o lock."""
         opened = self._tables.get(table.name)
         if opened is None or opened.version() != version:
-            opened = delta.open_table(self._uri(table), self.db.storage, version)
+            opened = delta.open_table(self._uri(table), self.delta_db.storage, version)
             self._tables[table.name] = opened
         return opened
 
@@ -617,7 +617,7 @@ class Execution:
         version = self._version(table)
         if version is None:
             raise SandboxError(
-                f"{table.name}: a tabela não existe no ambiente {self.db.environment}"
+                f"{table.name}: a tabela não existe no ambiente {self.delta_db.environment}"
             )
         engine.ingest(table, self._uri(table), version, partitions, materialize)
 
@@ -878,7 +878,7 @@ class Execution:
     ) -> None:
         """Confere que nenhuma alteração de dados entrou na tabela desde a versão fixada; um avanço
         só de metadados ou de manutenção atualiza a versão fixada. A tabela ausente nasce aqui."""
-        storage = self.db.storage
+        storage = self.delta_db.storage
         pinned = self._version(table)
         # O diff da tabela ausente na abertura parte da versão 0, a da criação.
         if pinned is None:
@@ -904,7 +904,7 @@ class Execution:
         """A reconciliação e a exportação de cada partição de uma tabela; devolve a versão final."""
         uri = self._uri(table)
         self._check_no_data_change(table, uri)
-        delta.reconcile(uri, table, self.db.storage)
+        delta.reconcile(uri, table, self.delta_db.storage)
         version = self._version(table)
         for value in values:
             with self._lock:
@@ -1020,10 +1020,10 @@ class Execution:
         check_partition_value(name)
         # O nome já usado é recusado agora, antes dos commits da execução; a saída o confere de
         # novo em delta.snapshot, contra outro escritor.
-        control, _ = delta.read_snapshots(self.db.storage, self.db.environment)
+        control, _ = delta.read_snapshots(self.delta_db.storage, self.delta_db.environment)
         if name in control["snapshots"] or name in control.get("archived", {}):
             raise ContractError(
-                f"{self.db.environment}: o snapshot {name} já existe, e o nome não "
+                f"{self.delta_db.environment}: o snapshot {name} já existe, e o nome não "
                 "volta a ser usado, nem arquivado; marque a execução com outro "
                 "nome e aponte o canal para ele com serialize-db channel"
             )
@@ -1032,7 +1032,7 @@ class Execution:
             # primeiro nome, e a entrada do snapshot o último.
             if self._snapshot is not None:
                 raise ContractError(
-                    f"{self.db.environment}: a execução já está marcada com o snapshot "
+                    f"{self.delta_db.environment}: a execução já está marcada com o snapshot "
                     f"{self._snapshot}, e marca um só"
                 )
             self._snapshot = name

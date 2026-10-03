@@ -143,7 +143,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   (an `SAWarning` for `=`, `>=` and the expanding `IN`, none for `LIKE`), so the Redshift
   `stream` by `UNLOAD` ran with `IN (NULL)`; `construct_params()` after `render_postcompile` of an
   expanding `bindparam` raises `InvalidRequestError` in the DuckDB engine and the Redshift cursor.
-  `Float` and `Double` no longer derive from `Numeric`, so `load_report` drops the `Double`
+  `Float` and `Double` no longer derive from `Numeric`, so `import_report` drops the `Double`
   columns from its sums; and the duckdb-engine 0.17.0 reflection fails on
   `pg_catalog.pg_collation`. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 

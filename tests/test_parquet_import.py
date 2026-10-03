@@ -1,4 +1,4 @@
-"""``serialize_db.load``: a carga inicial da base Parquet de origem sobre a base fictícia.
+"""``serialize_db.parquet_import``: a carga inicial da base Parquet de origem sobre a base fictícia.
 
 Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a base de
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
@@ -12,7 +12,7 @@ acima dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignor
 ``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o relatório que soma só
 os finitos; o relatório que acusa uma linha apagada, que confere só as partições pedidas e que lê
 na origem só as pastas da carga; a auditoria de chave estrangeira que registra o órfão sem barrar
-a carga; ``serialize-db load`` sobre a base inteira, duas vezes, e sobre uma partição só; e a
+a carga; ``serialize-db import`` sobre a base inteira, duas vezes, e sobre uma partição só; e a
 tabela sem partição impressa como tabela inteira.
 """
 
@@ -34,7 +34,7 @@ import sqlalchemy as sa
 import source_db_projetado as source
 from client_model import Base
 from conftest import LocalLocation
-from serialize_db import cli, delta, load
+from serialize_db import cli, delta, parquet_import
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import ContractError, ExecutionConflict
 from serialize_db.execution import Database
@@ -131,7 +131,7 @@ def test_discover_partitions_and_skipped_entries(
     origin = origin_of(base)
     partitioned = []
     for name, table in TABLES.items():
-        found, skipped = load.discover_partitions(origin, table)
+        found, skipped = parquet_import.discover_partitions(origin, table)
         assert skipped == (), name
         partition_by = table_options(table).partition_by
         if partition_by is None:
@@ -153,7 +153,7 @@ def test_discover_partitions_and_skipped_entries(
     off_the_rule.mkdir()
     quarter.mkdir()
     try:
-        found, skipped = load.discover_partitions(origin, TABLES["cad_operacoes"])
+        found, skipped = parquet_import.discover_partitions(origin, TABLES["cad_operacoes"])
     finally:
         stray.unlink()
         off_the_rule.rmdir()
@@ -162,14 +162,14 @@ def test_discover_partitions_and_skipped_entries(
     assert skipped == ("data_str=2026 Q1", "notas.txt")
 
     # As entradas da origem fora do modelo, e a tabela sem pasta.
-    assert load.entries_outside_the_model(origin, Base.metadata) == OUTSIDE_MODEL
+    assert parquet_import.entries_outside_the_model(origin, Base.metadata) == OUTSIDE_MODEL
     with pytest.raises(FileNotFoundError, match="cad_contas"):
-        load.discover_partitions(str(folder / "vazia"), TABLES["cad_contas"])
+        parquet_import.discover_partitions(str(folder / "vazia"), TABLES["cad_contas"])
 
 
-def test_load_order_puts_unpartitioned_tables_first() -> None:
+def test_import_order_puts_unpartitioned_tables_first() -> None:
     """As tabelas sem partição vêm antes das particionadas, cada grupo na ordem dada."""
-    ordered = [table.name for table in load.load_order(list(TABLES.values()))]
+    ordered = [table.name for table in parquet_import.import_order(list(TABLES.values()))]
     assert ordered[-4:] == [
         "cad_operacoes",
         "rel_contrato_operacao",
@@ -189,8 +189,8 @@ def test_partition_query_casts_to_the_contract(
     ``cad_contratos`` roda com ``to`` entre aspas."""
     table = TABLES["cad_lancamentos"]
     folder_uri = f"{base.root}/cad_lancamentos/data_base_str=2026-01-31"
-    query = load.partition_query(folder_uri, table, "2026-01-31")
-    contracts_query = load.partition_query(
+    query = parquet_import.partition_query(folder_uri, table, "2026-01-31")
+    contracts_query = parquet_import.partition_query(
         f"{base.root}/cad_contratos/data_str=2026-02-28", TABLES["cad_contratos"], "2026-02-28"
     )
     with DuckDBEngine(config, "consulta", db.storage) as engine, engine.session() as connection:
@@ -211,7 +211,7 @@ def test_partition_query_casts_to_the_contract(
 # ---------------------------------------------------------------- a carga
 
 
-def test_initial_load_loads_every_partition_once(
+def test_import_table_imports_every_partition_once(
     base: source.SourceBase,
     db: Database,
     config: DuckDBConfig,
@@ -223,7 +223,7 @@ def test_initial_load_loads_every_partition_once(
     carrega o resto."""
     origin = origin_of(base)
     table = TABLES["cad_contratos"]
-    assert load.initial_load(db, table, origin, config=config) == PARTITION_VALUES
+    assert parquet_import.import_table(db, table, origin, config=config) == PARTITION_VALUES
     dt = delta.open_table(db.uri(table), db.storage)
     assert dt.version() == len(PARTITION_VALUES)
     metadata = dt.metadata()
@@ -239,13 +239,13 @@ def test_initial_load_loads_every_partition_once(
     assert rows_by_value == base.partition_rows["cad_contratos"]
 
     # A segunda carga não grava nada.
-    assert load.initial_load(db, table, origin, config=config) == []
+    assert parquet_import.import_table(db, table, origin, config=config) == []
     assert delta.open_table(db.uri(table), db.storage).version() == len(PARTITION_VALUES)
 
     # A tabela sem partição carrega uma vez, com o valor None.
     accounts = TABLES["cad_contas"]
-    assert load.initial_load(db, accounts, origin, config=config) == [None]
-    assert load.initial_load(db, accounts, origin, config=config) == []
+    assert parquet_import.import_table(db, accounts, origin, config=config) == [None]
+    assert parquet_import.import_table(db, accounts, origin, config=config) == []
     assert delta.open_table(db.uri(accounts), db.storage).version() == 1
     assert add_actions(db, "cad_contas")[0]["num_records"] == base.rows["cad_contas"]
 
@@ -253,15 +253,17 @@ def test_initial_load_loads_every_partition_once(
     # carrega o resto.
     operations = TABLES["cad_operacoes"]
     only = ["2026-02-28"]
-    assert load.initial_load(db, operations, origin, partitions=only, config=config) == only
+    assert (
+        parquet_import.import_table(db, operations, origin, partitions=only, config=config) == only
+    )
     rates = TABLES["cad_aliquotas"]
-    assert load.initial_load(db, rates, origin, partitions=only, config=config) == []
+    assert parquet_import.import_table(db, rates, origin, partitions=only, config=config) == []
     assert not delta.table_exists(db.uri(rates), db.storage)
-    rest = load.initial_load(db, operations, origin, config=config)
+    rest = parquet_import.import_table(db, operations, origin, config=config)
     assert rest == ["2026-01-31", "2026-03-31", "2026-06-30"]
 
 
-def test_interrupted_load_resumes(
+def test_interrupted_import_resumes(
     base: source.SourceBase,
     db: Database,
     config: DuckDBConfig,
@@ -289,12 +291,12 @@ def test_interrupted_load_resumes(
 
     monkeypatch.setattr(delta, "register_files", failing_on_the_third)
     with pytest.raises(RuntimeError, match="interrompida"):
-        load.initial_load(db, table, origin, config=config)
+        parquet_import.import_table(db, table, origin, config=config)
     assert attempts == PARTITION_VALUES[:3]
     assert delta.open_table(db.uri(table), db.storage).version() == 2
 
     monkeypatch.undo()
-    assert load.initial_load(db, table, origin, config=config) == PARTITION_VALUES[2:]
+    assert parquet_import.import_table(db, table, origin, config=config) == PARTITION_VALUES[2:]
     assert delta.open_table(db.uri(table), db.storage).version() == 4
 
 
@@ -306,7 +308,9 @@ def test_keys_are_int64_and_timestamps_are_microseconds(
     """O Delta lê ``int64`` e ``timestamp[us]``, e o arquivo gravado tem ``INT64`` onde a origem
     tinha ``INT32`` e ``INT96``, sem a coluna de partição, com o ``execution_id`` no nome."""
     table = TABLES["cad_lancamentos"]
-    load.initial_load(db, table, origin_of(base), partitions=["2026-02-28"], config=config)
+    parquet_import.import_table(
+        db, table, origin_of(base), partitions=["2026-02-28"], config=config
+    )
     dt = delta.open_table(db.uri(table), db.storage)
     delta_schema = pa.schema(dt.schema())
     assert str(delta_schema.field("id_lancamento").type) == "int64"
@@ -334,7 +338,9 @@ def test_rows_are_written_in_sort_key_order(
     table = TABLES["cad_lancamentos"]
     sort_columns = list(table_options(table).sort_key)
     assert sort_columns == ["data_base", "id_mensuracao", "id_veiculo", "id_conta"]
-    load.initial_load(db, table, origin_of(base), partitions=["2026-01-31"], config=config)
+    parquet_import.import_table(
+        db, table, origin_of(base), partitions=["2026-01-31"], config=config
+    )
 
     (written,) = delta.open_table(db.uri(table), db.storage).file_uris()
     rows = pq.read_table(written, columns=sort_columns).to_pylist()
@@ -409,7 +415,7 @@ def assert_refused_without_commit(
     """A carga é ``ContractError`` com a tabela, a partição e ``fragment``, antes de qualquer
     gravação: a versão fica em 0 e a pasta da tabela não tem arquivo Parquet."""
     with pytest.raises(ContractError, match=re.escape(fragment)) as refusal:
-        load.initial_load(db, TABLES[table], origin, config=config)
+        parquet_import.import_table(db, TABLES[table], origin, config=config)
     assert str(refusal.value).startswith(f"{table} partição 2026-02-28: ")
     uri = db.uri(TABLES[table])
     assert delta.open_table(uri, db.storage).version() == 0
@@ -516,7 +522,7 @@ def test_text_is_measured_as_in_cast_and_the_audit(
 
     # Os três textos acima do limite do contrato, recusados sem commit.
     with pytest.raises(ContractError) as refusal:
-        load.initial_load(db, documents, str(origin), config=config)
+        parquet_import.import_table(db, documents, str(origin), config=config)
     message = str(refusal.value)
     assert message.startswith("cad_documentos tabela inteira: ")
     assert "1 textos acima dos 36 bytes de um Uuid em chave" in message
@@ -525,7 +531,7 @@ def test_text_is_measured_as_in_cast_and_the_audit(
     assert delta.open_table(db.uri(documents), db.storage).version() == 0
 
     # O Text(5) leva o teto do VARCHAR, e não o 5.
-    assert load.initial_load(db, notes, str(origin), config=config) == [None]
+    assert parquet_import.import_table(db, notes, str(origin), config=config) == [None]
     (written,) = delta.open_table(db.uri(notes), db.storage).file_uris()
     assert pq.read_table(written).column("nota").to_pylist() == ["0123456789"]
 
@@ -576,7 +582,7 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     porque o DuckDB ordena o ``NaN`` e o infinito acima deles (issue #59)."""
     origin = source_with_nonfinite(folder, base)
     table = TABLES["cad_lancamentos"]
-    assert load.initial_load(db, table, origin, config=config) == PARTITION_VALUES
+    assert parquet_import.import_table(db, table, origin, config=config) == PARTITION_VALUES
     nonfinite_partitions = {"2026-02-28", "2026-03-31"}
 
     # O log: as partições dos não finitos sem o mínimo e o máximo de valor, as outras com eles.
@@ -596,7 +602,7 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     assert has_min_max(finite_file, "valor")
 
     # O relatório não falha no CAST para DECIMAL e confere os não finitos dos dois lados.
-    report = load.load_report(db, table, origin, config=config)
+    report = parquet_import.import_report(db, table, origin, config=config)
     assert report.matches
     for partition in report.partitions:
         count = 1 if partition.value in nonfinite_partitions else 0
@@ -612,7 +618,7 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
 # ---------------------------------------------------------------- o relatório e a auditoria
 
 
-def test_load_report_matches_and_detects_a_difference(
+def test_import_report_matches_and_detects_a_difference(
     base: source.SourceBase,
     db: Database,
     config: DuckDBConfig,
@@ -621,13 +627,13 @@ def test_load_report_matches_and_detects_a_difference(
     as conversões de tipo; uma linha apagada do Delta aparece como diferença na partição dela."""
     origin = origin_of(base)
     for name in ("cad_aliquotas", "cad_operacoes"):
-        load.initial_load(db, TABLES[name], origin, config=config)
-        report = load.load_report(db, TABLES[name], origin, config=config)
+        parquet_import.import_table(db, TABLES[name], origin, config=config)
+        report = parquet_import.import_report(db, TABLES[name], origin, config=config)
         assert report.matches, name
         assert report.skipped == (), name
 
     # A tabela sem partição, com as conversões; a tabela não carregada não confere.
-    rates_report = load.load_report(db, TABLES["cad_aliquotas"], origin, config=config)
+    rates_report = parquet_import.import_report(db, TABLES["cad_aliquotas"], origin, config=config)
     assert [partition.value for partition in rates_report.partitions] == [None]
     assert rates_report.partitions[0].source_rows == base.rows["cad_aliquotas"]
     assert rates_report.partitions[0].source_sums.keys() == {"fator"}
@@ -636,7 +642,9 @@ def test_load_report_matches_and_detects_a_difference(
         "id_conta_origem: int32 -> int64",
         "id_conta_destino: int32 -> int64",
     )
-    entries_report = load.load_report(db, TABLES["cad_lancamentos"], origin, config=config)
+    entries_report = parquet_import.import_report(
+        db, TABLES["cad_lancamentos"], origin, config=config
+    )
     assert not entries_report.matches
     assert all(partition.delta_rows is None for partition in entries_report.partitions)
     assert "timestamp: INT96 -> timestamp[us]" in entries_report.conversions
@@ -650,29 +658,29 @@ def test_load_report_matches_and_detects_a_difference(
     delta.open_table(uri, db.storage).delete(
         f"data_str = '2026-03-31' AND id_operacao = {deleted_id}"
     )
-    report = load.load_report(db, TABLES["cad_operacoes"], origin, config=config)
+    report = parquet_import.import_report(db, TABLES["cad_operacoes"], origin, config=config)
     assert not report.matches
     differing = [partition for partition in report.partitions if not partition.matches]
     assert [partition.value for partition in differing] == ["2026-03-31"]
     assert differing[0].delta_rows == differing[0].source_rows - 1
 
 
-def test_load_report_confers_only_the_requested_partitions(
+def test_import_report_confers_only_the_requested_partitions(
     base: source.SourceBase,
     db: Database,
     config: DuckDBConfig,
 ) -> None:
-    """Com ``partitions``, o relatório confere só as partições pedidas, as que ``initial_load``
+    """Com ``partitions``, o relatório confere só as partições pedidas, as que ``import_table``
     grava: as outras da origem ficam de fora, uma linha apagada numa pedida continua acusada, e a
     tabela sem partição fica de fora."""
     origin = origin_of(base)
     operations = TABLES["cad_operacoes"]
     only = ["2026-02-28"]
-    load.initial_load(db, operations, origin, partitions=only, config=config)
+    parquet_import.import_table(db, operations, origin, partitions=only, config=config)
 
     # A origem inteira acusa as partições fora do log; a pedida confere.
-    assert not load.load_report(db, operations, origin, config=config).matches
-    report = load.load_report(db, operations, origin, partitions=only, config=config)
+    assert not parquet_import.import_report(db, operations, origin, config=config).matches
+    report = parquet_import.import_report(db, operations, origin, partitions=only, config=config)
     assert report.matches
     assert [partition.value for partition in report.partitions] == only
 
@@ -685,12 +693,14 @@ def test_load_report_confers_only_the_requested_partitions(
     delta.open_table(uri, db.storage).delete(
         f"data_str = '2026-02-28' AND id_operacao = {deleted_id}"
     )
-    report = load.load_report(db, operations, origin, partitions=only, config=config)
+    report = parquet_import.import_report(db, operations, origin, partitions=only, config=config)
     assert not report.matches
     assert [partition.value for partition in report.partitions] == only
 
     # A tabela sem partição fica de fora, como na carga.
-    rates = load.load_report(db, TABLES["cad_aliquotas"], origin, partitions=only, config=config)
+    rates = parquet_import.import_report(
+        db, TABLES["cad_aliquotas"], origin, partitions=only, config=config
+    )
     assert rates.partitions == ()
     assert rates.matches
 
@@ -700,7 +710,7 @@ def test_requested_partition_absent_from_the_source_is_refused(
     db: Database,
     config: DuckDBConfig,
 ) -> None:
-    """``initial_load`` e ``load_report`` recusam com ``ContractError`` um valor de ``partitions``
+    """``import_table`` e ``import_report`` recusam com ``ContractError`` um valor de ``partitions``
     que a origem não tem, antes de criar a tabela, e ``check_requested_partitions`` o recusa sem
     abrir um motor; a tabela sem partição fica inteira de fora com qualquer pedido, sem recusa
     nem criação."""
@@ -709,23 +719,25 @@ def test_requested_partition_absent_from_the_source_is_refused(
     requested = ["2026-02-28", "9999-12-31"]
     refusal = re.escape("cad_operacoes: partição(ões) pedida(s) que a origem não tem: 9999-12-31")
     with pytest.raises(ContractError, match=refusal):
-        load.initial_load(db, operations, origin, partitions=requested, config=config)
+        parquet_import.import_table(db, operations, origin, partitions=requested, config=config)
     assert not delta.table_exists(db.uri(operations), db.storage)
     with pytest.raises(ContractError, match=refusal):
-        load.load_report(db, operations, origin, partitions=requested, config=config)
+        parquet_import.import_report(db, operations, origin, partitions=requested, config=config)
     with pytest.raises(ContractError, match=refusal):
-        load.check_requested_partitions(origin, operations, requested)
+        parquet_import.check_requested_partitions(origin, operations, requested)
 
     # Sem partitions, ou com as que a origem tem, nada é recusado.
-    load.check_requested_partitions(origin, operations, None)
-    load.check_requested_partitions(origin, operations, ["2026-02-28"])
+    parquet_import.check_requested_partitions(origin, operations, None)
+    parquet_import.check_requested_partitions(origin, operations, ["2026-02-28"])
 
     # A tabela sem partição fica de fora com qualquer pedido, como antes.
     rates = TABLES["cad_aliquotas"]
-    load.check_requested_partitions(origin, rates, requested)
-    assert load.initial_load(db, rates, origin, partitions=requested, config=config) == []
+    parquet_import.check_requested_partitions(origin, rates, requested)
+    assert parquet_import.import_table(db, rates, origin, partitions=requested, config=config) == []
     assert not delta.table_exists(db.uri(rates), db.storage)
-    rates_report = load.load_report(db, rates, origin, partitions=requested, config=config)
+    rates_report = parquet_import.import_report(
+        db, rates, origin, partitions=requested, config=config
+    )
     assert rates_report.partitions == ()
 
 
@@ -744,25 +756,32 @@ def test_unpartitioned_table_under_partitions_is_left_out(
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Com ``partitions``, ``initial_load`` e ``load_report`` deixam a tabela sem partição inteira
+    """Com ``partitions``, ``import_table`` e ``import_report`` deixam a tabela sem partição inteira
     de fora: a tabela não é criada, nenhum motor é aberto e o relatório sai vazio e aprovado; a
     pasta da tabela ausente na origem continua ``FileNotFoundError``."""
     origin = origin_of(base)
     rates = TABLES["cad_aliquotas"]
-    monkeypatch.setattr(load, "DuckDBEngine", refuse_engine)
-    assert load.initial_load(db, rates, origin, partitions=["2026-02-28"], config=config) == []
+    monkeypatch.setattr(parquet_import, "DuckDBEngine", refuse_engine)
+    assert (
+        parquet_import.import_table(db, rates, origin, partitions=["2026-02-28"], config=config)
+        == []
+    )
     assert not delta.table_exists(db.uri(rates), db.storage)
-    report = load.load_report(db, rates, origin, partitions=["2026-02-28"], config=config)
+    report = parquet_import.import_report(
+        db, rates, origin, partitions=["2026-02-28"], config=config
+    )
     assert report.table == "cad_aliquotas"
     assert report.partitions == ()
     assert report.skipped == ()
     assert report.conversions == ()
     assert report.matches
     with pytest.raises(FileNotFoundError):
-        load.initial_load(db, rates, str(folder), partitions=["2026-02-28"], config=config)
+        parquet_import.import_table(
+            db, rates, str(folder), partitions=["2026-02-28"], config=config
+        )
 
 
-def test_load_report_reads_only_what_the_load_reads(
+def test_import_report_reads_only_what_the_import_reads(
     folder: Path,
     config: DuckDBConfig,
 ) -> None:
@@ -803,8 +822,8 @@ def test_load_report_reads_only_what_the_load_reads(
     db = Database(str(folder / "delta"), "prd", metadata)
 
     # A tabela particionada: só a partição da regra, carregada e conferida.
-    assert load.initial_load(db, parts, str(origin), config=config) == ["2026-01-31"]
-    report = load.load_report(db, parts, str(origin), config=config)
+    assert parquet_import.import_table(db, parts, str(origin), config=config) == ["2026-01-31"]
+    report = parquet_import.import_report(db, parts, str(origin), config=config)
     assert report.matches
     assert [partition.value for partition in report.partitions] == ["2026-01-31"]
     assert report.partitions[0].source_rows == 1
@@ -812,8 +831,8 @@ def test_load_report_reads_only_what_the_load_reads(
     assert report.conversions == ()
 
     # A tabela sem partição: os arquivos da pasta, sem a subpasta.
-    assert load.initial_load(db, whole, str(origin), config=config) == [None]
-    report = load.load_report(db, whole, str(origin), config=config)
+    assert parquet_import.import_table(db, whole, str(origin), config=config) == [None]
+    report = parquet_import.import_report(db, whole, str(origin), config=config)
     assert report.matches
     assert report.partitions[0].source_rows == 1
     assert report.conversions == ()
@@ -828,9 +847,9 @@ def test_foreign_key_orphans_are_reported_not_blocking(
     deixa lançamentos órfãos, que a auditoria de chave estrangeira do motor DuckDB registra em
     ``orfao_id_conta`` sobre a versão fixada de ``cad_contas``, e as outras chaves passam."""
     origin = origin_of(base)
-    for table in load.load_order(db.tables()):
-        load.initial_load(db, table, origin, config=config)
-        assert load.load_report(db, table, origin, config=config).matches, table.name
+    for table in parquet_import.import_order(db.tables()):
+        parquet_import.import_table(db, table, origin, config=config)
+        assert parquet_import.import_report(db, table, origin, config=config).matches, table.name
 
     # Uma conta apagada depois da carga deixa lançamentos órfãos.
     entries = TABLES["cad_lancamentos"]
@@ -867,30 +886,30 @@ def test_foreign_key_orphans_are_reported_not_blocking(
 # ---------------------------------------------------------------- a linha de comando
 
 
-def conflicting_load(
+def conflicting_import(
     *args: object,
     **options: object,
 ) -> list[str | None]:
-    """Um ``initial_load`` que encontra outro registro da mesma partição."""
+    """Um ``import_table`` que encontra outro registro da mesma partição."""
     raise ExecutionConflict("outro registro de cad_contas")
 
 
 def unpartitioned_difference(
     *args: object,
     **options: object,
-) -> load.LoadReport:
-    """Um ``load_report`` de ``cad_contas`` com uma linha a mais na origem."""
-    partition = load.PartitionReport(None, 5, 4, {}, {}, {}, {})
-    return load.LoadReport("cad_contas", (partition,), (), ())
+) -> parquet_import.ImportReport:
+    """Um ``import_report`` de ``cad_contas`` com uma linha a mais na origem."""
+    partition = parquet_import.PartitionReport(None, 5, 4, {}, {}, {}, {})
+    return parquet_import.ImportReport("cad_contas", (partition,), (), ())
 
 
-def test_cli_load_loads_the_base_and_reports(
+def test_cli_import_imports_the_base_and_reports(
     base: source.SourceBase,
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    """``serialize-db load`` sobre a base inteira: as tabelas sem partição antes das
+    """``serialize-db import`` sobre a base inteira: as tabelas sem partição antes das
     particionadas, as três entradas fora do modelo, saída 0; a segunda execução não grava nada;
     uma partição só, gravada e conferida sozinha, com a tabela sem partição fora, saída 0; 1 na
     partição fora do contrato; 2 no modelo fora do contrato, na tabela fora do modelo, na origem
@@ -899,7 +918,7 @@ def test_cli_load_loads_the_base_and_reports(
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
     common = [
-        "load",
+        "import",
         "--metadata",
         "client_model:Base.metadata",
         "--source",
@@ -948,7 +967,7 @@ def test_cli_load_loads_the_base_and_reports(
     off_the_path = datetime.date(2026, 3, 31)
     defective = source_with_defect(folder, base, "cad_operacoes", "data", off_the_path)
     refused = [
-        "load",
+        "import",
         "--metadata",
         "client_model:Base.metadata",
         "--source",
@@ -960,13 +979,13 @@ def test_cli_load_loads_the_base_and_reports(
     ]
     assert cli.main(refused) == 1
     printed_errors = capsys.readouterr().err
-    refusal = "serialize-db load: cad_operacoes partição 2026-02-28: 1 linhas com data"
+    refusal = "serialize-db import: cad_operacoes partição 2026-02-28: 1 linhas com data"
     assert refusal in printed_errors
 
     # Os erros de uso: o modelo de referência viola o contrato, a tabela fora do modelo e a
     # origem sem a pasta da tabela.
     reference = [
-        "load",
+        "import",
         "--metadata",
         "reference_model.model_db_projetado:Base.metadata",
         "--source",
@@ -1000,27 +1019,27 @@ def test_cli_load_loads_the_base_and_reports(
     assert "gs://bucket/raiz: esquema fora dos armazenamentos" in capsys.readouterr().err
 
     # O conflito com outro registro da mesma partição.
-    monkeypatch.setattr(load, "initial_load", conflicting_load)
+    monkeypatch.setattr(parquet_import, "import_table", conflicting_import)
     assert cli.main([*common, "--root", root, "--tables", "cad_contas"]) == 2
     printed_errors += capsys.readouterr().err
-    assert "serialize-db load: conflito: outro registro de cad_contas" in printed_errors
+    assert "serialize-db import: conflito: outro registro de cad_contas" in printed_errors
     assert "Traceback" not in printed_errors
 
 
-def test_cli_load_refuses_a_requested_partition_absent_from_the_source(
+def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
     base: source.SourceBase,
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    """``serialize-db load --partitions`` com uma partição que a origem não tem sai com 1, com a
+    """``serialize-db import --partitions`` com uma partição que a origem não tem sai com 1, com a
     mensagem e sem traceback, antes de gravar qualquer partição: a outra partição pedida, que a
     origem tem, fica fora do Delta em toda tabela."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = folder / "delta"
     arguments = [
-        "load",
+        "import",
         "--metadata",
         "client_model:Base.metadata",
         "--source",
@@ -1035,14 +1054,14 @@ def test_cli_load_refuses_a_requested_partition_absent_from_the_source(
     ]
     assert cli.main(arguments) == 1
     captured = capsys.readouterr()
-    refusal = r"serialize-db load: \w+: partição\(ões\) pedida\(s\) que a origem não tem: "
+    refusal = r"serialize-db import: \w+: partição\(ões\) pedida\(s\) que a origem não tem: "
     assert re.search(refusal + "9999-12-31", captured.err)
     assert "Traceback" not in captured.err
     assert "gravada(s)" not in captured.out
     assert list(root.glob("**/_delta_log")) == []
 
 
-def test_cli_load_names_the_unpartitioned_table(
+def test_cli_import_names_the_unpartitioned_table(
     base: source.SourceBase,
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1052,9 +1071,9 @@ def test_cli_load_names_the_unpartitioned_table(
     sai com 1."""
     monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    monkeypatch.setattr(load, "load_report", unpartitioned_difference)
+    monkeypatch.setattr(parquet_import, "import_report", unpartitioned_difference)
     arguments = [
-        "load",
+        "import",
         "--metadata",
         "client_model:Base.metadata",
         "--source",

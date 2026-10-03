@@ -285,8 +285,11 @@ The battery of 2026-09-24 at 01:41 to 02:19 UTC ran on a 16 vCPU (two per physic
 31,159 MB instance, DuckDB defaulting to 16 threads and a 24.3 GiB `memory_limit`,
 `environment_limits` giving 16 threads and 13.1 to 13.6 GiB (half of the 27 to 28 GB available at
 each opening), 29.7 GiB free of 37.0 GiB, the same roots under `.../shared/<usuário>/serialize-db/`
-and `main` with #69; the whole migration finished there, `cad_lancamentos` peaking at 16,430 MB.
-`plan/POC.md`
+and `main` with #69; the whole migration finished there, `cad_lancamentos` peaking at 16,430 MB
+under a 13.4 GiB limit with the sort faster than none at 16 threads (`source-base.md`). The threads
+probe with the cache off fixed `threads` at the process's CPUs: materialization best there, worse
+at half and at double, the S3 read 1.4x faster at triple (`duckdb.md`); the audit's non-finite
+count and the `NaN` row became assertions (`redshift.md`). `plan/POC.md`
 
 A new cloud session container (2026-09-24) starts without `.duckdb/`: the package tests with
 `SERIALIZE_DB_TEST_LOCAL_ROOT` failed on the missing `delta` extension until the GitHub

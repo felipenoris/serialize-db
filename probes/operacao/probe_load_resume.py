@@ -1,10 +1,10 @@
 """Sonda da carga inicial parada no meio e retomada pelo mesmo comando.
 
 ``plan/OPEN_QUESTIONS.md`` ("A operação no ambiente alvo") espera a leitura no alvo do que
-``tests/test_load.py`` cobre na pasta local. A sonda roda ``serialize-db load`` das três primeiras
-partições de ``cad_lancamentos`` na origem e o encerra por ``SIGKILL``, como o kernel sem memória,
-quando o arquivo da segunda partição aparece na pasta dela, entre o ``COPY`` e o commit; depois
-repete o comando.
+``tests/test_parquet_import.py`` cobre na pasta local. A sonda roda ``serialize-db import`` das
+três primeiras partições de ``cad_lancamentos`` na origem e o encerra por ``SIGKILL``, como o
+kernel sem memória, quando o arquivo da segunda partição aparece na pasta dela, entre o ``COPY`` e
+o commit; depois repete o comando.
 
 Checagens:
 
@@ -138,7 +138,7 @@ def main() -> None:
     values = lib.source_partitions(source, 3)
     uri = lib.table_uri(db, lib.TABLE.name)
     arguments = lib.cli_arguments(
-        db, "load", "--source", source, "--tables", lib.TABLE.name, "--partitions", *values
+        db, "import", "--source", source, "--tables", lib.TABLE.name, "--partitions", *values
     )
     second_folder = storage.join(db.environment, lib.TABLE.name, f"{lib.PARTITION_BY}={values[1]}")
 

@@ -41,7 +41,7 @@ from lancamentos_model import (
 from serialize_db import cli, delta
 from serialize_db.errors import ExecutionConflict
 from serialize_db.execution import Database
-from serialize_db.load import LoadReport, PartitionReport
+from serialize_db.parquet_import import ImportReport, PartitionReport
 from serialize_db.publication import PublicationStatus
 from serialize_db.storage import Storage
 
@@ -555,8 +555,8 @@ def test_status_and_load_lines_print_no_none(
     missing_in_source = PartitionReport(
         MONTHS[1], None, 5, {}, {"valor": Decimal("2.5")}, {}, {"valor": 0}
     )
-    report = LoadReport("cad_lancamentos", (missing_in_delta, missing_in_source), (), ())
-    cli._print_load_report(report, [])
+    report = ImportReport("cad_lancamentos", (missing_in_delta, missing_in_source), (), ())
+    cli._print_import_report(report, [])
     printed = capsys.readouterr().out
     assert (
         f"DIFERENÇA em {MONTHS[0]}: origem 38 linhas {{'valor': Decimal('1.5')}} não finitos "

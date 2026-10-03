@@ -38,7 +38,7 @@ TESTS_DIR = Path(__file__).resolve().parents[2] / "tests"
 sys.path.insert(0, str(TESTS_DIR))
 from client_model import Base  # noqa: E402
 
-from serialize_db import delta, load  # noqa: E402
+from serialize_db import delta, parquet_import  # noqa: E402
 from serialize_db.execution import Database  # noqa: E402
 from serialize_db.resources import available_cpus, available_memory  # noqa: E402
 from serialize_db.resources import environment_limits  # noqa: E402
@@ -155,7 +155,7 @@ def source_partitions(
 ) -> list[str]:
     """Os ``count`` primeiros valores de partição de ``cad_lancamentos`` na origem, em ordem de
     nome; com menos, a sonda para com o código 2."""
-    found, _ = load.discover_partitions(source, TABLE)
+    found, _ = parquet_import.discover_partitions(source, TABLE)
     values = list(found)[:count]
     if len(values) < count:
         print(
@@ -171,10 +171,10 @@ def load_partitions(
     source: str,
     values: list[str],
 ) -> None:
-    """A carga das partições pela biblioteca, sem o relatório de ``serialize-db load``, que soma a
+    """A carga das partições pela biblioteca, sem o relatório de ``serialize-db import``, que soma a
     origem inteira."""
     started = time.perf_counter()
-    loaded = load.initial_load(db, TABLE, source, values)
+    loaded = parquet_import.import_table(db, TABLE, source, values)
     print(f"carga de {', '.join(loaded)} em {time.perf_counter() - started:.1f} s")
 
 
