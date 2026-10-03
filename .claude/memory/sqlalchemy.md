@@ -146,6 +146,27 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `Float` and `Double` no longer derive from `Numeric`, so `import_report` drops the `Double`
   columns from its sums; and the duckdb-engine 0.17.0 reflection fails on
   `pg_catalog.pg_collation`. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- SQLAlchemy 2.1.3 (2026-10-02) fixed the `NULL` of `params()` values under `literal_binds`
+  (#13635) and still breaks the package (2026-10-03, on the stand-in: 6 package cases and 3 study
+  cases failed). `construct_params()` merges the values `params()` stored on the statement and
+  refuses any parameter set under `render_postcompile` (`InvalidRequestError`); the
+  `construct_expanded_state()` of the statement compiled without `render_postcompile` gave the
+  same text and values on 2.0.54 and 2.1.3, with `duckdb_engine.Dialect(paramstyle="qmark")` and
+  `RedshiftDialect_redshift_connector(paramstyle="named")`. The PostgreSQL dialect's
+  `_backslash_escapes` default went from true to false, and both dialects inherit it
+  (sqlalchemy-redshift sets it false only in `_set_backslash_escapes`, at connect): offline
+  literals stop doubling the backslash, which the Redshift `UNLOAD` literal needs, and the
+  stand-in's `stream` by `UNLOAD` read 0 rows where `query` read 1. `params()` keeps `required` on
+  the `bindparam`, so `bound_statement` refuses with `SqlError` a statement the client passed
+  through `params(x=1)`, and `render` writes it with `:x`. A copy with `construct_expanded_state()`
+  in both engines, `(sa.Numeric, sa.Float)` in the `import_report` sums and an explicit
+  `_backslash_escapes` (true on the Redshift dialects of `sql` and `engine.redshift`, false on the
+  DuckDB one of `sql`) passed every package test on 2.1.3 and on 2.0.54. `plan/POC.md`,
+  `plan/OPEN_QUESTIONS.md`
+- On 2.0.54, the true `_backslash_escapes` makes `render(..., "duckdb")` double a constant's
+  backslash, and DuckDB, which has no backslash escape, reads both: `"t"."b" = 'a\\b'` missed the
+  row `a\b` (2026-10-03). The engines pass values as parameters, and no test covers a constant with
+  a backslash in `render`. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 
 ## duckdb-sqlalchemy
 

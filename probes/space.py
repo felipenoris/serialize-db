@@ -162,7 +162,7 @@ def pinned_requirements() -> dict[str, str | None]:
 
     # "deltalake==1.6.4" vira {"deltalake": "1.6.4"}; "boto3" vira {"boto3": None}; nomes com "-"
     # viram "_". Uma entrada sem == não apaga a versão que outra fixou: o boto3>=1.40 do grupo dev
-    # não desfaz o boto3==1.43.102 das dependências de execução.
+    # não desfaz o boto3 fixado por == nas dependências de execução.
     found: dict[str, str | None] = {}
     for entry in entries:
         match = (

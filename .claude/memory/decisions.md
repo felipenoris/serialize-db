@@ -1763,3 +1763,17 @@ generated partition of each table on failure. The assistant's choices, named in 
 ingestion cut to what the pipeline reads, the `last_base_date` fix with the rerun case, and the
 item in `plan/OPEN_QUESTIONS.md`.
 `tests/test_pipeline.py`, `plan/PLAN-STAGE-6.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
+
+## SQLAlchemy 2.0.54 over 2.1.3 (2026-10-03)
+
+On 2026-10-03 the user asked whether the package's dependencies could be updated. The assistant
+pinned boto3 1.43.108, DuckDB 1.5.6, ruff 0.16.10 and sqlglot 30.21.0 in PR #125, under the
+default the coordinator set (the bumps that pass the suites without changing behavior go into one
+PR, the ones that break the package go to the user on a card first), and put SQLAlchemy 2.1.3 on a
+decision card: 6 package tests fail on it (the expanding `IN` under `render_postcompile`, the
+backslash of the Redshift literals, the `Double` sums of `import_report`), and an adjustment in
+four places passed every package test on 2.1.3 and on 2.0.54. The assistant recommended keeping
+2.0.54 (2.1 was nine days old with three regression-fix releases, and the unmaintained
+duckdb-engine does not follow 2.1), and the user chose "Manter 2.0.54". The item stays in
+`plan/OPEN_QUESTIONS.md`, read again with a newer 2.1.x or with the DuckDB dialect switch.
+`pyproject.toml`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
