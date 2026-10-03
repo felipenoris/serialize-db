@@ -1278,7 +1278,7 @@ def _export(
         print(f"serialize-db export: destino não vazio: {args.destination}", file=sys.stderr)
         return 2
     started = time.perf_counter()
-    files = delta.export_snapshot(uri, table, args.destination, db.storage, args.version, args.mode)
+    files = delta.export_parquet(uri, table, args.destination, db.storage, args.version, args.mode)
     version = "" if args.version is None else f" da versão {args.version}"
     print(
         f"{table.name}: {len(files)} arquivo(s) em {args.destination}{version}, {_measure(started)}"

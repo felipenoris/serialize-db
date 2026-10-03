@@ -1172,7 +1172,7 @@ def exported_measures(
     return scan(storage, query)
 
 
-def test_export_snapshot_copy_and_rewrite(
+def test_export_parquet_copy_and_rewrite(
     storage: Storage,
     uri: str,
 ) -> None:
@@ -1187,11 +1187,11 @@ def test_export_snapshot_copy_and_rewrite(
     copy_folder = "prd/exportacao/copia"
     rewrite_folder = "prd/exportacao/reescrita"
     old_folder = "prd/exportacao/antiga"
-    copied = delta.export_snapshot(uri, OPERACOES, storage.uri_of(copy_folder), storage)
-    rewritten = delta.export_snapshot(
+    copied = delta.export_parquet(uri, OPERACOES, storage.uri_of(copy_folder), storage)
+    rewritten = delta.export_parquet(
         uri, OPERACOES, storage.uri_of(rewrite_folder), storage, mode="rewrite"
     )
-    old = delta.export_snapshot(uri, OPERACOES, storage.uri_of(old_folder), storage, version=2)
+    old = delta.export_parquet(uri, OPERACOES, storage.uri_of(old_folder), storage, version=2)
     assert len(copied) == 2
     assert len(rewritten) == 2
     assert len(old) == 2
@@ -1208,7 +1208,7 @@ def test_export_snapshot_copy_and_rewrite(
     outside = storage.uri + "-fora"
     for mode in ("copy", "rewrite"):
         with pytest.raises(ValueError, match="fora da raiz"):
-            delta.export_snapshot(uri, OPERACOES, outside, storage, mode=mode)
+            delta.export_parquet(uri, OPERACOES, outside, storage, mode=mode)
     assert Storage.for_uri(outside).list_files("") == []
 
 
@@ -1221,9 +1221,7 @@ def test_export_by_rewrite_creates_the_folders_above(
     publish(storage, uri, "2026-07-31", 1, 10)
     publish(storage, uri, "2026-08-31", 11, 5)
     folder = "prd/nova/exportacao/cad_operacoes"
-    exported = delta.export_snapshot(
-        uri, OPERACOES, storage.uri_of(folder), storage, mode="rewrite"
-    )
+    exported = delta.export_parquet(uri, OPERACOES, storage.uri_of(folder), storage, mode="rewrite")
     assert len(exported) == 2
     assert exported_measures(storage, folder) == [("2026-07-31", 10, 55), ("2026-08-31", 5, 65)]
 
@@ -1239,7 +1237,7 @@ def test_rewrite_and_export_accept_a_trailing_slash(
     data = channels([1, 2], ["app", "web"])
     delta.publish_partition(canais, CANAIS, None, data, METADATA, storage)
     folder = "prd/exportacao/dom_canais"
-    exported = delta.export_snapshot(
+    exported = delta.export_parquet(
         canais, CANAIS, storage.uri_of(folder) + "/", storage, mode="rewrite"
     )
     assert exported == [storage.uri_of(f"{folder}/data.parquet")]
@@ -1494,7 +1492,7 @@ def test_duckdb_connections_take_the_environment_limits(
     delta.read_back(uri, OPERACOES, "2026-07-31", 10, storage)
     delta.rewrite(uri, OPERACOES, storage)
     exported = storage.uri_of("prd/exportacao/cad_operacoes")
-    delta.export_snapshot(uri, OPERACOES, exported, storage, mode="rewrite")
+    delta.export_parquet(uri, OPERACOES, exported, storage, mode="rewrite")
     delta.deep_copy(uri, 1, storage.uri_of("prd/arquivo/2026T3/cad_operacoes"), storage)
     # A releitura, a reescrita com a releitura dela, a exportação e a contagem da cópia.
     assert len(configs) == 5
@@ -1533,5 +1531,5 @@ def test_the_memory_is_read_before_the_commit(
     assert not delta.table_exists(archive, storage)
     exported = storage.uri_of("prd/exportacao/cad_operacoes")
     with pytest.raises(SandboxError, match=r"1\.5 MiB"):
-        delta.export_snapshot(uri, OPERACOES, exported, storage, mode="rewrite")
+        delta.export_parquet(uri, OPERACOES, exported, storage, mode="rewrite")
     assert storage.list_files(storage.relative(exported)) == []

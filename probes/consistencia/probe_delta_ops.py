@@ -1,6 +1,6 @@
 """As rotinas Delta sobre partições de três escritores (``publish_partition`` pelo delta-rs, o
 ``export_partition`` do motor DuckDB e dois ``write_deltalake(mode="append")`` numa partição de
-dois arquivos): ``compact``, ``deep_copy`` e a sua retomada, ``export_snapshot`` por cópia e por
+dois arquivos): ``compact``, ``deep_copy`` e a sua retomada, ``export_parquet`` por cópia e por
 reescrita, ``rewrite`` com uma coluna renomeada, ``vacuum_keeping_snapshots`` prendendo um
 snapshot, a restauração de ``read_back`` e a escrita condicional do arquivo de controle por oito
 threads, esta como leitura do achado conhecido.
@@ -248,17 +248,17 @@ def read_export(
     return pa.concat_tables(parts)
 
 
-def check_export_snapshot(
+def check_export_parquet(
     storage: Storage,
     uri: str,
     folder: Path,
     expected: dict[str, pa.Table],
 ) -> None:
-    """Seção E: ``export_snapshot`` por cópia e por reescrita, os arquivos lidos direto."""
+    """Seção E: ``export_parquet`` por cópia e por reescrita, os arquivos lidos direto."""
     problems = []
     for mode in ("copy", "rewrite"):
         destination = storage.uri_of(storage.join("prd", "exportacao", mode))
-        files = delta.export_snapshot(uri, TUDO, destination, storage, mode=mode)
+        files = delta.export_parquet(uri, TUDO, destination, storage, mode=mode)
         found = read_export(folder / "delta" / "prd" / "exportacao" / mode)
         for month, expected_part in expected.items():
             part = found.filter(pc.field("data_str") == month)
@@ -266,7 +266,7 @@ def check_export_snapshot(
                 compare(expected_part, part, key="id", label=f"export {mode} {month}")
             )[0]
         print(f"   export {mode}: {len(files)} arquivos")
-    report("E export_snapshot por cópia e por reescrita", problems)
+    report("E export_parquet por cópia e por reescrita", problems)
 
 
 def renamed_table() -> sa.Table:
@@ -429,7 +429,7 @@ def main() -> None:
     after_compact = check_compact(storage, uri, expected, version_three_writers)
     copy_uri = storage.uri_of(storage.join("prd", "arquivo", "s1", TUDO.name))
     check_deep_copy(storage, uri, copy_uri, after_compact, expected)
-    check_export_snapshot(storage, uri, folder, expected)
+    check_export_parquet(storage, uri, folder, expected)
     version_before_rewrite = check_rewrite(storage, uri, expected)
     check_vacuum(storage, uri, expected, version_before_rewrite)
     check_read_back(storage, copy_uri)

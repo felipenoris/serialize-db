@@ -312,7 +312,7 @@ class TestS3ProofOfConcept(DeltaProofOfConcept):
         storage: S3Location,
         table_uri: str,
     ) -> None:
-        """Listar, copiar e apagar objetos: o que ``export_snapshot(mode="copy")`` e a limpeza fazem
+        """Listar, copiar e apagar objetos: o que ``export_parquet(mode="copy")`` e a limpeza fazem
         no S3."""
         s3 = boto3.client("s3")
         source_prefix = table_uri.removeprefix(f"s3://{storage.bucket}/")

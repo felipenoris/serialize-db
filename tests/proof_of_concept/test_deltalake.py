@@ -659,12 +659,12 @@ def test_compact_packs_files_up_to_the_target_size(
     assert metrics["totalConsideredFiles"] == 0
 
 
-def test_export_snapshot_by_copying_files(
+def test_export_parquet_by_copying_files(
     folder: Callable[[str], str],
     two_months: pa.Table,
     con: duckdb.DuckDBPyConnection,
 ) -> None:
-    """``export_snapshot(mode="copy")``: os arquivos que o log lista, copiados no layout
+    """``export_parquet(mode="copy")``: os arquivos que o log lista, copiados no layout
     ``mes=.../``, sem ler dados."""
     uri = folder("export")
     february = two_months.filter(pc.field("mes") == MONTHS[1])

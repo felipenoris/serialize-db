@@ -802,11 +802,12 @@ measurements are in `plan/POC.md`, and the user's statements in `.claude/memory/
   mandatory manifest and had the load's fourth loss (`INT96` nanoseconds) and the `conversões`
   line's reach documented. The battery of 23:09 passed every case, loaded the stable source whole
   and read two writers on one table entering in both engines (`.claude/memory/environments.md`).
-- The user's decisions of 2026-10-03 (`.claude/memory/decisions.md`): `serialize_db.parquet_import`
-  in place of `serialize_db.load`, with `import_table`, `import_report`, `import_order` and
-  `serialize-db import` in place of `initial_load`, `load_report`, `load_order` and
-  `serialize-db load`, and `delta_db` for the `Database` argument and `run.delta_db` for `run.db`
-  where the function serves only the Delta (all but `unpublish_redshift`), with no alias.
+- The user's decisions of 2026-10-03 (`.claude/memory/decisions.md`), with no alias:
+  `serialize_db.parquet_import` for `serialize_db.load`, with `import_table`, `import_report`,
+  `import_order` and `serialize-db import` for `initial_load`, `load_report`, `load_order` and
+  `serialize-db load`; `delta_db` for the `Database` argument and `run.delta_db` for `run.db` where
+  the function serves only the Delta (all but `unpublish_redshift`); `delta.export_parquet` for
+  `delta.export_snapshot`.
 - The user's answers of 2026-09-23 and 2026-09-24 (time zone refusal, `FILLRECORD`, JSON ceiling,
   `VARCHAR(n)` width, runbook, 400-day retention, `archived` key, `local` writing tests, the
   `EXPLAIN` distribution reading, the temporary staging filled inside the transaction) are in

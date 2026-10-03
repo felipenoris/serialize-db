@@ -18,9 +18,9 @@ Redshift, um por lista de colunas dos arquivos, e ``snapshot`` marca no arquivo 
 ambiente as versões de um snapshot do banco, que ``vacuum_keeping_snapshots`` preserva;
 ``set_channel`` aponta um canal do ambiente para um snapshot, e ``channel_snapshot`` e
 ``snapshot_versions`` leem o canal e as versões para o leitor e a publicação. ``compact``,
-``deep_copy`` e ``export_snapshot`` são a operação: ``compact`` junta os arquivos pequenos das
+``deep_copy`` e ``export_parquet`` são a operação: ``compact`` junta os arquivos pequenos das
 partições na própria tabela, ``deep_copy`` copia uma versão para uma tabela nova noutra pasta,
-como a do arquivo de um snapshot (``<ambiente>/arquivo/<nome>/<tabela>``), e ``export_snapshot``
+como a do arquivo de um snapshot (``<ambiente>/arquivo/<nome>/<tabela>``), e ``export_parquet``
 grava uma versão em arquivos Parquet sem o log, noutra pasta.
 
 Exemplo, numa pasta local:
@@ -106,7 +106,7 @@ __all__ = [
     "copy_manifest",
     "create_table",
     "deep_copy",
-    "export_snapshot",
+    "export_parquet",
     "history",
     "max_key",
     "open_table",
@@ -2460,7 +2460,7 @@ def _export_by_rewrite(
     return sorted(_return_stats_path(str(row[0])) for row in rows)
 
 
-def export_snapshot(
+def export_parquet(
     uri: str,
     table: sa.Table,
     destination: str,
@@ -2475,8 +2475,8 @@ def export_snapshot(
 
     .. code-block:: python
 
-        export_snapshot(uri, Operacao.__table__, storage.uri_of("prd/exportacao/2026T3"), storage,
-                        version=143)
+        export_parquet(uri, Operacao.__table__, storage.uri_of("prd/exportacao/2026T3"), storage,
+                       version=143)
 
     :param uri: a URI da pasta da tabela Delta exportada, sob a raiz do banco.
     :param table: a tabela do modelo, lida só no modo ``rewrite``.

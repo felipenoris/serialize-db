@@ -66,7 +66,7 @@ destino:
 | `db.open_delta()` | As versões Delta de um snapshot, pelo canal ou pelo nome; o arquivado, pela cópia em `<raiz>/<ambiente>/arquivo/<nome>/`. | Uma view por tabela num DuckDB no processo do cliente, lida em Arrow. |
 | `db.open_redshift()`, `serialize_db.reader.open_redshift` | As tabelas `<ambiente>_<tabela>` do Redshift. | O resultado em Arrow no processo do cliente. |
 | `serialize-db archive` | As versões Delta de um snapshot. | Uma tabela Delta nova por tabela, em `<raiz>/<ambiente>/arquivo/<nome>/<tabela>`. |
-| `serialize-db export` | Uma versão da tabela Delta. | Arquivos Parquet sem o log, na pasta de `--destination`, sob a raiz. |
+| `serialize-db export`, `serialize_db.delta.export_parquet` | Uma versão da tabela Delta. | Arquivos Parquet sem o log, na pasta de `--destination`, sob a raiz. |
 
 Os arquivos intermediários também ficam sob a raiz. O motor Redshift grava os manifestos do `COPY`
 do `ingest`, os arquivos do `UNLOAD` e o Parquet do `appender` em
