@@ -5917,6 +5917,6 @@ do `ruff check` e do `ruff format --check`.
 
 **Consequências**: `pyproject.toml` fixa boto3 1.43.108, DuckDB 1.5.6, ruff 0.16.10 e sqlglot
 30.21.0, e a pasta preparada para o ambiente alvo precisa do `prepare_offline.sh` de novo, pelas
-extensões da 1.5.6. A SQLAlchemy fica em 2.0.54, e o item dela em
-[`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) traz a 2.1.3; a contrabarra do `render` no DuckDB entra lá
-como item próprio, à espera do usuário.
+extensões da 1.5.6. A SQLAlchemy fica em 2.0.54, por decisão do usuário do mesmo dia, e o item
+dela em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) traz a 2.1.3; a contrabarra do `render` no DuckDB
+entra lá como item próprio, à espera do usuário.
