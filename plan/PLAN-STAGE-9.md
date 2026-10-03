@@ -30,7 +30,7 @@ antes e o que esperar depois, e entra na página de
 local (10 casos) e `tests/test_delta.py::test_deep_copy_and_relocation` para a cópia por registro.
 Provas de conceito: `test_deltalake.py` (`test_vacuum_with_keep_versions`,
 `test_compact_and_checkpoint`, `test_dataset_reader_and_deep_copy`,
-`test_export_snapshot_by_copying_files`, `test_log_files`) e
+`test_export_parquet_by_copying_files`, `test_log_files`) e
 `test_stdlib.py::test_exclusive_create_atomic_replace_and_fingerprint` (o arquivo de controle).
 
 ## A implementação
@@ -75,7 +75,7 @@ do `pdoc`. O que a implementação mudou do plano:
   `arquivo/<nome>/`, e teria dado por arquivada a `cad_lancamentos` pela metade que a falha de
   2026-09-24 deixou no alvo ([`POC.md`](POC.md)).
 - **`export`** exige o destino sob a raiz (`Storage.relative`) e vazio (`list_files`), e
-  `export_snapshot` confere a origem e o destino sob a raiz nos dois modos antes de gravar,
+  `export_parquet` confere a origem e o destino sob a raiz nos dois modos antes de gravar,
   porque o `COPY` particionado do DuckDB grava onde recebe.
 - **`history`** devolve o instante do commit como `datetime` em UTC, e a linha de comando o imprime
   em ISO 8601; `get_add_actions(flatten=False)` traz `path`, `size_bytes`, `modification_time`,
@@ -130,7 +130,7 @@ do `pdoc`. O que a implementação mudou do plano:
   máquina, a memória é a dos rodapés e do log, e os arquivos ficam idênticos aos da origem, com o
   `INT96` e o `FIXED_LEN_BYTE_ARRAY` do `UNLOAD` inclusive; a normalização fica com
   `export --mode rewrite` e com a compactação, que reescrevem.
-- **`export`** chama `export_snapshot` com `--mode copy` ou `rewrite` e imprime o tempo e o pico
+- **`export`** chama `export_parquet` com `--mode copy` ou `rewrite` e imprime o tempo e o pico
   de RSS do processo; `--version` exporta uma versão antiga, com o DDL tirado do esquema daquela
   versão.
 - **No ambiente alvo**, sobre a raiz da carga pelo pacote: em 2026-09-24, na bateria das 12:38,

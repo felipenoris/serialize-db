@@ -4,12 +4,14 @@
 cliente, monta os caminhos (a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``) e abre os
 leitores de ``serialize_db.reader`` por ``open_delta`` e ``open_redshift``. ``Execution`` é o
 gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
-de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava o snapshot marcado e o
-resumo no log. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as tabelas presas à
-versão fixada, ``sandbox`` é o motor onde ele roda ``stream``, ``query``, ``create_table`` e
-``append``, ``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o contrato e
-``publish_delta`` leva as partições auditadas ao Delta; a publicação aos clientes no Redshift é
-``serialize-db publish_redshift``, depois da execução.
+de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava a entrada do snapshot
+marcado em ``<raiz>/<ambiente>/_serialize_db/snapshots.json`` e o resumo no log
+``serialize_db.execution``. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as
+tabelas do Delta ao sandbox, presas à versão fixada, ``sandbox`` é o motor onde ele roda
+``stream``, ``query``, ``create_table`` e ``append``, ``next_ids`` dá as faixas da chave
+sequencial, ``audit`` confere o contrato e ``publish_delta`` leva as partições auditadas do
+sandbox ao Delta; a publicação aos clientes no Redshift é ``serialize-db publish_redshift``,
+depois da execução.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
 sob o lock dela, ou numa sessão a mais do ``ingest`` de várias tabelas, e o estado mutável da
@@ -88,11 +90,15 @@ log = logging.getLogger("serialize_db.execution")
 
 @dataclasses.dataclass(frozen=True)
 class Database:
-    """A raiz do banco, o ambiente e os modelos do cliente.
+    """O banco Delta: a raiz, o ambiente e os modelos do cliente.
 
-    ``storage`` nasce no primeiro uso, e a pasta local relativa vira absoluta: ``uri`` parte da raiz
-    normalizada, a URI que o delta-rs e o DuckDB recebem. Os prefixos são caminhos relativos à raiz,
-    os que os métodos de ``Storage`` recebem.
+    Sob ``<raiz>/<ambiente>/`` ficam as tabelas Delta, uma pasta por tabela (``uri``), o arquivo de
+    controle dos snapshots (``control_path``), os arquivos intermediários do motor e do leitor
+    Redshift em ``staging/``, numa pasta por execução (``staging_prefix``) ou por leitor, os
+    manifestos da publicação no Redshift (``publication_prefix``) e as cópias dos snapshots
+    arquivados (``archive_prefix``). ``storage`` nasce no primeiro uso, e a pasta local relativa
+    vira absoluta: ``uri`` parte da raiz normalizada, a URI que o delta-rs e o DuckDB recebem. Os
+    prefixos são caminhos relativos à raiz, os que os métodos de ``Storage`` recebem.
 
     Exemplo:
 
@@ -108,8 +114,9 @@ class Database:
     ``file://``; o S3 sem região e outro esquema são ``ValueError`` no primeiro uso de
     ``storage``."""
     environment: str
-    """O ambiente, ``prd`` ou ``dsv``, um nome de pasta: as execuções de um não tocam as tabelas do
-    outro. Fora da regra da partição, a construção é ``ContractError``."""
+    """O ambiente, ``prd`` ou ``dsv``, a pasta sob a raiz e o prefixo das tabelas publicadas no
+    Redshift, ``<ambiente>_<tabela>``: as execuções de um não tocam as tabelas do outro. Fora da
+    regra da partição, a construção é ``ContractError``."""
     metadata: sa.MetaData
     """O ``MetaData`` dos modelos do cliente: as tabelas que a execução abre e reconcilia."""
 
@@ -128,7 +135,7 @@ class Database:
         self,
         table: sa.Table,
     ) -> str:
-        """A pasta da tabela.
+        """A pasta da tabela Delta no ambiente.
 
         Exemplo:
 
@@ -158,7 +165,10 @@ class Database:
         self,
         execution_id: str,
     ) -> str:
-        """Os arquivos intermediários de uma execução.
+        """A pasta dos arquivos intermediários de uma execução no motor Redshift, que o fim da
+        execução apaga: os manifestos do ``COPY`` do ``ingest``, o Parquet do ``appender`` e os
+        arquivos do ``UNLOAD`` de ``stream`` e da partição com ``Double`` não finito em
+        ``export_partition``.
 
         Exemplo:
 
@@ -238,7 +248,7 @@ class Database:
             reader.close()
 
         :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
-            ``arquivo/<nome>/``. ``None`` lê o canal.
+            ``<raiz>/<ambiente>/arquivo/<nome>/``. ``None`` lê o canal.
         :param channel: o canal do ambiente, ``"default"``, o mesmo que sem argumento, ou
             ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente.
         :param config: a configuração do DuckDB; ``None`` é ``DuckDBConfig()``, os limites lidos
@@ -637,11 +647,13 @@ class Execution:
         partitions: list[str] | None = None,
         materialize: bool = False,
     ) -> None:
-        """Traz as tabelas ao sandbox na versão fixada.
+        """Traz as tabelas do Delta ao sandbox, na versão fixada.
 
-        Uma tabela entra na sessão principal; mais de uma entram todas em paralelo, cada uma numa
-        sessão a mais do motor, e a chamada volta quando todas terminam. Uma falha não cancela as
-        que já rodam: todas terminam, e a exceção leva o resultado de cada tabela numa nota.
+        Cada tabela entra no sandbox com o nome do modelo, que no Redshift leva o prefixo
+        ``exec_<id>_``. Uma tabela entra na sessão principal; mais de uma entram todas em
+        paralelo, cada uma numa sessão a mais do motor, e a chamada volta quando todas terminam.
+        Uma falha não cancela as que já rodam: todas terminam, e a exceção leva o resultado de
+        cada tabela numa nota.
 
         Exemplo:
 
@@ -759,7 +771,8 @@ class Execution:
     ) -> AuditReport:
         """Roda a auditoria do motor e guarda o relatório aprovado.
 
-        O relatório, com o SQL de cada verificação e as amostras, vai para o log. A contagem por
+        O relatório, com o SQL de cada verificação, vai ao log ``serialize_db.execution`` no nível
+        ``INFO``, e a amostra de cada verificação reprovada, no nível ``WARNING``. A contagem por
         partição e as colunas ``Double`` com valor não finito do relatório aprovado são as que
         ``publish_delta`` passa à exportação.
 
@@ -815,7 +828,7 @@ class Execution:
         if not report.passed:
             raise AuditFailed(
                 f"{table.name} {_where_text(checked)}: reprovada em {failed}; o "
-                "relatório está no log"
+                "relatório está no log serialize_db.execution"
             )
         key = (table.name, tuple(checked) if checked is not None else None)
         with self._lock:
@@ -939,13 +952,15 @@ class Execution:
         audit: bool = True,
         max_workers: int = 1,
     ) -> dict[str, int]:
-        """Leva as partições auditadas de cada tabela ao Delta.
+        """Leva as partições auditadas de cada tabela do sandbox à tabela Delta do ambiente,
+        ``<raiz>/<ambiente>/<tabela>``.
 
         As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
         por tabela, ``create_table`` se não existe, ``reconcile`` e ``export_partition`` por
-        partição, que registra no log o arquivo que o motor gravou, com a contagem da auditoria em
-        ``expected_rows`` e as colunas ``Double`` com valor não finito sem mínimo e máximo (todas as
-        ``Double`` com ``audit=False``); no motor Redshift, a partição com essas colunas volta por
+        partição: o motor grava a partição na pasta dela na tabela Delta, e o commit registra no
+        log da tabela o arquivo gravado, com a contagem da auditoria em ``expected_rows`` e as
+        colunas ``Double`` com valor não finito sem mínimo e máximo (todas as ``Double`` com
+        ``audit=False``); no motor Redshift, a partição com essas colunas volta por
         ``publish_partition``, que grava o arquivo de novo. As tabelas correm num pool de
         ``max_workers``: na primeira falha nada novo começa, o que está em curso termina, e a
         exceção leva o resultado de cada tabela numa nota.
@@ -960,7 +975,7 @@ class Execution:
         :param partitions: os valores de partição a publicar; ``None`` numa tabela sem partição,
             que é substituída inteira.
         :param audit: ``audit=False`` dispensa a exigência da auditoria aprovada, com um aviso no
-            log.
+            log ``serialize_db.execution``.
         :param max_workers: quantas tabelas correm ao mesmo tempo.
         :return: ``{tabela: versão}``, com a versão do último commit de cada tabela.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição, a lista

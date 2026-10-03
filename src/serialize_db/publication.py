@@ -12,7 +12,9 @@ por partição, ``DELETE`` da partição e, quando a versão pedida a tem, um ``
 lista de colunas dos arquivos, com a lista, numa staging temporária e ``INSERT ... SELECT`` com o
 valor; e por último o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão
 lida, cujas 0 linhas, como o ``1023`` e a tabela publicada que outra primeira publicação criou,
-saem como ``ExecutionConflict``. As tabelas correm num pool, uma conexão por tabela.
+saem como ``ExecutionConflict``. Os manifestos do ``COPY`` ficam em
+``<raiz>/<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``, e a publicação não os apaga.
+As tabelas correm num pool, uma conexão por tabela.
 ``unpublish_redshift`` apaga a tabela publicada e a linha de controle numa transação, e
 ``publication_status`` compara a versão publicada com a atual. As versões vêm de um snapshot do
 arquivo de controle, por ``serialize-db publish_redshift`` com ``--snapshot`` ou ``--channel``, ou
@@ -908,15 +910,17 @@ def publish_redshift(
     max_workers: int = 1,
     versions: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
-    """Publica as tabelas no Redshift.
+    """Publica as tabelas Delta do ambiente nas tabelas ``<ambiente>_<tabela>`` do esquema do
+    Redshift.
 
     Confere a tabela de controle antes de tudo; depois, por tabela, numa conexão própria do pool: a
     reconciliação da tabela publicada que já existe e a transação da publicação. Uma tabela cuja
     versão publicada é a pedida não muda; uma versão anterior à publicada volta a tabela a ela,
     trocando as partições alteradas entre as duas, e a partição que só a versão publicada tem sai
     pelo ``DELETE``. Na primeira falha nada novo começa, o que está em curso termina, e a exceção
-    leva o resultado de cada tabela numa nota. Cada tabela publicada vai ao log com as partições,
-    o tempo e o pico de memória residente do processo.
+    leva o resultado de cada tabela numa nota. Cada tabela publicada vai ao log
+    ``serialize_db.publication`` com as partições, o tempo e o pico de memória residente do
+    processo.
 
     Exemplo:
 
@@ -925,13 +929,14 @@ def publish_redshift(
         publish_redshift(db, config, [Lancamento.__table__], "exec-2026-09-05")
         # {"cad_lancamentos": 58}
 
-    :param delta_db: o banco Delta, com a raiz e o ambiente, que prefixa o nome das tabelas
-        publicadas.
-    :param config: a configuração do Redshift, com a conexão, o esquema e o ``iam_role`` do
-        ``COPY``.
+    :param delta_db: o banco Delta de origem, com a raiz e o ambiente, que prefixa o nome das
+        tabelas publicadas.
+    :param config: a configuração do Redshift de destino, com a conexão, o esquema das tabelas
+        publicadas e o ``iam_role`` do ``COPY``.
     :param tables: as tabelas do modelo a publicar.
     :param execution_id: a execução que publica, que a linha de controle grava; os manifestos do
-        ``COPY`` ficam em ``<ambiente>/publicacao/<execution_id>/``, sob a raiz.
+        ``COPY`` ficam em ``<ambiente>/publicacao/<execution_id>/``, sob a raiz, e a publicação
+        não os apaga.
     :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo; o padrão 1
         publica uma por vez.
     :param versions: a versão do Delta por nome de tabela, as de um snapshot do arquivo de
@@ -998,8 +1003,8 @@ def publication_status(
     delta_db: Database,
     config: RedshiftConfig,
 ) -> list[PublicationStatus]:
-    """A versão publicada contra a atual de cada tabela do ambiente que existe no Delta, com as
-    partições pendentes.
+    """A versão publicada no Redshift contra a atual no Delta, de cada tabela do ambiente que
+    existe no Delta, com as partições pendentes.
 
     Exemplo:
 

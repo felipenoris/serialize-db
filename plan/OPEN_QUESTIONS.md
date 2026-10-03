@@ -166,7 +166,7 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
 - **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
   `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: numa partição com os dois,
   todos saem com o sinal do primeiro que apareceu. Atinge o `export_partition` do motor DuckDB,
-  `import_table`, `rewrite` e `export_snapshot(mode="rewrite")`; `publish_partition` e `compact`,
+  `import_table`, `rewrite` e `export_parquet(mode="rewrite")`; `publish_partition` e `compact`,
   pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift não foi lido. A diferença
   aparece em `1 / x`, em `math.copysign` e no texto do valor, nunca numa comparação ou numa soma.
   Opções: `DICTIONARY_SIZE_LIMIT 0` no `COPY` (sem dicionário em coluna alguma, arquivo maior), ou

@@ -318,7 +318,7 @@ erro.
 Para publicar no Hive ou para sair do Delta.
 
 1. O snapshot atual usa
-   `export_snapshot(uri, table, destination, storage, version=None, mode="copy")`: `mode="copy"`
+   `export_parquet(uri, table, destination, storage, version=None, mode="copy")`: `mode="copy"`
    copia os arquivos que `get_add_actions()` lista, já no layout `<coluna>=<valor>/`, com o nome e
    o caminho relativo de cada arquivo, como o `carga-<id>_<uuid>.parquet` da carga, sem ler dados;
    no S3, a transferência gerenciada do `boto3` por arquivo. Serve quando os leitores casam colunas

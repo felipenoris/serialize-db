@@ -6,12 +6,12 @@ recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--enviro
 (`SERIALIZE_DB_ENVIRONMENT`, `dsv`), menos `publish_redshift --init`, que lê só as variáveis
 `SERIALIZE_DB_REDSHIFT_*`. Saem com 0 quando terminam; com 1 na auditoria reprovada, na carga com
 diferença de contagem ou soma ou com partição fora do contrato, e no erro sem tratamento, que
-imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão ou com a
-porta que não é número, no nome repetido ou ausente e no conflito com outro escritor, no arquivo de
-controle ou na tabela.
-`compact`, `archive` e `export` imprimem por tabela o tempo e o pico de memória residente do
-processo (`VmHWM`), a medida da rotina na tabela com que a máquina é dimensionada; a publicação a
-põe na linha de log de cada tabela.
+imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão ou com a porta
+que não é número, no nome repetido ou ausente e no conflito com outro escritor, no arquivo de
+controle ou na tabela. `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de
+memória residente do processo (`VmHWM`), a medida da rotina na tabela com que a máquina é
+dimensionada; a publicação a põe na linha de cada tabela no log `serialize_db.publication`. A linha
+de comando imprime o log no stderr a partir do nível `INFO`.
 
 ### Tabela de controle da publicação
 
@@ -45,7 +45,7 @@ qualquer que seja a retenção do `vacuum`.
 
 O nome de um snapshot é imutável: a entrada gravada nunca muda de versões, e o nome não volta a ser
 usado, nem depois do arquivamento. O leitor, a publicação e os canais citam o snapshot pelo nome, e
-o arquivamento o usa na pasta `arquivo/<nome>/`.
+o arquivamento o usa na pasta `<raiz>/<ambiente>/arquivo/<nome>/`.
 
 ### Canal do snapshot
 
@@ -78,13 +78,15 @@ serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd
 ```
 
 Antes: a tabela de controle no esquema, as variáveis `SERIALIZE_DB_REDSHIFT_*` e, com
-`--channel default`, o canal apontado. Depois: cada tabela do modelo presente no snapshot na
-versão dele no Redshift, só com as partições alteradas desde a versão publicada, e a linha de
-controle com a versão e o `--execution-id`; a tabela do modelo fora do snapshot é erro de uso, e
-`--tables` a deixa de fora. A publicação de um snapshot anterior ao publicado volta a tabela: as
-partições alteradas entre as duas versões recebem os arquivos da versão pedida, e a partição que
-só a versão publicada tinha sai. `--channel current` publica a versão atual de cada tabela, sem
-snapshot.
+`--channel default`, o canal apontado. Depois: cada tabela do modelo presente no snapshot, na versão
+dele, na tabela `<ambiente>_<tabela>` do esquema do Redshift, que a primeira publicação cria, só com
+as partições alteradas desde a versão publicada; a linha de controle com a versão e o
+`--execution-id`; e os manifestos do `COPY` em
+`<raiz>/<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/`, que nenhum subcomando apaga. A
+tabela do modelo fora do snapshot é erro de uso, e `--tables` a deixa de fora. A publicação de um
+snapshot anterior ao publicado volta a tabela: as partições alteradas entre as duas versões recebem
+os arquivos da versão pedida, e a partição que só a versão publicada tinha sai. `--channel current`
+publica a versão atual de cada tabela, sem snapshot.
 
 ### Refazer um snapshot
 
@@ -167,9 +169,10 @@ como mudar a retenção.
 
 ### Arquivo
 
-Anual: os snapshots mais velhos que o prazo da tabela viva vão para `arquivo/<nome>/<tabela>/`
-do ambiente, pela cópia dos arquivos de cada partição e o registro deles, sem os dados passarem
-pela máquina, e a entrada passa de `snapshots` para `archived` no mesmo arquivo de controle:
+Anual: os snapshots mais velhos que o prazo da tabela viva vão para
+`<raiz>/<ambiente>/arquivo/<nome>/<tabela>/`, pela cópia dos arquivos de cada partição e o registro
+deles, sem os dados passarem pela máquina, e a entrada passa de `snapshots` para `archived` no mesmo
+arquivo de controle:
 
 ```shell
 serialize-db archive --root s3://bucket/projeto/delta --environment prd \
@@ -177,16 +180,18 @@ serialize-db archive --root s3://bucket/projeto/delta --environment prd \
 ```
 
 Antes: o snapshot registrado em `snapshots` e apontado por nenhum canal, que `serialize-db channel`
-move antes; a pasta `arquivo/<nome>/` recebe a regra de ciclo de vida do bucket. Depois: uma tabela
-nova por tabela do snapshot, com uma versão por partição, os mesmos arquivos e as mesmas somas, cada
-tabela impressa com o tempo da cópia e o pico de RSS do processo, e o tempo de cada partição no log;
-a entrada em `archived`, que `vacuum` não prende mais, e `snapshot` recusando o nome, porque ele dá
-a pasta. O comando se repete depois de uma interrupção e continua de onde parou: a tabela já inteira
-no arquivo e a partição já registrada nele são puladas, e só o que falta é copiado.
+move antes; a pasta `<raiz>/<ambiente>/arquivo/<nome>/` recebe a regra de ciclo de vida do bucket.
+Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os mesmos arquivos e as
+mesmas somas, cada tabela impressa com o tempo da cópia e o pico de RSS do processo, e o tempo de
+cada partição no log `serialize_db.delta`; a entrada em `archived`, que `vacuum` não prende mais, e
+`snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma interrupção e
+continua de onde parou: a tabela já inteira no arquivo e a partição já registrada nele são puladas,
+e só o que falta é copiado.
 
 ### Exportação
 
-Sob demanda: as pastas Parquet `<coluna>=<valor>/` de uma versão da tabela, sem o log, sob a raiz:
+Sob demanda: uma versão da tabela Delta gravada em pastas Parquet `<coluna>=<valor>/`, sem o log, na
+pasta de `--destination`, sob a raiz:
 
 ```shell
 serialize-db export --root s3://bucket/projeto/delta --environment prd \
@@ -243,7 +248,7 @@ As opções de cada subcomando de `serialize-db`. Um valor de partição, um `--
 | --- | --- | --- |
 | `--metadata modulo:atributo` | obrigatória | O caminho importável do `MetaData` dos modelos, como `pipeline.models:Base.metadata`. |
 | `--root` | `SERIALIZE_DB_ROOT` | A raiz das tabelas Delta, pasta local ou `s3://bucket/prefixo`; obrigatória sem a variável. Fora dos armazenamentos da biblioteca, ou no S3 sem região, é erro de uso, em todo subcomando. |
-| `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`. |
+| `--environment` | `SERIALIZE_DB_ENVIRONMENT`, senão `dsv`; a variável vazia conta como ausente | O ambiente, a pasta sob a raiz: cada tabela fica em `<raiz>/<ambiente>/<tabela>`, e em `publish_redshift` a tabela publicada se chama `<ambiente>_<tabela>`. |
 
 `run`, `import` e as rotinas de operação (`snapshot`, `channel`, `vacuum`, `compact`, `archive`,
 `export` e `history`) recebem as três; `audit` e `publish_redshift` também, com `--root` e, em
@@ -288,7 +293,7 @@ recebem só `--metadata`.
 
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
-| `--source` | obrigatória | A raiz da base Parquet de origem, pasta local ou `s3://bucket/prefixo`. |
+| `--source` | obrigatória | A raiz da base Parquet de origem, pasta local ou `s3://bucket/prefixo`, com uma pasta por tabela, `<origem>/<tabela>/`, e as partições em `<coluna>=<valor>/`; a carga só a lê e grava em `<raiz>/<ambiente>/<tabela>`. |
 | `--tables` | todas do modelo | As tabelas carregadas, na ordem da carga: as sem partição antes das particionadas. |
 | `--partitions` | todas | As partições carregadas e conferidas no relatório, que toda tabela particionada da carga precisa ter na origem: uma que falta é recusada antes de qualquer gravação, com a saída 1; com ela, a tabela sem partição fica inteira de fora, sem carga nem relatório, numa linha da saída. |
 
@@ -303,7 +308,7 @@ recebem só `--metadata`.
 | `--channel` | nenhum | O canal cujo snapshot é publicado: `default`, ou `current`, a versão atual de cada tabela do modelo que existe no ambiente. |
 | `--tables` | todas do modelo | As tabelas publicadas ou despublicadas; a tabela do modelo sem versão no snapshot é erro de uso, e a opção a deixa de fora. |
 | `--max-workers` | 1 | As tabelas publicadas ao mesmo tempo, cada uma na sua conexão. |
-| `--execution-id` | `publicacao-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador gravado na linha de controle. |
+| `--execution-id` | `publicacao-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador gravado na linha de controle, que dá a pasta dos manifestos do `COPY`, `<raiz>/<ambiente>/publicacao/<execution_id>/`. |
 | `--metadata`, `--root` | obrigatórias | Dispensadas por `--init`. |
 
 `--init`, `--status` e `--unpublish` valem nesta ordem e não recebem `--snapshot` nem
@@ -342,14 +347,14 @@ um dos dois obrigatório e excludentes.
 
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
-| `--name` | obrigatória | O snapshot arquivado, registrado em `snapshots`. |
+| `--name` | obrigatória | O snapshot arquivado, registrado em `snapshots`; a cópia vai para `<raiz>/<ambiente>/arquivo/<nome>/<tabela>`. |
 
 ### `export`
 
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
 | `--table` | obrigatória | A tabela do modelo exportada. |
-| `--destination` | obrigatória | A URI da pasta de destino, vazia e sob a raiz. |
+| `--destination` | obrigatória | A URI da pasta que recebe os arquivos Parquet, vazia e sob a raiz. |
 | `--version` | a atual | A versão exportada. |
 | `--mode` | `copy` | `copy` copia os arquivos que o log da versão lista; `rewrite` grava um arquivo por partição pelo `COPY` do DuckDB. |
 

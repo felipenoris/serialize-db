@@ -167,7 +167,8 @@ class AuditFailed(Exception):
     partições.
 
     A execução encerra sem tocar o Delta; a mensagem nomeia a tabela, as partições e as
-    verificações reprovadas, e o relatório, com o SQL e a amostra, vai para o log.
+    verificações reprovadas, e o relatório, com o SQL e a amostra, vai ao log
+    ``serialize_db.execution``.
 
     Exemplo:
 

@@ -5,30 +5,30 @@ Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``sche
 ``publish_redshift`` o da etapa 8, ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e
 ``history`` os da etapa 9 e ``channel`` o da etapa 10, com o runbook abaixo, seguido das opções de
 cada subcomando.
-``schema write`` grava os arquivos
-de esquema dos modelos e ``schema check`` compara os versionados com a geração nova, sem gravar;
-``sql write`` grava o texto SQL de cada statement do pipeline em cada motor e ``sql check`` o
-compara com a geração nova. ``run`` abre uma execução, com a partição de ``--partition`` ou sem
-partição, e entrega a ``modulo:funcao`` do pipeline;
+
+``schema write`` grava os arquivos de esquema dos modelos e ``schema check`` compara os
+versionados com a geração nova, sem gravar; ``sql write`` grava o texto SQL de cada statement do
+pipeline em cada motor e ``sql check`` o compara com a geração nova. ``run`` abre uma execução,
+com a partição de ``--partition`` ou sem partição, e entrega a ``modulo:funcao`` do pipeline;
 ``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
-versão atual do Delta, no motor de ``--engine``;
-``import`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
-ambiente, as sem partição antes das particionadas, e confere contagem e somas por partição;
-``publish_redshift`` publica no Redshift o snapshot de ``--snapshot`` ou do canal de
-``--channel`` (``current`` é a versão atual de cada tabela), mostra o estado da publicação
-(``--status``), cria a tabela de controle (``--init``) ou despublica (``--unpublish``).
-``snapshot`` grava a versão
-atual de cada tabela do ambiente no arquivo de controle; ``channel`` aponta um canal do ambiente
-para um snapshot, o ``default`` que o leitor Delta lê sem argumento, ou lista os canais;
-``vacuum`` lista, ou apaga com
-``--apply``, os arquivos fora da retenção e das versões dos snapshots; ``compact`` junta os
-arquivos pequenos das partições de uma tabela; ``archive`` copia as tabelas de um snapshot para
-``arquivo/<nome>/`` e move a entrada para ``archived``; ``export`` grava as pastas Parquet de uma
-versão de uma tabela, sem o log; ``history`` lista os commits de uma tabela com os metadados da
-biblioteca. Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do
-``MetaData`` do cliente, e os statements por ``--statements modulo:atributo``, o caminho importável
-do dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm
-por padrão ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e ``SERIALIZE_DB_ENGINE``
+versão atual do Delta, no motor de ``--engine``; ``import`` faz a carga inicial da base Parquet
+de origem (``--source``) nas tabelas Delta do ambiente, ``<raiz>/<ambiente>/<tabela>``, as sem
+partição antes das particionadas, e confere contagem e somas por partição; ``publish_redshift``
+publica o snapshot de ``--snapshot`` ou do canal de ``--channel`` (``current`` é a versão atual
+de cada tabela) nas tabelas ``<ambiente>_<tabela>`` do esquema do Redshift, mostra o estado da
+publicação (``--status``), cria a tabela de controle (``--init``) ou despublica
+(``--unpublish``). ``snapshot`` grava a versão atual de cada tabela do ambiente no arquivo de
+controle, ``<raiz>/<ambiente>/_serialize_db/snapshots.json``; ``channel`` aponta um canal do
+ambiente para um snapshot, o ``default`` que o leitor Delta lê sem argumento, ou lista os canais;
+``vacuum`` lista, ou apaga com ``--apply``, os arquivos fora da retenção e das versões dos
+snapshots; ``compact`` junta os arquivos pequenos das partições de uma tabela; ``archive`` copia
+as tabelas de um snapshot para ``<raiz>/<ambiente>/arquivo/<nome>/<tabela>`` e move a entrada
+para ``archived``; ``export`` grava em ``--destination`` as pastas Parquet de uma versão de uma
+tabela, sem o log; ``history`` lista os commits de uma tabela com os metadados da biblioteca. Os
+modelos chegam por ``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do
+cliente, e os statements por ``--statements modulo:atributo``, o caminho importável do dicionário
+``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm por padrão
+``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e ``SERIALIZE_DB_ENGINE``
 (``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``.
 
 Exemplo:
@@ -239,7 +239,13 @@ def _add_database_arguments(
         help="a raiz das tabelas Delta, pasta local ou s3://bucket/prefixo; "
         "padrão SERIALIZE_DB_ROOT",
     )
-    parser.add_argument("--environment", type=_name_argument, default=_environment_default())
+    parser.add_argument(
+        "--environment",
+        type=_name_argument,
+        default=_environment_default(),
+        help="o ambiente, a pasta sob a raiz: cada tabela fica em <raiz>/<ambiente>/<tabela>; "
+        "padrão SERIALIZE_DB_ENVIRONMENT, senão dsv",
+    )
 
 
 def _add_run_parser(
@@ -274,7 +280,9 @@ def _add_publish_redshift_parser(
     pelo canal, o estado, a tabela de controle e a despublicação; a conexão vem de
     ``SERIALIZE_DB_REDSHIFT_*``."""
     publish = commands.add_parser(
-        "publish_redshift", help="a publicação no Redshift de um snapshot"
+        "publish_redshift",
+        help="publica as versões Delta de um snapshot ou canal nas tabelas <ambiente>_<tabela> "
+        "do Redshift",
     )
     publish.add_argument(
         "--metadata",
@@ -282,8 +290,20 @@ def _add_publish_redshift_parser(
         default=None,
         help="modulo:atributo com o MetaData dos modelos; dispensado por --init",
     )
-    publish.add_argument("--root", type=_root_argument, default=os.environ.get("SERIALIZE_DB_ROOT"))
-    publish.add_argument("--environment", type=_name_argument, default=_environment_default())
+    publish.add_argument(
+        "--root",
+        type=_root_argument,
+        default=os.environ.get("SERIALIZE_DB_ROOT"),
+        help="a raiz das tabelas Delta de origem, pasta local ou s3://bucket/prefixo; "
+        "padrão SERIALIZE_DB_ROOT",
+    )
+    publish.add_argument(
+        "--environment",
+        type=_name_argument,
+        default=_environment_default(),
+        help="o ambiente, a pasta sob a raiz e o prefixo das tabelas publicadas, "
+        "<ambiente>_<tabela>; padrão SERIALIZE_DB_ENVIRONMENT, senão dsv",
+    )
     which = publish.add_mutually_exclusive_group()
     which.add_argument(
         "--snapshot",
@@ -331,7 +351,10 @@ def _add_import_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
     """``import``: a carga inicial da base Parquet de origem nas tabelas Delta do ambiente."""
-    import_command = commands.add_parser("import", help="a carga inicial da base Parquet de origem")
+    import_command = commands.add_parser(
+        "import",
+        help="importa a base Parquet de --source nas tabelas Delta <raiz>/<ambiente>/<tabela>",
+    )
     _add_database_arguments(import_command)
     import_command.add_argument(
         "--source",
@@ -361,7 +384,9 @@ def _add_operation_parsers(
     """Os subcomandos da operação: ``snapshot``, ``channel``, ``vacuum``, ``compact``,
     ``archive``, ``export`` e ``history``."""
     snapshot = commands.add_parser(
-        "snapshot", help="o snapshot do banco com a versão atual de cada tabela"
+        "snapshot",
+        help="grava o snapshot do banco, a versão atual de cada tabela, em "
+        "<raiz>/<ambiente>/_serialize_db/snapshots.json",
     )
     _add_database_arguments(snapshot)
     snapshot.add_argument("--name", required=True, type=_name_argument)
@@ -405,19 +430,23 @@ def _add_operation_parsers(
     compact_command.set_defaults(handler=_compact)
 
     archive = commands.add_parser(
-        "archive", help="copia as tabelas de um snapshot para arquivo/<nome>/"
+        "archive",
+        help="copia as tabelas de um snapshot para <raiz>/<ambiente>/arquivo/<nome>/<tabela>",
     )
     _add_database_arguments(archive)
     archive.add_argument("--name", required=True, type=_name_argument)
     archive.set_defaults(handler=_archive)
 
     export = commands.add_parser(
-        "export", help="as pastas Parquet de uma versão da tabela, sem o log"
+        "export",
+        help="grava uma versão da tabela Delta em pastas Parquet de --destination, sem o log",
     )
     _add_database_arguments(export)
     export.add_argument("--table", required=True)
     export.add_argument(
-        "--destination", required=True, help="a URI da pasta de destino, vazia e sob a raiz"
+        "--destination",
+        required=True,
+        help="a URI da pasta que recebe os arquivos Parquet, vazia e sob a raiz",
     )
     export.add_argument("--version", type=int, default=None, help="a versão; padrão a atual")
     export.add_argument("--mode", choices=["copy", "rewrite"], default="copy")
@@ -459,9 +488,19 @@ def _add_audit_parser(
         help="imprime o texto das verificações, sem conexão nem armazenamento",
     )
     audit_command.add_argument(
-        "--root", type=_root_argument, default=os.environ.get("SERIALIZE_DB_ROOT")
+        "--root",
+        type=_root_argument,
+        default=os.environ.get("SERIALIZE_DB_ROOT"),
+        help="a raiz das tabelas Delta auditadas, pasta local ou s3://bucket/prefixo; "
+        "padrão SERIALIZE_DB_ROOT; dispensada por --sql",
     )
-    audit_command.add_argument("--environment", type=_name_argument, default=_environment_default())
+    audit_command.add_argument(
+        "--environment",
+        type=_name_argument,
+        default=_environment_default(),
+        help="o ambiente, a pasta sob a raiz: cada tabela fica em <raiz>/<ambiente>/<tabela>; "
+        "padrão SERIALIZE_DB_ENVIRONMENT, senão dsv",
+    )
     audit_command.set_defaults(handler=_audit)
 
 
@@ -1239,7 +1278,7 @@ def _export(
         print(f"serialize-db export: destino não vazio: {args.destination}", file=sys.stderr)
         return 2
     started = time.perf_counter()
-    files = delta.export_snapshot(uri, table, args.destination, db.storage, args.version, args.mode)
+    files = delta.export_parquet(uri, table, args.destination, db.storage, args.version, args.mode)
     version = "" if args.version is None else f" da versão {args.version}"
     print(
         f"{table.name}: {len(files)} arquivo(s) em {args.destination}{version}, {_measure(started)}"

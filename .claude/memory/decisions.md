@@ -1721,3 +1721,22 @@ fixtures' `target.db` stay.
 `src/serialize_db/execution.py`, `src/serialize_db/reader.py`, `src/serialize_db/publication.py`,
 `src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `plan/PLAN-STAGE-6.md`,
 `plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`
+
+## The name of the export function (2026-10-03)
+
+The same day, in the review of the docs for the data's source and destination, the assistant found
+that `delta.export_snapshot` exports one version of one table (`version=`) to Parquet files without
+the log, while everywhere else in the package a snapshot is a named entry of
+`_serialize_db/snapshots.json` with the version of each table (`run.snapshot`,
+`serialize-db snapshot`, the channels, `archive_snapshot`). Offered on a decision card
+`export_parquet` (recommended: the name says the destination format, the pair of
+`parquet_import.import_table`), `export_version` (the name says what leaves, not the format) and
+keeping the name, the user chose `export_parquet`: the function is `delta.export_parquet`, with no
+alias, and the subcommand `serialize-db export` stays. The tests named after the function
+(`test_export_parquet_copy_and_rewrite`, the study suite's `test_export_parquet_by_copying_files`)
+and the consistency probe's section E (`check_export_parquet`) follow; the dated records
+(`plan/POC.md`, the entries above) keep the old name.
+`src/serialize_db/delta.py`, `src/serialize_db/cli.py`, `tests/test_delta.py`,
+`tests/proof_of_concept/test_deltalake.py`, `probes/consistencia/probe_delta_ops.py`,
+`docs/index.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `plan/serialize-db.md`,
+`plan/OPEN_QUESTIONS.md`
