@@ -81,6 +81,13 @@ as variáveis que a autorizam e o relatório da sessão estão no cabeçalho de
 [`tests/conftest.py`](tests/conftest.py). Uma suíte sem a sua variável é pulada, e o fim da sessão
 imprime o comando que a autoriza.
 
+No Windows, o pytest roda como módulo do Python, `uv run python -m pytest` no lugar de
+`uv run pytest`, e os casos que leem um fato só do Linux são pulados:
+
+```
+uv run python -m pytest
+```
+
 ## Testes do pacote
 
 Os testes de `tests/`, sem `tests/proof_of_concept/` nem `tests/test_probes.py` (as funções puras
