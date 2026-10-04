@@ -151,6 +151,10 @@ foi medido em [`POC.md`](POC.md).
   e `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
   passa a refleti-la, a lista de `probes/space.py` e a prosa que nomeia o dialeto em `README.md`,
   `docs/index.md`, `plan/` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a 2.0.54 o serve.
+- **O DuckDB 1.5.6.** Os clientes instalam as extensões do DuckDB pelos wheels
+  `duckdb-extension-delta` e `duckdb-extension-httpfs` do PyPI, que exigem o `duckdb` da mesma
+  versão e paravam na 1.5.5 em 2026-10-04 ([`POC.md`](POC.md)); o pino fica em 1.5.5. A troca
+  para a 1.5.6, que passou os testes do pacote em 2026-10-03, espera os wheels da 1.5.6 no PyPI.
 - **O pacote no Windows.** A esteira roda os testes do pacote num runner Windows desde 2026-10-01
   ([`POC.md`](POC.md)), com a pasta local e o DuckDB em memória; o S3, o Redshift, os probes,
   `prepare_offline.sh` e o projeto cliente não rodaram no Windows. Lá, o `os.environ` passa o nome

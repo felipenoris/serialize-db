@@ -5935,3 +5935,22 @@ em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) traz a 2.1.3; a contrabarra das cons
 que o usuário mandou corrigir no mesmo dia, sai com `_backslash_escapes` falso nos dois dialetos do
 DuckDB do pacote, como registram [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) e
 [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md).
+
+## O que os wheels das extensões do DuckDB no PyPI mostraram
+
+Em 2026-10-04, depois do merge do PR #125, o usuário apontou que os clientes do pacote instalam as
+extensões do DuckDB pelos wheels `duckdb-extension-delta` e `duckdb-extension-httpfs` do PyPI, que
+não tinham a 1.5.6. Na API JSON do PyPI, a última versão de `duckdb-extension-delta`,
+`duckdb-extension-httpfs` e `duckdb-extension-aws` era a 1.5.5, de 2026-08-10, e cada versão exige
+o `duckdb` da mesma versão (`requires_dist` `duckdb==1.5.5`); o DuckDB 1.5.6 é de 2026-09-28. O
+`uv pip compile` de `duckdb==1.5.6` com os dois wheels sem versão resolveu sem erro para
+`duckdb-extension-delta` 1.0.3 e `duckdb-extension-httpfs` 1.0.3; com `duckdb==1.5.5`, para a 1.5.5.
+No contêiner de desenvolvimento, com o DuckDB 1.5.5 e o resto da `main`, o `INSTALL` trouxe de novo
+`delta` 45c4087 e `httpfs` 827222f para `.duckdb/v1.5.5/linux_amd64/`, o `ruff check` e o
+`ruff format --check` passaram, e as três sessões, sem as variáveis `AWS_*`, deram 256 aprovados e
+436 pulados sem variável, 573 e 119 com a raiz local, e 690 e 2 com o substituto, os números da
+`main` com o DuckDB 1.5.6.
+
+**Consequências**: `pyproject.toml` volta a fixar o DuckDB 1.5.5, e a troca para a 1.5.6 espera os
+wheels das extensões no PyPI, no item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). A pasta preparada
+para a 1.5.5 no ambiente alvo tem as extensões da versão fixada.

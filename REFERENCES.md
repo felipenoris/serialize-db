@@ -1097,6 +1097,11 @@ API JSON do PyPI, consultada em 2026-10-03 para as versões novas das dependênc
 <https://pypi.org/pypi/pdoc/json>, <https://pypi.org/pypi/ipykernel/json>,
 <https://pypi.org/pypi/uv-build/json> e <https://pypi.org/pypi/duckdb-sqlalchemy/json>.
 
+API JSON do PyPI, consultada em 2026-10-04 para os wheels das extensões do DuckDB que os clientes
+instalam: <https://pypi.org/pypi/duckdb-extension-delta/json>,
+<https://pypi.org/pypi/duckdb-extension-httpfs/json> e
+<https://pypi.org/pypi/duckdb-extension-aws/json>.
+
 Issue do botocore que pede a expiração da credencial na interface pública, consultada em
 2026-09-27 para `credential_expiry` de `probes/probelib.py`:
 <https://github.com/boto/botocore/issues/2694>.

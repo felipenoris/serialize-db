@@ -1792,3 +1792,13 @@ dialects of `serialize_db.sql` and `serialize_db.engine.duckdb`, and the Redshif
 doubling.
 `src/serialize_db/sql.py`, `src/serialize_db/engine/duckdb.py`, `tests/test_sql.py`,
 `tests/test_engine_duckdb.py`, `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+
+## DuckDB back to 1.5.5 (2026-10-04)
+
+After PR #125 merged, the user stated that the package's clients install the DuckDB extensions
+from the PyPI wheels `duckdb-extension-delta` and `duckdb-extension-httpfs`, which had no 1.5.6,
+and proposed going back to DuckDB 1.5.5. The assistant read the wheels on PyPI (newest 1.5.5, each
+version requiring the exact `duckdb`; with `duckdb==1.5.6` the unpinned wheels resolve to 1.0.3
+without an error) and pinned DuckDB 1.5.5 again in a new PR, keeping boto3, ruff, sqlglot and the
+backslash fix of PR #125. The 1.5.6 waits for the wheels in `plan/OPEN_QUESTIONS.md`.
+`pyproject.toml`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/CURRENT_STATE.md`
