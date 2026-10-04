@@ -131,16 +131,16 @@ foi medido em [`POC.md`](POC.md).
   de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
   serve a ele, que precisa de um papel de cliente no alvo.
 
-- **O ganho das APIs com threads no ambiente alvo.** Em 2026-10-04, num contêiner de 4 vCPUs, com
-  o motor DuckDB e as tabelas Delta numa pasta local, o `stream`, o `appender`, as sessões a mais,
-  `run.ingest` e `materialize` de várias tabelas ganharam da execução em série, e `run.publish_delta`
-  com `max_workers=4` não ganhou ([`POC.md`](POC.md)); o `run.ingest` das tabelas no S3 tem as
-  leituras do alvo de 2026-09-23 a 2026-09-29. Seguem sem medida: o `stream`, o `appender` e a
-  `new_session()` do motor Redshift, o `publish_delta` e o `materialize` com as tabelas no S3, o
-  `publish_redshift` com `max_workers` maior que 1 e o ganho numa máquina com mais CPUs.
-  `probes/operacao/probe_parallel_gain.py` mede cada um contra a série, passou na pasta local e no
-  substituto e espera a rodada no alvo, pelo comando do cabeçalho dela; o que ela ler entra na
-  seção "Multithreading" de `docs/index.md`.
+- **O ganho das APIs com threads no ambiente alvo.** Em 2026-10-04, num contêiner de 4 vCPUs, com o
+  motor DuckDB e as tabelas Delta numa pasta local, o `stream`, o `appender`, as sessões a mais,
+  `run.ingest` e `materialize` de várias tabelas ganharam da execução em série, e
+  `run.publish_delta` com `max_workers=4` não ganhou ([`POC.md`](POC.md)); o `run.ingest` das
+  tabelas no S3 tem as leituras do alvo de 2026-09-23 a 2026-09-29. Seguem sem medida: o `stream`, o
+  `appender` e a `new_session()` do motor Redshift, o `publish_delta` e o `materialize` com as
+  tabelas no S3, o `publish_redshift` com `max_workers` maior que 1 e o ganho numa máquina com mais
+  CPUs. `probes/operacao/probe_parallel_gain.py` mede cada um contra a série, passou na pasta local
+  e no substituto e espera a rodada no alvo, pelo comando de `SUITE.md`, seção "Sondas da operação";
+  o que ela ler entra na seção "Multithreading" de `docs/index.md`.
 - **A compilação do statement Core a cada chamada.** Os dois motores compilam o statement Core a
   cada `query` e `stream`, e o Redshift também a cada `execute`, por `bound_statement` e o
   `compile` com `render_postcompile`, sem cache: em 2026-10-04, no motor DuckDB, 200 consultas

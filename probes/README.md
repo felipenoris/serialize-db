@@ -214,8 +214,7 @@ kernel sem memória, que não deixa rodar nenhum `finally`; `probe_parallel_gain
 biblioteca no próprio processo. Cada leitura sai no terminal e em
 `output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime `OK` ou `PROBLEMAS`
 com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as variáveis do
-ambiente alvo estão em `SUITE.md`, seção "Sondas da operação", e o de `probe_parallel_gain.py`,
-no cabeçalho dela.
+ambiente alvo estão em `SUITE.md`, seção "Sondas da operação".
 
 | Sonda | O que roda |
 | --- | --- |
