@@ -8,10 +8,10 @@ de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava a ent
 marcado em ``<raiz>/<ambiente>/_serialize_db/snapshots.json`` e o resumo no log
 ``serialize_db.execution``. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as
 tabelas do Delta ao sandbox, presas à versão fixada, ``sandbox`` é o motor onde ele roda
-``stream``, ``query``, ``create_table`` e ``append``, ``next_ids`` dá as faixas da chave
-sequencial, ``audit`` confere o contrato e ``publish_delta`` leva as partições auditadas do
-sandbox ao Delta; a publicação aos clientes no Redshift é ``serialize-db publish_redshift``,
-depois da execução.
+``stream``, ``query``, ``create_table``, ``append`` e ``appender`` e toma a conexão por
+``session`` e ``new_session``, ``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o
+contrato e ``publish_delta`` leva as partições auditadas do sandbox ao Delta; a publicação aos
+clientes no Redshift é ``serialize-db publish_redshift``, depois da execução.
 
 As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
 sob o lock dela, ou numa sessão a mais do ``ingest`` de várias tabelas, e o estado mutável da
@@ -435,8 +435,9 @@ class Execution:
         """A versão fixada de cada tabela do ambiente, pelo nome, ``None`` na que não existe: a
         entrada do ``with`` as lê, e ``publish_delta`` avança a de cada tabela que grava."""
         self.sandbox: Engine | None = None
-        """O motor da execução, onde o pipeline roda ``stream``, ``query``, ``create_table`` e
-        ``append``; ``None`` até a entrada do ``with``, e fechado na saída."""
+        """O motor da execução, onde o pipeline roda ``stream``, ``query``, ``create_table``,
+        ``append`` e ``appender`` e toma a conexão por ``session`` e ``new_session``; ``None`` até
+        a entrada do ``with``, e fechado na saída."""
         self._read: dict[str, int] = {}
         self._written: dict[str, int] = {}
         self._tables: dict[str, DeltaTable] = {}

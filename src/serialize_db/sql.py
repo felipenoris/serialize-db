@@ -77,7 +77,8 @@ __all__ = [
 ]
 
 SENTINEL = "{prefix}"
-"""O sentinela do prefixo do sandbox no texto gerado; os motores o leem, e ``read_sql`` o troca."""
+"""O sentinela do prefixo do sandbox no texto gerado: ``read_sql`` o troca pelo prefixo informado,
+o motor e o leitor Redshift pelo prefixo deles, e ``bind`` recusa um texto que ainda o traz."""
 
 # O compilador de cada motor, com paramstyle "named" para o % dos literais não sair dobrado. São os
 # dialetos de terceiros, e não o postgresql do SQLAlchemy.
@@ -490,7 +491,9 @@ def read_sql(
 ) -> str:
     """O texto versionado com o sentinela trocado pelo prefixo informado, pronto para ``bind``.
 
-    Nenhuma outra primitiva preenche o sentinela.
+    O motor e o leitor Redshift também trocam o sentinela de um texto pronto pelo prefixo deles,
+    ``exec_<id>_`` e ``<ambiente>_``; o motor DuckDB e o leitor Delta o entregam a ``bind``, que
+    recusa um texto que ainda o traz (``SqlError``).
 
     Exemplo:
 

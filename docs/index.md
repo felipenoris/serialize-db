@@ -102,9 +102,12 @@ uv sync
 O projeto cliente pede o Python 3.13 ou mais novo, como o pacote (`uv init --python 3.13`); com um
 `requires-python` que aceita versões anteriores, o `uv add` recusa o pacote. As dependências que o
 `uv sync` instala são as de execução, nas versões fixadas em `pyproject.toml`: `sqlalchemy`,
-`pyarrow`, `deltalake`, `duckdb`, `boto3`, que faz a escrita condicional do arquivo de controle no
-S3, os dialetos `duckdb-engine` e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, e
-`redshift-connector`, o driver do motor Redshift, da publicação e do leitor Redshift. Os grupos de
+`pyarrow`, `deltalake`, `duckdb`, `boto3`, que no S3 faz a escrita condicional do arquivo de
+controle e a cópia dos arquivos do `archive` e do `export`, dá a chave da sessão AWS ao segredo do
+DuckDB e à cláusula de credenciais do `COPY` e do `UNLOAD` sem `iam_role` e pede a credencial
+temporária do grupo de trabalho do Redshift, os dialetos `duckdb-engine` e `sqlalchemy-redshift`,
+que compilam o texto SQL de cada motor, e `redshift-connector`, o driver do motor Redshift, da
+publicação e do leitor Redshift. Os grupos de
 `pyproject.toml`, `dev` entre eles, servem ao desenvolvimento do pacote e nunca vão para o projeto
 cliente. O pacote não importa o pandas: o cliente que converte o resultado com `to_pandas`, como no
 tutorial, declara o pandas no próprio projeto.
@@ -166,7 +169,7 @@ As chaves de `Table.info["serialize_db"]`:
 
 | Chave | O que declara |
 | --- | --- |
-| `partition_by` | A coluna de partição, uma no máximo, de texto `String(n)`, no fim da tabela; o valor é o nome da pasta da partição e começa por letra ou dígito, seguido de letras, dígitos, `_`, `.` e `-` (`[0-9A-Za-z][0-9A-Za-z_.-]*`). Na base atual é a data em `AAAA-MM-DD`. |
+| `partition_by` | A coluna de partição, uma no máximo, de texto `String(n)`; o valor é o nome da pasta da partição e começa por letra ou dígito, seguido de letras, dígitos, `_`, `.` e `-` (`[0-9A-Za-z][0-9A-Za-z_.-]*`). Na base atual é a data em `AAAA-MM-DD`, a última coluna de cada tabela particionada. |
 | `partition_source` | Opcional: a coluna de data de que a coluna de partição deriva (`strftime('%Y-%m-%d')`); com ela, a auditoria e a carga inicial conferem a derivação. |
 | `sort_key` | As colunas da `SORTKEY` do Redshift e da ordenação dos arquivos. |
 | `redshift` | `diststyle` e `distkey` do Redshift; ausente, a distribuição é `AUTO`. |

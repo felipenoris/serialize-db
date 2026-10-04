@@ -1,11 +1,14 @@
 """As exceções da biblioteca, num módulo sem dependências, que os outros importam sem ciclo.
 
-Cada etapa acrescenta as suas: ``ContractError`` é a da etapa 1 (``schema``), ``SqlError`` a da
-etapa 2 (``sql``), ``ConflictError``, ``ExecutionConflict``, ``RegistrationRefused``,
-``SchemaDiffRefused`` e ``LogUnavailable`` as da etapa 3 (``storage`` e ``delta``), que a
-execução deixa chegar ao cliente, ``SandboxError`` a da etapa 4 (os motores), ``AuditFailed`` a
-da etapa 6 (a execução) e ``PublicationError`` a da etapa 8 (a publicação). A linha de comando
-captura ``ConflictError`` e ``ExecutionConflict`` e sai com 2.
+``ContractError`` é a dos dados, do modelo e da configuração fora do contrato de ``schema``;
+``SqlError`` a do texto SQL de ``sql``; ``ConflictError``, ``ExecutionConflict``,
+``RegistrationRefused``, ``SchemaDiffRefused`` e ``LogUnavailable`` as de ``storage`` e ``delta``,
+que a execução deixa chegar ao cliente; ``SandboxError`` a do sandbox, dos motores de ``engine``
+e dos limites de ``resources``; ``AuditFailed`` a da auditoria reprovada em ``execution``; e
+``PublicationError`` a da publicação no Redshift de ``publication``. A linha de comando sai com 1
+em ``AuditFailed`` e no ``ContractError`` da carga de ``serialize-db import``, e com 2 em
+``ContractError``, ``ConflictError``, ``ExecutionConflict`` e ``PublicationError`` nos demais
+casos.
 """
 
 __all__ = [

@@ -1,31 +1,37 @@
 """A linha de comando ``serialize-db``.
 
-Cada subcomando entra com a etapa que entrega a primitiva por trás dele: ``schema`` é o da etapa 1,
-``sql`` o da etapa 2, ``run`` e ``audit`` os da etapa 6, ``import`` o da etapa 7,
-``publish_redshift`` o da etapa 8, ``snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e
-``history`` os da etapa 9 e ``channel`` o da etapa 10, com o runbook abaixo, seguido das opções de
-cada subcomando.
+Cada subcomando roda uma rotina do pacote: a geração dos arquivos do contrato, a execução de um
+pipeline, a carga inicial, a publicação no Redshift e a operação do banco Delta. O runbook abaixo
+diz quando rodar as rotinas da operação, e as opções de cada subcomando vêm depois dele.
 
-``schema write`` grava os arquivos de esquema dos modelos e ``schema check`` compara os
-versionados com a geração nova, sem gravar; ``sql write`` grava o texto SQL de cada statement do
-pipeline em cada motor e ``sql check`` o compara com a geração nova. ``run`` abre uma execução,
-com a partição de ``--partition`` ou sem partição, e entrega a ``modulo:funcao`` do pipeline;
-``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
-versão atual do Delta, no motor de ``--engine``; ``import`` faz a carga inicial da base Parquet
-de origem (``--source``) nas tabelas Delta do ambiente, ``<raiz>/<ambiente>/<tabela>``, as sem
-partição antes das particionadas, e confere contagem e somas por partição; ``publish_redshift``
-publica o snapshot de ``--snapshot`` ou do canal de ``--channel`` (``current`` é a versão atual
-de cada tabela) nas tabelas ``<ambiente>_<tabela>`` do esquema do Redshift, mostra o estado da
-publicação (``--status``), cria a tabela de controle (``--init``) ou despublica
-(``--unpublish``). ``snapshot`` grava a versão atual de cada tabela do ambiente no arquivo de
-controle, ``<raiz>/<ambiente>/_serialize_db/snapshots.json``; ``channel`` aponta um canal do
-ambiente para um snapshot, o ``default`` que o leitor Delta lê sem argumento, ou lista os canais;
-``vacuum`` lista, ou apaga com ``--apply``, os arquivos fora da retenção e das versões dos
-snapshots; ``compact`` junta os arquivos pequenos das partições de uma tabela; ``archive`` copia
-as tabelas de um snapshot para ``<raiz>/<ambiente>/arquivo/<nome>/<tabela>`` e move a entrada
-para ``archived``; ``export`` grava em ``--destination`` as pastas Parquet de uma versão de uma
-tabela, sem o log; ``history`` lista os commits de uma tabela com os metadados da biblioteca. Os
-modelos chegam por ``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do
+- ``schema write`` grava os arquivos de esquema dos modelos; ``schema check`` compara os
+  versionados com a geração nova, sem gravar.
+- ``sql write`` grava o texto SQL de cada statement do pipeline em cada motor; ``sql check`` o
+  compara com a geração nova.
+- ``run`` abre uma execução, com a partição de ``--partition`` ou sem partição, e entrega a
+  ``modulo:funcao`` do pipeline.
+- ``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
+  versão atual do Delta, no motor de ``--engine``.
+- ``import`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
+  ambiente, ``<raiz>/<ambiente>/<tabela>``, as sem partição antes das particionadas, e confere
+  contagem e somas por partição.
+- ``publish_redshift`` publica o snapshot de ``--snapshot`` ou do canal de ``--channel``
+  (``current`` é a versão atual de cada tabela) nas tabelas ``<ambiente>_<tabela>`` do esquema do
+  Redshift, mostra o estado da publicação (``--status``), cria a tabela de controle (``--init``)
+  ou despublica (``--unpublish``).
+- ``snapshot`` grava a versão atual de cada tabela do ambiente no arquivo de controle,
+  ``<raiz>/<ambiente>/_serialize_db/snapshots.json``.
+- ``channel`` aponta um canal do ambiente para um snapshot, o ``default`` que o leitor Delta lê
+  sem argumento, ou lista os canais.
+- ``vacuum`` lista, ou apaga com ``--apply``, os arquivos fora da retenção e das versões dos
+  snapshots.
+- ``compact`` junta os arquivos pequenos das partições de uma tabela.
+- ``archive`` copia as tabelas de um snapshot para ``<raiz>/<ambiente>/arquivo/<nome>/<tabela>``
+  e move a entrada para ``archived``.
+- ``export`` grava em ``--destination`` as pastas Parquet de uma versão de uma tabela, sem o log.
+- ``history`` lista os commits de uma tabela com os metadados da biblioteca.
+
+Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do
 cliente, e os statements por ``--statements modulo:atributo``, o caminho importável do dicionário
 ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm por padrão
 ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e ``SERIALIZE_DB_ENGINE``
@@ -64,20 +70,24 @@ Exemplo:
     serialize-db history --root s3://bucket/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
-O código de saída é 0 quando o comando termina; 1 quando ``check`` encontra diferença, com o diff
-impresso, quando a auditoria reprova, também pelo valor fora do contrato que o ``ingest`` da
-auditoria recusa, impresso com o erro do banco, e quando a carga acha uma partição fora do
-contrato ou uma diferença de contagem ou soma; 2 no erro de uso, como o motor fora de ``duckdb`` e
-``redshift`` e ``--partitions`` na auditoria de uma tabela sem partição, na configuração do
-Redshift sem conexão ou com a porta que não é número, na tabela fora do modelo ou sem Delta, na
-partição acima do ``String(n)`` da coluna de partição, no ``execution_id`` longo demais para o
-prefixo do sandbox do Redshift, no ``ContractError`` do pipeline, no conflito da execução, da
-carga e do ``archive``, na tabela ou no arquivo de controle, na publicação sem a tabela de
-controle, sem ``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do snapshot
-arquivado ou da tabela fora do snapshot, no modelo fora do contrato e na origem ausente ou fora
-dos armazenamentos da carga, no snapshot repetido ou ausente, no canal sem ``--name`` e
-``--snapshot`` juntos, no canal ``current``, na compactação depois de um snapshot na versão
-atual, no arquivo do snapshot de um canal e no destino da exportação não vazio ou fora da raiz.
+O código de saída:
+
+- 0 quando o comando termina.
+- 1 quando ``check`` encontra diferença, com o diff impresso; quando a auditoria reprova, também
+  pelo valor fora do contrato que o ``ingest`` da auditoria recusa, impresso com o erro do banco;
+  e quando a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem,
+  ou uma diferença de contagem ou soma.
+- 2 no erro de uso: o motor fora de ``duckdb`` e ``redshift`` e ``--partitions`` na auditoria de
+  uma tabela sem partição; a configuração do Redshift sem conexão ou com a porta que não é número;
+  a tabela fora do modelo ou sem Delta; a partição acima do ``String(n)`` da coluna de partição; o
+  ``execution_id`` longo demais para o prefixo do sandbox do Redshift; o ``ContractError`` do
+  pipeline; o conflito da execução, da carga e do ``archive``, na tabela ou no arquivo de
+  controle; a publicação sem a tabela de controle, sem ``--snapshot`` nem ``--channel``, do
+  snapshot ou do canal ausente, do snapshot arquivado ou da tabela fora do snapshot; o modelo fora
+  do contrato e a origem ausente ou fora dos armazenamentos da carga; o snapshot repetido ou
+  ausente; o canal sem ``--name`` e ``--snapshot`` juntos, e o canal ``current``; a compactação
+  depois de um snapshot na versão atual; o arquivo do snapshot de um canal; e o destino da
+  exportação não vazio ou fora da raiz.
 
 .. include:: ../../docs/operacao.md
 """
