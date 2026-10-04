@@ -2273,10 +2273,12 @@ class RedshiftEngine:
         novo por chamada na pasta da tabela Delta, ``<coluna>=<valor>/<execution_id>_<uuid>/``
         (sem ``<coluna>=<valor>/`` numa tabela sem partição), e os arquivos entram no log da
         tabela por ``register_files``, como o Redshift os gravou, com as conferências e a
-        releitura. Com ``columns_without_min_max``, o ``UNLOAD`` vai a
-        ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a partição volta por
-        ``publish_partition``, com um aviso no log ``serialize_db.engine.redshift``, porque o rodapé
-        do ``UNLOAD`` deixa o ``NaN`` fora do máximo e o leitor podaria a linha (issue #59).
+        releitura. O ``UNLOAD`` corre em série (``PARALLEL OFF``), num arquivo só, até 5.000.000
+        linhas, e em paralelo, um arquivo por slice, acima disso. Com ``columns_without_min_max``,
+        o ``UNLOAD`` vai a ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a
+        partição volta por ``publish_partition``, com um aviso no log
+        ``serialize_db.engine.redshift``, porque o rodapé do ``UNLOAD`` deixa o ``NaN`` fora do
+        máximo e o leitor podaria a linha (issue #59).
 
         Exemplo:
 
