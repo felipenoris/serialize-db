@@ -3,9 +3,9 @@ publicação. Os modelos SQLAlchemy do cliente são o contrato de esquema: a
 biblioteca deriva deles o esquema Arrow e Delta, o DDL de cada motor, a conversão dos lotes de
 dados e a conferência dos próprios modelos.
 
-Esta página explica o funcionamento geral do pacote, traz o tutorial de uso, a retenção dos
-arquivos removidos e a tabela de mapeamento de tipos. A referência de cada módulo, com os
-argumentos, o retorno e as exceções de cada função, está no menu: `serialize_db.schema`,
+Esta página explica o funcionamento geral do pacote, traz o tutorial de uso, o uso das threads, a
+retenção dos arquivos removidos e a tabela de mapeamento de tipos. A referência de cada módulo, com
+os argumentos, o retorno e as exceções de cada função, está no menu: `serialize_db.schema`,
 `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
 `serialize_db.engine` (com os motores `serialize_db.engine.duckdb` e
 `serialize_db.engine.redshift`), `serialize_db.resources`, `serialize_db.execution`,
@@ -774,6 +774,140 @@ do dataset traz os nulos dele; o DuckDB sobre esse dataset erra parte dos filtro
 texto dos arquivos do `UNLOAD`; ele e `serialize_db.delta.publish_partition` deixam sem os dois as
 `Double` com valor não finito na partição. O filtro nas outras colunas e a leitura sem filtro saem
 certos.
+
+## Multithreading
+
+O pacote usa threads em três lugares: no trabalho nativo de cada comando, porque o DuckDB, o
+delta-rs e o PyArrow soltam o GIL e usam as CPUs da máquina; nas threads auxiliares que o `stream` e
+o `appender` abrem ao lado do laço do cliente; e nos pools que levam várias tabelas ao mesmo tempo.
+Toda primitiva pode ser chamada de qualquer thread e é síncrona: quando ela volta, o efeito vale
+para o comando seguinte, de qualquer thread. Cada motor guarda uma sessão por execução, sob um lock:
+os comandos que várias threads mandam à sessão principal rodam um de cada vez, e
+`run.sandbox.new_session()` abre uma sessão a mais, que roda ao lado da principal.
+
+### As APIs com threads
+
+| API | O que roda ao mesmo tempo |
+| --- | --- |
+| `run.sandbox.stream(statement)` e o `stream` dos leitores | No DuckDB, uma thread roda a consulta e entrega os lotes, até 64 MiB em memória e o resto num arquivo intermediário, enquanto o cliente trabalha nos que já chegaram. No Redshift, o `UNLOAD` roda inteiro antes do primeiro lote, e uma thread lê os arquivos dele dois lotes à frente do cliente. |
+| `run.sandbox.appender(table)` | O `write` converte o lote na thread do cliente, e uma thread grava os lotes num arquivo, Arrow IPC na pasta de transbordo do DuckDB ou Parquet no `staging/` do Redshift, enquanto o cliente produz o seguinte; o `close` insere tudo num comando. `run.sandbox.append(table, data)` é a forma de uma chamada, com os lotes prontos. |
+| `run.sandbox.new_session()` | Uma sessão a mais, com o seu lock: um cursor da mesma conexão no DuckDB e outra conexão no Redshift, sem as tabelas temporárias da sessão principal. |
+| `run.ingest(*tables)` | Uma sessão a mais por tabela, todas ao mesmo tempo. |
+| `reader.materialize(*tables)` e `db.open_delta()` | Uma sessão a mais por tabela, todas ao mesmo tempo: a cópia de cada tabela e a view de cada uma na abertura. |
+| `run.publish_delta(*tables, max_workers=n)` | Até `n` tabelas ao mesmo tempo: o arquivo de cada partição sai da sessão principal, uma tabela por vez, e o registro no log, as conferências, o commit e a releitura correm em paralelo. |
+| `serialize_db.publication.publish_redshift(..., max_workers=n)` e `serialize-db publish_redshift --max-workers n` | Até `n` tabelas ao mesmo tempo, uma conexão cada. |
+| `run.next_ids(table, n)` | Faixas de ids que não se sobrepõem entre threads. |
+
+### O ganho sobre a execução em série
+
+Em 2026-10-04, num contêiner Linux de 4 vCPUs (Python 3.13.14, DuckDB 1.5.5, PyArrow 25.0.1,
+deltalake 1.6.6, pandas 3.0.6), o motor DuckDB num banco em arquivo leu e gravou 10.000.000 de
+linhas de seis colunas em lotes de 100.000, e as tabelas Delta ficaram numa pasta local. O trabalho
+do cliente em cada lote foi a conversão para o pandas, duas colunas calculadas nele e a volta ao
+Arrow. Cada tempo é o menor de três medidas, cada uma num processo novo, e cada memória é o maior
+pico de memória residente do processo acima da base nas três:
+
+| O que o pipeline faz | Em série | Com threads | Ganho |
+| --- | --- | --- | --- |
+| Ler e trabalhar em cada lote | `query` e o laço: 1,378 s, 699 MB | `stream`: 0,835 s, 133 MB | 1,65 vez |
+| Gravar os lotes que o cliente produz | o trabalho de todos e o `append`: 4,733 s, 1.173 MB | `appender.write` em cada lote: 3,109 s, 857 MB | 1,52 vez |
+| Ler, trabalhar e gravar | `query`, o trabalho e o `append`: 5,162 s, 1.870 MB | `stream` e `appender` no mesmo `with`: 3,509 s, 1.020 MB | 1,47 vez |
+| 200 consultas pequenas em texto SQL, em quatro threads | 0,375 s em série e 0,377 s nas threads, na sessão principal | uma sessão a mais por thread: 0,170 s | 2,20 vezes |
+| Quatro tabelas de 5.000.000 de linhas para o sandbox | `run.ingest` de cada uma, `materialize=True`: 4,859 s, 439 MB | `run.ingest` das quatro: 3,735 s, 612 MB | 1,30 vez |
+| As mesmas quatro no leitor Delta | `materialize` de cada uma: 5,888 s, 435 MB | `materialize` das quatro: 3,765 s, 635 MB | 1,56 vez |
+| As mesmas quatro para o Delta | `publish_delta` com `max_workers=1`: 1,941 s | `max_workers=4`: 1,905 s | 1,02 vez |
+
+Sem trabalho do cliente, o `stream` ganhou de 1,12 a 1,14 vez, o `appender` 1,09 e os dois juntos
+1,07; com 5 ms de espera por lote, como uma chamada de rede, o `stream` ganhou de 1,90 a 1,91 vez, e
+com 5 ms de laço Python puro, de 1,70 a 1,73. O primeiro lote do `stream` chegou em 0,02 s, contra
+0,8 s do `query`. Num processo que já tinha usado a memória, como o da sonda do ambiente alvo, a
+série do `appender` custou menos, e o ganho dele com o pandas ficou entre 1,07 e 1,23 vez. As
+consultas pequenas da tabela são texto SQL; as mesmas por statement Core, que o motor compila em
+Python a cada chamada, levaram 0,760 s em série, 0,826 s nas threads da sessão principal e 0,608 s
+nas sessões a mais (1,25 vez), num processo só. Quatro agregações sobre as 10.000.000 de linhas
+levaram 0,270 s em série e 0,242 s em quatro threads com uma sessão a mais cada.
+
+No ambiente alvo, com as tabelas no S3, o `run.ingest` das quatro tabelas de uma partição da base
+ganhou 1,25 vez com 4 vCPUs (2026-09-23, com o cache de arquivos externos do DuckDB ligado), 1,89
+vez com 16 vCPUs (2026-09-24) e de 1,16 a 1,21 vez com 8 vCPUs, numa partição em que a maior tabela
+tinha 85% das linhas (2026-09-27 e 2026-09-29). O Redshift não tem medida do ganho.
+
+### Como usar as threads
+
+- **Leia o resultado grande por `stream`, com o trabalho dentro do laço.** A consulta segue enquanto
+  o cliente trabalha, o primeiro lote chega antes e a memória fica nos 64 MiB de lotes mais o
+  arquivo intermediário. O `query` serve ao resultado pequeno e ao trabalho que precisa da tabela
+  inteira. No Redshift, o `query` passa pelo cursor do driver, que lê o resultado inteiro antes de
+  devolver a primeira linha.
+- **Abra `stream` e `appender` no mesmo `with`**, com a tabela de saída criada antes por
+  `create_table` ou pelo `ingest` com `materialize=True`: a leitura, o trabalho e a gravação se
+  sobrepõem, como no exemplo de "Rodar o pipeline no sandbox DuckDB".
+- **O ganho é o trabalho que se sobrepõe**, no máximo o menor de dois tempos: o do cliente e o da
+  thread da biblioteca, que roda a consulta no `stream` e grava o arquivo no `appender`. Ele cresce
+  com o trabalho do cliente até igualar o da thread. O comando do `close` do `appender` roda depois
+  do laço e não se sobrepõe a nada.
+- **Não abra o `stream` dentro de `session()` na mesma thread.** No bloco, a consulta roda inteira
+  na thread do cliente antes do primeiro lote, e passa pelo arquivo intermediário: 1,995 s contra
+  1,378 s do `query`, com o primeiro lote em 1,2 s. O leitor da conexão crua no bloco,
+  `connection.execute(...).to_arrow_reader(...)`, tem a memória do `stream` e quase o tempo da série
+  (1,327 s), porque a consulta espera o cliente, e segura o lock da sessão até o fim do laço.
+- **Passe todas as tabelas numa chamada**: `run.ingest(*tables)`, `reader.materialize(*tables)` e
+  `run.publish_delta(*tables, max_workers=n)`. Um laço com uma chamada por tabela as leva uma por
+  vez. O ganho para na maior tabela, e o pico de memória soma o das tabelas em curso: 39% a 46%
+  acima da série nas medidas.
+- **Dê a cada thread do cliente a sua `new_session()`** para as consultas independentes. Na sessão
+  principal as threads esperam o lock, e o tempo é o da série. A sessão a mais ganha mais nas
+  consultas pequenas; a consulta grande já usa todas as `threads` do DuckDB, as CPUs do processo,
+  num pool que as sessões dividem. Ela não vê as tabelas temporárias da sessão principal.
+- **Junte as consultas pequenas numa só**, com `GROUP BY` ou uma junção, antes de levá-las a
+  threads: cada chamada com um statement Core o compila em Python, cerca de 2 ms sob o GIL, e esse
+  tempo não se divide entre as threads.
+- **Espere o `Future` do passo de que outro depende.** Cada comando está confirmado quando volta, e
+  a ordem entre os passos é do código do cliente. As faixas de `run.next_ids` não se sobrepõem entre
+  threads.
+- **Um pool do cliente ganha com trabalho nativo e com espera de rede.** O trabalho em Python puro
+  de várias threads roda uma de cada vez, sob o GIL; ao lado das threads da biblioteca, que rodam no
+  código nativo, ele ainda se sobrepõe.
+- **`max_workers` da publicação no Delta não ganhou na pasta local**, porque o arquivo de cada
+  partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada tabela em curso soma a
+  memória da sua escrita.
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+
+import pyarrow as pa
+import sqlalchemy as sa
+
+by_account = sa.select(Lancamento.id_conta, sa.func.sum(Lancamento.valor).label("total")).group_by(
+    Lancamento.id_conta
+)
+by_operation = sa.select(Operacao.operacao, sa.func.sum(Operacao.valor).label("total")).group_by(
+    Operacao.operacao
+)
+
+with Execution(db, "duckdb", "2026-08-31") as run:
+    run.ingest(Lancamento.__table__, Operacao.__table__, partitions=["2026-08-31"],
+               materialize=True)                                   # uma sessão a mais cada
+
+    def summarize(statement: sa.Select) -> pa.Table:
+        """Uma consulta independente, na sua sessão a mais."""
+        with run.sandbox.new_session() as session:
+            return session.query(statement)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        accounts = pool.submit(summarize, by_account)
+        operations = pool.submit(summarize, by_operation)
+        totals = (accounts.result(), operations.result())   # o passo seguinte usa os dois
+
+    run.sandbox.create_table(Projetado.__table__)
+    with run.sandbox.stream(sa.select(Lancamento)) as stream, \
+            run.sandbox.appender(Projetado.__table__) as appender:
+        for batch in stream:                 # a consulta segue enquanto o cliente trabalha
+            ids = run.next_ids(Projetado.__table__, batch.num_rows)
+            appender.write(project(batch, ids))   # a thread do appender grava o lote anterior
+    run.audit(Projetado.__table__, ["2026-08-31"])
+    run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])
+```
 
 ## Retenção dos arquivos removidos
 

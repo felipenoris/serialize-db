@@ -6038,3 +6038,90 @@ regra das duas sondas) e em [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), e o texto long
 máximo entra no item da issue #85 em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
 sem nada no `src/` (decisão do usuário de 2026-09-25); o `Double` não finito no `render` e a
 ordem do `__exit__` esperam o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
+
+## O que a medição das APIs com threads mostrou
+
+Em 2026-10-04, neste contêiner (Linux x86_64, 4 vCPUs, 16.094 MB, Python 3.13.14, DuckDB 1.5.5,
+PyArrow 25.0.1, deltalake 1.6.6, pandas 3.0.6), a pedido do usuário, um script no scratchpad mediu
+pela API pública cada API com threads do pacote contra a forma em série que faz o mesmo. O motor
+DuckDB abriu um banco em arquivo com uma tabela de 10.000.000 de linhas em seis colunas
+(`id_lancamento`, `id_conta`, `data_base`, `valor`, `historico` e `data_base_str`), lida e gravada
+em lotes de 100.000; os pools leram quatro tabelas Delta iguais de 5.000.000 de linhas numa pasta
+local, publicadas pelo pacote. Cada medida rodou num processo novo, três vezes por variante, com o
+pico de memória residente zerado por `/proc/self/clear_refs` depois do preparo; o tempo é o menor
+dos três, e o pico, o maior acima da base. O trabalho do cliente em cada lote foi nenhum (a coluna
+`valor_projetado` pelo `pyarrow.compute`), pandas (o lote no pandas com `ArrowDtype`,
+`valor_projetado` e `historico` em maiúsculas calculados nele, e a volta ao Arrow), Python (um laço
+de Python puro calibrado em 5 ms) ou espera (5 ms de `time.sleep`, como uma chamada de rede). O
+`stream` rodou em duas rodadas, a segunda com o leitor da conexão crua ao lado dele.
+
+- **O `stream` ganhou do `query` seguido do laço em todo trabalho, com um sexto do pico.** Nas duas
+  rodadas, sem trabalho, 0,686 s e 0,697 s contra 0,771 s e 0,795 s (1,12 e 1,14 vez); com o
+  pandas, 0,872 s e 0,835 s contra 1,365 s e 1,378 s (1,56 e 1,65 vez); com Python, 0,747 s e
+  0,758 s contra 1,270 s e 1,312 s (1,70 e 1,73 vez); com a espera, 0,695 s e 0,693 s contra
+  1,319 s e 1,321 s (1,90 e 1,91 vez). O pico ficou entre 118 MB e 134 MB, contra 686 MB a 700 MB
+  do `query`, e o primeiro lote chegou em 0,022 s a 0,025 s, contra 0,757 s a 0,822 s.
+- **O leitor da conexão crua dentro de `session()` não sobrepôs o trabalho à consulta.**
+  `connection.execute("SELECT * FROM cad_lancamentos").to_arrow_reader(100_000)` deu o primeiro lote
+  em 0,017 s a 0,019 s, com o pico de 111 MB a 126 MB, e levou 0,682 s sem trabalho, 1,327 s com o
+  pandas, 1,162 s com Python e 1,304 s com a espera, de 1,01 a 1,17 vez a série. Com a espera, que
+  solta o GIL, o tempo foi o da consulta mais o das esperas: o DuckDB produz o lote seguinte só
+  quando o cliente o pede [inferido], e o ganho do `stream` vem da thread auxiliar.
+- **O `stream` aberto dentro de `session()`, na mesma thread, foi o mais lento**: 1,400 s e 1,431 s
+  sem trabalho, 2,024 s e 1,995 s com o pandas, 1,913 s e 1,903 s com Python e 1,920 s e 1,969 s
+  com a espera, de 0,55 a 0,69 vez a série, com o primeiro lote em 1,185 s a 1,238 s e o pico de
+  213 MB a 236 MB. A consulta roda inteira na thread do cliente e passa toda pelo arquivo
+  intermediário antes do primeiro lote ([`PLAN.md`](PLAN.md)).
+- **O `appender` ganhou do trabalho de todos os lotes seguido do `append`**: 2,843 s contra 3,089 s
+  sem trabalho (1,09 vez), 3,109 s contra 4,733 s com o pandas (1,52 vez), 2,992 s contra 3,377 s
+  com Python (1,13 vez) e 2,979 s contra 3,551 s com a espera (1,19 vez), com o pico de 826 MB a
+  876 MB contra 878 MB a 1.173 MB. Com 5.000.000 de linhas, também em processo novo, 1,359 s contra
+  1,686 s sem trabalho (1,24 vez) e 1,536 s contra 2,180 s com o pandas (1,42 vez). Num processo só,
+  quatro rodadas alternadas com o pandas levaram 2,864 s, 1,792 s, 2,113 s e 2,283 s em série e de
+  1,462 s a 1,621 s pelo `appender`: a primeira série do processo fez 88.810 faltas de página, e as
+  seguintes de 20.888 a 52.306.
+- **`stream` e `appender` no mesmo `with` ganharam do `query`, do trabalho e do `append` em
+  série**: 3,471 s contra 3,730 s sem trabalho (1,07 vez), 3,509 s contra 5,162 s com o pandas
+  (1,47 vez), 3,525 s contra 4,214 s com Python (1,20 vez) e 3,424 s contra 4,245 s com a espera
+  (1,24 vez), com o pico de 943 MB a 1.020 MB contra 1.582 MB a 1.870 MB.
+- **As consultas em threads só ganharam com uma sessão a mais por thread, e o statement Core
+  limitou o ganho.** 200 consultas de 1.000 linhas por `BETWEEN` em `id_lancamento`, em texto SQL,
+  levaram 0,375 s em série, 0,377 s em quatro threads na sessão principal e 0,170 s em quatro
+  threads com uma `new_session()` cada (2,20 vezes); quatro agregações por `id_conta` sobre as
+  10.000.000 de linhas, 0,270 s, 0,277 s e 0,242 s (1,12 vez). Num processo só, o menor de quatro,
+  as 200 consultas levaram 0,288 s, 0,309 s e 0,126 s em texto (2,28 vezes), 0,760 s, 0,826 s e
+  0,608 s pelo statement Core que devolve as linhas (1,25 vez) e 0,668 s, 0,717 s e 0,557 s pelo
+  que as conta (1,20 vez): o caminho de compilação de cada chamada, `bound_statement` e o `compile`
+  com `render_postcompile`, custou cerca de 2 ms em Python, sob o GIL.
+- **Os pools ganharam na leitura das tabelas, e a publicação no Delta não.** `run.ingest` das quatro
+  tabelas com `materialize=True` levou 4,859 s numa chamada por tabela e 3,735 s numa chamada só
+  (1,30 vez), com o pico de 439 MB e 612 MB; o `materialize` das quatro no leitor Delta, 5,888 s e
+  3,765 s (1,56 vez), com 435 MB e 635 MB; e `run.publish_delta` das quatro, 1,941 s com
+  `max_workers=1` e 1,905 s com 4 (1,02 vez), com 106 MB e 127 MB: o `COPY` de cada partição corre
+  em série na sessão principal ([`serialize-db.md`](serialize-db.md), seção "Paralelismo").
+
+A sonda `probes/operacao/probe_parallel_gain.py` repete as medidas no próprio processo, sem o
+trabalho em Python, a espera e as variantes dentro de `session()`, sobre quatro tabelas que ela
+gera: no motor DuckDB, nos pools, no motor Redshift e na publicação no Redshift. Neste contêiner,
+com o padrão de 5.000.000 de linhas e três medidas, as seções `duckdb` e `pools` passaram a checagem
+duas vezes. Na primeira, o pico lido depois de outra medida no mesmo processo saiu abaixo do de um
+processo novo, de +0 MB a +125 MB no `appender`: uma consulta da tabela inteira seguida do
+`to_pandas` leu +418 MB na primeira medida do processo e +205 MB em cada repetição, porque o pool do
+Arrow (mimalloc) e o `malloc` guardam a memória solta, e +365 MB com `gc.collect()`, o
+`release_unused()` do pool e o `malloc_trim(0)` da glibc antes de zerar o pico, o que a sonda faz
+desde então. Na segunda, o `stream` ganhou 1,23 vez sem trabalho e 1,66 com o pandas, com o pico de
++19 MB e +10 MB contra +313 MB e +324 MB; o `appender`, 1,03 e 1,07 vez; os dois juntos, 1,25 e 1,38
+vez; as 200 consultas pelo statement Core, 0,90 vez nas threads da sessão principal e 1,22 nas
+sessões a mais; `run.ingest`, 1,28 vez; `publish_delta`, 1,08 vez; e o `materialize`, 1,32 vez. As
+medidas no mesmo processo variaram mais que em processo novo: a série do `appender` com o pandas
+levou 2,573 s, 1,927 s e 1,655 s. No substituto, com 20.000 linhas e duas medidas, as quatro seções
+passaram a checagem, a publicação no Redshift e a limpeza das tabelas `poc<id>_*` inclusive, com os
+tempos sem valor de medida.
+
+**Consequências**: a página principal do `pdoc` ganhou a seção "Multithreading" (`docs/index.md`),
+com as APIs, o ganho medido e as regras de uso, entre elas juntar as consultas pequenas numa só;
+[`PLAN.md`](PLAN.md), seção "A troca de dados com o código cliente", ganhou as medidas das
+primitivas, e [`serialize-db.md`](serialize-db.md), seção "Paralelismo", aponta para esta seção. O
+ganho no Redshift, com as tabelas no S3 e numa máquina com mais CPUs espera a sonda no alvo
+([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A compilação de cada chamada pelo statement Core, cerca
+de 2 ms em Python, não tem cache no pacote.

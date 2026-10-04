@@ -254,7 +254,7 @@ export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
 export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
 
-# Cada sonda lê cad_lancamentos em $SOURCE_PATH, grava sob
+# As sondas que recebem $SOURCE_PATH leem cad_lancamentos nele. Cada sonda grava sob
 # $SERIALIZE_DB_TEST_S3_ROOT/serialize-db-operacao/<sonda>-<id>/, que apaga no fim, e imprime o
 # relatório no terminal e em probes/output/operacao_<sonda>_<data-hora>.txt; código de saída 1
 # quando alguma checagem reprova.
@@ -276,6 +276,12 @@ export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
 # O UNLOAD da exportação com PARALLEL OFF e em paralelo, de 1, 5, 10 e 20 milhões de linhas e da
 # primeira partição inteira, três vezes cada; as tabelas exec_operacao_<id>_* saem no fim.
 .venv/bin/python probes/operacao/probe_unload_parallel.py $SOURCE_PATH
+
+# O ganho das APIs com threads sobre a execução em série no motor DuckDB, nos pools de tabelas, no
+# motor Redshift e na publicação no Redshift, três medidas de cada forma, sobre quatro tabelas de
+# 5 milhões de linhas que a sonda gera; as tabelas exec_* do sandbox e as poc<id>_* publicadas,
+# com as linhas de controle delas, saem no fim.
+.venv/bin/python probes/operacao/probe_parallel_gain.py
 ```
 
 # Resultados
