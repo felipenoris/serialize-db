@@ -198,3 +198,26 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   after an overwrite of the same partition or a schema change, and passes after another partition, a
   compaction of the same partition or a metadata-only commit. `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`
+- The threaded APIs against their serial form, 2026-10-04, this container (Linux, 4 vCPUs, 16 GB,
+  DuckDB 1.5.5, PyArrow 25.0.1, deltalake 1.6.6, pandas 3.0.6), each measure in a new process, best
+  of three, 10,000,000 rows of six columns in a DuckDB file database, 100,000-row batches: `stream`
+  beat `query` plus the loop 1.12-1.14x with no client work, 1.56-1.65x with pandas per batch,
+  1.70-1.73x with 5 ms of pure Python and 1.90-1.91x with a 5 ms sleep, at 118-134 MB of peak
+  against 686-700 MB and the first batch at 0.02 s against 0.8 s. The raw `to_arrow_reader` inside
+  `session()` gained 1.01-1.17x, the 5 ms sleep included (1.304 s against 1.321 s), so DuckDB makes
+  the next batch only when the client pulls it [inferred] and the gain is the library's helper
+  thread; `stream` opened inside `session()` in the same thread lost (0.55-0.69x, first batch at 1.2
+  s, the whole query through the spool file). `appender` against all the work then `append`: 1.09x,
+  1.52x, 1.13x and 1.19x; `stream` and `appender` in one `with`: 1.07x, 1.47x, 1.20x and 1.24x, with
+  40% to 45% less peak. 200 small queries from four threads: 0.377 s on the main session against
+  0.375 s serial, 0.170 s with one `new_session()` per thread (2.20x), as SQL text; as Core
+  statements, about 2 ms more each in Python (the compile path, no cache) and only 1.20-1.25x; four
+  big aggregations, 1.12x. In one warm process the serial `appender` path ran faster (fewer page
+  faults) and its pandas gain fell to 1.07-1.23x. Four 5,000,000-row tables in a local Delta folder:
+  `run.ingest(*tables)` 1.30x and `reader.materialize(*tables)` 1.56x over one call per table, with
+  a 39% to 46% higher peak; `publish_delta(max_workers=4)` 1.02x. A peak read in-process after
+  earlier measures misses the memory the process kept: one query read +418 MB first and +205 MB on
+  each repeat, and +365 MB with the Arrow pool's `release_unused()` and glibc's `malloc_trim(0)`
+  before `/proc/self/clear_refs`. `probes/operacao/probe_parallel_gain.py` repeats the measures for
+  the Redshift engine, S3 and `publish_redshift` in the target. `plan/POC.md`,
+  `plan/OPEN_QUESTIONS.md`, `docs/index.md`

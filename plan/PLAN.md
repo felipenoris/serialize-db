@@ -193,7 +193,9 @@ em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que el
   linhas em 94 MB, contra 83 MB do leitor direto e 322 MB da tabela inteira.
 - **Dentro de `session()`, na mesma thread, a consulta roda na thread de quem chama**, porque a
   auxiliar esperaria o bloco, e o bloco o stream; o cliente lê o arquivo depois da consulta
-  inteira. Toda espera por um lote tem prazo e confere o encerramento, a thread não referencia o
+  inteira, e o caminho custa mais que o `query`: com o pandas por lote em 10.000.000 de linhas,
+  1,995 s contra 1,378 s, com o primeiro lote em 1,190 s (2026-10-04, [`POC.md`](POC.md)). Toda
+  espera por um lote tem prazo e confere o encerramento, a thread não referencia o
   stream, e `close` (ou o fim do `with`) cancela por `interrupt()` a consulta que ainda roda e apaga
   o arquivo, e o `cleanup` do motor cancela o comando em curso antes de fechar a conexão (decisão do
   usuário de 2026-09-23): o `close` depois do primeiro lote de uma varredura longa terminou em 7 a
@@ -212,8 +214,13 @@ em `test_duckdb.py`, `test_pyarrow.py` e `tests/test_engine_duckdb.py`. O que el
   arbitrária.
 - **O ganho do encadeamento é o trabalho do cliente escondido atrás da leitura e da escrita**,
   limitado pelo estágio mais lento: 1,25x com o trabalho em pandas por lote e 1,55x com um laço
-  Python puro, em 6.000.000 de linhas. Ler um lote é uma chamada nativa longa, e a thread auxiliar
-  paga no máximo um intervalo de troca do GIL por lote ao lado do laço Python do cliente.
+  Python puro, em 6.000.000 de linhas, na sondagem de 2026-09-20 no macOS. Com as primitivas do
+  motor DuckDB, em 10.000.000 de linhas num banco em arquivo, o `stream` ganhou do `query` seguido
+  do laço de 1,12 a 1,14 vez sem trabalho do cliente, de 1,56 a 1,65 com o pandas por lote, de
+  1,70 a 1,73 com 5 ms de Python puro e de 1,90 a 1,91 com 5 ms de espera, e o `stream` com o
+  `appender` ganhou da série 1,07, 1,47, 1,20 e 1,24 vez (2026-10-04, [`POC.md`](POC.md)). Ler um
+  lote é uma chamada nativa longa, e a thread auxiliar paga no máximo um intervalo de troca do GIL
+  por lote ao lado do laço Python do cliente.
 - **`appender` grava os lotes num arquivo intermediário numa thread auxiliar e, no `close`, os
   insere na tabela num único `INSERT ... BY NAME`**, sob o lock, enquanto o cliente prepara o lote
   seguinte: `write` faz o `cast` do lote na thread do cliente, para o erro aparecer com o lote em

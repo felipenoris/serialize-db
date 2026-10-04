@@ -391,7 +391,9 @@ threads da biblioteca, que leem e gravam lotes e publicam tabelas fora da sessã
 cliente, com `concurrent.futures`, sobre primitivas que podem ser chamadas de qualquer thread. O que
 a troca por lotes, o `cast` e o GIL fixam está em [`PLAN.md`](PLAN.md), seção "A troca de dados com
 o código cliente"; as medições, em `tests/proof_of_concept/test_concurrency.py` e `test_parallel.py`,
-e os exemplos do Redshift em `test_redshift.py`.
+e os exemplos do Redshift em `test_redshift.py`. O ganho de cada API com threads sobre a execução em
+série está em [`POC.md`](POC.md), seção "O que a medição das APIs com threads mostrou", e o guia do
+cliente, na seção "Multithreading" de `docs/index.md`.
 
 ### O que a biblioteca garante
 

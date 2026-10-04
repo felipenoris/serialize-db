@@ -38,6 +38,7 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_vacuum_orphans.py s3://bucket/origem
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_compact_memory.py s3://bucket/origem
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_parallel_gain.py
 ```
 
 ## Os scripts
@@ -202,16 +203,19 @@ comparação valor a valor (`compare`, com `NaN` igual a `NaN` e o zero com o se
 
 As sondas de `operacao/` rodam no ambiente alvo as rotinas de `serialize-db` que
 [`plan/OPEN_QUESTIONS.md`](../plan/OPEN_QUESTIONS.md) ainda espera ler lá, sobre as primeiras
-partições de `cad_lancamentos` da base de origem, que elas só leem. Cada uma grava sob
+partições de `cad_lancamentos` da base de origem, que elas só leem; `probe_parallel_gain.py` gera
+as próprias tabelas. Cada uma grava sob
 `<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-operacao/<sonda>-<id>/` ou, sem a variável, sob
 `<SERIALIZE_DB_TEST_LOCAL_ROOT>/serialize-db-operacao/<sonda>-<id>/`, e apaga a pasta no fim, também
 quando para numa exceção (`SERIALIZE_DB_TEST_KEEP` a mantém); sem nenhuma das duas raízes, ou com a
 origem sem as partições, para com o código 2. As rotinas rodam como o operador as roda, pelo
 `serialize-db` do ambiente virtual num processo filho, e as interrompidas levam `SIGKILL`, como o
-kernel sem memória, que não deixa rodar nenhum `finally`. Cada leitura sai no terminal e em
+kernel sem memória, que não deixa rodar nenhum `finally`; `probe_parallel_gain.py` chama a
+biblioteca no próprio processo. Cada leitura sai no terminal e em
 `output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime `OK` ou `PROBLEMAS`
 com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as variáveis do
-ambiente alvo estão em `SUITE.md`, seção "Sondas da operação".
+ambiente alvo estão em `SUITE.md`, seção "Sondas da operação", e o de `probe_parallel_gain.py`,
+no cabeçalho dela.
 
 | Sonda | O que roda |
 | --- | --- |
@@ -220,6 +224,7 @@ ambiente alvo estão em `SUITE.md`, seção "Sondas da operação".
 | `probe_vacuum_orphans.py` | `serialize-db vacuum --full` de dois órfãos, cópias do arquivo registrado na pasta da partição e num prefixo dentro dela, com a retenção padrão (nada listado), com `--retention-hours 0` (os dois) e com `--apply` (os dois apagados, a tabela intacta). |
 | `probe_compact_memory.py` | `serialize-db compact` da partição repartida em cerca de 32 arquivos pelo `COPY ... FILE_SIZE_BYTES` do DuckDB e registrada: os arquivos juntados, as mesmas linhas e o tempo e o pico de RSS do processo. |
 | `probe_unload_parallel.py` | O `UNLOAD` da exportação do motor Redshift com `PARALLEL OFF` e em paralelo, de 1, 5, 10 e 20 milhões de linhas e da partição inteira, três vezes cada: o menor tempo, os arquivos e o tempo dos rodapés por tamanho e modo, contra o limiar de 5.000.000 linhas de `_PARALLEL_OFF_ROWS`; pede a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, e o sandbox `exec_operacao_<id>_*` sai no `cleanup`. |
+| `probe_parallel_gain.py` | O ganho das APIs com threads sobre a execução em série, em quatro tabelas iguais de `--rows` linhas (5.000.000 por padrão) que a sonda gera e publica no Delta, cada variante `--repetitions` vezes (3 por padrão): no motor DuckDB, o `stream`, o `appender`, os dois no mesmo `with`, sem trabalho do cliente e com o pandas por lote, e 200 consultas pequenas em série, em quatro threads na sessão principal e em quatro sessões a mais (`duckdb`); `run.ingest`, `run.publish_delta` e o `materialize` do leitor Delta com as quatro tabelas numa chamada contra uma por tabela (`pools`); no motor Redshift, `run.ingest` das quatro, o `stream`, o `appender`, os dois juntos, 80 consultas pequenas e `run.publish_delta` (`redshift`); e `publish_redshift` com `max_workers=4` contra 1 (`publicacao`). Imprime cada medida e o resumo com o menor tempo de cada variante, o pico e a razão sobre a série, e confere as linhas contadas; `redshift` e `publicacao` pedem a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, o sandbox `exec_*` sai no `cleanup`, e a sonda apaga as tabelas `poc<id>_*` que publicou e as linhas de controle delas. |
 
 `operation_lib.py` é a biblioteca comum: a raiz de trabalho (`work_database`), as partições da
 origem, a carga pela biblioteca, `serialize-db` num processo filho até o fim (`run_cli`) ou
