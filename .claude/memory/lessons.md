@@ -696,3 +696,11 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   dotted path as a column outside the contract, which has no nested type; the case
   `coluna aninhada` of `test_register_files_refuses_each_defect` fails on the old code.
   `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+- **A DuckDB version bump waits for the PyPI extension wheels** (2026-10-04). The dependency
+  review of 2026-10-03 read the PyPI versions of the packages in `pyproject.toml` only, pinned
+  DuckDB 1.5.6 and passed every suite with the extensions `INSTALL` fetched from the DuckDB
+  repository; after the merge, the user pointed out that the clients install `delta` and `httpfs`
+  from the wheels `duckdb-extension-delta` and `duckdb-extension-httpfs`, each version requiring the
+  exact `duckdb`, and the newest was 1.5.5. With `duckdb==1.5.6` the resolver picked the 1.0.3
+  wheels without an error. Before bumping DuckDB, read those wheels' versions on PyPI; the rule
+  lives here because `CLAUDE.md` is at its size budget. `plan/POC.md`
