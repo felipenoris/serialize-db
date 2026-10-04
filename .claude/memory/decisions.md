@@ -1777,3 +1777,18 @@ four places passed every package test on 2.1.3 and on 2.0.54. The assistant reco
 duckdb-engine does not follow 2.1), and the user chose "Manter 2.0.54". The item stays in
 `plan/OPEN_QUESTIONS.md`, read again with a newer 2.1.x or with the DuckDB dialect switch.
 `pyproject.toml`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## The backslash of the DuckDB constants (2026-10-03)
+
+The same dependency update found that on SQLAlchemy 2.0.54 the DuckDB dialect doubles the backslash
+of every constant it writes (`_backslash_escapes` true, inherited from PostgreSQL), and DuckDB reads
+both characters: `render(..., "duckdb")` misses the row, and the DuckDB engine refuses a `LIKE`
+whose `ESCAPE` is a backslash and misses the row of a `literal_execute` bindparam. Offered on a
+decision card the fix in PR #125 (recommended: a wrong result without an error, fixed by one line
+and guarded by a test) and leaving it recorded, the user chose "Corrigir agora". The card said the
+engines were unaffected; before the answer the assistant corrected it in the thread, with the
+engine's two cases and the fix on both DuckDB dialects. `_backslash_escapes` is false on the DuckDB
+dialects of `serialize_db.sql` and `serialize_db.engine.duckdb`, and the Redshift ones keep
+doubling.
+`src/serialize_db/sql.py`, `src/serialize_db/engine/duckdb.py`, `tests/test_sql.py`,
+`tests/test_engine_duckdb.py`, `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`

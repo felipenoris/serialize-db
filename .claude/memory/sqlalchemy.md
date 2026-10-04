@@ -163,10 +163,19 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `_backslash_escapes` (true on the Redshift dialects of `sql` and `engine.redshift`, false on the
   DuckDB one of `sql`) passed every package test on 2.1.3 and on 2.0.54. `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`
-- On 2.0.54, the true `_backslash_escapes` makes `render(..., "duckdb")` double a constant's
-  backslash, and DuckDB, which has no backslash escape, reads both: `"t"."b" = 'a\\b'` missed the
-  row `a\b` (2026-10-03). The engines pass values as parameters, and no test covers a constant with
-  a backslash in `render`. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+- On 2.0.54, the true `_backslash_escapes` makes the DuckDB dialect double the backslash of every
+  constant it writes, and DuckDB, which has no backslash escape, reads both (2026-10-03):
+  `render(..., "duckdb")` wrote `"t"."b" = 'a\\b'` and missed the row `a\b`, and the engine's
+  `qmark` compile, which passes values as parameters, still wrote `ESCAPE '\\'` for
+  `like(..., escape="\\")` (DuckDB: `Invalid escape string. Escape string must be empty or one
+  character.`) and `= 'a\\b'` for a `literal_execute` bindparam, which missed the row.
+  duckdb-engine's `initialize` calls `DefaultDialect.initialize` and skips PostgreSQL's
+  `_set_backslash_escapes`, so a client's connected duckdb-engine keeps it true and refuses the
+  same `ESCAPE`. The fix the user chose the same day sets `_backslash_escapes = False` on
+  `serialize_db.sql`'s DuckDB dialect and on `engine.duckdb._QMARK`, guarded by
+  `test_render_writes_the_backslash_as_each_engine_reads_it` and
+  `test_query_keeps_backslash_literals`, which failed on the old code. `plan/POC.md`,
+  `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`
 
 ## duckdb-sqlalchemy
 

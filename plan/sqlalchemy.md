@@ -1234,6 +1234,12 @@ Os comportamentos do compilador que definem `render`, verificados em 2026-09-19 
   `literal_column(":nome")` por `replacement_traverse` antes de compilar, e o texto sai
   `mes = :mes` nos dois casos, sem tocar no filtro de avisos do processo (2026-09-22,
   [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
+- O dialeto avulso do DuckDB herda do PostgreSQL o `_backslash_escapes` verdadeiro e dobra a
+  contrabarra de cada constante que escreve, `'a\\b'` para `a\b`, também no `ESCAPE` do `LIKE`;
+  o DuckDB lê as duas, e o `=` não acha a linha. O duckdb-engine não o desliga ao conectar,
+  porque o `initialize` dele pula o do PostgreSQL. `render` e o motor DuckDB o fixam em falso no
+  dialeto do DuckDB, e o do Redshift segue verdadeiro (leitura de 2026-10-03,
+  [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md)).
 - Um nome de tabela com `{` é citado, `"{prefix}cad_operacoes"`; `quoted_name(..., quote=False)` o
   deixa sem aspas nos dois dialetos.
 - Um esquema `banco.esquema`, o nome em três partes do datashare do ambiente alvo, cai na mesma

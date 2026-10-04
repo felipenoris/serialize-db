@@ -2,13 +2,13 @@
 arquivos.
 
 Os testes correm sobre o statement de ``plan/sqlalchemy.md`` (o parâmetro, um ``%`` e um ``:``
-em literais, duas tabelas do contrato), sobre os quatro statements do pipeline fictício de
-``tests/client_model/statements.py``, com os arquivos versionados em ``tests/client_model/sql/``,
-sobre uma tabela cujos identificadores carregam ``:`` e ``'`` e sobre uma com a ``key`` de uma
-coluna diferente do nome. Nada é gravado, exceto os testes marcados ``local``, que gravam os
-arquivos de texto SQL sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o texto executa num DuckDB em memória
-sobre o DDL da etapa 1, e o statement com ``bindparam`` num ``sqlalchemy.Connection`` do
-``duckdb-engine`` criado fora da biblioteca.
+em literais, duas tabelas do contrato), sobre constantes com contrabarra nas mesmas tabelas, sobre
+os quatro statements do pipeline fictício de ``tests/client_model/statements.py``, com os arquivos
+versionados em ``tests/client_model/sql/``, sobre uma tabela cujos identificadores carregam ``:`` e
+``'`` e sobre uma com a ``key`` de uma coluna diferente do nome. Nada é gravado, exceto os testes
+marcados ``local``, que gravam os arquivos de texto SQL sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o
+texto executa num DuckDB em memória sobre o DDL da etapa 1, e o statement com ``bindparam`` num
+``sqlalchemy.Connection`` do ``duckdb-engine`` criado fora da biblioteca.
 """
 
 from __future__ import annotations
@@ -198,6 +198,32 @@ def test_rendered_text_runs_in_duckdb(
     client_connection.execute(text, values)
     vehicles = client_connection.execute(f'SELECT * FROM "{prefix}dom_veiculos"').fetchall()
     assert vehicles == [(5, "veículo 5")]
+
+
+def test_render_writes_the_backslash_as_each_engine_reads_it() -> None:
+    """A contrabarra de uma constante sai simples no texto do DuckDB, que a lê como caractere, e
+    dobrada no do Redshift, que a lê como escape; o texto do DuckDB acha a linha pelo `=` e pelo
+    `ESCAPE` do `LIKE`."""
+    by_equality = sa.select(DRAFT_ACCOUNTS.c.id_conta).where(DRAFT_ACCOUNTS.c.numero == r"1\2")
+    by_escape = sa.select(DRAFT_ACCOUNTS.c.id_conta).where(
+        DRAFT_ACCOUNTS.c.numero.like(r"1\%2", escape="\\")
+    )
+
+    # O texto de cada motor.
+    duckdb_text = sql.render(by_equality, "duckdb", DRAFT_METADATA, prefix="")
+    redshift_text = sql.render(by_equality, "redshift", DRAFT_METADATA, prefix="")
+    assert duckdb_text.endswith(r"= '1\2'")
+    assert redshift_text.endswith(r"= '1\\2'")
+
+    # O texto do DuckDB roda sobre as contas 1\2 e 1%2, ao lado das do rascunho.
+    connection = draft_sandbox("")
+    connection.executemany(
+        'INSERT INTO "cad_contas" VALUES ($id_conta, $numero)',
+        [{"id_conta": 11, "numero": r"1\2"}, {"id_conta": 12, "numero": "1%2"}],
+    )
+    assert connection.execute(duckdb_text).fetchall() == [(11,)]
+    escape_text = sql.render(by_escape, "duckdb", DRAFT_METADATA, prefix="")
+    assert connection.execute(escape_text).fetchall() == [(12,)]
 
 
 def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:

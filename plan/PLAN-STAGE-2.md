@@ -77,7 +77,10 @@ analisa (decisão do usuário de 2026-09-22; `sqlglot` fixado no grupo `dev`, e 
   entram nas dependências de execução de `pyproject.toml` no commit que escrever o módulo, com
   `prepare_offline.sh` rodado de novo. A alternativa medida em 2026-09-21 — o dialeto `postgresql`
   do próprio SQLAlchemy, que compila o mesmo texto fora a citação de `"timestamp"`
-  ([`POC.md`](POC.md)) — fica registrada e não adotada.
+  ([`POC.md`](POC.md)) — fica registrada e não adotada. O dialeto do DuckDB sai com
+  `_backslash_escapes` falso: herdado do PostgreSQL, ele dobraria a contrabarra de cada constante, e
+  o DuckDB, que a lê como caractere, leria as duas (`= 'a\\b'` não achava a linha `a\b`); o do
+  Redshift a dobra, porque o Redshift a lê como escape (leitura de 2026-10-03, [`POC.md`](POC.md)).
 - **`bind`** recusa um texto que ainda traga o sentinela `{prefix}`, porque sem a troca ele chegaria
   ao motor como erro de sintaxe (decisão do usuário de 2026-09-21; `read_sql` o preenche). Depois
   lê os nomes dos marcadores com `_placeholders`, que percorre o texto com uma expressão que
@@ -134,6 +137,7 @@ analisa (decisão do usuário de 2026-09-22; `sqlglot` fixado no grupo `dev`, e 
 | --- | --- | --- |
 | Texto por dialeto | `test_render_embeds_constants_and_keeps_parameters` | Constantes embutidas, `:nome` preservado, `%` simples em `LIKE`, toda tabela e coluna do contrato entre aspas nos dois dialetos com o sentinela dentro delas (`"{prefix}cad_contas"."numero"`, `"to"`, `"timestamp"`); DuckDB e Redshift iguais para o statement portável. |
 | Execução | `test_rendered_text_runs_in_duckdb` | O texto com `prefix=""` e com `prefix="exec_42_"` passa por `bind` e roda num DuckDB em memória com `$nome`, sobre o DDL da etapa 1; os quatro statements de `STATEMENTS` rodam sobre as 12 tabelas do modelo cliente, e `veiculos_novos` insere o veículo do lançamento uma vez só. |
+| Contrabarra | `test_render_writes_the_backslash_as_each_engine_reads_it` | A constante com contrabarra sai simples no texto do DuckDB e dobrada no do Redshift; o texto do DuckDB acha a linha pelo `=` e pelo `ESCAPE` do `LIKE`. |
 | Literais com dois-pontos | `test_bind_leaves_quoted_literals_and_casts_alone` | `'TI:%'`, `'12:30'` e `valor::DECIMAL(18, 2)` intactos; só `:nome` do dicionário muda. |
 | Identificadores citados | `test_bind_leaves_quoted_identifiers_alone` | As colunas `taxa :base`, `:base` e `preco d'agua` saem intactas entre aspas duplas, e o `:nome` fora das aspas é o único trocado. |
 | Parâmetros | `test_bind_refuses_missing_and_extra_parameters` | Faltante e sobrando são `SqlError` com os dois conjuntos na mensagem. |

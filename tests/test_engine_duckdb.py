@@ -8,14 +8,14 @@ particionado por ``data_base_str`` com a origem ``data_base``, com uma chave est
 Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a abertura que
 falha, a sessão a mais, a ingestão presa à versão e a poda por intervalo, a transação do cliente em
 ``session()`` diante do ``ingest`` materializado e de ``create_table``, os parâmetros do statement,
-a versão fixada, o stream (o primeiro lote com a consulta rodando, o orçamento, o cancelamento, os
-erros), ``create_table`` e o appender (o ``INSERT`` único no ``close``, o ``close`` repetido, as
-recusas do ``write``, o appender abandonado, a view e a tabela ausente recusadas, a ordem do exemplo
-mensal, o pipeline de três estágios, a leitura durante um acréscimo em voo, dois escritores na mesma
-tabela), as formas por tabela, os tipos e o ``NOT NULL`` do ``ingest`` materializado, o ciclo com o
-pandas, a auditoria (cada defeito, a dispensa da junção, a amostra, os não finitos, o órfão), a
-exportação pelo registro do arquivo do ``COPY`` e o pipeline de exemplo num banco em arquivo. A
-extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+as constantes com contrabarra, a versão fixada, o stream (o primeiro lote com a consulta rodando, o
+orçamento, o cancelamento, os erros), ``create_table`` e o appender (o ``INSERT`` único no
+``close``, o ``close`` repetido, as recusas do ``write``, o appender abandonado, a view e a tabela
+ausente recusadas, a ordem do exemplo mensal, o pipeline de três estágios, a leitura durante um
+acréscimo em voo, dois escritores na mesma tabela), as formas por tabela, os tipos e o ``NOT NULL``
+do ``ingest`` materializado, o ciclo com o pandas, a auditoria (cada defeito, a dispensa da junção,
+a amostra, os não finitos, o órfão), a exportação pelo registro do arquivo do ``COPY`` e o pipeline
+de exemplo num banco em arquivo. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -854,6 +854,24 @@ def test_query_keeps_percent_literals(
         'WHERE "area" LIKE \'X%\' AND "id_lancamento" > :minimo'
     )
     assert engine.query(text, {"minimo": 10}).column("n")[0].as_py() == 1
+
+
+def test_query_keeps_backslash_literals(
+    setup: Setup,
+) -> None:
+    """A contrabarra que o statement embute no texto chega simples ao DuckDB, que a lê como
+    caractere: no ``ESCAPE`` do ``LIKE`` e no ``bindparam`` com ``literal_execute``."""
+    engine = setup.engine
+    percent = entry_rows(MONTHS[0], 1, 3, area="A%B")
+    backslash = entry_rows(MONTHS[0], 10, 2, area=r"A\B")
+    create_and_append(engine, ENTRIES, pa.concat_tables([percent, backslash]))
+    by_escape = sa.select(sa.func.count().label("n")).where(
+        ENTRIES.c.area.like(r"A\%B", escape="\\")
+    )
+    assert engine.query(by_escape).column("n")[0].as_py() == 3
+    inline_area = sa.bindparam("area", r"A\B", literal_execute=True)
+    by_inline_area = sa.select(sa.func.count().label("n")).where(ENTRIES.c.area == inline_area)
+    assert engine.query(by_inline_area).column("n")[0].as_py() == 2
 
 
 # ---------------------------------------------------------------- o stream

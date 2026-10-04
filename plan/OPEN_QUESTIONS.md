@@ -136,17 +136,10 @@ foi medido em [`POC.md`](POC.md).
   statement que o próprio cliente passou por `params()` é recusado com `SqlError`. A reflexão do
   duckdb-engine 0.17.0 também falha na 2.1, fora do pacote. O ajuste que passou os testes do
   pacote na 2.1.3 e na 2.0.54 é `construct_expanded_state()` nos dois motores, `sa.Float` ao lado
-  de `sa.Numeric` nas somas do `import_report` e `_backslash_escapes` explícito em cada dialeto.
-  O usuário decidiu manter a 2.0.54 em 2026-10-03 (`.claude/memory/decisions.md`); a leitura se
-  repete com uma 2.1.x nova ou com a troca do dialeto do DuckDB.
-- **A contrabarra das constantes no `render` para o DuckDB.** Com a SQLAlchemy 2.0.54, o dialeto
-  do DuckDB dobra a contrabarra de uma constante do statement (`_backslash_escapes` verdadeiro, o
-  escape do PostgreSQL), e o DuckDB, que não a trata como escape, lê as duas: o texto de
-  `render(..., "duckdb")` com `"t"."b" = 'a\\b'` não achou a linha `a\b` ([`POC.md`](POC.md)).
-  Os motores passam os valores como parâmetros e não são afetados, e o texto do Redshift precisa
-  da contrabarra dobrada; nenhum teste cobre uma constante com contrabarra no `render`. Espera o
-  usuário: corrigir agora (`_backslash_escapes` falso no dialeto do DuckDB de `serialize_db.sql`,
-  com um teste), ou junto do ajuste da SQLAlchemy 2.1.
+  de `sa.Numeric` nas somas do `import_report` e `_backslash_escapes` verdadeiro e explícito nos
+  dialetos do Redshift; os do DuckDB já o fixam em falso. O usuário decidiu manter a 2.0.54 em
+  2026-10-03 (`.claude/memory/decisions.md`); a leitura se repete com uma 2.1.x nova ou com a troca
+  do dialeto do DuckDB.
 - **O dialeto do DuckDB.** O `duckdb-engine` 0.17.0, o compilador do `render` e do motor DuckDB
   fixado em `pyproject.toml`, é de 2025-03-29, sem lançamento desde então, com 55 issues e 43 PRs
   abertos e a correção da reflexão da `pg_collation` parada num PR de 2026-03-28; o

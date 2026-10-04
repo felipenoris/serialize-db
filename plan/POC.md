@@ -5901,11 +5901,16 @@ do `ruff check` e do `ruff format --check`.
     `SqlError`, e o `render` o escreveu com `:x` no lugar de `1`;
   - a reflexão do duckdb-engine 0.17.0 seguiu falhando na `pg_catalog.pg_collation`
     (`test_create_all_and_reflection`).
-- **A contrabarra do `render` no DuckDB com a 2.0.54.** O `_backslash_escapes` verdadeiro dobra a
+- **A contrabarra das constantes no DuckDB com a 2.0.54.** O `_backslash_escapes` verdadeiro dobra a
   contrabarra da constante `a\b` no texto de `render(..., "duckdb")`, `'a\\b'`, e o DuckDB, que não
   a trata como escape, lê as duas: o `WHERE "t"."b" = 'a\\b'` não achou a linha `a\b` na 2.0.54 e a
-  achou na 2.1.3. Os motores passam os valores como parâmetros; nenhum teste cobre uma constante
-  com contrabarra no `render`.
+  achou na 2.1.3. O motor DuckDB passa os valores como parâmetros, mas o mesmo `_backslash_escapes`
+  vale para as constantes que o texto dele embute: o `like(r"a\%b", escape="\\")` saiu `ESCAPE
+  '\\'`, que o DuckDB recusa com `Invalid escape string. Escape string must be empty or one
+  character.`, e o `bindparam("v", r"a\b", literal_execute=True)` saiu `= 'a\\b'` e não achou a
+  linha. A `Connection` do cliente sobre o duckdb-engine recusa o mesmo `ESCAPE`: o `initialize` do
+  duckdb-engine pula o do PostgreSQL, e o `_backslash_escapes` segue verdadeiro depois de conectar.
+  Nenhum teste cobria uma constante com contrabarra.
 - **O ajuste do pacote.** Em duas cópias a mais com boto3, ruff e sqlglot novos, com
   `construct_expanded_state()` nos dois motores, `(sa.Numeric, sa.Float)` nas somas do
   `import_report` e `_backslash_escapes` explícito, verdadeiro nos dialetos do Redshift de
@@ -5914,9 +5919,19 @@ do `ruff check` e do `ruff format --check`.
   reprovaram os estudos da reflexão, do `render_postcompile` e, com o substituto, do `required`
   depois do `params()`; com a 2.0.54, 255, 571 e 688 aprovados, sem reprovação. A sonda do
   `render` deu, nas duas versões, o texto do DuckDB com uma contrabarra e o do Redshift com duas.
+- **A correção da contrabarra no DuckDB.** Numa cópia do branch com `_backslash_escapes` falso no
+  dialeto do DuckDB de `serialize_db.sql` e no `qmark` de `serialize_db.engine.duckdb`, o `render`
+  escreveu `'a\b'`, o motor escreveu `ESCAPE '\'`, e os três casos acharam as linhas; o texto do
+  Redshift seguiu com a contrabarra dobrada. Os testes novos,
+  `test_render_writes_the_backslash_as_each_engine_reads_it` e
+  `test_query_keeps_backslash_literals`, reprovaram no código anterior, um pelo texto
+  `= '1\\2'` e o outro pelo `Invalid escape string`, e passaram com a correção: 256 aprovados e
+  436 pulados sem variável, 573 e 119 com a raiz local, e 690 e 2 com o substituto.
 
 **Consequências**: `pyproject.toml` fixa boto3 1.43.108, DuckDB 1.5.6, ruff 0.16.10 e sqlglot
 30.21.0, e a pasta preparada para o ambiente alvo precisa do `prepare_offline.sh` de novo, pelas
-extensões da 1.5.6. A SQLAlchemy fica em 2.0.54, por decisão do usuário do mesmo dia, e o item
-dela em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) traz a 2.1.3; a contrabarra do `render` no DuckDB
-entra lá como item próprio, à espera do usuário.
+extensões da 1.5.6. A SQLAlchemy fica em 2.0.54, por decisão do usuário do mesmo dia, e o item dela
+em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) traz a 2.1.3; a contrabarra das constantes no DuckDB,
+que o usuário mandou corrigir no mesmo dia, sai com `_backslash_escapes` falso nos dois dialetos do
+DuckDB do pacote, como registram [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) e
+[`PLAN-STAGE-4.md`](PLAN-STAGE-4.md).
