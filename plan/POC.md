@@ -6125,3 +6125,46 @@ primitivas, e [`serialize-db.md`](serialize-db.md), seção "Paralelismo", apont
 ganho no Redshift, com as tabelas no S3 e numa máquina com mais CPUs espera a sonda no alvo
 ([`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)). A compilação de cada chamada pelo statement Core, cerca
 de 2 ms em Python, não tem cache no pacote.
+
+## O que a suíte inteira mostrou no Windows
+
+Em 2026-10-04, o usuário relatou o `uv run python -m pytest` parando na coleta no Windows 11, com
+Python 3.13.3, com `ModuleNotFoundError: No module named 'resource'` em `probes/duckdb_threads.py`,
+que `tests/test_probes.py` importa. Sem argumentos, o pytest coleta `tests/` inteiro, e a esteira
+roda só os testes do pacote, sem `tests/test_probes.py` e sem `tests/proof_of_concept/` (decisão do
+usuário de 2026-09-21). Um `tests.yml` temporário no ramo da correção rodou a suíte inteira no
+runner `windows-latest` (Windows-2025Server-10.0.26100-SP0, Python 3.13.15, deltalake 1.6.6, DuckDB
+1.5.5, PyArrow 25.0.1), sem variável e com a raiz local; o job Ubuntu passou nas duas rodadas.
+
+- **A primeira rodada, com o `resource` já importado só no ramo do macOS, teve 4 casos
+  reprovados, 252 aprovados e 437 pulados sem variável, e 9 reprovados, 564 aprovados e 120
+  pulados com a raiz local.**
+- **O Windows não distingue maiúsculas no nome das variáveis.** `no_proxy` e `NO_PROXY` foram uma
+  variável só, e `prepare_environment` não teve o que copiar; o `setenv` de `https_proxy` trocou o
+  valor de `HTTPS_PROXY`, e `environment_rows` a leu como `(igual a HTTPS_PROXY)`. É a leitura do
+  `encodekey` do `os.py` que o item do Windows de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) fez
+  sem rodar.
+- **O pico de memória dos scripts de subprocesso de `test_duckdb.py`** importa o `resource` e lê
+  o `VmHWM` de `/proc/self/status`, e os dois casos que o medem pararam no subprocesso.
+- **O caminho do Linux sem unidade**, `/dados/prd/cad_lancamentos`, não é absoluto no Windows.
+- **A pasta dos testes do delta-rs juntava `/deltalake/<nome>` à raiz escrita com `\`**, e as
+  primitivas do pacote compararam esse texto com caminhos escritos com `/`: `Storage.relative`
+  recusou a URI em `version_diff` (`ValueError`), e o registro do `RETURN_STATS` a recusou em
+  `file_from_return_stats` (`RegistrationRefused`). O pacote monta as URIs a partir da raiz escrita
+  com `/`.
+- **O caminho relativo dos arquivos do `COPY ... PARTITION_BY` do DuckDB** sai com `\` no `str`
+  do `pathlib`; as pastas `mes=<mês>/data_0.parquet` são as do Linux.
+- **O relatório do `credentials.py`, gravado em UTF-8, foi lido pelo `read_text()` em cp1252**, a
+  codificação padrão do Python no runner, e parou num `UnicodeDecodeError` no byte 0x81.
+- **A segunda rodada passou com 252 aprovados e 441 pulados sem variável, em 23,7 s, e com 568
+  aprovados e 125 pulados com a raiz local, em 113,4 s.** No Ubuntu, foram 256 e 437, e 574 e
+  119: os quatro pulados a mais sem variável são os casos que leem um fato só do Linux, e os seis
+  a mais com a raiz local são esses, o do `stream` gravado em arquivo, que mede o mesmo pico, e o
+  do modo POSIX dos arquivos.
+
+**Consequências**: `probes/duckdb_threads.py` importa o `resource` só no ramo do macOS, onde o
+lê. A pasta dos testes do delta-rs usa `/`, a listagem do `COPY` particionado compara com `/`, e o
+relatório do `credentials.py` é lido em UTF-8. Os casos que leem um fato só do Linux, o pico de
+memória pelo `/proc`, o caminho sem unidade e as variáveis em duas grafias, são pulados no Windows.
+O `README.md` diz que no Windows o pytest roda como módulo do Python. A esteira continua só com os
+testes do pacote, e no Linux nada muda.

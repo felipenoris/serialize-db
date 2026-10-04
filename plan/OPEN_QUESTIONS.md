@@ -180,14 +180,16 @@ foi medido em [`POC.md`](POC.md).
   versão e paravam na 1.5.5 em 2026-10-04 ([`POC.md`](POC.md)); o pino fica em 1.5.5. A troca
   para a 1.5.6, que passou os testes do pacote em 2026-10-03, espera os wheels da 1.5.6 no PyPI.
 - **O pacote no Windows.** A esteira roda os testes do pacote num runner Windows desde 2026-10-01
-  ([`POC.md`](POC.md)), com a pasta local e o DuckDB em memória; o S3, o Redshift, os probes,
-  `prepare_offline.sh` e o projeto cliente não rodaram no Windows. Lá, o `os.environ` passa o nome
-  da variável para maiúsculas (o `encodekey` do `os.py` do Python 3.13, lido sem rodar no Windows),
-  e `_proxy_settings`, de `serialize_db.storage`, lê na variável `username`, a do usuário do proxy
-  no espaço SageMaker, o `USERNAME` do login: com `HTTP_PROXY` definido, o DuckDB recebe o login
-  como usuário do proxy, com ou sem usuário no endereço. Espera o usuário: no Windows, ler o
-  usuário e a senha do proxy só do endereço, ou de variáveis `SERIALIZE_DB_`, ou manter a leitura
-  enquanto o Windows é só a máquina de quem desenvolve.
+  ([`POC.md`](POC.md)), com a pasta local e o DuckDB em memória, e a suíte inteira, com os testes
+  dos probes e as provas de conceito, passou no runner em 2026-10-04; o S3, o Redshift, os próprios
+  probes, `prepare_offline.sh` e o projeto cliente não rodaram no Windows. Lá, o `os.environ` passa
+  o nome da variável para maiúsculas (o `encodekey` do `os.py` do Python 3.13; no runner, `no_proxy`
+  e `NO_PROXY` foram uma variável só), e `_proxy_settings`, de `serialize_db.storage`, lê na
+  variável `username`, a do usuário do proxy no espaço SageMaker, o `USERNAME` do login: com
+  `HTTP_PROXY` definido, o DuckDB recebe o login como usuário do proxy, com ou sem usuário no
+  endereço. Espera o usuário: no Windows, ler o usuário e a senha do proxy só do endereço, ou de
+  variáveis `SERIALIZE_DB_`, ou manter a leitura enquanto o Windows é só a máquina de quem
+  desenvolve.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   ([`POC.md`](POC.md)), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma

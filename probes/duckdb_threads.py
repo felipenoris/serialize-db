@@ -70,7 +70,6 @@ import multiprocessing
 import os
 import pkgutil
 import re
-import resource
 import shutil
 import sys
 import tempfile
@@ -374,6 +373,10 @@ def peak_rss_mb() -> float:
     começa no pico do processo pai. No macOS, o ``ru_maxrss``, em bytes.
     """
     if sys.platform == "darwin":
+        # O módulo resource só existe nos Unix; importado aqui, o probe importa no Windows, onde
+        # tests/test_probes.py o carrega.
+        import resource
+
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
     status = Path("/proc/self/status").read_text()
     kilobytes = re.search(r"^VmHWM:\s+(\d+)", status, re.MULTILINE).group(1)

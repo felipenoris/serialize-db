@@ -358,6 +358,10 @@ def test_mask_and_pretty_hide_secrets_and_response_metadata() -> None:
     assert long_text.splitlines()[-1] == "... (42 linhas omitidas)"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="no Windows, o nome da variável não distingue maiúsculas: https_proxy é HTTPS_PROXY",
+)
 def test_environment_rows_show_presence_for_secrets_and_collapse_equal_twins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2250,7 +2254,7 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
         sys.stdout = stdout
 
     assert code == 0
-    text = next(folder.glob("credentials_*.txt")).read_text()
+    text = next(folder.glob("credentials_*.txt")).read_text(encoding="utf-8")
     every_client = (
         "delta-rs ok, duckdb delta_scan ok, duckdb read_parquet ok, pyarrow ok, "
         "boto3 ok; contêiner - até -, secret -, cláusula "

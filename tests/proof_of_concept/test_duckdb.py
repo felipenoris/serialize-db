@@ -315,6 +315,10 @@ def test_streaming_query_starts_before_the_end() -> None:
     con.close()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="o pico de memória vem do /proc no Linux e do ru_maxrss no macOS",
+)
 def test_streaming_query_bounds_memory() -> None:
     """Sem ``ORDER BY`` o processo fica no tamanho de um lote.
 
@@ -398,6 +402,10 @@ print(json.dumps({
 
 
 @pytest.mark.local
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="o pico de memória vem do /proc no Linux e do ru_maxrss no macOS",
+)
 def test_spooled_stream_bounds_memory(
     local_location: LocalLocation,
 ) -> None:
@@ -997,7 +1005,7 @@ def test_copy_partition_by_month(
     con.register("amostra", sample_table().slice(ROWS // 2 - 1000, 2000))
     con.execute(f"COPY (SELECT * FROM amostra) TO '{out}' (FORMAT parquet, PARTITION_BY (mes))")
 
-    files = sorted(str(file.relative_to(out)) for file in out.rglob("*.parquet"))
+    files = sorted(file.relative_to(out).as_posix() for file in out.rglob("*.parquet"))
     assert files == [f"mes={MONTHS[0]}/data_0.parquet", f"mes={MONTHS[1]}/data_0.parquet"]
 
     # O arquivo não tem a coluna de partição, a convenção do Delta. read_parquet a devolve mesmo num

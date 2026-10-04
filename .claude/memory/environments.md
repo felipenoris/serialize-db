@@ -336,5 +336,18 @@ channel and read, in the probe, the engine's secret renewed before each expiry. 
   folders with `\` (`duckdb.md`); `Path.from_uri("file:///tmp/x")` raises `URI is not absolute`; a
   new file's mode reads 0o666; `os.path.join` joins with `\`; and `os.environ` uppercases the
   name, so the proxy's `username` variable reads the login's `USERNAME`
-  (`plan/OPEN_QUESTIONS.md`). The job log is the only reading: its download URL is refused by
-  this container's proxy (403), and `get_job_logs` with `tail_lines` returns the end of it.
+  (`plan/OPEN_QUESTIONS.md`). The job log is the only reading: on 2026-10-01 its download URL
+  was refused by this container's proxy (403), and `get_job_logs` with `tail_lines` returns the
+  end of it; on 2026-10-04, `get_job_logs` with `return_content: false` gave a `logs_url` that
+  `curl -sS -o <file>` downloaded whole, once the job had finished (404 while it ran).
+- On 2026-10-04 the user's `uv run python -m pytest` on Windows 11 (Python 3.13.3) stopped at
+  collection: `tests/test_probes.py` imports `probes/duckdb_threads.py`, which imported
+  `resource` at the top. The workflow never runs `tests/test_probes.py` nor
+  `tests/proof_of_concept/` (decision of 2026-09-21), so only a whole run shows such errors; a
+  temporary `tests.yml` on the fix branch (push trigger on the branch, the whole suite without
+  variables and with the local root, `--continue-on-collection-errors -rfE`) read them on the
+  runner. Also on Windows: the variable name is case-insensitive (`no_proxy` is `NO_PROXY`), a
+  Linux path without a drive is not absolute, `read_text()` decodes in cp1252, and a URI built
+  from the `\` root fails `Storage.relative` and the `RETURN_STATS` registration, which compare
+  with `/`. After the fixes: 252 passed and 441 skipped without variables, 568 and 125 with the
+  local root. `plan/POC.md`
