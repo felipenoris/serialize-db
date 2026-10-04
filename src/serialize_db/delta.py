@@ -529,10 +529,12 @@ def _stat_converter(
     """A conversão do texto do ``RETURN_STATS`` para o valor que o log guarda, ou ``None`` quando o
     tipo fica sem mínimo e máximo.
 
-    Inteiro, data, ``Double`` e texto transcrevem exato. ``decimal`` fica de fora porque o log
-    guarda o mínimo e o máximo como número JSON, e um máximo abaixo do valor real poda o arquivo que
-    tem a linha, sem erro, nos dois leitores; ``timestamp``, porque o log o guarda truncado em
-    milissegundos.
+    Inteiro, data e ``Double`` transcrevem exato. O texto entra como o DuckDB o grava no rodapé:
+    até 256 bytes, o mínimo truncado e o máximo truncado para cima, com o último byte aumentado,
+    limites que contêm os valores do arquivo e não podam linha; o texto multibyte longo vem sem os
+    dois, e a coluna fica sem poda. ``decimal`` fica de fora porque o log guarda o mínimo e o
+    máximo como número JSON, e um máximo abaixo do valor real poda o arquivo que tem a linha, sem
+    erro, nos dois leitores; ``timestamp``, porque o log o guarda truncado em milissegundos.
     """
     if pa.types.is_integer(field_type):
         return int
@@ -574,8 +576,8 @@ def file_from_return_stats(
 
     ``row`` é a linha do ``RETURN_STATS`` como dicionário (``filename``, ``count``,
     ``file_size_bytes``, ``column_statistics``). O ``null_count`` entra de toda coluna do contrato,
-    e o mínimo e o máximo dos tipos que transcrevem exato, convertidos do texto; uma coluna só de
-    nulos chega sem os dois.
+    e o mínimo e o máximo dos tipos que o log guarda (``_stat_converter``), convertidos do texto;
+    uma coluna só de nulos, ou de texto multibyte longo, chega sem os dois.
     """
     contract = arrow_schema(table)
     minimum: dict[str, object] = {}
@@ -676,8 +678,8 @@ def file_from_footer(
 def _exact_statistic(
     field_type: pa.DataType,
 ) -> bool:
-    """Se o mínimo e o máximo do tipo transcrevem exato no log: inteiro, data, ``Double`` e
-    texto."""
+    """Se o mínimo e o máximo do tipo entram no log como limites seguros: inteiro, data e
+    ``Double``, exatos, e o texto, como o DuckDB o trunca (``_stat_converter``)."""
     return _stat_converter(field_type) is not None
 
 
@@ -703,8 +705,8 @@ def _action_stats(
     columns_without_min_max: Collection[str],
 ) -> str:
     """O JSON de estatísticas da ação: ``numRecords``, o ``nullCount`` que o arquivo declara e o
-    mínimo e o máximo dos tipos exatos, sem as colunas de ``columns_without_min_max`` e sem um
-    extremo não finito, que o JSON não representa."""
+    mínimo e o máximo dos tipos de ``_exact_statistic``, sem as colunas de
+    ``columns_without_min_max`` e sem um extremo não finito, que o JSON não representa."""
     minimum: dict[str, object] = {}
     maximum: dict[str, object] = {}
     nulls: dict[str, int] = {}
@@ -1174,8 +1176,8 @@ def _read_back_problems(
     """As diferenças entre os leitores, o log e a contagem esperada.
 
     As linhas iguais nos quatro; o menor e o maior valor de cada coluna da chave iguais nos dois
-    leitores; e o mínimo e o máximo registrados no log, das colunas de tipo exato, como limites dos
-    lidos: um máximo abaixo do lido podaria o arquivo que tem a linha.
+    leitores; e o mínimo e o máximo registrados no log, das colunas de ``_exact_statistic``, como
+    limites dos lidos: um máximo abaixo do lido podaria o arquivo que tem a linha.
     """
     problems = []
     counts = {
@@ -2313,8 +2315,8 @@ def deep_copy(
 
     Cada arquivo que o log da versão lista é copiado por ``Storage.copy`` para o mesmo caminho
     relativo, sem os dados passarem pela máquina no S3, e entra no log novo com o tamanho, as linhas
-    e as estatísticas da ação de origem, as dos tipos exatos, num commit ``overwrite`` por partição,
-    como ``register_files``, com o esquema da versão; no fim, o esquema da cópia é conferido contra
+    e as estatísticas da ação de origem, num commit ``overwrite`` por partição, como
+    ``register_files``, com o esquema da versão; no fim, o esquema da cópia é conferido contra
     o da versão, e a contagem dela pelos dois leitores contra a soma das ações. A memória é a do
     log. Cada partição copiada vai ao log ``serialize_db.delta`` com o número de arquivos e o
     tempo da cópia.

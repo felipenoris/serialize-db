@@ -5954,3 +5954,22 @@ No contêiner de desenvolvimento, com o DuckDB 1.5.5 e o resto da `main`, o `INS
 **Consequências**: `pyproject.toml` volta a fixar o DuckDB 1.5.5, e a troca para a 1.5.6 espera os
 wheels das extensões no PyPI, no item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). A pasta preparada
 para a 1.5.5 no ambiente alvo tem as extensões da versão fixada.
+
+## O que a sonda das estatísticas de texto do DuckDB mostrou
+
+Sonda de 2026-10-04 no contêiner de desenvolvimento, DuckDB 1.5.5, `COPY ... (FORMAT parquet,
+RETURN_STATS)` de uma tabela com três textos: `c` repetido 300 vezes seguido de `z`, `a` repetido
+300 vezes e `b`. O `RETURN_STATS` e o rodapé Parquet trazem o mínimo e o máximo truncados em 256
+bytes: o mínimo é o prefixo `aaa...a` (256 bytes, abaixo do menor valor) e o máximo é o prefixo com
+o último byte aumentado, `ccc...cd` (256 bytes, acima do maior valor), então os limites contêm os
+valores do arquivo e a poda por eles não perde linha. Um texto de `é` repetido 300 vezes (600
+bytes) saiu sem mínimo e máximo no `RETURN_STATS` e com `has_min_max` falso no rodapé, e a coluna
+fica sem poda. O PyArrow 25 não expõe os campos `is_min_value_exact` e `is_max_value_exact` do
+rodapé. A leitura de 2026-09-22, de um texto de 41 caracteres transcrito exato, vale só abaixo do
+corte.
+
+**Consequências**: as docstrings de `_stat_converter`, `_exact_statistic`,
+`file_from_return_stats`, `_action_stats` e `_read_back_problems`, que chamavam o texto de exato,
+dizem como o DuckDB o trunca; o código não muda, porque os limites truncados são seguros, e
+[`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) já registrava o máximo truncado para cima e o texto multibyte
+longo omitido.
