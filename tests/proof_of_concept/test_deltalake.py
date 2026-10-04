@@ -80,8 +80,10 @@ def folder(
     local_location: LocalLocation,
 ) -> Callable[[str], str]:
     """O caminho de ``name`` sob ``deltalake/`` na raiz da sessão, sem criar a pasta; cada teste
-    usa nomes próprios."""
-    return lambda name: local_location.child(f"deltalake/{name}")
+    usa nomes próprios. O caminho usa ``/`` também no Windows, como o pacote escreve a pasta
+    local: ``Storage.relative`` e o registro do ``RETURN_STATS`` comparam o texto da URI recebida
+    com caminhos escritos com ``/``."""
+    return lambda name: Path(local_location.child(f"deltalake/{name}")).as_posix()
 
 
 @pytest.fixture

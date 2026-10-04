@@ -32,6 +32,7 @@ import os
 import pkgutil
 import re
 import shutil
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -378,6 +379,10 @@ def test_execution_log(
     assert caplog.records[-1].execution_id == "exec-2026-09-05"  # type: ignore[attr-defined]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="no Windows, o nome da variável não distingue maiúsculas: no_proxy é NO_PROXY",
+)
 def test_prepare_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,6 +428,9 @@ def test_json_control_file_and_commit_metadata() -> None:
     assert dt.datetime.fromisoformat(json.loads(stamp_text)) == stamp
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="a pasta local do exemplo é um caminho do Linux, sem unidade"
+)
 def test_storage_uris() -> None:
     """``urllib.parse`` separa bucket e prefixo; ``PurePosixPath`` junta chaves; ``Path`` cuida da
     pasta local."""
