@@ -459,3 +459,11 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `Parse` response with its execution response unread, and the server ran every command in order and
   got the `close`'s `Terminate` after the last. The engine reuses the connection in `_run`, and the
   user decided on 2026-09-29 to leave it so (`decisions.md`). `plan/POC.md`
+- The reconnect of `execute` repeats a command the server may have applied: the driver's
+  `InterfaceError` on a closed socket says nothing about the command's outcome, and on the
+  stand-in a `COPY` or `INSERT` passed to the server before the drop ran twice (240 rows of a
+  120-row partition, 2026-10-04). Since 2026-10-04 `_copy_partition` runs each partition's
+  `DELETE`, `COPY` and `INSERT` in `transaction()`, where the drop rises as `InterfaceError`
+  after the `ROLLBACK` and the server discards the transaction; the appender already loaded
+  inside one, and the publication's `_Connection` never retries. `plan/PLAN-STAGE-5.md`,
+  `plan/POC.md`

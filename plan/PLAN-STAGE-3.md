@@ -112,8 +112,9 @@ o rodapé de cada arquivo, um GET por arquivo:
    `Infinity`, que não é JSON válido; e o `has_nan` só vê o último grupo de linhas do arquivo, por
    isso a lista vem da contagem da auditoria, não do `RETURN_STATS` (leituras de 2026-09-23,
    [`POC.md`](POC.md)). O rodapé do `COPY` do DuckDB já sai sem mínimo e máximo no grupo de linhas
-   com `NaN`. O texto não tem exceção: o `RETURN_STATS` trunca o máximo para cima, e omite o texto
-   multibyte longo.
+   com `NaN`. O texto acima de 256 bytes entra truncado: o mínimo como prefixo em fronteira de
+   caractere, o máximo com o último byte ASCII incrementado, e os dois omitidos sem byte ASCII no
+   prefixo (leitura de 2026-10-04, [`POC.md`](POC.md)).
 
 A reprovação recusa o commit com o arquivo e a conferência na mensagem, e os arquivos ficam órfãos
 na pasta até `vacuum(full=True)`. Depois do commit, `read_back` lê a versão nova pelo delta-rs e

@@ -530,11 +530,13 @@ def _stat_converter(
     tipo fica sem mínimo e máximo.
 
     Inteiro, data e ``Double`` transcrevem exato. O texto entra como o DuckDB o grava no rodapé:
-    até 256 bytes, o mínimo truncado e o máximo truncado para cima, com o último byte aumentado,
-    limites que contêm os valores do arquivo e não podam linha; o texto multibyte longo vem sem os
-    dois, e a coluna fica sem poda. ``decimal`` fica de fora porque o log guarda o mínimo e o
-    máximo como número JSON, e um máximo abaixo do valor real poda o arquivo que tem a linha, sem
-    erro, nos dois leitores; ``timestamp``, porque o log o guarda truncado em milissegundos.
+    acima de 256 bytes, o mínimo é o prefixo de até 256 bytes em fronteira de caractere, e o máximo
+    é o prefixo de 256 bytes sem os bytes fora do ASCII e sem um byte 127 do fim, com o último byte
+    incrementado, limites que contêm os valores do arquivo e não podam linha; sem byte ASCII no
+    prefixo do mínimo ou do máximo, os dois saem omitidos, e a coluna fica sem poda
+    (``plan/POC.md``). ``decimal`` fica de fora porque o log guarda o mínimo e o máximo como
+    número JSON, e um máximo abaixo do valor real poda o arquivo que tem a linha, sem erro, nos
+    dois leitores; ``timestamp``, porque o log o guarda truncado em milissegundos.
     """
     if pa.types.is_integer(field_type):
         return int
@@ -577,7 +579,7 @@ def file_from_return_stats(
     ``row`` é a linha do ``RETURN_STATS`` como dicionário (``filename``, ``count``,
     ``file_size_bytes``, ``column_statistics``). O ``null_count`` entra de toda coluna do contrato,
     e o mínimo e o máximo dos tipos que o log guarda (``_stat_converter``), convertidos do texto;
-    uma coluna só de nulos, ou de texto multibyte longo, chega sem os dois.
+    uma coluna só de nulos, ou de texto sem byte ASCII no prefixo de 256 bytes, chega sem os dois.
     """
     contract = arrow_schema(table)
     minimum: dict[str, object] = {}

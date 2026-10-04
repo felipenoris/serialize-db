@@ -38,7 +38,9 @@ foi medido em [`POC.md`](POC.md).
   `UNLOAD` é montada a cada comando, no motor da [etapa 5](PLAN-STAGE-5.md) e, desde a decisão do
   usuário de 2026-09-26, na publicação da [etapa 8](PLAN-STAGE-8.md), que passou assim no alvo em
   2026-09-27, e leva uma chave com cerca de 29 minutos ou mais pela frente; o motor reconecta uma
-  vez por comando e perde só a tabela temporária que o pipeline tenha criado na sessão.
+  vez por comando fora de transação e perde só a tabela temporária que o pipeline tenha criado na
+  sessão, e a carga de cada partição de `ingest` e de `pinned_delta` roda numa transação desde
+  2026-10-04, para a queda no meio do `COPY` subir sem repetição ([`POC.md`](POC.md)).
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
@@ -76,7 +78,11 @@ foi medido em [`POC.md`](POC.md).
   `Double` com valor não finito da issue #59, em todo caminho de escrita, e sem o `nullCount` na
   troca do motor Redshift e no `compact` da [etapa 9](PLAN-STAGE-9.md). O `delta_scan` dos
   motores e do leitor Delta e o `COPY` do Redshift leem certo, e o pacote filtra o dataset do
-  delta-rs só pela coluna da partição (`read_back`), fora da perda. Com
+  delta-rs só pela coluna da partição (`read_back`), fora da perda. O texto de um arquivo gravado
+  pelo DuckDB, pelo export do motor ou pelo import, também fica sem mínimo e máximo quando o corte
+  de 256 bytes parte um caractere multibyte ou o incremento do máximo não dá UTF-8 válido, e o
+  filtro do dataset por essa coluna perde o arquivo inteiro (leitura de 2026-10-04,
+  [`POC.md`](POC.md)). Com
   `delta.dataSkippingStatsColumns` sem as três colunas, a mesma sonda leu 2, 2 e 1, e o `delta_scan`
   seguiu podando pelas estatísticas que o log já guarda; a propriedade faz o `write_deltalake`
   gravar só as estatísticas das colunas dela e o `get_add_actions` esconder as outras. A issue #3032
@@ -240,6 +246,28 @@ Notas anteriores à janela, sem decisão pedida: a coluna de partição `Text` d
 recusaria um destino com `\` no Windows, não lido lá. As três notas que valiam correção, a lista
 vazia em `publish_delta` e `audit`, o `run.snapshot` repetido e a partição repetida no `ingest` do
 Redshift, saíram com a decisão do usuário de 2026-10-02.
+
+## Achados da revisão de bugs de 2026-10-04
+
+A revisão de `src/serialize_db` na `main` de 2026-10-04, a pedido do usuário, com atenção à
+consistência das leituras, das escritas e da publicação, corrigiu no mesmo PR o `COPY` repetido
+pela reconexão do motor Redshift ([`POC.md`](POC.md), [etapa 5](PLAN-STAGE-5.md)) e deixa dois
+itens que pedem decisão:
+
+- **O `Double` não finito nas constantes do `render`.** `render` escreve `nan`, `inf` e `-inf`
+  para um `Double` não finito embutido como constante, e o DuckDB recusa o texto com
+  `BinderException` (`Referenced column "nan" was not found`); o Redshift não foi lido, e o
+  `literal_text` do `stream` do Redshift compila os parâmetros do cliente com o mesmo
+  `literal_binds`, sem leitura. Opções: um `literal_processor` do `Double` nos dois dialetos,
+  que escreva `CAST('NaN' AS DOUBLE)` e `CAST('Infinity' AS DOUBLE)`; ou um `SqlError` na
+  constante não finita, antes de o motor recusar o texto.
+- **A ordem do `Execution.__exit__`.** O `__exit__` roda `sandbox.cleanup()` antes de
+  `_write_snapshot()`: um descarte que falha, por uma conexão derrubada ou um `DROP` recusado,
+  sobe ao cliente e deixa a execução sem a entrada do snapshot que `Execution(snapshot=...)`
+  pediu, com as partições já publicadas no Delta e as versões no log da execução. Opções: gravar
+  a entrada antes do descarte, com o descarte em `finally`, para a falha do sandbox não apagar o
+  registro do que já está publicado; ou a docstring de `Execution` dizer que o snapshot só entra
+  com o descarte concluído, e o operador o cria por `serialize-db snapshot`.
 
 ## Decisões de API pendentes por etapa
 

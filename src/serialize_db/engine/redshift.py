@@ -8,13 +8,14 @@ banco do datashare e o ``search_path`` no esquema. O motor guarda uma conexão, 
 execução, e um ``threading.RLock`` que toda primitiva toma pelo tempo do seu comando; ``session()``
 dá a conexão crua ao bloco, com o lock tomado e reentrante na mesma thread, e ``new_session()``
 abre outra conexão, com o seu lock. Uma conexão derrubada pelo servidor é reaberta uma vez por
-comando, fora de transação, e o comando é repetido.
+comando, fora de transação, e o comando é repetido; a carga de cada partição de ``ingest`` e de
+``pinned_delta`` roda numa transação, para o ``COPY`` e o ``INSERT`` nunca se repetirem.
 
 As primitivas:
 
-- ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, por um
-  ``COPY ... MANIFEST`` por lista de colunas dos arquivos, com a lista, numa staging sem a coluna
-  de partição e um ``INSERT`` com o valor dela;
+- ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, cada
+  partição numa transação, por um ``COPY ... MANIFEST`` por lista de colunas dos arquivos, com a
+  lista, numa staging sem a coluna de partição e um ``INSERT`` com o valor dela;
   ``pinned_delta`` carrega a versão fixada em ``exec_<id>_<tabela>_versao_<versão>`` e a devolve
   como origem de consulta;
 - ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
@@ -1336,7 +1337,9 @@ class RedshiftEngine:
         Uma conexão derrubada pelo servidor (``InterfaceError`` do driver) é reaberta uma vez, com
         credencial nova, e o comando é repetido, fora de transação. A reconexão perde a tabela
         temporária que o pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift``
-        avisa da perda.
+        avisa da perda. O driver não diz se o servidor aplicou o comando derrubado: um comando que
+        não pode entrar duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda
+        em ``transaction()``, onde a queda sobe sem repetição.
 
         Exemplo:
 
@@ -1372,7 +1375,7 @@ class RedshiftEngine:
     @contextlib.contextmanager
     def transaction(self) -> Iterator[None]:
         """``BEGIN`` e ``COMMIT`` em volta do bloco, sob o lock; uma exceção sai por ``ROLLBACK``.
-        Protegida, para o appender.
+        Protegida, para o appender e para a carga de cada partição de ``ingest`` e ``pinned_delta``.
 
         O ``COMMIT`` e o ``ROLLBACK`` rodam dentro da transação, sem a reconexão de ``execute``:
         numa conexão nova, eles não teriam transação a fechar.
@@ -1484,30 +1487,36 @@ class RedshiftEngine:
         version: int,
         value: str | None,
     ) -> None:
-        """Uma partição da versão fixada na tabela do sandbox: os manifestos, um ``COPY`` de cada
-        na staging vazia, com a lista das colunas dos arquivos dele, e o ``INSERT`` com o valor da
-        partição."""
+        """Uma partição da versão fixada na tabela do sandbox, numa transação: os manifestos, um
+        ``COPY`` de cada na staging vazia, com a lista das colunas dos arquivos dele, e o ``INSERT``
+        com o valor da partição.
+
+        A transação tira a repetição de ``execute``: o driver não diz se o servidor aplicou o
+        comando derrubado, e o ``COPY`` ou o ``INSERT`` repetido carregaria a partição duas vezes;
+        a queda sobe como ``InterfaceError``, e o servidor desfaz a transação.
+        """
         partitions = [value] if value is not None else None
         manifests = delta.copy_manifest(
             uri, version, partitions, self._manifest_folder(table, value), self.storage
         )
-        self.execute(f"DELETE FROM {self.qualified(staging)}")
-        # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo à de mesmo nome, e
-        # a coluna que o arquivo não tem fica nula.
-        for manifest in manifests:
-            credentials = credentials_clause(self.config)
-            self.execute(
-                copy_text(
-                    self.qualified(staging),
-                    manifest.uri,
-                    credentials,
-                    manifest=True,
-                    columns=manifest.columns,
+        with self.transaction():
+            self.execute(f"DELETE FROM {self.qualified(staging)}")
+            # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo à de mesmo nome,
+            # e a coluna que o arquivo não tem fica nula.
+            for manifest in manifests:
+                credentials = credentials_clause(self.config)
+                self.execute(
+                    copy_text(
+                        self.qualified(staging),
+                        manifest.uri,
+                        credentials,
+                        manifest=True,
+                        columns=manifest.columns,
+                    )
                 )
+            self.execute(
+                insert_from_staging(self.qualified(name), self.qualified(staging), table, value)
             )
-        self.execute(
-            insert_from_staging(self.qualified(name), self.qualified(staging), table, value)
-        )
 
     def _load_from_delta(
         self,
@@ -1565,13 +1574,14 @@ class RedshiftEngine:
         materialize: bool = False,
     ) -> None:
         """Carrega as partições pedidas da versão fixada da tabela Delta na tabela
-        ``exec_<id>_<tabela>`` do esquema: por partição, um ``COPY ... MANIFEST FILLRECORD`` por
-        lista de colunas dos arquivos, com a lista, numa staging sem a coluna de partição, e um
-        ``INSERT`` com o valor dela.
+        ``exec_<id>_<tabela>`` do esquema: por partição, numa transação, um ``COPY ... MANIFEST
+        FILLRECORD`` por lista de colunas dos arquivos, com a lista, numa staging sem a coluna de
+        partição, e um ``INSERT`` com o valor dela.
 
         O ``COPY`` lê os arquivos da versão na pasta da tabela Delta, listados nos manifestos que o
         motor grava sob o ``staging_prefix``. Um commit na tabela depois da abertura não muda o que
-        foi carregado.
+        foi carregado. A transação de cada partição deixa a queda da conexão subir sem a repetição
+        de ``execute``, que carregaria a partição duas vezes.
 
         Exemplo:
 
@@ -1595,6 +1605,9 @@ class RedshiftEngine:
         :raises redshift_connector.Error: o ``COPY`` recusado por uma coluna da versão que o
             modelo não tem, porque a lista de colunas do rodapé a nomeia e a staging, criada do
             modelo, não a tem; o modelo tem de acompanhar a tabela.
+        :raises redshift_connector.InterfaceError: a conexão derrubada na transação de uma
+            partição, que o servidor desfaz; a tabela fica criada, sem essa partição e sem as
+            seguintes.
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")
@@ -1656,6 +1669,9 @@ class RedshiftEngine:
             staging.
         :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``);
             e, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
+        :raises redshift_connector.InterfaceError: a conexão derrubada na transação de uma
+            partição da carga, que o servidor desfaz; a staging fica criada, sem essa partição e
+            sem as seguintes, até o ``cleanup``.
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela ainda não existe")
