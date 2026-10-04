@@ -5955,21 +5955,86 @@ No contêiner de desenvolvimento, com o DuckDB 1.5.5 e o resto da `main`, o `INS
 wheels das extensões no PyPI, no item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). A pasta preparada
 para a 1.5.5 no ambiente alvo tem as extensões da versão fixada.
 
-## O que a sonda das estatísticas de texto do DuckDB mostrou
+## O que a revisão de bugs de 2026-10-04 mostrou
 
-Sonda de 2026-10-04 no contêiner de desenvolvimento, DuckDB 1.5.5, `COPY ... (FORMAT parquet,
-RETURN_STATS)` de uma tabela com três textos: `c` repetido 300 vezes seguido de `z`, `a` repetido
-300 vezes e `b`. O `RETURN_STATS` e o rodapé Parquet trazem o mínimo e o máximo truncados em 256
-bytes: o mínimo é o prefixo `aaa...a` (256 bytes, abaixo do menor valor) e o máximo é o prefixo com
-o último byte aumentado, `ccc...cd` (256 bytes, acima do maior valor), então os limites contêm os
-valores do arquivo e a poda por eles não perde linha. Um texto de `é` repetido 300 vezes (600
-bytes) saiu sem mínimo e máximo no `RETURN_STATS` e com `has_min_max` falso no rodapé, e a coluna
-fica sem poda. O PyArrow 25 não expõe os campos `is_min_value_exact` e `is_max_value_exact` do
-rodapé. A leitura de 2026-09-22, de um texto de 41 caracteres transcrito exato, vale só abaixo do
-corte.
+Em 2026-10-04, a pedido do usuário, a revisão de `src/serialize_db` na `main` (`fec8015`) procurou
+bugs na consistência da informação nas leituras, nas escritas e na publicação, com uma sonda no
+contêiner de desenvolvimento para cada hipótese (Linux x86_64, DuckDB 1.5.5, deltalake 1.6.6).
 
-**Consequências**: as docstrings de `_stat_converter`, `_exact_statistic`,
-`file_from_return_stats`, `_action_stats` e `_read_back_problems`, que chamavam o texto de exato,
-dizem como o DuckDB o trunca; o código não muda, porque os limites truncados são seguros, e
-[`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) já registrava o máximo truncado para cima e o texto multibyte
-longo omitido.
+- **O `COPY` repetido pela reconexão do motor Redshift.** `RedshiftEngine.execute` reabre a
+  conexão derrubada fora de transação e repete o comando, e o `InterfaceError` do driver não diz
+  se o servidor aplicou o comando antes da queda. No substituto, uma conexão de mentira que
+  derruba o primeiro `COPY`, ou o primeiro `INSERT`, depois de passá-lo ao DuckDB fez o `ingest`
+  de uma partição de 120 linhas deixar 240 no sandbox, nos dois casos. Com a carga de cada
+  partição numa `transaction()`, do `DELETE` da staging ao `INSERT`, a queda subiu como
+  `InterfaceError` depois do `ROLLBACK`, a tabela ficou criada e sem linha, e o `USE` da conexão
+  rodou uma vez. O teste novo, `test_ingest_partition_load_raises_on_a_dropped_connection_without_retry`,
+  reprovou no código anterior (`DID NOT RAISE`), e a asserção nova de
+  `test_ingest_loads_each_partition_through_the_staging`, a sequência `BEGIN`, `DELETE`, `COPY`,
+  `INSERT`, `COMMIT`, também. O `appender` já carregava numa transação, e a conexão da publicação
+  não reconecta.
+- **As estatísticas de texto truncadas.** O `COPY ... RETURN_STATS` do DuckDB 1.5.5 corta o
+  mínimo e o máximo de um texto acima de 256 bytes, no `RETURN_STATS` e no rodapé, pela regra
+  que fecha com os casos das duas sondas, a desta revisão e a da revisão do pdoc (PR #127): o
+  mínimo é o prefixo de até 256 bytes em fronteira de caractere (`a` × 254 seguido de `é` e de
+  `z` × 10 dá `a` × 254 e `é`, 256 bytes; `a` × 255 seguido de `é` dá `a` × 255); o máximo é o
+  prefixo de 256 bytes sem os bytes fora do ASCII e sem um byte 127 do fim, com o último byte
+  incrementado (`x` × 257 dá `x` × 255 e `y`; `~` × 300 dá `~` × 255 e `\x7f`; `a` × 254
+  seguido de `é` × 100 dá `a` × 253 e `b`, 254 bytes; `a` × 255 seguido de `\x7f` × 100 dá
+  `a` × 254 e `b`; `é` × 100, `a` e `é` × 100 dá `é` × 100 e `b`, 201 bytes; `c` × 300 e `z` dá
+  `c` × 255 e `d`); sem byte ASCII no prefixo de 256 bytes do mínimo ou do máximo, os dois saem
+  omitidos, com `has_min_max` falso no rodapé (`é` × 300, `é` × 128 seguido de `z`, `\x7f` × 300,
+  `\u07ff` × 200, `\U0010ffff` × 100, e `é` × 300 como mínimo com `z` como máximo); `é` × 128,
+  256 bytes exatos, sai inteiro. Os limites nunca excluem o valor real. O PyArrow 25 não expõe
+  `is_min_value_exact` e `is_max_value_exact` do rodapé, e a leitura de 2026-09-22, de um texto
+  de 41 caracteres transcrito exato, vale só abaixo do corte. O `write_deltalake` do delta-rs
+  1.6.6 guarda no log e no rodapé um prefixo de 64 bytes em fronteira de caractere, o máximo com
+  o último caractere incrementado (`a` × 300 dá `a` × 64 como mínimo; `é` × 300 dá `é` × 31 e
+  `ê` como máximo), e o valor inteiro quando o incremento não existe (`\U0010ffff` × 100, 400
+  bytes). `_read_back_problems` aceita os limites; as docstrings de `_stat_converter`,
+  `_exact_statistic`, `file_from_return_stats`, `_action_stats` e `_read_back_problems`, que
+  chamavam o texto de exato, dizem como o DuckDB o trunca desde o PR #127, com esta regra em
+  `_stat_converter` e `file_from_return_stats`; o código não muda, porque os limites são
+  seguros, e [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md) registra a regra.
+- **O texto sem mínimo e máximo no log e o filtro do dataset (issue #85).** O `export_partition`
+  do motor DuckDB de uma partição com `texto` de `é` × 300 (600 bytes) registrou o arquivo com o
+  `nullCount` de `texto` e sem o mínimo e o máximo, passou na releitura, e o `delta_scan` achou a
+  linha pelo filtro `texto = ...`; `to_pyarrow_table`, o dataset e `to_pandas` com o mesmo filtro
+  devolveram 0 de 1, também para o valor curto `a` × 10 do mesmo arquivo, porque a perda é por
+  arquivo, e `IS NULL` deu 0, certo, pelo `nullCount`; com `é` × 10 o log tem o mínimo
+  `aaaaaaaaaa` e o máximo `éééééééééé`, e o filtro acha a linha. É o gatilho da issue #85 numa
+  coluna de texto gravada pelo DuckDB, fora da lista da issue (`Numeric`, `DateTime`, `Boolean` e
+  o texto do `UNLOAD`); nenhuma leitura do pacote filtra o dataset por uma coluna de texto.
+- **A posição da coluna de partição.** Um modelo com a coluna de partição na segunda posição
+  passou em `check_models`, em `cast` com as colunas fora de ordem (a saída na ordem do modelo),
+  em `create_table`, `append` e `export_partition` do motor DuckDB, com o arquivo sem a coluna de
+  partição e a releitura, em `delta_scan` e `to_pyarrow_table` na ordem do modelo e em
+  `publish_partition`; `partition_query` escreve a constante na posição da coluna,
+  `_ordered_select` a deixa fora do arquivo, e `insert_from_staging` a preenche na posição dela.
+  A posição não é regra do contrato, e nenhum caminho depende dela; "no fim da tabela", em
+  `docs/index.md`, descrevia a base atual, e o PR #127 a trata assim.
+- **As ações do log.** O `remove` do `publish_partition` que substitui uma partição e o do
+  `restore` levam `partitionValues` e `dataChange` verdadeiro, e `version_diff` devolve a
+  partição certa entre versões vizinhas, pela compactação sem efeito (`numFilesAdded` e
+  `numFilesRemoved` zero, sem versão nova, nas partições de um arquivo) e por cima do `restore`.
+- **Os literais do `render`.** Texto com aspas, contrabarra, `%`, `:` e Unicode, data, `DateTime`
+  com microssegundos, `Double` nos extremos, `Numeric(18, 2)` e os limites do `BigInteger` saem
+  transcritos nos dois dialetos (`'d''ag\ua'` no DuckDB e `'d''ag\\ua'` no Redshift,
+  `'2026-08-31 23:59:59.999999'`, `1.7976931348623157e+308`, `-0.0`, `123456789012345.67`,
+  `-9223372036854775808`), e o `bind` do DuckDB devolve cada valor igual. O `Double` não finito
+  como constante sai `nan`, `inf` e `-inf`, que o DuckDB recusa com `BinderException`
+  (`Referenced column "nan" was not found`); o Redshift não foi lido.
+- **A ordem do `Execution.__exit__`.** `sandbox.cleanup()` roda antes de `_write_snapshot()`, e a
+  falha do descarte deixa a execução sem a entrada do snapshot, com as partições já publicadas no
+  Delta (lido no código, sem sonda).
+- **As sessões.** Com a correção, as três sessões deram 256 aprovados e 437 pulados sem variável,
+  574 e 119 com a raiz local e 691 e 2 com o substituto; o `ruff check` e o `ruff format --check`
+  passaram.
+
+**Consequências**: `ingest` e `pinned_delta` carregam cada partição numa transação, nas docstrings
+do motor e em [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md), e a lição está em `.claude/memory/lessons.md`;
+o corte das estatísticas de texto está nas docstrings de `serialize_db.delta` (PR #127, com a
+regra das duas sondas) e em [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), e o texto longo sem mínimo e
+máximo entra no item da issue #85 em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md),
+sem nada no `src/` (decisão do usuário de 2026-09-25); o `Double` não finito no `render` e a
+ordem do `__exit__` esperam o usuário em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).

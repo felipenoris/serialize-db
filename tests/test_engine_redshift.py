@@ -209,7 +209,8 @@ class FakeConnection:
     """A conexão de mentira: registra cada comando com o instante, dorme ``delay`` segundos por
     comando, sabe que tabelas existem, responde ``pg_last_unload_count()`` e, num ``UNLOAD``, grava
     ``unload_rows`` num Parquet da pasta local com o manifesto, como o Redshift faria; com
-    ``fail``, cada comando recebe esse erro."""
+    ``fail``, cada comando recebe esse erro; com ``drop_on``, o primeiro comando que começa por
+    essa palavra derruba a conexão."""
 
     def __init__(
         self,
@@ -228,6 +229,7 @@ class FakeConnection:
         self.last_unload_count = 0
         self.write_manifest = True
         self.fail: Exception | None = None
+        self.drop_on: str | None = None
         self.autocommit = False
         self.closed = False
 
@@ -247,6 +249,9 @@ class FakeConnection:
         self.commands.append(command)
         if self.drop_next > 0:
             self.drop_next -= 1
+            raise redshift_connector.InterfaceError("BrokenPipe: server socket closed")
+        if self.drop_on is not None and text.upper().startswith(self.drop_on.upper()):
+            self.drop_on = None
             raise redshift_connector.InterfaceError("BrokenPipe: server socket closed")
         time.sleep(self.delay)
         try:
@@ -1039,11 +1044,11 @@ def test_ingest_loads_each_partition_through_the_staging(
     monkeypatch: pytest.MonkeyPatch,
     local_location: LocalLocation,
 ) -> None:
-    """Por partição, o manifesto no ``staging/``, o ``DELETE`` da staging, o ``COPY ... MANIFEST
-    FILLRECORD`` com a lista das colunas do arquivo e o ``INSERT`` com o valor; a staging apagada
-    no fim; a partição sem arquivo não roda; o nome ocupado e a tabela sem versão são
-    ``SandboxError``; ``pinned_delta`` carrega a versão inteira em ``_versao_<versão>`` uma vez, e
-    outra versão numa staging nova; ``cleanup`` apaga as tabelas e o ``staging/``."""
+    """Por partição, numa transação, o manifesto no ``staging/``, o ``DELETE`` da staging, o
+    ``COPY ... MANIFEST FILLRECORD`` com a lista das colunas do arquivo e o ``INSERT`` com o valor;
+    a staging apagada no fim; a partição sem arquivo não roda; o nome ocupado e a tabela sem versão
+    são ``SandboxError``; ``pinned_delta`` carrega a versão inteira em ``_versao_<versão>`` uma vez,
+    e outra versão numa staging nova; ``cleanup`` apaga as tabelas e o ``staging/``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos")
     delta.create_table(uri, ENTRIES, storage)
@@ -1082,7 +1087,15 @@ def test_ingest_loads_each_partition_through_the_staging(
             f'"esquema"."{name}"', f'"esquema"."{staging}"', ENTRIES, MONTHS[1]
         )
     ]
-    assert texts[-1] == f'DROP TABLE IF EXISTS "esquema"."{staging}"'
+    # A partição inteira numa transação, da staging vazia ao INSERT.
+    assert texts[-6:] == [
+        "BEGIN",
+        f'DELETE FROM "esquema"."{staging}"',
+        copies[0],
+        inserts[0],
+        "COMMIT",
+        f'DROP TABLE IF EXISTS "esquema"."{staging}"',
+    ]
     with pytest.raises(SandboxError, match="ocupado"):
         engine.ingest(ENTRIES, uri, 2)
 
@@ -1115,6 +1128,35 @@ def test_ingest_loads_each_partition_through_the_staging(
     ]
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
     assert connection.closed
+
+
+@pytest.mark.local
+def test_ingest_partition_load_raises_on_a_dropped_connection_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
+    """A conexão derrubada no ``COPY`` de uma partição sobe como ``InterfaceError`` de dentro da
+    transação, com o ``ROLLBACK`` tentado e sem reconexão: o driver não diz se o servidor aplicou o
+    ``COPY``, e a repetição de ``execute`` carregaria a partição duas vezes. A staging sai pelo
+    ``DROP`` do fim, e a tabela do sandbox fica criada."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    uri = storage.uri_of("prd/cad_lancamentos")
+    delta.create_table(uri, ENTRIES, storage)
+    rows = entry_rows(MONTHS[0], 1, 10)
+    delta.publish_partition(uri, ENTRIES, MONTHS[0], rows, METADATA, storage)
+    connection = FakeConnection(storage)
+    engine = fake_engine(monkeypatch, connection, storage)
+    connection.drop_on = "COPY"
+    with pytest.raises(redshift_connector.InterfaceError):
+        engine.ingest(ENTRIES, uri, 1, partitions=[MONTHS[0]])
+    texts = connection.texts()
+    staging = f'"esquema"."{PREFIX}cad_lancamentos_staging"'
+    assert texts[-5:-2] == ["BEGIN", f"DELETE FROM {staging}", texts[-3]]
+    assert texts[-3].startswith("COPY")
+    assert texts[-2:] == ["ROLLBACK", f"DROP TABLE IF EXISTS {staging}"]
+    # Nenhuma conexão nova: o USE e o search_path rodaram só na abertura.
+    assert texts.count("USE compartilhado") == 1
+    assert engine.name_in_use(f"{PREFIX}cad_lancamentos")
 
 
 @pytest.mark.local

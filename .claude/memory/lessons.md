@@ -704,3 +704,14 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   exact `duckdb`, and the newest was 1.5.5. With `duckdb==1.5.6` the resolver picked the 1.0.3
   wheels without an error. Before bumping DuckDB, read those wheels' versions on PyPI; the rule
   lives here because `CLAUDE.md` is at its size budget. `plan/POC.md`
+- **A command repeated after a connection drop is read with the command applied before the
+  drop** (2026-10-04). `RedshiftEngine.execute` reopened a dropped connection and repeated the
+  command, and the bug review of 2026-10-04 read the case the design never had: the driver's
+  `InterfaceError` says nothing about whether the server applied the command before the socket
+  closed, so a `COPY` or `INSERT` that had landed ran twice, and the stand-in showed 240 rows of
+  a 120-row partition in the sandbox. A retry is designed per command: one that may repeat (a
+  DDL with `IF`, the `DELETE` of a staging, a `SELECT`) stays outside a transaction, and one that
+  adds rows runs inside one, where the drop rises and the server rolls back. The test double
+  drops the connection on a named command after passing it to the stand-in
+  (`FakeConnection.drop_on`), so the repeat is measured, not assumed; the rule lives here
+  because `CLAUDE.md` is at its size budget. `plan/POC.md`, `plan/PLAN-STAGE-5.md`

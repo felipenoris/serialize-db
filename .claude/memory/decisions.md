@@ -1802,3 +1802,22 @@ version requiring the exact `duckdb`; with `duckdb==1.5.6` the unpinned wheels r
 without an error) and pinned DuckDB 1.5.5 again in a new PR, keeping boto3, ruff, sqlglot and the
 backslash fix of PR #125. The 1.5.6 waits for the wheels in `plan/OPEN_QUESTIONS.md`.
 `pyproject.toml`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`, `plan/CURRENT_STATE.md`
+
+## The retried `COPY` of the Redshift ingest (2026-10-04)
+
+The bug review the user asked for on 2026-10-04 (the consistency of reads, writes and the
+publication) found that `RedshiftEngine.execute` repeats, after reconnecting, a command the
+server may have applied before the drop, and the stand-in showed a partition of 120 rows loaded
+twice by `ingest`. The assistant offered on a decision card: each partition's load in a
+transaction (recommended: the `COPY` and the `INSERT` never repeat, and the server discards the
+half-loaded partition), no repeat at all in `execute`, or documenting the hazard. The user chose
+"Transação" (2026-10-04, 18:25 UTC), the option the PR already implemented. The two minor
+findings, the non-finite `Double` constant in `render` and the order of `Execution.__exit__`,
+went to `plan/OPEN_QUESTIONS.md` with their options. The coordinator's relays of the same day
+were answered with probes recorded in `plan/POC.md`: the partition column's position is not a
+contract rule (every path binds the columns by name), and a long multibyte text in a
+DuckDB-written file lands without min and max in the log, a new trigger of issue #85, recorded
+only, by the user's decision of 2026-09-25; the `_stat_converter` docstring stayed with the
+pdoc review's PR #127.
+`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `plan/PLAN-STAGE-5.md`,
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`
