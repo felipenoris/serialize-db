@@ -95,6 +95,9 @@ log = logging.getLogger("serialize_db.engine.duckdb")
 # O compilador dos statements Core: o estilo qmark é o do driver do DuckDB, e a lista posicional sai
 # na ordem de positiontup, sem reescrever marcador algum.
 _QMARK = duckdb_engine.Dialect(paramstyle="qmark")
+# O DuckDB lê a contrabarra como caractere, e o dialeto, herdado do PostgreSQL, a dobraria nas
+# constantes que o texto embute, como o ESCAPE do LIKE.
+_QMARK._backslash_escapes = False
 
 # O arquivo de transbordo: Arrow IPC em formato de fluxo, com LZ4, um terço do tamanho sem
 # compressão (2026-09-22).

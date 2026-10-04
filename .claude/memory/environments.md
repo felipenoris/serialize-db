@@ -230,6 +230,9 @@ On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `
 suites). The runtime dependencies are pinned in `[project]` since the package code, with
 `redshift-connector==2.1.17` among them since 2026-09-25 (PR #95), and `prepare_offline.sh` must be
 rerun whenever one is added.
+DuckDB keeps its extensions per version, `.duckdb/v<version>/linux_amd64/`: DuckDB 1.5.6, pinned on
+2026-10-03, installs `delta` 6059958 and `httpfs` 4bc690d, where 1.5.5 had `45c4087` and `827222f`,
+so a folder prepared for 1.5.5 has no extension for 1.5.6 until `prepare_offline.sh` runs again.
 
 The suites exist so the same proof of concept runs in the target, without internet; the local suite
 validates the prepared folder there (verified 2026-09-19: extracted at another path with dead proxies

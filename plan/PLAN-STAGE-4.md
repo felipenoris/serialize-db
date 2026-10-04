@@ -270,7 +270,10 @@ memória do stream transbordado (`test_spooled_stream_bounds_memory`).
   valores, e a lista posicional sai na ordem de `compiled.positiontup`, sem reescrever marcador
   algum (decisão do usuário de 2026-09-23). A sonda de 2026-09-23 achou o `IN` de lista, que sem
   `render_postcompile` sai `__[POSTCOMPILE_...]`, e rodou o `qmark` com um `?` dentro de um literal
-  de `text()`. Antes de
+  de `text()`. O dialeto sai com `_backslash_escapes` falso, como o de `render`: o texto ainda
+  embute algumas constantes, como o `ESCAPE` do `LIKE` e o `bindparam` com `literal_execute`, e
+  com a contrabarra dobrada o `ESCAPE '\\'` era erro de sintaxe no DuckDB e o `literal_execute`
+  não achava a linha (leitura de 2026-10-03, [`POC.md`](POC.md)). Antes de
   compilar, os nomes de `params` são conferidos contra os `bindparam` sem valor do statement, e um
   nome a mais ou a menos é `SqlError`, como no `bind`: `params` ignora o nome a mais, e o valor que
   falta seria `InvalidRequestError` do SQLAlchemy. Um texto pronto, já sem o sentinela, passa por
@@ -431,6 +434,7 @@ uma chave única; `tests/test_resources.py` sobre um `/proc` e um cgroup fabrica
 | Dispensa da junção | `test_audit_skips_the_pinned_join_above_max_key` | Com as chaves da execução acima do `max_key` da versão fixada, a junção com as demais partições não roda e o relatório diz por quê; com uma chave abaixo dele, a junção roda e acha a repetição. |
 | Amostra | `test_audit_report_samples_failing_rows` | Até 20 linhas inteiras por verificação reprovada; a de `linhas` busca as suas numa segunda consulta por contador acima de zero, e uma verificação aprovada não traz amostra; o `NaN` entra em `nonfinite_columns` sem reprovar. |
 | Texto com `%` | `test_query_keeps_percent_literals` | `LIKE 'A%'`, num statement e num texto pronto, chega ao DuckDB como está. |
+| Texto com contrabarra | `test_query_keeps_backslash_literals` | O `ESCAPE` do `LIKE` e o `bindparam` com `literal_execute` chegam ao DuckDB com a contrabarra simples e acham as linhas. |
 
 ## A implementação
 

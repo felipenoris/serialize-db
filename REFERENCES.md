@@ -449,6 +449,7 @@ Blog:
 - <https://duckdb.org/2026/07/22/announcing-duckdb-155.html>
 - <https://duckdb.org/2026/08/17/duckdb-20-highlights.html>
 - <https://duckdb.org/2026/09/02/try-duckdb-20-alpha.html>
+- <https://duckdb.org/2026/09/28/announcing-duckdb-156>
 - <https://duckdb.org/2021/06/25/querying-parquet.html>
 - <https://duckdb.org/2025/01/22/parquet-encodings.html>
 - <https://duckdb.org/2025/02/05/announcing-duckdb-120.html>
@@ -1083,6 +1084,18 @@ API JSON do PyPI, consultada em 2026-09-25 para as versões novas das dependênc
 <https://pypi.org/pypi/flask-cors/json>, <https://pypi.org/pypi/moto/json>,
 <https://pypi.org/pypi/pdoc/json>, <https://pypi.org/pypi/ipykernel/json> e
 <https://pypi.org/pypi/uv-build/json>.
+
+API JSON do PyPI, consultada em 2026-10-03 para as versões novas das dependências diretas:
+<https://pypi.org/pypi/boto3/json>, <https://pypi.org/pypi/botocore/json>,
+<https://pypi.org/pypi/deltalake/json>, <https://pypi.org/pypi/duckdb/json>,
+<https://pypi.org/pypi/duckdb-engine/json>, <https://pypi.org/pypi/pyarrow/json>,
+<https://pypi.org/pypi/redshift-connector/json>, <https://pypi.org/pypi/sqlalchemy/json>,
+<https://pypi.org/pypi/sqlalchemy-redshift/json>, <https://pypi.org/pypi/pandas/json>,
+<https://pypi.org/pypi/pytest/json>, <https://pypi.org/pypi/ruff/json>,
+<https://pypi.org/pypi/sqlglot/json>, <https://pypi.org/pypi/flask/json>,
+<https://pypi.org/pypi/flask-cors/json>, <https://pypi.org/pypi/moto/json>,
+<https://pypi.org/pypi/pdoc/json>, <https://pypi.org/pypi/ipykernel/json>,
+<https://pypi.org/pypi/uv-build/json> e <https://pypi.org/pypi/duckdb-sqlalchemy/json>.
 
 Issue do botocore que pede a expiração da credencial na interface pública, consultada em
 2026-09-27 para `credential_expiry` de `probes/probelib.py`:

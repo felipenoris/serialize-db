@@ -85,6 +85,9 @@ _DIALECTS = {
     "duckdb": duckdb_engine.Dialect(paramstyle="named"),
     "redshift": RedshiftDialect_redshift_connector(paramstyle="named"),
 }
+# O DuckDB lê a contrabarra de uma constante como caractere, e o dialeto, herdado do PostgreSQL, a
+# dobraria; o Redshift a lê como escape, e o dialeto dele a dobra.
+_DIALECTS["duckdb"]._backslash_escapes = False
 # O marcador de parâmetro de cada motor: $nome no DuckDB, :nome no redshift_connector com
 # cursor.paramstyle = "named".
 _MARKERS = {"duckdb": "$", "redshift": ":"}
