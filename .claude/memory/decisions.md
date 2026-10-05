@@ -1860,3 +1860,21 @@ docstring without a recommendation, since four connections read 0.95x there (31.
 29.987 s), and the rule of `docs/index.md` ("Multithreading") stays, since it already says the
 default is 1 and the gain comes with the tables on S3.
 `src/serialize_db/execution.py`
+
+## The Core statement compiled at each call, without a cache (2026-10-05)
+
+Both engines compile the Core statement at each `query` and `stream`, and the Redshift engine also
+at each `execute`, through `bound_statement` and the `compile` with `render_postcompile`, without a
+cache. On 2026-10-04, in the DuckDB engine in the local folder, 200 small queries took about 2 ms
+more each in Python by Core statement than by SQL text, and the gain of the extra sessions fell
+from 2.28x to 1.25x (`POC.md`); in the target on 2026-10-05, with 8 vCPUs, the 200 Core-statement
+queries gained 1.51x in the extra sessions (0.526 s serial, 0.348 s), and in the Redshift engine,
+where each took about 86 ms, the 80 gained 3.14x (6.858 s, 2.181 s;
+`.claude/memory/concurrency.md`). The assistant offered on a decision card a cache of the compiled
+text in both engines, or the guidance as it is (recommended: the about 2 ms measured locally are
+about 2% of a small Redshift query, and the 200 DuckDB queries add up to about 0.4 s of compile,
+which only a pipeline with thousands of small queries would feel). The user chose "Sem cache"
+(2026-10-05, 23:46 UTC): the engines keep compiling at each call, the "Multithreading" section of
+`docs/index.md` keeps the guidance to join the small queries into one, and the item left
+`.claude/memory/OPEN_QUESTIONS.md`.
+`.claude/memory/OPEN_QUESTIONS.md`
