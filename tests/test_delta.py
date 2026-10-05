@@ -9,14 +9,14 @@ raiz nova. O modelo é o de ``Operacao``, com uma coluna de cada tipo que a cama
 Eles conferem a criação idempotente; a substituição da partição, a versão do próprio commit, a
 tabela sem partição, que as mensagens chamam de tabela inteira, e o conflito de dois escritores; o
 registro de um arquivo como o ``UNLOAD`` grava, as recusas das conferências, a releitura que desfaz
-o commit e as estatísticas que podam; a coluna ``Double`` com valor não finito sem mínimo e máximo;
-o ``max_key`` sem os arquivos de zero linhas; a reconciliação aditiva, a dos comentários e a recusa
-da destrutiva; a reescrita num commit; a diferença de versões pelo log e a recusa do log limpo; o
-arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que preserva os snapshots; a
-compactação; a exportação nos dois modos, com pastas novas acima do destino e com a barra final; a
-cópia profunda com o esquema da versão copiada; os caminhos fora da raiz recusados antes de gravar;
-a pasta copiada que abre na mesma versão; e os limites do ambiente em cada conexão do DuckDB. A
-extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+o commit e as estatísticas que podam; a coluna ``Double`` com valor não finito sem mínimo e máximo,
+num arquivo em Snappy; o ``max_key`` sem os arquivos de zero linhas; a reconciliação aditiva, a dos
+comentários e a recusa da destrutiva; a reescrita num commit; a diferença de versões pelo log e a
+recusa do log limpo; o arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que preserva
+os snapshots; a compactação; a exportação nos dois modos, com pastas novas acima do destino e com a
+barra final; a cópia profunda com o esquema da versão copiada; os caminhos fora da raiz recusados
+antes de gravar; a pasta copiada que abre na mesma versão; e os limites do ambiente em cada conexão
+do DuckDB. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -700,9 +700,9 @@ def test_nonfinite_double_columns_leave_min_max_out(
     uri: str,
 ) -> None:
     """A coluna em ``columns_without_min_max`` sai sem mínimo e máximo no rodapé e no log de
-    ``publish_partition`` e no log de ``register_files``; a outra partição sai com eles, e o
-    ``delta_scan`` devolve a linha do ``NaN`` num filtro por intervalo e não abre o arquivo da
-    partição sem ``NaN``."""
+    ``publish_partition``, num arquivo em Snappy como o das outras escritas, e no log de
+    ``register_files``; a outra partição sai com eles, e o ``delta_scan`` devolve a linha do
+    ``NaN`` num filtro por intervalo e não abre o arquivo da partição sem ``NaN``."""
     # Julho com NaN e setembro com infinito saem sem o mínimo e o máximo de valor; agosto, com eles.
     with_nan = rows("2026-07-31", 1, 3, valor=[1.5, float("nan"), 2.0])
     delta.publish_partition(
@@ -739,6 +739,8 @@ def test_nonfinite_double_columns_leave_min_max_out(
     valor_index = footer.schema.names.index("valor")
     statistics = footer.row_group(0).column(valor_index).statistics
     assert statistics is None or not statistics.has_min_max
+    codecs = {footer.row_group(0).column(index).compression for index in range(footer.num_columns)}
+    assert codecs == {"SNAPPY"}
 
     # A poda do delta_scan, lida pelos arquivos que o DuckDB abre.
     with storage.duckdb_connect() as connection:

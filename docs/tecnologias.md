@@ -2199,9 +2199,12 @@ com valor não finito em cada partição ([issue #59](https://github.com/felipen
 Os arquivos de dados já são Parquet. Exportar é listar os arquivos do snapshot que interessa:
 `dt.file_uris(file_pruning_predicate="mes IN ('2026-07', '2026-08')")` devolve as URIs, e
 `get_add_actions(flatten=True)` acrescenta `size_bytes` e `num_records`. Essa lista alimenta o
-manifesto do `COPY` do Redshift e qualquer leitor Parquet. Os arquivos do delta-rs têm as colunas não
-anuláveis como `required`, estatísticas em todas as colunas, Snappy e um row group por arquivo até o
-tamanho alvo do escritor (120.000 linhas ficaram num row group).
+manifesto do `COPY` do Redshift e qualquer leitor Parquet. Os arquivos do delta-rs têm as colunas
+não anuláveis como `required`, estatísticas em todas as colunas, Snappy e um row group por arquivo
+até o tamanho alvo do escritor (120.000 linhas ficaram num row group). O `optimize.compact` regrava
+em ZSTD, e um `WriterProperties` sem `compression` grava sem compressão (delta-rs 1.6.6,
+2026-10-05); a biblioteca passa `compression="SNAPPY"` nas propriedades que tiram o mínimo e o
+máximo das colunas `Double` com valor não finito.
 
 Uma exportação para outro layout (um arquivo por mês com `FIELD_IDS` e `KV_METADATA`, por exemplo) é
 um `COPY (SELECT ... FROM delta_scan(uri) WHERE ...) TO ...` do DuckDB, com as opções de

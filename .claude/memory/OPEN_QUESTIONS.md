@@ -125,17 +125,6 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   em ZSTD e a publica ao lado de uma exportada pelo motor DuckDB em Snappy; passou no substituto em
   2026-10-05 e espera a rodada no alvo.
 
-- **A compressão dos arquivos do `publish_partition` com `columns_without_min_max`.** As
-  propriedades do escritor que tiram o mínimo e o máximo das colunas (`delta._writer_properties`)
-  não nomeiam o codec, e o delta-rs 1.6.6 grava então o Parquet sem compressão (`UNCOMPRESSED`),
-  enquanto o `write_deltalake` sem propriedades grava em Snappy: 200.000 linhas de quatro colunas
-  deram 3.681.503 bytes contra 2.230.231, e 2.229.915 com `compression="SNAPPY"` nas mesmas
-  propriedades, que mantêm a coluna sem estatística no rodapé (leitura local de 2026-10-05). Os
-  dados ficam certos. Passam por esse caminho a troca do `export_partition` do motor Redshift, na
-  partição com `Double` não finito e em toda tabela com `Double` publicada com `audit=False`, e o
-  cliente que chama `publish_partition` com `columns_without_min_max`. Espera o usuário: pôr
-  `compression="SNAPPY"` nas propriedades, com um teste do codec, ou deixar como está.
-
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente
   ficam fechados antes da carga da produção, porque mudá-los depois é reescrever o Delta: `valor`

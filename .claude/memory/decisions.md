@@ -1878,3 +1878,19 @@ which only a pipeline with thousands of small queries would feel). The user chos
 `docs/index.md` keeps the guidance to join the small queries into one, and the item left
 `.claude/memory/OPEN_QUESTIONS.md`.
 `.claude/memory/OPEN_QUESTIONS.md`
+
+## The codec of the files `publish_partition` writes without statistics (2026-10-05)
+
+Reading the codecs after the battery of 2026-10-05, the assistant found that
+`delta._writer_properties`, the writer properties that take min and max off the
+`columns_without_min_max` in `publish_partition`, named no codec, and delta-rs 1.6.6 then wrote the
+Parquet uncompressed: 3,681,503 bytes against 2,230,231 in Snappy for 200,000 rows of four columns.
+The path is the Redshift engine's swap (a partition with a non-finite `Double`, or every table with
+a `Double` column under `audit=False`) and any `publish_partition` called with those columns. Asked
+on a card, the user chose "Corrigir agora" (23:45 UTC): the properties carry
+`compression="SNAPPY"`, the codec of `write_deltalake` without properties, in PR #139; the
+alternative was keeping the item in `.claude/memory/OPEN_QUESTIONS.md`.
+`tests/test_delta.py::test_nonfinite_double_columns_leave_min_max_out` checks the codec, and
+`tests/proof_of_concept/test_deltalake.py::test_writer_codec_depends_on_the_call` the delta-rs
+behavior.
+`.claude/memory/delta.md`
