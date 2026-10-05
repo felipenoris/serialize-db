@@ -483,7 +483,8 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   `serialize_db_publications` left the schema: `RS-8` read 0 of 3 tables (`teste`, `teste3` and
   `teste_query_editor`), `RS-19` resolved `teste` after the `USE`,
   `redshift.engine.control_table_present` read `False`, and `publish_redshift --init` created the
-  control table again before the base publication; who dropped them is not known. The `COPY ...
+  control table again before the base publication; the user dropped every table before the
+  battery (statement of 2026-10-05). The `COPY ...
   SERIALIZETOJSON` of the 80,901-byte string into `SUPER` failed with the `1224` message now ending
   in `(Hint: set enable_large_strings_opt_in parameter.)`; `RS-12` counted 56 load errors in 30
   days; the suite's `UNLOAD` named its files `0064_part_00`; the Data API answered in 509 ms and
