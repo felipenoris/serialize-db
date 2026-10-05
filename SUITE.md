@@ -217,7 +217,8 @@ export PYTHONPATH=tests
 # que cada uma apaga no fim, e imprimem o relatório no terminal e em
 # probes/output/consistencia_<sonda>_<data-hora>.txt; código de saída 1 quando alguma checagem
 # reprova. O sinal do zero, as estatísticas que deep_copy não registra e as atualizações perdidas
-# do arquivo de controle (plan/OPEN_QUESTIONS.md) saem como leituras conhecidas, não como reprovação.
+# do arquivo de controle (.claude/memory/OPEN_QUESTIONS.md) saem como leituras conhecidas, não
+# como reprovação.
 .venv/bin/python probes/consistencia/probe_types.py
 .venv/bin/python probes/consistencia/probe_stream.py
 .venv/bin/python probes/consistencia/probe_execution.py

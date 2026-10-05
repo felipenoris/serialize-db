@@ -10,8 +10,9 @@ pasta que ``probe_folder`` recria no início e ``finish`` apaga no fim
 passou, 1 quando alguma reprovou, 2 sem a pasta de trabalho.
 
 Cada checagem é um ``report(título, problemas)``: ``OK`` sem problema, ``PROBLEMAS`` com a lista.
-A diferença conhecida do sinal do zero pelo ``COPY`` do DuckDB (``plan/OPEN_QUESTIONS.md``) sai
-das checagens por ``known_zero_sign`` e é impressa como leitura, até a decisão do usuário.
+A diferença conhecida do sinal do zero pelo ``COPY`` do DuckDB
+(``.claude/memory/OPEN_QUESTIONS.md``) sai das checagens por ``known_zero_sign`` e é impressa como
+leitura, até a decisão do usuário.
 """
 
 from __future__ import annotations

@@ -72,7 +72,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   2026-09-24; when the refresh runs, the page does not say). `storage.duckdb_setup` and the
   migration script created the secret with `REFRESH auto` (user decision of 2026-09-24) until the
   target read on 2026-09-25 that only `httpfs` triggers it (below). `plan/POC.md`,
-  `plan/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
+  `.claude/memory/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
 - In the stand-in of 2026-09-25 (moto behind a proxy answering `400 ExpiredToken` to a key past
   its 70 s lifetime, a local IMDS issuing a new key every 40 s, because delta-rs ignored
   `AWS_CONTAINER_CREDENTIALS_FULL_URI` and 169.254.170.2 does not exist in the container):
@@ -84,7 +84,8 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   (object_store 0.13.2) refreshed by itself. `S3FileSystem` and boto3 failed for IMDS reasons
   the target does not share: botocore's IMDS fetcher pushes a near expiry 12 to 20 minutes
   ahead (`ec2_credential_refresh_window` 10 min plus 2 to 10 random), and the AWS C++ SDK
-  1.11.800 of PyArrow reloaded about every five minutes. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  1.11.800 of PyArrow reloaded about every five minutes. `plan/POC.md`,
+  `.claude/memory/OPEN_QUESTIONS.md`
 - In the target on 2026-09-25 (`probes/credentials.py`, 18:33 to 19:36 UTC, 14 rounds 5 minutes
   apart over `<root>/prd/cad_contas`, `plan/readings/credentials-2026-09-25-1833.txt` in git
   history), the `boto3` chain served a new container key about every 30.6 minutes (the first
@@ -98,7 +99,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   key, and `delta_scan` read in the three later rounds. `credentials_clause` followed the container
   key from 18:53:55 on (a new `boto3` session per call). botocore refreshes a held container
   credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry. `plan/POC.md`,
-  `plan/OPEN_QUESTIONS.md`
+  `.claude/memory/OPEN_QUESTIONS.md`
 - The user chose on 2026-09-25 (card "Chave boto3") the DuckDB secret built from the key of the
   `boto3` credential (`storage.aws_credentials`; `KEY_ID ?`, `SECRET ?` and `SESSION_TOKEN ?` as
   command parameters, since a DuckDB syntax error repeats the command's line; without the `aws`
@@ -109,7 +110,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   old engine failed from 72 s and the new one read every round; `probes/credentials.py`, which
   reads DuckDB through the engine since, failed `CR-4` on the old code and passed on the new.
   With `FULL_URI`, `S3FileSystem` and `boto3` renewed, unlike the IMDS stand-in.
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `plan/OPEN_QUESTIONS.md`
+  `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `.claude/memory/OPEN_QUESTIONS.md`
 - In the target on 2026-09-26 (`probes/credentials.py` on the new code, 16:15:59 to 17:19:00 UTC,
   14 rounds over `<root>/prd/cad_contas`), no read failed and the exit code was 0: the engine's
   `delta_scan` read in the 5 rounds past the opening key's expiry at 17:00:22 (`CR-4`, which
@@ -120,7 +121,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   between 16:56:06 and 17:01:06; 34 to 60 minutes left at the rounds), `credentials_clause`
   followed it from 16:31:02 (`CR-10`), delta-rs, `read_parquet`, `S3FileSystem` and `boto3` read
   past the expiry, and the Redshift connection answered twice past its 17:16:00 password expiry
-  (`CR-8`). `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  (`CR-8`). `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
 - In the target on 2026-09-27 (17:35:23 to 18:38:25 UTC, 14 rounds over the same table) no read
   failed: the secret moved to the new key at 18:20:31, 10.2 minutes before the 18:30:43 expiry (the
   18:15:30 round was 15.2 minutes before it, outside botocore's window), and `delta_scan` read in

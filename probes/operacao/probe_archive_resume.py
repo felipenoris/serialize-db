@@ -1,7 +1,7 @@
 """Sonda do ``archive`` interrompido no meio da cópia e continuado pelo mesmo comando.
 
-``plan/OPEN_QUESTIONS.md`` ("A operação no ambiente alvo") registra que só o substituto exercitou
-a continuação de uma cópia interrompida. A sonda carrega as três primeiras partições de
+``.claude/memory/OPEN_QUESTIONS.md`` ("A operação no ambiente alvo") registra que só o substituto
+exercitou a continuação de uma cópia interrompida. A sonda carrega as três primeiras partições de
 ``cad_lancamentos`` na origem, grava um snapshot delas, roda ``serialize-db archive`` e o encerra
 por ``SIGKILL`` logo depois da linha do log que dá a primeira partição copiada, na ordem do log da
 tabela, com a seguinte em cópia; depois repete o comando.

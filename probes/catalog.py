@@ -1,8 +1,8 @@
 """Os serviços de catálogo alcançáveis do espaço: Glue, Athena, Lake Formation e S3 Tables.
 
 A decisão em ``plan/estrategia.md`` dispensa serviço de catálogo; este probe mede o gatilho de
-reavaliação do item "O Delta diante de um catálogo" de ``plan/OPEN_QUESTIONS.md``: se o Glue ou
-o S3 Tables passarem a existir e a responder ao papel do projeto, o DuckLake e o Iceberg com
+reavaliação do item "O Delta diante de um catálogo" de ``.claude/memory/OPEN_QUESTIONS.md``: se o
+Glue ou o S3 Tables passarem a existir e a responder ao papel do projeto, o DuckLake e o Iceberg com
 catálogo voltam à mesa.
 
 Uso:

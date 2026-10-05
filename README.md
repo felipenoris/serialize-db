@@ -37,8 +37,9 @@ O `uv sync` instala em `.venv/` o Python 3.13, o pacote com as dependências de 
 `duckdb-engine` e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, e o driver
 `redshift-connector`), tudo o que a interface pública usa, e o grupo `dev`, que o `uv` inclui por
 padrão: o `pytest` e as bibliotecas só dos testes (`pandas`, `sqlglot`), fixadas nas versões
-usadas pelos documentos em `plan/`. `uv sync --no-dev` instala só o pacote e as dependências de
-execução, o que um projeto cliente recebe ([`docs/index.md`](docs/index.md), seção "Instalação").
+usadas pelos documentos do `plan/` da biblioteca do projeto Claude. `uv sync --no-dev` instala só
+o pacote e as dependências de execução, o que um projeto cliente recebe
+([`docs/index.md`](docs/index.md), seção "Instalação").
 O grupo `docs` traz o `pdoc`, e o grupo `emulator` traz o `moto` e o `flask` do substituto local
 das suítes do ambiente alvo (seção "Testes no substituto local"), fora do `dev` para que os testes
 padrão não os instalem.

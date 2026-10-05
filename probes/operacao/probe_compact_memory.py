@@ -1,7 +1,7 @@
 """Sonda do ``compact`` numa partição de vários arquivos e da memória dele.
 
-``plan/OPEN_QUESTIONS.md`` ("A memória da compactação" e "A operação no ambiente alvo") espera a
-compactação de uma partição com mais de um arquivo, que a carga não grava, e a memória do
+``.claude/memory/OPEN_QUESTIONS.md`` ("A memória da compactação" e "A operação no ambiente alvo")
+espera a compactação de uma partição com mais de um arquivo, que a carga não grava, e a memória do
 ``optimize.compact`` do delta-rs, que roda fora do ``memory_limit`` do DuckDB. A sonda carrega a
 primeira partição de ``cad_lancamentos`` na origem, reparte o arquivo dela em cerca de 32 arquivos
 pelo ``COPY ... FILE_SIZE_BYTES`` do DuckDB, como o ``UNLOAD`` em paralelo do Redshift fragmenta

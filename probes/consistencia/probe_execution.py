@@ -105,7 +105,7 @@ CADASTRO = Cadastro.__table__
 MONTHS = ["2026-05-31", "2026-06-30", "2026-07-31", "2026-08-31"]
 NEW_MONTH = "2026-09-30"
 ROWS = 20_000
-# A soma de controle da auditoria falha de 1e32 em diante (plan/OPEN_QUESTIONS.md): esses
+# A soma de controle da auditoria falha de 1e32 em diante (.claude/memory/OPEN_QUESTIONS.md): esses
 # valores ficam fora dos dados do pipeline.
 FINITE_OR_NAN = [d for d in DOUBLES if d is not None and abs(d) < 1e30]
 AUGUST = MONTHS[3]
@@ -636,7 +636,7 @@ def check_window_d(
     conferência da versão fixada e o commit, ``exec-f`` publica setembro inteira nesse intervalo
     e ``exec-e`` segue. A docstring de ``publish_delta`` promete ``ExecutionConflict`` a
     ``exec-e``; a leitura conhecida é o commit dela, que substitui a partição de ``exec-f`` sem
-    aviso (``plan/OPEN_QUESTIONS.md``)."""
+    aviso (``.claude/memory/OPEN_QUESTIONS.md``)."""
     problems = []
     outcomes: dict[str, object] = {}
     reached, gate = threading.Event(), threading.Event()
@@ -666,7 +666,7 @@ def check_window_d(
     elif isinstance(paused_outcome, dict) and isinstance(other_outcome, dict):
         print(
             "   achado conhecido: exec-e commitou depois de exec-f sem ExecutionConflict, e o "
-            "arquivo dela substituiu o de exec-f (plan/OPEN_QUESTIONS.md)"
+            "arquivo dela substituiu o de exec-f (.claude/memory/OPEN_QUESTIONS.md)"
         )
         committers = ["exec-f", "exec-e"]
     else:

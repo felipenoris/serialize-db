@@ -3,8 +3,8 @@ num processo filho, encerrado por ``SIGKILL`` num ponto marcado, os arquivos de 
 e a limpeza.
 
 Uma sonda da operação roda uma rotina de ``serialize-db`` que o ambiente alvo ainda não leu
-(``plan/OPEN_QUESTIONS.md``) sobre partições de ``cad_lancamentos`` da base de origem, que ela só
-lê. Ela grava só sob ``<raiz>/serialize-db-operacao/<sonda>-<id>/``, com a raiz de
+(``.claude/memory/OPEN_QUESTIONS.md``) sobre partições de ``cad_lancamentos`` da base de origem, que
+ela só lê. Ela grava só sob ``<raiz>/serialize-db-operacao/<sonda>-<id>/``, com a raiz de
 ``SERIALIZE_DB_TEST_S3_ROOT`` ou, sem ela, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, e apaga a pasta no
 fim, também quando para numa exceção (``SERIALIZE_DB_TEST_KEEP`` a mantém). A saída e os erros
 vão ao terminal e a ``probes/output/operacao_<sonda>_<data-hora>.txt``. Código de saída: 0 quando

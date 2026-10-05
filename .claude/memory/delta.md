@@ -144,7 +144,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   predicate rejects, affecting 1.6.4 and 1.6.5 (read by the documentation review on 2026-09-25);
   1.6.5 is also yanked, and 1.6.6 (2026-09-24, not yanked) fixes it with PR #4785; the package
   uses neither `MERGE` nor the change data feed. `plan/POC.md`, `plan/PLAN-STAGE-9.md`,
-  `plan/OPEN_QUESTIONS.md`
+  `.claude/memory/OPEN_QUESTIONS.md`
 
 - The pin is `deltalake==1.6.6` since 2026-09-25 (user request): the three local sessions (no
   variable, the local root, the local root with the stand-in) read the same counts on 1.6.4 and
@@ -158,7 +158,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   and `datafusion` 55.1.0 stayed, and the AWS SDK crates moved up (`aws-runtime` 1.10.0,
   `aws-sigv4` 1.6.0, `aws-smithy-runtime` 1.15.0), so the container credential chain is read only
   by the S3 suite in the target, whose prepared folder gets 1.6.6 when `prepare_offline.sh` runs
-  again. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  again. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 - `to_pyarrow_dataset()` gives each fragment a `partition_expression` built from the file's log
   statistics, and a null min or max becomes `column >= null` or `column <= null`, so PyArrow skips
@@ -181,7 +181,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `IS NOT NULL` right (3 and 2) and `valor > 1.5` 0 of 1, and an all-null column (`nullCount` equal
   to the rows) gets `is_null(valor)` in the guarantee and reads right.
   `delta.dataSkippingStatsColumns` without the affected columns leaves them out of the guarantee,
-  and the engine file's filters read 2, 2 and 1. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`,
+  and the engine file's filters read 2, 2 and 1. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`,
   `tests/proof_of_concept/test_deltalake.py`
 
 - The dataset filter defect has no fix upstream on 2026-09-25: `filestats_to_expression_next` is
@@ -206,7 +206,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   the older files whose log keeps `valor`'s. The protocol makes the statistics optional and accepts
   wide bounds with `tightBounds` false. `docs/index.md`, section "Ler a base com o modelo", lists
   the readers that filter right and the ones that lose rows. `plan/POC.md`,
-  `plan/OPEN_QUESTIONS.md`, `REFERENCES.md`
+  `.claude/memory/OPEN_QUESTIONS.md`, `REFERENCES.md`
 
 - `optimize.compact` packs a partition's files into bins up to the target size, `target_size` or
   the table property `delta.targetFileSize`, 100 MB without both, and rewrites only the bins with
@@ -339,7 +339,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   one commit per partition, no data through the machine, files identical to the source (the
   DuckDB `COPY` path stays for `export --mode rewrite` and compaction). `optimize.compact` runs in
   delta-rs too, with its default parallel tasks, memory unmeasured.
-  `plan/PLAN-STAGE-9.md`, `plan/OPEN_QUESTIONS.md`
+  `plan/PLAN-STAGE-9.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The registration of UNLOAD files (2026-09-24)
 
