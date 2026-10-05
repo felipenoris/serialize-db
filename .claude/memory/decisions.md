@@ -1,6 +1,6 @@
 # What the user stated and decided
 
-Read before planning or implementing any stage, and whenever a "why" question comes up: these are facts stated by the user, not visible in the code, with their dates. The plan (`plan/PLAN.md`, pt-BR, in the library's `plan/` since 2026-10-05) records the decisions it rested on until then; this file keeps the statements behind them, and every decision since.
+Read before changing an interface or a behavior of the library, and whenever a "why" question comes up: these are facts stated by the user, not visible in the code, with their dates, in the order they were taken. The stage numbers name the parts of the package the plan built (the key is in `CLAUDE.md`, "How this memory is organized"), and the plan itself, with the decisions it rested on until 2026-10-05, is in the library's `plan/`.
 
 ## The pipeline outside this repository
 
@@ -9,7 +9,7 @@ is used only for the declarative models (DDL) and for Core `select` and `insert`
 move tables, never for ORM instances; no catalog service is enabled, which excludes Iceberg on
 Glue (Iceberg with a SQLite catalog file moved by the library is the documented alternative if Glue
 or S3 Tables may be enabled later); development and production runs write separate tables; renaming
-or dropping columns is rare. The decision in `plan/PLAN.md`, with the rationale in `plan/estrategia.md`, follows from them: Delta Lake
+or dropping columns is rare. The decision follows from them: Delta Lake
 through `deltalake` as the table layer, SQLAlchemy kept as contract metadata and Core, SQLMesh, dbt and
 DuckLake not adopted. SQLAlchemy is in the project for
 compatibility with that code (user statement of 2026-09-19); the same day the user decided that
@@ -22,10 +22,9 @@ convenience over the same batch API, so the client works on the current batch wh
 reads the next and writes the previous; never an ORM instance, a row list or a DataFrame. The
 pipelines run pandas with the pyarrow backend (user statement of 2026-09-20), so
 `types_mapper=pd.ArrowDtype` is their native form, and the rule rests on the conversion being cheap,
-which the probes of that day measured for the table and for the batch (`plan/PLAN.md`, section "A
-troca de dados com o código cliente"). The same day the user moved the
-models to `tests/model/` as the reference model: the tests hand it to the package API as a client
-library would, and the package holds no model. On 2026-09-21 the user renamed it
+which the probes of that day measured for the table and for the batch. The same day the user moved
+the models to `tests/model/` as the reference model: the tests hand it to the package API as a
+client library would, and the package holds no model. On 2026-09-21 the user renamed it
 `tests/reference_model/` and stated that it is the SQLAlchemy model of the original partitioned
 Parquet base and that its files will not be changed: the corrections stage 1 planned go to a copy,
 the client model, in `tests/client_model/` (proposed, awaiting confirmation), and the reference
@@ -53,7 +52,7 @@ the connection runs `USE` there and the datashare write rules apply; and the Dat
 path of the library, only a probe check, a suite test and an example. On 2026-09-21 the user asked
 for a flag on how a partition an engine wrote enters the Delta, on both engines and the initial
 load: `export_mode="register"` registers the engine's file (`UNLOAD`, DuckDB
-`COPY ... (RETURN_STATS)`) after the checks of `plan/PLAN-STAGE-3.md`, `"rewrite"` writes by
+`COPY ... (RETURN_STATS)`) after the registration checks, `"rewrite"` writes by
 `write_deltalake`; the `cad_lancamentos` measurement decides the default, `"register"` until then.
 
 ## The test layout
@@ -76,11 +75,11 @@ rule that `secrets/` is never read, limited to that path; the facts are in `plan
 reports stay outside git (the user decided on 2026-09-23 not to copy them to `plan/readings/`). The same day the user confirmed the reading of `RS-19`: `USE
 datalake_rw_shared` makes two-part names resolve in the datashare while `current_database()` keeps
 answering `dev`, so the switch is confirmed by resolving a name, never by that function
-(`plan/PLAN-STAGE-5.md`, `docs/tecnologias.md`, Redshift).
+(`docs/tecnologias.md`, Redshift).
 
 ## The stage 1 review
 
-On 2026-09-21 the user accepted two proposals of the stage 1 review (`plan/PLAN-STAGE-1.md`): a
+On 2026-09-21 the user accepted two proposals of the stage 1 review: a
 `String` without length is a `check_models` violation (`String(n)` or `Text`), and `ddl` generates
 the `CREATE TABLE` text from the type table without the SQLAlchemy dialects (`sql_type`, `quoted`,
 `column_ddl`; no `@compiles` hook; `duckdb-engine` and `sqlalchemy-redshift` stay in the `dev`
@@ -91,7 +90,7 @@ tables get `ALTER TABLE ADD COLUMN` as text under either design, since SQLAlchem
 `ALTER` (that was Alembic's, which left); and the dialects stay for the statements (`sql.render`,
 stage 2), so the decision only keeps stage 1 and the migration script free of them, and stage 2
 decides whether `render` runs at development or at runtime. A `String(n)` width change reaches only
-the versioned `.redshift.sql`, never the Delta diff (`plan/PLAN-STAGE-8.md`, pending decision).
+the versioned `.redshift.sql`, never the Delta diff (a pending decision of stage 8 at the time).
 
 ## The repository layout of 2026-09-21
 
@@ -102,13 +101,13 @@ the readings and the study documents), a new `docs/` with the package documentat
 examples or the probes; DuckDB and local files, no S3), a GitHub workflow that publishes the `pdoc`
 site, and a README whose test and probe sections hold only the final commands, split into the
 package tests of the GitHub workflow and the AWS tests with a flag for Redshift, with the prose on
-what each test does moved to the header of each test file. `plan/CURRENT_STATE.md`, `README.md`
+what each test does moved to the header of each test file. `README.md`
 
 Later on 2026-09-21, after merging PR #46, the user removed the corporate index from
 `pyproject.toml` (the `UV_CONFIG_FILE` workaround left the workflows), took `tests/test_probes.py`
 out of the GitHub tests workflow, and asked for a README instruction that builds the static HTML
 documentation into a folder the user names. The docs workflow fails until the user enables Pages
-with the source "GitHub Actions". `plan/CURRENT_STATE.md`, `README.md`
+with the source "GitHub Actions". `README.md`
 
 Still on 2026-09-21, the user asked for the two workflow badges in the `README.md` and for the
 DuckDB DDL beside the Redshift one on the documentation's main page. The repository's Pages now has
@@ -118,8 +117,7 @@ every module separates: public, the interface client code imports, which `pdoc` 
 protected, not public interface but used by another module of the library; private, used only
 inside its module. The private one carries the `_` prefix, the other two are unprefixed, and the
 module's `__all__` lists the public names and only those, so `pdoc` documents the public interface
-and nothing else.
-`plan/PLAN.md`, `plan/CURRENT_STATE.md`, `CLAUDE.md`
+and nothing else. `CLAUDE.md`
 
 On 2026-09-21 the user decided the `sort_key` of each partitioned table of the client model:
 `data, sistema, contrato` in `cad_contratos`, `data, operacao` in `cad_operacoes`, `data, sistema,
@@ -132,7 +130,7 @@ column prunes only right after the partition; `id_mensuracao` and `id_veiculo` h
 in the base today, and the user kept them. The user did not take the proposed primary-key
 tiebreaker. The migration does not freeze the key the way it freezes the types: the Delta log does
 not store it, changing it later reorders the partitions one rewrites, and Redshift has
-`ALTER TABLE ... ALTER COMPOUND SORTKEY`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-7.md`
+`ALTER TABLE ... ALTER COMPOUND SORTKEY`.
 
 On 2026-09-21 the user decided how `sa.Text` reaches Redshift, the first of the seven pending
 decisions of stage 1: `sql_type` keeps writing `VARCHAR(65535)`, the engine's ceiling, instead of
@@ -142,7 +140,7 @@ forbidding `Text` and requiring `String(n)` in the models (`sqlalchemy-redshift`
 `_refuse_text_above_length` for `String(n)`; both measure bytes, and without the check the value
 would only abort the publication `COPY` (`Spectrum Scan Error` 15007, read on 2026-09-21), after
 the data was already in the Delta. No column of the client model or of the reference model is
-`Text`: the rule guards future models. `plan/PLAN-STAGE-1.md`, `plan/schema.md`, `docs/index.md`
+`Text`: the rule guards future models. `docs/index.md`
 
 On 2026-09-21 the user kept the byte measure for `String(n)`, the second pending decision of stage
 1: `cast` measures with `pc.binary_length`, the measure Redshift applies to `VARCHAR(n)` (a UTF-8
@@ -153,8 +151,7 @@ characters with `VARCHAR(4n)` in the Redshift DDL. The audit of stage 4 (`octet_
 Redshift, `strlen` in DuckDB) and `scripts/migrate_parquet_to_delta.py` already measure bytes. The
 same day `probes/parquet_source.py` gained the byte maximum beside the character length in its
 sample section, because the client model's lengths came from a reading in characters: in the
-fictitious base, `cad_contas.nome` reads 45 characters and 47 bytes.
-`plan/PLAN-STAGE-1.md`, `plan/schema.md`, `probes/README.md`
+fictitious base, `cad_contas.nome` reads 45 characters and 47 bytes. `probes/README.md`
 
 On 2026-09-21 the user made the table and column comment optional, the third pending decision of
 stage 1: `check_models` no longer reports a table or a column without `comment`. The alternatives
@@ -164,7 +161,7 @@ comment at all, produced 129 violations, 85 of them about comments, so the 44 st
 were drowned. The client model keeps its 12 table comments and its 77 column comments. The column
 comment still reaches the Arrow schema and the Delta schema; the table comment now has no consumer,
 and whether `create_table` passes it as the Delta table's `description` is an open item of stage 3.
-`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `docs/index.md`
+`docs/index.md`
 
 On 2026-09-21, asked to confirm the `String(n)` lengths of the client model (the fourth pending
 decision of stage 1), the user asked for the whole base to be measured first, instead of confirming
@@ -174,7 +171,7 @@ sample per table, in characters; two columns sit at zero margin (`cad_contratos.
 `BND`..`FMM`), and `cad_lancamentos.meta` is 100% null over its 141,901,795 rows, so its
 `String(255)` rests on nothing. `probes/parquet_source.py <raiz> --text-bytes` now reads the text
 columns of every file and reports, per column, the longest value in bytes and in characters
-(section 9); the run in the target closes the decision. `plan/PLAN-STAGE-1.md`, `probes/README.md`
+(section 9); the run in the target closes the decision. `probes/README.md`
 
 On 2026-09-21 the user replaced the decision of the same day to measure the whole base before
 fixing the `String(n)` lengths of the client model: the lengths are the model owner's, reviewed
@@ -185,12 +182,12 @@ key, and `svv_table_info` read after the first publication (stage 8, `diststyle`
 `tbl_rows`, `skew_rows`, the denied view being a reading too) says whether an explicit `distkey`
 pays, which would then enter by `ALTER TABLE`. What weighed: nobody has measured how the clients
 query, the AWS documentation recommends `AUTO`, and the distribution is reversible, unlike the
-types the migration freezes. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`
+types the migration freezes.
 
 On 2026-09-21 the user closed the review of the client model's comments the same way as the
 lengths: they are a first draft, and the model's owner revises them directly in the code, so the
 item leaves `.claude/memory/OPEN_QUESTIONS.md`. The only pending decision of stage 1 left is the
-foreign key `cad_contratos` declares to `rel_contrato_operacao`. `plan/PLAN-STAGE-1.md`
+foreign key `cad_contratos` declares to `rel_contrato_operacao`.
 
 On 2026-09-21 the user removed the foreign key `cad_contratos` declared to `rel_contrato_operacao`,
 the last pending decision of stage 1, and declined declaring `(data, sistema, contrato, operacao)`
@@ -201,7 +198,7 @@ would accept it, and the alternatives offered were inverting it (the direction t
 audit of stage 4 checks nothing between the two tables, and `rel_contrato_operacao` keeps
 `id_rel_contrato_operacao` as its only key. The query the client runs is contract → operations,
 which the `sort_key` `data, sistema, contrato, operacao` already serves; the direction of a foreign
-key never bore on it. `plan/PLAN-STAGE-1.md`, `tests/client_model/`
+key never bore on it. `tests/client_model/`
 
 ## The generated SQL text of stage 2
 
@@ -215,7 +212,6 @@ parameter `base`, and one named `preco d'agua` opened a false literal region tha
 `:nome` (`SqlError: parâmetros do texto [] e do dicionário ['data_str'] não fecham`). No identifier
 of the contract carries `:` or `'`, so the two expressions agree on today's text. `bind` substitutes
 no value into the SQL: it rewrites the marker's style and hands the dictionary to the driver.
-`plan/PLAN-STAGE-2.md`
 
 The same day the user decided who fills the `{prefix}` sentinel of a saved SQL file: the functions
 that handle the file take a `prefix` argument, and the obligation to state it propagates to their
@@ -224,7 +220,7 @@ required; `sql_files` always writes the sentinel, because the versioned file ser
 other primitive fills it. The question came from the user reading `plan/PLAN-STAGE-4.md`, whose
 `stream` row said the engine emptied `{prefix}` "por `sql.bind`" while the stage 2 signature
 `bind(sql, params, style)` has no prefix; stages 4 and 5 now say the ready text arrives with the
-prefix already replaced. `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`
+prefix already replaced.
 
 
 ## The code review of 2026-09-21
@@ -246,22 +242,20 @@ dialect with a fully quoted table copy compiles the same text, quotes every iden
 DuckDB). Consequence recorded in `plan/PLAN.md`: the two packages leave the `dev` group and enter
 the runtime dependencies in the commit that writes `serialize_db.sql`, because the engines of
 stages 4 and 5 call `render` at run time; `prepare_offline.sh` runs again then.
-`plan/PLAN-STAGE-2.md`, `plan/PLAN.md`
 
 The same day the user accepted the recommendation that followed from keeping the dialects: the
 prefixed copy `render` compiles is built with `quoted_name(quote=True)` on the table name and on
 every column, so the DML quotes every contract identifier like the DDL of stage 1, with the
 `{prefix}` sentinel inside the quotes and no dependence on either dialect's reserved-word list;
 labels and the rest of the statement stay quoted as the dialect requires, because they are the
-client's. The rule of `plan/PLAN.md` stays as written. `plan/PLAN-STAGE-2.md`
+client's. The rule of `plan/PLAN.md` stays as written.
 
 On 2026-09-22 the user put `sqlglot` in the tests: `sqlglot==30.18.0` (the version of the scratch
 trial of 2026-09-21) enters the `dev` group, and `test_redshift_text_parses_with_sqlglot` stops
 being optional. The decision was taken believing the versioned file with the sentinel does not
 parse, a reading of the `quote=False` draft of 2026-09-21; the implementation of 2026-09-22 showed
 the quoted sentinel parses, and the test parses the versioned file of every statement and the
-text with the prefix empty. Stage 2 has no decision awaiting the user. `plan/PLAN-STAGE-2.md`,
-`plan/POC.md`, `pyproject.toml`
+text with the prefix empty. Stage 2 has no decision awaiting the user. `pyproject.toml`
 
 ## The decisions of stage 4
 
@@ -279,8 +273,6 @@ the same day: `published(table, uri, version)` in both engines' protocol and `ru
 in `Execution` — the pinned version as a query source that occupies no name in the sandbox, which is
 also what the audit's keys outside the partition already needed — and `SandboxError` as the stage's
 exception in `serialize_db.errors`. Stage 4 has no decision awaiting the user.
-`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN.md`,
-`plan/serialize-db.md`, `plan/POC.md`
 
 ## The decisions of stage 3
 
@@ -297,7 +289,6 @@ date, `Double` and `String` columns, the four that transcribe exactly, and leave
 publication, instead of falling back to the set difference of `get_add_actions`: `create_table`
 pins `delta.logRetentionDuration` at 3650 days, and the cleanup that would remove the file also
 makes the published version unreadable. Stage 3 has no decision awaiting the user.
-`plan/PLAN-STAGE-3.md`, `plan/POC.md`
 
 ## The sandbox tables and the DDL flag of 2026-09-22
 
@@ -311,7 +302,7 @@ and loader (probe of the same day); a Redshift temporary table lives in the sess
 serverless workgroup ends after 3,600 s idle, cannot be inspected from outside or after a failed
 audit, and gets `RAW` encoding by default. The user asked for
 `ddl(table, dialect, prefix="", temporary=False)` all the same, with `temporary=True` emitting
-`CREATE TEMP TABLE` and no use inside the plan. `plan/PLAN-STAGE-1.md`, `plan/POC.md`
+`CREATE TEMP TABLE` and no use inside the plan.
 
 The same day the user removed the per-thread connection from the Redshift engine (stage 5): the
 engine keeps one session per execution and a `threading.Lock`, every command takes it, `stream`
@@ -322,7 +313,6 @@ and a temporary table the pipeline creates in the session serves the next comman
 when the engine reconnects. The DuckDB engine keeps its cursor per thread, stream and loader
 (superseded later the same day: both engines keep a single session under a lock, section "The
 review of 2026-09-22 and the single session on both engines").
-`plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/serialize-db.md`
 
 The same day the user generalized the partition column: any text column `String(n)` partitions,
 `partition_source` is optional and the derivation `strftime('%Y-%m-%d')` is checked by the audit
@@ -332,8 +322,7 @@ space or empty), `previous_partitions` returns the text order, and `Execution` v
 value against those rules instead of `AAAA-MM-DD`. `check_models` refuses a partition column
 without length, a `partition_source` the table lacks and one without `partition_by`. A non-text
 partition type stays out: five SQL templates and the log's `partition_values` treat the value as
-quoted text. `plan/PLAN.md`, `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`,
-`plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `docs/index.md`
+quoted text. `docs/index.md`
 
 The same day the user made the Core statement submitted to the engine the default path
 (`run.sandbox.query`, `execute` and `stream` compile the prefixed copy with the client's
@@ -344,14 +333,12 @@ the user accepted, with one requirement the user stated: the library never deman
 the same statements there. The user accepted the two proposals from the probes of that day, both
 the same day: `render` maps a valueless `bindparam` to `:nome` by `replacement_traverse` and
 `param` left the module, so one statement serves the client's `Connection`, the engines and the
-files (`plan/PLAN-STAGE-2.md`); and `UniqueConstraint` replaced the two unique indexes the client
+files; and `UniqueConstraint` replaced the two unique indexes the client
 model's composite foreign keys reference, with the `check_models` rule that a foreign key targets
 the referred table's primary key or a `UniqueConstraint` in the same column order, because DuckDB
-refuses a unique index as target and a swapped order, and Redshift documents the same requirement
-(`plan/PLAN-STAGE-1.md`, `plan/schema.md`). The
-migration ran successfully in the target; its reports exist and are not available yet, so the
-`export_mode` default still waits for their numbers. `plan/PLAN.md`, `plan/PLAN-STAGE-2.md`,
-`.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+refuses a unique index as target and a swapped order, and Redshift documents the same requirement.
+The migration ran successfully in the target; its reports exist and are not available yet, so the
+`export_mode` default still waits for their numbers. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The review of 2026-09-22 and the single session on both engines
 
@@ -369,8 +356,7 @@ The probes of the same day showed it feasible with intermediate files (`.claude/
 and the plan now has `session()` on both engines, `stream` and `loader` through Arrow IPC files on
 DuckDB, and `ingest` without `max_workers`. The user stated that the target may have any number of
 vCPUs and that the library must explore parallelism to scale; the 2 vCPUs read on 2026-09-21 are a
-reading, not a design premise. `plan/PLAN.md`, `plan/PLAN-STAGE-3.md` to `plan/PLAN-STAGE-6.md`,
-`plan/serialize-db.md`, `plan/POC.md`
+reading, not a design premise.
 
 ## The answers of 2026-09-23: extra sessions, parallel ingest and the audit text
 
@@ -394,9 +380,7 @@ report with the `cad_lancamentos` partition in both modes sets the default and d
 and for the initial load, whether the other mode leaves stages 4, 5 and 7. The user accepted
 freezing the generated SQL text path where it served only diffs: `audit_files`,
 `write_audit_files` and `serialize-db audit --write` left the plan, and `audit_sql` with `--sql`
-stay for debugging. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md` to `plan/PLAN-STAGE-8.md`,
-`plan/serialize-db.md`, `docs/tecnologias.md` (Redshift), `plan/POC.md`,
-`.claude/memory/OPEN_QUESTIONS.md`
+stay for debugging. `docs/tecnologias.md` (Redshift), `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The review of stages 3 and 4 of 2026-09-23
 
@@ -419,7 +403,7 @@ the farthest 13,409 from the exact sum over 20,000,000 values) while the `DECIMA
 exact, and the pruning defect involves no `CAST`; the decision stays pending in stage 1. The user
 asked for the context of the `loader` creating its table at `close` and of `interrupt()`, and for a
 reference implementation of the hybrid `stream` before deciding; the three stay pending in
-`.claude/memory/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+`.claude/memory/OPEN_QUESTIONS.md`.
 
 The same day the user answered the rest. The non-finite `Double`: `cast` does not refuse `NaN` or
 infinity; the pruning defect is GitHub issue #59 (opened at the user's request) and stays in
@@ -430,16 +414,14 @@ the `loader` checks the name at open on a cursor of its own, without the session
 the table at `close` in one transaction with the `INSERT`; the hybrid `stream` (batches in memory up
 to 64 MiB, the LZ4 spool file after), which the user asked to see as code before approving; and
 `interrupt()` in the stream's `close` and in the engine's `cleanup`. Stage 4 has no decision
-awaiting the user. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`,
-`plan/PLAN.md`, `plan/POC.md`
+awaiting the user.
 
 After merging PR #58 the user read PARQUET-1246 as the Parquet spec recommending no min and max for
 a column holding `NaN`, noted that DuckDB documents its own `NaN` convention, and proposed that the
 library follow the Parquet storage standard whatever DuckDB does (2026-09-23). The sources showed a
 different spec rule (min and max without the `NaN` plus `nan_count`), a Delta log outside the
 Parquet spec, and DuckDB losing the row through both layers; the recommendation awaiting the user is
-no `Double` min and max in the footer or the log. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
-`.claude/memory/OPEN_QUESTIONS.md`
+no `Double` min and max in the footer or the log. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The decisions of stage 6
 
@@ -459,8 +441,7 @@ of refused characters: the single quote broke the `publish_partition` predicate,
 percent-encodes `:`, `%`, `#`, `'` and accents in the folder name, which the `register` mode's
 `COPY` writes unencoded. Validating every value of `partitions` in `ingest`, `audit` and `publish`
 is the assistant's extension, named in the report. Stage 6 has no decision awaiting the user.
-`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN.md`,
-`plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+`.claude/memory/OPEN_QUESTIONS.md`
 
 Later on 2026-09-23 the user asked for the stage 6 interface to be corrected against its table of
 primitives: `Database(root, environment, metadata)` without `storage_options`, which stage 3
@@ -471,8 +452,7 @@ argument, `Execution` argument, `SERIALIZE_DB_EXPORT_MODE`, `"register"`; and `-
 `publish`, `delta.snapshot(storage, environment, name, versions)`, the `serialize-db audit`
 options and `AuditFailed` imported from `serialize_db.errors`, and made `storage` a
 `functools.cached_property` after a probe showed the frozen dataclass refusing the `init=False`
-field in `__post_init__`; each was named in the report. `plan/PLAN-STAGE-6.md`,
-`plan/PLAN-STAGE-5.md`, `plan/POC.md`
+field in `__post_init__`; each was named in the report.
 
 ## The decisions of stage 5
 
@@ -484,7 +464,7 @@ explicitly by the user once, creates it, so no pipeline code path runs its `CREA
 assistant's choices around it, named in the report: `create_publications_table(config)`,
 `serialize-db publish --init`, the new `PublicationError`, a plain `CREATE TABLE` without `IF NOT
 EXISTS`, the check by `select 1 ... limit 0` outside a transaction, `publication_status` making the
-same check, the pipeline's opening no longer reading the table (`plan/PLAN.md`, step 1), a
+same check, the pipeline's opening no longer reading the table, a
 runbook row in stage 9, and `connect` running no command to confirm the `USE` (the first two-part
 statement confirms it). The user accepted the other three proposals as made. `stream` always goes
 through `UNLOAD ... PARALLEL OFF` to `staging/<execution_id>/stream/<uuid>/` and `query` always
@@ -498,8 +478,7 @@ through the `loader`, and the multi-row `INSERT` left. `schema_from_row_descript
 partition and per attempt, `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` in `register` and
 `staging/<execution_id>/<tabela>/<coluna>=<valor>/<uuid>/` in `rewrite` (the `rewrite` path is the
 assistant's). Stage 5 has no decision awaiting the user; the readings the next suite run in the
-target makes for these decisions are in `.claude/memory/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-5.md`,
-`plan/PLAN-STAGE-8.md`, `plan/PLAN.md`, `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+target makes for these decisions are in `.claude/memory/OPEN_QUESTIONS.md`.
 
 The user then chose the per-partition version of the #59 rule (2026-09-23): a `Double` column with a
 non-finite value (`NaN` or infinity) in a partition is written without min and max, in the Parquet
@@ -511,8 +490,7 @@ engines; with `audit=False` every `Double` column goes in the list. The trigger 
 value, so the audit count serves as it is and the infinite-extreme special case of `register_files`
 goes. `initial_load` counts non-finite values in its partition check query, and its `load_report`
 sums only finite values. Open: the footer the Redshift `UNLOAD` writes for a row group with `NaN`.
-`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
-`plan/PLAN-STAGE-7.md`, `.claude/memory/OPEN_QUESTIONS.md`
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## The implementation of stages 3, 4 and 6
 
@@ -532,8 +510,7 @@ per partition; the audit counts with `count(CASE WHEN ...)`, because Redshift's 
 worker only, and a failure goes up with each table's outcome in a note; `Execution` refuses the
 `"redshift"` engine until stage 5, `publish_redshift` waits for stage 8, and the snapshot is
 written only when the execution ends without error; the two stream-cancellation tests assert the
-thread ended and the session is free, with the error null or the interrupt's. `plan/PLAN-STAGE-3.md`,
-`plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`
+thread ended and the session is free, with the error null or the interrupt's.
 
 
 ## The code review of 2026-09-23
@@ -561,13 +538,12 @@ the same day: code the plan assigns to a later stage stays, even without a calle
 `archive_prefix`, and the `sandbox_prefix` draft of stage 5 in `test_stdlib.py`); in the real base
 `id_parent` and `id_child` always differ, and `rel_contas_hierarquias` implements a tree of
 accounting accounts, which the fixture now builds and `tests/test_source_db_projetado.py` checks.
-`plan/PLAN-STAGE-4.md`, `plan/CURRENT_STATE.md`, `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+`.claude/memory/OPEN_QUESTIONS.md`
 
 The user asked on 2026-09-23 to build the local stand-in and apply the behavior corrections of the
 target-only suites, then to version the stand-in: `tests/emulator.py`, switched on by
 `SERIALIZE_DB_TEST_EMULATOR`, with moto pinned in the `dev` group (in the `emulator` group since the
-answers to the pending decisions, below). `plan/POC.md`,
-`plan/CURRENT_STATE.md`
+answers to the pending decisions, below).
 
 ## The early migration's reports
 
@@ -585,7 +561,7 @@ partitioned table's load, every requested partition in the four write variants, 
 process (`spawn`) with its own peak (`VmHWM` on Linux) and a scratch table under
 `<root>/_medicao_<table>/`, also when the partition is already in the log, and the report carries
 the machine; `--no-measure` turns it off (the assistant's design, named in the report).
-`source-base.md`, `plan/PLAN-STAGE-7.md`, `.claude/memory/OPEN_QUESTIONS.md`
+`source-base.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The answers to the pending decisions
 
@@ -610,8 +586,8 @@ the user asked where the one-database-per-transaction rule comes from: the AWS p
 for data sharing reads and writes", never measured in the target), the entry of an archived snapshot
 (the assistant proposed moving it to a sibling `archived` key), the pytest temporary folder (the
 user asked for context), and the source of the distribution reading, which the probe of the same
-day found denied in `svv_table_info`. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-9.md`,
-`.claude/memory/OPEN_QUESTIONS.md`, `docs/index.md`, `README.md`
+day found denied in `svv_table_info`. `.claude/memory/OPEN_QUESTIONS.md`, `docs/index.md`,
+`README.md`
 
 The user answered the three questions left open the same day. The publication staging: the two
 temporary-staging cases go into `tests/proof_of_concept/test_redshift_transactions.py`, one filling
@@ -623,8 +599,7 @@ conditional write, and `snapshot` refuses a name present in either key (both ent
 `serialize_db.delta` with stage 9's `archive`). The pytest temporary folder: the tests that wrote
 there, `tests/test_source_db_projetado.py` and the 17 writing cases of `tests/test_probes.py`, are
 `local` and write under `SERIALIZE_DB_TEST_LOCAL_ROOT`, so the premise that `pytest` without a
-variable writes nothing holds (checked in a stripped environment). `plan/PLAN-STAGE-8.md`,
-`plan/PLAN-STAGE-9.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+variable writes nothing holds (checked in a stripped environment).
 
 The same day the user chose the source of the stage 8 distribution reading, after `probes/redshift.py`
 (`RS-8`) found `svv_table_info` denied to the role after the `USE` (42501): the published tables stay
@@ -633,8 +608,7 @@ between published tables (`cad_lancamentos` with `cad_contas` on `id_conta`); an
 enters by `ALTER TABLE ... ALTER DISTKEY` only when the plan shows `DS_BCAST_INNER` or `DS_DIST_BOTH`.
 Rejected: `SHOW TABLE`, which probably shows only `DISTSTYLE AUTO`, and asking the administrator for
 the view. `tests/proof_of_concept/test_redshift.py::test_explain_of_a_join_on_the_share` reads whether
-the role may run `EXPLAIN` on the datashare. `plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-8.md`,
-`.claude/memory/OPEN_QUESTIONS.md`
+the role may run `EXPLAIN` on the datashare. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The readings folder
 
@@ -648,7 +622,7 @@ replaces it; the probe reports of 2026-09-21 stay out of git, and the older read
 history. The rule of the same day decides when a report leaves: once `plan/POC.md` and the stage
 file hold what it showed. The same identifiers remained elsewhere in the repository (`plan/POC.md`, the memory,
 `SUITE.md`, `examples/`, `tests/test_probes.py`) until the user's answer of the same day, in the
-section on the publication flow. `plan/readings/README.md`
+section on the publication flow.
 
 On 2026-10-04 the user moved `plan/readings/` out of the repository, to the Claude project's
 library at `/mnt/project-files/readings/`, file by file as it was: the engine and publication suite
@@ -660,7 +634,7 @@ masked. The library's `README.md` indexes them; the assistant pointed its links 
 GitHub, kept the leaving rule of 2026-09-23 (a report leaves once `plan/POC.md` and the stage file
 hold what it showed) and wrote that git history keeps the reports that were in `plan/readings/`;
 a report that leaves the library has no such copy. The placeholders the README listed went into
-the masking rule of `CLAUDE.md`. `plan/CURRENT_STATE.md`
+the masking rule of `CLAUDE.md`.
 
 ## The Redshift suite runs of 2026-09-23 and the stage 8 transaction
 
@@ -676,8 +650,7 @@ transaction with `UPDATE serialize_db_publications ... WHERE table_name = <t> AN
 <version read>`, where 0 affected rows raises `ExecutionConflict` without a retry and a `1023` that
 still escapes from any command raises `ExecutionConflict` too; the user chose (b), and replaced it
 later the same day with the flow of the next section, as the answers on the first publication and
-on the two stage 5 proposals came. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-5.md`,
-`plan/PLAN-STAGE-4.md`, `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+on the two stage 5 proposals came. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The publication flow, the unpublish flow and the stage 5 answers of 2026-09-23
 
@@ -707,8 +680,7 @@ path of `examples/redshift_copy_unload.py` and `examples/redshift_manifest.py`, 
 account in a fabricated ARN of `tests/test_probes.py`, which took the documentation's
 `123456789012`, carry the placeholders of `plan/readings/README.md` (the lab's got their own:
 `<conta do laboratório>`, `dzd-<domínio do laboratório>`, `<projeto do laboratório>`); git
-history keeps the old values. `plan/PLAN-STAGE-8.md`,
-`plan/PLAN-STAGE-5.md`, `.claude/memory/OPEN_QUESTIONS.md`
+history keeps the old values. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The battery of 2026-09-23 at 22:49 and the parallel-processing instruction
 
@@ -726,7 +698,7 @@ and made the stand-in refuse `ALTER COLUMN ... TYPE`; it proposed, awaiting the 
 the default `export_mode` with `rewrite` only for the stage 5 non-finite fallback, the load sorted
 by `sort_key`, and the temporary staging filled inside the transaction. The raw migration reports
 stayed out of git, as the first run's did; their numbers entered `plan/POC.md`.
-`plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## The environment-derived DuckDB limits and the approvals of 2026-09-24
 
@@ -749,8 +721,8 @@ killing the process for lack of RAM; approved the three proposals (`register` as
 stages 4, 5 and 7 with `rewrite` only in the stage 5 swap for a non-finite `Double` partition, the
 load sorted by `sort_key`, the stage 8 temporary staging filled inside the transaction after the
 control row read); and merged PR #68. Whether `rewrite` leaves stages 4 and 7, with the
-`export_mode` flag and its tests, was put to the user (proposed: remove it). `plan/PLAN-STAGE-4.md`,
-`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`, `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+`export_mode` flag and its tests, was put to the user (proposed: remove it).
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## The rewrite leaves stages 4 and 7, and the engine page enters the pdoc site (2026-09-24)
 
@@ -765,8 +737,7 @@ registration and measures each partition with and without the sort (`SORT_VARIAN
 text had proposed keeping the `rewrite` variants until stage 7 absorbs the script, and the
 assistant removed them to match the user's answer. `serialize_db.engine.__all__` lists `duckdb`,
 because pdoc documents only the submodules a package's `__all__` names, and the site had no engine
-page since stage 4; `tests/test_package.py` checks every package. `plan/PLAN-STAGE-4.md`,
-`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-7.md`, `plan/PLAN.md`
+page since stage 4; `tests/test_package.py` checks every package.
 
 ## The battery of 2026-09-24 at 01:41 on a 16 vCPU machine
 
@@ -776,8 +747,7 @@ revisions to the plan and the code. The assistant fixed `DuckDBConfig.threads` a
 CPUs by the probe's reading, as the plan had assigned to that run, closed the open items on the
 `cad_lancamentos` migration, the half-memory fraction, the threads, the non-finite `Double` and the
 Redshift audit text, and turned the audit readings into assertions; the migration reports stay out
-of git. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-4.md`,
-`plan/PLAN-STAGE-7.md`
+of git. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## REFRESH auto on the DuckDB secret and the archive by copy and registration (2026-09-24)
 
@@ -790,8 +760,7 @@ partition's files of the snapshot version with `Storage.copy` and registers them
 `register_files` on a table made by `create_table`, one commit per partition, in place of
 `deep_copy` by `write_deltalake` over the whole table, whose memory grows with the table outside
 DuckDB's limit (the DuckDB `COPY` rewrite stays with `export --mode rewrite` and compaction). The
-`deep_copy` code changes when stage 9 starts. `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`,
-`.claude/memory/OPEN_QUESTIONS.md`
+`deep_copy` code changes when stage 9 starts. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The implementation of stages 5 and 8 (2026-09-24)
 
@@ -811,8 +780,8 @@ temporary staging with `JSON_PARSE` for a table with a JSON column; the stream s
 the `row_desc` of `select * from (...) limit 0`; `PARALLEL OFF` up to 5,000,000 rows, unmeasured;
 string min and max left out of the log for `UNLOAD` files; an empty partition registered through
 an empty file the engine writes; and the stage 8 suite publishing in a `poc<id>` environment,
-creating the control table only when absent and dropping it only in that case. `plan/PLAN-STAGE-5.md`,
-`plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-8.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+creating the control table only when absent and dropping it only in that case.
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## Stage 7 over the package and the measurement out of the script (2026-09-24)
 
@@ -825,14 +794,13 @@ package as `serialize_db.load` with the plan's primitives (`discover_partitions`
 thin, keeping only what the plan leaves out of the package (the `--report` JSON with the machine
 and the per-partition progress); and the measurement of the sorted and unsorted variants leaves
 the script, because the 2026-09-24 battery measured the four `cad_lancamentos` partitions in both
-variants and the `sort_key` order is decided (`plan/POC.md` keeps the numbers). The assistant's
-choices, named in the report: the partition check before the `COPY` (no orphan file on a
+variants and the `sort_key` order is decided (the library's `plan/POC.md` keeps the numbers). The
+assistant's choices, named in the report: the partition check before the `COPY` (no orphan file on a
 contract refusal), `config` on `initial_load` and `load_report` for the tests' engine folder,
 `--tables` instead of `--table` on `serialize-db load`, the root layout
 `<root>/<environment>/<table>` of `Database` (the script gains `--environment`), one `initial_load`
 call per partition in the script for the progress JSON, and the foreign-key audit left to
-`serialize-db audit --foreign-keys` after the load. `plan/PLAN-STAGE-7.md`, `plan/CURRENT_STATE.md`,
-`.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+`serialize-db audit --foreign-keys` after the load. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The routines print their measure (2026-09-24)
 
@@ -845,8 +813,7 @@ the CLI's printed line for `compact`, `archive` and `export` (`em <s> s; RSS má
 publication, whose CLI line is a summary printed at the end; `peak_rss_mb` in
 `serialize_db.resources`, read from `_PROC / "self/status"` so the tests fabricate it, with the
 script importing it; and, beyond the ask, the copy time of each partition on `deep_copy`'s log
-line. `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-9.md`, `.claude/memory/OPEN_QUESTIONS.md`,
-`plan/POC.md`
+line. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The arguments, returns and exceptions in the docstrings (2026-09-24)
 
@@ -871,8 +838,7 @@ third-party exception that only propagates stays out, except `duckdb.Error` wher
 conversion or a missing extension surfaces (`initial_load`, `Storage.duckdb_connect`,
 `DuckDBEngine`). The code divergences the review found wait on the user in
 `.claude/memory/OPEN_QUESTIONS.md`. The same day the user asked for the standard in `CLAUDE.md`,
-which holds it in "Python Code Style", section "Docstrings". `docs/operacao.md`, `docs/index.md`,
-`plan/POC.md`
+which holds it in "Python Code Style", section "Docstrings". `docs/operacao.md`, `docs/index.md`
 
 ## The code review of 2026-09-24
 
@@ -908,8 +874,7 @@ helpers), because a shared helper would move code between modules; and the `monk
 `delta.open_table`, `delta.read_snapshots` and `Storage.copy`, the only way to put a commit or a
 failure between two steps. After the merge the user approved, on 2026-09-24, the same reading in
 `scripts/migrate_parquet_to_delta.py`, whose `--environment` default took the empty variable as
-the environment `''` and failed with `ContractError`. `plan/PLAN-STAGE-1.md`,
-`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `docs/operacao.md`, `plan/POC.md`
+the environment `''` and failed with `ContractError`. `docs/operacao.md`
 
 ## The read access of stage 10 (2026-09-24)
 
@@ -934,7 +899,7 @@ unload_to)` for the client without the Delta root, beside `Database.open_redshif
 unload_to=None)` (C); and reading an archived snapshot from its copy in
 `arquivo/<name>/<table>` at the copy's current version, against refusing the name (D), because
 the target's only snapshot, `carga-2026-09-24`, moved to `archived` in the 16:51 battery.
-`plan/PLAN-STAGE-10.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## The snapshot name rule in `delta.snapshot` (2026-09-24)
 
@@ -944,8 +909,7 @@ partition rule `[0-9A-Za-z][0-9A-Za-z_.-]*`, checked by `Execution.snapshot` and
 The public `delta.snapshot` wrote any name, so `2026 T3` or `a/b` could enter the control file
 and break or nest the archive's `arquivo/<name>/`; the user asked for the fix, and
 `delta.snapshot` raises `ContractError` for such a name before reading the control file
-(`test_snapshot_control_file_is_written_conditionally`). `plan/PLAN-STAGE-3.md`,
-`plan/CURRENT_STATE.md`
+(`test_snapshot_control_file_is_written_conditionally`).
 
 ## The production environment named `prd` (2026-09-24)
 
@@ -957,7 +921,7 @@ the dated records of what ran, because the target still holds them: the 14:16 lo
 `<root>/prod/`, the 16:51 publication as `prod_<table>`, the transaction runs of 2026-09-23 and
 the stage 10 probe's `prod_` prefix, in `plan/POC.md`, `plan/CURRENT_STATE.md`,
 `plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`, `CLAUDE.md` and the memory. The user deletes
-the target's `prod` artifacts (the section on `dsv`). `plan/POC.md`
+the target's `prod` artifacts (the section on `dsv`).
 
 ## The snapshot channel and the closed stage 10 decisions (2026-09-24)
 
@@ -978,8 +942,7 @@ default --snapshot <name>`, the name explicit from the start; and after reading 
 the user kept both Redshift entries, `serialize_db.reader.open_redshift(metadata, environment,
 config, unload_to)` for the client and `db.open_redshift(config)` for the team. The user had
 first read `open_delta(channel="default")` as the current-version mode; it is the default
-snapshot, and `current` names the other mode. `plan/PLAN-STAGE-10.md`, `plan/PLAN.md`,
-`plan/serialize-db.md`, `plan/PLAN-STAGE-6.md`, `plan/PLAN-STAGE-8.md`
+snapshot, and `current` names the other mode.
 
 ## The review of the stage 10 interface (2026-09-24)
 
@@ -998,7 +961,6 @@ for the engine of `Execution`. The user adopted only the finalizer and, in `open
 without S3, which runs `query` and not `stream`; the assistant's reading, stated in the report:
 `Database.open_redshift` takes the same `config=None`, since it calls the function. Everything
 else stays as planned or implemented, the `metadata` of `open_redshift` included.
-`plan/PLAN-STAGE-10.md`, `plan/POC.md`
 
 ## The development environment named `dsv` and the target's `prod` artifacts (2026-09-24)
 
@@ -1017,7 +979,7 @@ target run relied on the default: `SUITE.md` passes `--environment prd` everywhe
 the user answered the open item on the target's `prod` environment: the user deletes every
 artifact of the base named `prod` there (the `<root>/prod/` folder, the `prod_<table>` tables
 and their `serialize_db_publications` rows), and the item left `.claude/memory/OPEN_QUESTIONS.md`.
-`CLAUDE.md`, `plan/serialize-db.md`, `docs/operacao.md`
+`CLAUDE.md`, `docs/operacao.md`
 
 ## The review of comments and documentation (2026-09-25)
 
@@ -1041,7 +1003,7 @@ statistics, and `statistics_enabled="NONE"` drops the `nullCount` with the min a
 review's probes read as `IS NULL` returning 0 through the delta-rs dataset and the true count
 through `delta_scan`, the `INT96` timestamp of the `UNLOAD` among the columns without statistics;
 `deep_copy` reopens the destination table per partition, which the commit does not need
-(`plan/POC.md`, the review of 2026-09-21); and the `probes/diagnose_aws.py` summary still prints
+(the review of 2026-09-21); and the `probes/diagnose_aws.py` summary still prints
 that the suite does not hand `AWS_ENDPOINT_URL` to DuckDB, which its docstring no longer says.
 `.claude/memory/OPEN_QUESTIONS.md` stayed out while PR #81 changes it. `src/`, `scripts/`,
 `probes/`, `README.md`, `examples/README.md`, `probes/README.md`, `docs/`
@@ -1070,7 +1032,7 @@ The reader's tests import the publication suite's `Target`, `target` and `export
 (`from test_publication import ...`), so the `redshift` case of `tests/test_reader.py` publishes as
 the publication suite does. The pdoc build read four fields wrong (`:param channel:`, `:param db:`
 and one `:raises ContractError:` with a second colon on the first line), corrected before the
-commit. `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+commit.
 
 ## The compaction of partitions with non-finite `Double` values (2026-09-25)
 
@@ -1087,8 +1049,8 @@ probes of the same day found it only after a `rewrite` of a table with more than
 whose partitions have several files, which today only the Redshift engine writes. The code does not
 follow the decision yet: asked on 2026-09-25 whether to implement it with the two Redshift
 decisions below, the user kept it for the choice of issue #85, because a partition compacted
-without statistics widens what the delta-rs dataset filter reads wrong. `plan/PLAN-STAGE-9.md`,
-`plan/POC.md`, `plan/CURRENT_STATE.md`, `.claude/memory/OPEN_QUESTIONS.md`
+without statistics widens what the delta-rs dataset filter reads wrong.
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## The count check of the Redshift engine's swap (2026-09-25)
 
@@ -1101,7 +1063,6 @@ runs `read_back` after it). After `publish_partition`, `_swap` runs `delta.read_
 restores the previous version and raises `RegistrationRefused`. The alternatives were comparing
 the `UNLOAD` files' rows before the commit, which misses a loss in the delta-rs write, and
 documenting the gap. `_swap` follows it since the corrections after PR #84 (2026-09-25).
-`plan/PLAN-STAGE-5.md`, `plan/CURRENT_STATE.md`
 
 ## The version of the Redshift engine's `_publicado` staging (2026-09-25)
 
@@ -1115,7 +1076,6 @@ staging is the same one when the versions match. The alternatives were refusing 
 with `SandboxError`, which refuses on Redshift what DuckDB accepts, and reloading the same
 staging, which changes what an earlier `FromClause` reads. Before deciding, the user asked what a
 staging is. `published` follows it since the corrections after PR #84 (2026-09-25).
-`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`
 
 ## The corrections after PR #84 (2026-09-25)
 
@@ -1140,8 +1100,7 @@ clause built for each `COPY`", below). After asking for their context and side e
 also kept the local `unload_to` of the Redshift reader and `deep_copy` reopening the destination per
 partition as they are, which `plan/PLAN-STAGE-10.md` and `plan/PLAN-STAGE-9.md` record. The items
 that wait on a target run, the delta-rs dataset filter (issue #85), the `deltalake` upgrade (another
-thread) and the bucket rule stayed out. `.claude/memory/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-8.md`,
-`plan/PLAN-STAGE-9.md`, `plan/PLAN-STAGE-10.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
+thread) and the bucket rule stayed out. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The traceback of `serialize-db load` (2026-09-25)
 
@@ -1151,7 +1110,6 @@ error of the subcommands, while the source outside the library's storages and th
 `ExecutionConflict` end with exit 2 and one line. On a decision card the assistant recommended one
 line with the table and the message, keeping exit 1; the user chose on 2026-09-25 to keep the
 traceback, and the code does not change.
-`plan/PLAN-STAGE-7.md`
 
 ## The DuckDB secret with the key of the `boto3` credential (2026-09-25)
 
@@ -1167,8 +1125,7 @@ the text a DuckDB syntax error repeats; the `aws` extension out of `duckdb_setup
 of `rewrite`, `read_back`, `export_snapshot` and the stage 5 swap keeping the opening key, since
 each lasts a table or a partition; the `stream` helper thread ending the stream with the entry's
 error; and `probes/credentials.py` reading DuckDB through the engine, which read the renewal
-in the target on 2026-09-26.
-`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-4.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+in the target on 2026-09-26. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The types the contract accepted without checking (2026-09-25)
 
@@ -1185,9 +1142,8 @@ failing in `delta_schema`; on a decision card the assistant recommended listing 
 0 to the precision beside the precision above 38, in the same PR, and the user chose it on
 2026-09-25. Two limits of the same rule came from the assistant and were named in the report: the
 precision below 1, which made `check_models` raise PyArrow's `ValueError`, and the scale above
-37, the Redshift documentation's maximum, unread in the target.
-`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/schema.md`, `docs/tecnologias.md` (Redshift),
-`docs/index.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+37, the Redshift documentation's maximum, unread in the target. `docs/tecnologias.md` (Redshift),
+`docs/index.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The Redshift driver in the runtime dependencies (2026-09-25)
 
@@ -1202,8 +1158,7 @@ documentation naming `serialize-db[redshift]`; the user chose "Mover" on 2026-09
 left. The assistant's choices, named in the report: the client's installation in `docs/index.md`
 by `uv add` and then `uv sync`, `uv sync` in place of `uv sync --group dev` in `README.md`, and
 the GitHub workflow importing every module of the package and running `serialize-db --help` after
-`uv sync --no-dev`, before the tests. `plan/PLAN.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`,
-`plan/CURRENT_STATE.md`
+`uv sync --no-dev`, before the tests.
 
 ## The publication's credentials clause built for each `COPY` (2026-09-26)
 
@@ -1220,8 +1175,7 @@ transaction passes a marker to `publication_statements`, whose signature stays, 
 `_run_publication` swaps it for a fresh `credentials_clause` right before each `COPY`'s `execute`.
 `test_publish_builds_the_credentials_for_each_copy` failed on the old code (one call for two
 `COPY`s) and passes on the new. The `COPY` longer than its key stays in
-`.claude/memory/OPEN_QUESTIONS.md`. `plan/PLAN-STAGE-8.md`, `.claude/memory/OPEN_QUESTIONS.md`,
-`plan/POC.md`, `plan/CURRENT_STATE.md`
+`.claude/memory/OPEN_QUESTIONS.md`.
 
 ## The messages of the load and of `compact` (2026-09-27)
 
@@ -1236,8 +1190,7 @@ arquivo(s), nenhum commit` when the delta-rs writes and removes no file, with it
 naming the files read rather than "a partition with one file", because the probe of the same day
 found the delta-rs skips any file that fits no other in the target size (`.claude/memory/delta.md`);
 and the `CLAUDE.md` line on `serialize_db.engine.__all__`, which lists `duckdb` and `redshift`.
-`docs/operacao.md`, `plan/PLAN-STAGE-9.md`, `docs/tecnologias.md` (Delta Lake), `plan/POC.md`,
-`plan/CURRENT_STATE.md`
+`docs/operacao.md`, `docs/tecnologias.md` (Delta Lake)
 
 ## The probe fixes of the review of 2026-09-25 (2026-09-27)
 
@@ -1256,7 +1209,7 @@ rules (nested ternaries, dynamic `getattr`, work before an early return, `alcanc
 usage error in `scripts/migrate_parquet_to_delta.py`, whose `--metadata` also left with a traceback;
 the empty presence variable of `diagnose_aws.py` read as `(vazia)`, a side effect of the shared
 helper; and the stale count of the script's tests in `plan/CURRENT_STATE.md` (4 to 5).
-`plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/CURRENT_STATE.md`
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## The optional partition of `Execution` (2026-09-27)
 
@@ -1272,7 +1225,6 @@ partição", the user's "Atualização de Tabela de Domínio (não particionada)
 verb-first style. The assistant's additions, named in the report: the paragraph of "Rodar uma
 execução" on what the third argument is for, and the sentence of `plan/PLAN.md` on the domain
 pipeline.
-`plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
 ## The monthly pipeline test (2026-09-27)
 
@@ -1280,7 +1232,6 @@ pipeline.
 end to end on the DuckDB engine over the fixture base loaded into a Delta in a local folder; the
 user keeps its adaptation to S3 and Redshift (message of 2026-09-27), which waits in
 `.claude/memory/OPEN_QUESTIONS.md`.
-`plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The names of the Delta and Redshift publications (2026-09-27)
 
@@ -1304,7 +1255,6 @@ The assistant's choices, named in the report: the parameters `pinned` and `pinne
 auditing the current Delta version, the renamed tests, and the dated records (`plan/POC.md`, the
 older entries of this file, the dated lines of `CLAUDE.md`) keeping the old names, as with `prod`
 and `dev`.
-`plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/CURRENT_STATE.md`
 
 ## `create_table`, `append` and `appender` in place of `load` and `loader` (2026-09-28)
 
@@ -1335,8 +1285,8 @@ the missing table and the view of the `ingest`, whose `close` runs one `INSERT .
 `Engine.append(table, data)` over it, returning the rows; the protocol `Appender` in place of
 `Loader`; and the DuckDB `ingest` with `materialize=True` by `ddl(table, "duckdb")` and
 `INSERT ... BY NAME` in one transaction, so a malformed JSON in the Delta fails the ingest and the
-view keeps the `delta_scan` types; the `INSERT` cost the same as the `CREATE TABLE AS`
-(`plan/POC.md`). The assistant's choices, named in the report: the DuckDB `object_kind` helper,
+view keeps the `delta_scan` types; the `INSERT` cost the same as the `CREATE TABLE AS`.
+The assistant's choices, named in the report: the DuckDB `object_kind` helper,
 the appender's `INSERT` as a single statement without an explicit transaction, `create_table`
 refusing the occupied name with "ocupado", the probes of `probes/consistencia/` calling the new
 API, `tests/test_pipeline.py` ingesting the 12 tables again, and the dated records
@@ -1344,8 +1294,6 @@ API, `tests/test_pipeline.py` ingesting the 12 tables again, and the dated recor
 and `loader`. The user's run of `probes/consistencia/probe_append_test.py` with `-m redshift` and
 `-m local` in the target on 2026-09-29 read two writers on one table entering in both engines;
 the user's decision of 2026-09-29 puts it in the docstrings (the section on two writers below).
-`plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`,
-`plan/PLAN-STAGE-10.md`, `plan/serialize-db.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
 ## The immutable snapshot name, and the review's decisions taken one at a time (2026-09-28)
 
@@ -1380,7 +1328,7 @@ of a recorded snapshot, the user heard the stage 10 flow (a run marked with a ne
 until `archive`) and kept the snapshot names immutable, never reused, asking for the characteristic
 in the documentation: `docs/operacao.md` ("Snapshot do banco" and "Refazer um snapshot"),
 `docs/index.md`, the docstrings of `Execution.snapshot` and `delta.snapshot`, and
-`plan/serialize-db.md`. `.claude/memory/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-10.md`
+`plan/serialize-db.md`. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The `appender` manifest and the initial load's conversions (2026-09-28)
 
@@ -1398,7 +1346,7 @@ user heard that it lists every type change, lossy or not, read only in the first
 partition, and that the `INT96` timestamp loses its sub-microsecond part, a fourth loss the
 documentation missed; offered to mark the lossy conversions read in every footer, the user chose
 "Só a doc": the line stays as it is, and `docs/index.md` lists the fourth loss and the line's reach.
-`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-7.md`, `plan/POC.md`, `docs/index.md`
+`docs/index.md`
 
 The local suites of that evening failed `test_stream_delivers_each_batch_while_the_query_runs`
 in 3 of 21 runs: DuckDB 1.5.5 delivered `INTERRUPT Error: Interrupted!` in place of the
@@ -1408,8 +1356,7 @@ error, and that every option on the card changes only the test, the user chose o
 affected case alone and a warning to the client in the `stream` docstring: the error case opens
 its own engine with `threads=1` and asserts the `OSError` of the Arrow reader, and the docstrings
 of `DuckDBEngine.stream` and `DeltaReader.stream` say the error can arrive as the interrupt with
-more than one thread. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
-`plan/POC.md`
+more than one thread. The package's behavior does not change.
 
 ## Two writers on one table in the docstrings (2026-09-29)
 
@@ -1426,8 +1373,7 @@ table under `SERIALIZABLE`); `test_two_writers_on_the_same_table_both_enter` che
 in `tests/test_engine_duckdb.py` and, `redshift`-marked, in `tests/test_engine_redshift.py`. The
 assistant's choices, named in the report: `plan/serialize-db.md` no longer says each `append` writes
 a distinct table, and `plan/POC.md` reads the target's pair as refused by no `1023` instead of by
-serializable isolation. The package's behavior does not change. `plan/PLAN-STAGE-4.md`,
-`plan/PLAN-STAGE-5.md`, `plan/serialize-db.md`, `plan/POC.md`
+serializable isolation. The package's behavior does not change.
 
 ## The stand-in's message for a missing mandatory file (2026-09-29)
 
@@ -1440,8 +1386,7 @@ in `tests/emulator.py` raises `Spectrum Scan Error: File not found`, the target'
 without the URI the old message carried; the test records only the message field and the SQLSTATE,
 so the target's other fields stay unread. `test_appender_copies_the_file_at_close` keeps recording
 the message as a reading, without asserting it, because the engine never reads that text; a missing
-manifest keeps the stand-in's own message, since the target's was never read. `tests/emulator.py`,
-`plan/PLAN-STAGE-5.md`, `plan/POC.md`
+manifest keeps the stand-in's own message, since the target's was never read. `tests/emulator.py`
 
 ## The `RS-8` count without the sandbox tables (2026-09-29)
 
@@ -1452,7 +1397,7 @@ table and the Redshift suite's tables), so the sandbox's `exec_<id>_` tables app
 `svv_all_tables` listing it prints. The user had said at 17:00 UTC that a table left after a run
 would be a sign of a real problem. Asked on a card whether `RS-8` should also count and name the
 `exec_` tables or stay as it was, the user chose "Deixar" (20:26 UTC): `RS-8` keeps counting the
-library prefix only, and a sandbox leftover is read in the listing. `plan/POC.md`
+library prefix only, and a sandbox leftover is read in the listing.
 
 ## The Redshift engine's connection after an interrupted command (2026-09-29)
 
@@ -1466,7 +1411,6 @@ of an interrupted command and open another at the next one, with a stand-in test
 or stay as it was, the user chose "Deixar" (20:36 UTC): the engine keeps its connection, after a
 Ctrl+C in the middle of a command the engine is recreated by hand, and an interrupted run may leave
 an `exec_` table in the schema. Why Redshift did not commit that `DROP` stays unread.
-`plan/PLAN-STAGE-5.md`, `plan/POC.md`
 
 ## The correction of a partition follows the runbook (2026-09-29)
 
@@ -1487,15 +1431,14 @@ the next execution reads and the next snapshot carries back to Redshift; the use
 (22:41 UTC) to add both: "Refazer um snapshot" carries the `serialize-db channel` and
 `serialize-db publish_redshift --channel default` of the revert, possible until the `archive` of
 the old snapshot, and the warning that a correction that fails is undone in Delta by another
-execution writing the partitions again, before the next execution. `docs/operacao.md`,
-`plan/serialize-db.md`, `plan/PLAN.md`
+execution writing the partitions again, before the next execution. `docs/operacao.md`
 
 Asked on 2026-09-30 whether the pytest tests cover the redo and the revert, the assistant found
 them covered in parts, the revert only by `--snapshot` and never over an `Execution` marked with a
 new snapshot; the user answered "sim" (02:25 UTC) to one test of the whole runbook:
 `test_redo_a_snapshot_and_revert_by_the_channel`, with the `redshift`, `s3` and `local` markers,
 from the `Execution` marked `2026T3.r2` to the revert by the channel, reading the rows in Redshift
-and in the Delta reader at each step. `tests/test_publication.py`, `plan/PLAN-STAGE-8.md`
+and in the Delta reader at each step. `tests/test_publication.py`
 
 ## The S3 409 of the conditional write as `ConflictError` (2026-09-30)
 
@@ -1509,7 +1452,7 @@ give a conditional `PutObject` a `409 ConditionalRequestConflict` when another o
 object runs during the upload, with the instruction to re-read the ETag and retry, while
 `_put_s3` converted only the 412; the user chose "Converter" (04:08 UTC): `_put_s3` turns
 `ConditionalRequestConflict` and `409` into `ConflictError`, tested by a `boto3` client double.
-`src/serialize_db/storage.py`, `src/serialize_db/errors.py`, `plan/PLAN-STAGE-3.md`
+`src/serialize_db/storage.py`, `src/serialize_db/errors.py`
 
 ## The load report of the requested partitions (2026-10-01)
 
@@ -1523,7 +1466,7 @@ unpartitioned table out, and `serialize-db load` passes `--partitions` to both, 
 the requested partitions match. The migration script passes its `--partitions` the same way, an
 extension the assistant named in its report. The Delta side still aggregates the whole table and
 drops the other partitions after the query. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
-`scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
+`scripts/migrate_parquet_to_delta.py`
 
 ## The requested partition the source does not have (2026-10-01)
 
@@ -1537,7 +1480,7 @@ the source does not have in a partitioned table, before `create_table`, an unpar
 stays out of the request without refusal, and the public `check_requested_partitions(source,
 table, partitions)` lets `serialize-db load` and the script check every table before writing any
 partition, exiting 1. `src/serialize_db/load.py`, `src/serialize_db/cli.py`,
-`scripts/migrate_parquet_to_delta.py`, `plan/PLAN-STAGE-7.md`
+`scripts/migrate_parquet_to_delta.py`
 
 ## The column outside the contract at the registration (2026-10-01)
 
@@ -1552,7 +1495,7 @@ client's file. Asked whether the registration should refuse it, like the partiti
 contrato`, the first such column in footer order, right after the partition-column check, and the
 file stays orphaned as in every refusal. Schema evolution is unaffected, as the user asked in the
 same message: the model changes first and `reconcile` adds the column to the log before any file
-carries it. `src/serialize_db/delta.py`, `plan/PLAN-STAGE-3.md`
+carries it. `src/serialize_db/delta.py`
 
 ## The Delta column the model does not have, at the ingest (2026-10-01)
 
@@ -1569,8 +1512,7 @@ the case (the model has to keep up with the table),
 `test_materialized_ingest_refuses_a_delta_column_outside_the_model` asserts the DuckDB behavior,
 and the Redshift sentence stays unread in the target (`.claude/memory/OPEN_QUESTIONS.md`).
 `src/serialize_db/engine/__init__.py`, `src/serialize_db/engine/duckdb.py`,
-`src/serialize_db/engine/redshift.py`, `src/serialize_db/reader.py`, `plan/PLAN-STAGE-4.md`,
-`plan/PLAN-STAGE-5.md`
+`src/serialize_db/engine/redshift.py`, `src/serialize_db/reader.py`
 
 ## The audit of an unpartitioned table with a list of partitions (2026-10-01)
 
@@ -1585,7 +1527,7 @@ documentar" (17:26 UTC): no code change; the `partitions` field of `run.audit` s
 not filter an unpartitioned table, the approval sits under the list and `publish_delta` does not
 look there, so the unpartitioned table is audited with `None`;
 `test_audit_with_partitions_on_a_table_without_partition_audits_it_whole` asserts it.
-`src/serialize_db/execution.py`, `plan/PLAN-STAGE-6.md`
+`src/serialize_db/execution.py`
 
 ## The floor of `memory_limit` (2026-10-01)
 
@@ -1603,8 +1545,8 @@ note had said "unlimited", and the probe corrected it. Offered on a decision car
 negative, `environment_limits` is built on it, the DuckDB engine reads the memory only when the
 configuration omits `memory_limit`, so an informed `memory_limit` opens without the reading, and
 `test_environment_limits_refuses_the_memory_under_two_mib` and the starved case of
-`test_engine_config_and_single_session` assert it.
-`src/serialize_db/resources.py`, `src/serialize_db/engine/duckdb.py`, `plan/PLAN-STAGE-4.md`
+`test_engine_config_and_single_session` assert it. `src/serialize_db/resources.py`,
+`src/serialize_db/engine/duckdb.py`
 
 ## Ruff in `pyproject.toml` and the signature pattern (2026-10-01)
 
@@ -1638,8 +1580,8 @@ consequence of that choice. Asked on a second card about the `dev` group, the wo
 2026-09-21: `ruff==0.16.9` enters the `dev` group, `tests.yml` runs `uv run ruff check` and
 `uv run ruff format --check` after `uv sync` and before the tests, and `README.md` got the two
 commands in its "Testes do pacote" section once PR #115, which revised it, merged (03:51 UTC);
-the item left `.claude/memory/OPEN_QUESTIONS.md` with them.
-`pyproject.toml`, `plan/CURRENT_STATE.md`, `.claude/memory/OPEN_QUESTIONS.md`, `README.md`
+the item left `.claude/memory/OPEN_QUESTIONS.md` with them. `pyproject.toml`,
+`.claude/memory/OPEN_QUESTIONS.md`, `README.md`
 
 ## The memory read before the commit (2026-10-02)
 
@@ -1658,10 +1600,8 @@ destination and `_export_by_rewrite` before creating the folder, the private `_r
 itself, the callers' fields (`export_partition` of both engines, `publish_delta`, `initial_load`)
 say the refusal comes with nothing written, and `test_the_memory_is_read_before_the_commit`
 asserts the version, the archive and the exported folder untouched, failing on the previous code
-(`assert 2 == 1`).
-`src/serialize_db/delta.py`, `src/serialize_db/engine/duckdb.py`,
-`src/serialize_db/engine/redshift.py`, `src/serialize_db/execution.py`, `src/serialize_db/load.py`,
-`plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+(`assert 2 == 1`). `src/serialize_db/delta.py`, `src/serialize_db/engine/duckdb.py`,
+`src/serialize_db/engine/redshift.py`, `src/serialize_db/execution.py`, `src/serialize_db/load.py`
 
 ## The unpartitioned table under `partitions` (2026-10-02)
 
@@ -1681,7 +1621,7 @@ table, out of the count of conferred tables and out of the script's JSON;
 `test_unpartitioned_table_under_partitions_is_left_out` (with `DuckDBEngine` replaced by a double
 that refuses to open) and the new assertions of the existing cases fail on the previous code.
 `src/serialize_db/load.py`, `src/serialize_db/cli.py`, `scripts/migrate_parquet_to_delta.py`,
-`docs/operacao.md`, `README.md`, `plan/PLAN-STAGE-7.md`, `plan/POC.md`
+`docs/operacao.md`, `README.md`
 
 ## The empty partition list, the second snapshot and the repeated partition (2026-10-02)
 
@@ -1703,10 +1643,9 @@ execution stays marked with the first name; `RedshiftEngine._partitions_to_load`
 repeated value once, so the partition gets one `COPY` and one `INSERT`. The three tests
 (`test_the_empty_list_of_partitions_is_refused`, `test_snapshot_is_marked_once_per_execution`,
 `test_ingest_counts_a_repeated_partition_once`) fail on the previous code, and the three notes
-left `.claude/memory/OPEN_QUESTIONS.md`.
-`src/serialize_db/execution.py`, `src/serialize_db/engine/__init__.py`,
-`src/serialize_db/engine/duckdb.py`, `src/serialize_db/engine/redshift.py`,
-`plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-6.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+left `.claude/memory/OPEN_QUESTIONS.md`. `src/serialize_db/execution.py`,
+`src/serialize_db/engine/__init__.py`, `src/serialize_db/engine/duckdb.py`,
+`src/serialize_db/engine/redshift.py`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The name of the initial load's module (2026-10-03)
 
@@ -1727,8 +1666,7 @@ resumed one. `discover_partitions`, `partition_query`, `check_requested_partitio
 (`plan/POC.md`, `plan/readings/`, the entries above) keep the old names. The user also asked the
 `db` argument's docstring to say it is the Delta base the data is imported into.
 `src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `tests/test_parquet_import.py`,
-`scripts/migrate_parquet_to_delta.py`, `docs/index.md`, `docs/operacao.md`, `README.md`,
-`plan/PLAN.md`, `plan/PLAN-STAGE-7.md`
+`scripts/migrate_parquet_to_delta.py`, `docs/index.md`, `docs/operacao.md`, `README.md`
 
 ## The `delta_db` argument (2026-10-03)
 
@@ -1742,10 +1680,8 @@ take `delta_db` (`Execution`, `DeltaReader`, `import_table`, `import_report`, `p
 uses the `Database` only for the environment that prefixes the published tables' names. The
 attribute `run.db` is `run.delta_db` and `DeltaReader._db` is `_delta_db`, with no alias; the
 client's variables and the examples (`db = Database(...)`, `db.open_delta()`) and the test
-fixtures' `target.db` stay.
-`src/serialize_db/execution.py`, `src/serialize_db/reader.py`, `src/serialize_db/publication.py`,
-`src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `plan/PLAN-STAGE-6.md`,
-`plan/PLAN-STAGE-7.md`, `plan/PLAN-STAGE-8.md`
+fixtures' `target.db` stay. `src/serialize_db/execution.py`, `src/serialize_db/reader.py`,
+`src/serialize_db/publication.py`, `src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`
 
 ## The name of the export function (2026-10-03)
 
@@ -1760,11 +1696,9 @@ keeping the name, the user chose `export_parquet`: the function is `delta.export
 alias, and the subcommand `serialize-db export` stays. The tests named after the function
 (`test_export_parquet_copy_and_rewrite`, the study suite's `test_export_parquet_by_copying_files`)
 and the consistency probe's section E (`check_export_parquet`) follow; the dated records
-(`plan/POC.md`, the entries above) keep the old name.
-`src/serialize_db/delta.py`, `src/serialize_db/cli.py`, `tests/test_delta.py`,
-`tests/proof_of_concept/test_deltalake.py`, `probes/consistencia/probe_delta_ops.py`,
-`docs/index.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-9.md`, `plan/serialize-db.md`,
-`.claude/memory/OPEN_QUESTIONS.md`
+(`plan/POC.md`, the entries above) keep the old name. `src/serialize_db/delta.py`,
+`src/serialize_db/cli.py`, `tests/test_delta.py`, `tests/proof_of_concept/test_deltalake.py`,
+`probes/consistencia/probe_delta_ops.py`, `docs/index.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The execution's folder in the pipeline test (2026-10-03)
 
@@ -1786,8 +1720,8 @@ copies the files to the execution's `entradas/` and appends the copies' rows to 
 of `cad_contratos`; `relatorios/` receives the balances and the apportionment, and `geracao/` the
 generated partition of each table on failure. The assistant's choices, named in the report: the
 ingestion cut to what the pipeline reads, the `last_base_date` fix with the rerun case, and the
-item in `.claude/memory/OPEN_QUESTIONS.md`.
-`tests/test_pipeline.py`, `plan/PLAN-STAGE-6.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+item in `.claude/memory/OPEN_QUESTIONS.md`. `tests/test_pipeline.py`,
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## SQLAlchemy 2.0.54 over 2.1.3 (2026-10-03)
 
@@ -1801,7 +1735,7 @@ four places passed every package test on 2.1.3 and on 2.0.54. The assistant reco
 2.0.54 (2.1 was nine days old with three regression-fix releases, and the unmaintained
 duckdb-engine does not follow 2.1), and the user chose "Manter 2.0.54". The item stays in
 `.claude/memory/OPEN_QUESTIONS.md`, read again with a newer 2.1.x or with the DuckDB dialect switch.
-`pyproject.toml`, `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+`pyproject.toml`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The backslash of the DuckDB constants (2026-10-03)
 
@@ -1814,9 +1748,8 @@ and guarded by a test) and leaving it recorded, the user chose "Corrigir agora".
 engines were unaffected; before the answer the assistant corrected it in the thread, with the
 engine's two cases and the fix on both DuckDB dialects. `_backslash_escapes` is false on the DuckDB
 dialects of `serialize_db.sql` and `serialize_db.engine.duckdb`, and the Redshift ones keep
-doubling.
-`src/serialize_db/sql.py`, `src/serialize_db/engine/duckdb.py`, `tests/test_sql.py`,
-`tests/test_engine_duckdb.py`, `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+doubling. `src/serialize_db/sql.py`, `src/serialize_db/engine/duckdb.py`, `tests/test_sql.py`,
+`tests/test_engine_duckdb.py`
 
 ## DuckDB back to 1.5.5 (2026-10-04)
 
@@ -1826,7 +1759,7 @@ and proposed going back to DuckDB 1.5.5. The assistant read the wheels on PyPI (
 version requiring the exact `duckdb`; with `duckdb==1.5.6` the unpinned wheels resolve to 1.0.3
 without an error) and pinned DuckDB 1.5.5 again in a new PR, keeping boto3, ruff, sqlglot and the
 backslash fix of PR #125. The 1.5.6 waits for the wheels in `.claude/memory/OPEN_QUESTIONS.md`.
-`pyproject.toml`, `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`, `plan/CURRENT_STATE.md`
+`pyproject.toml`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The retried `COPY` of the Redshift ingest (2026-10-04)
 
@@ -1843,9 +1776,8 @@ day were answered with probes recorded in `plan/POC.md`: the partition column's 
 contract rule (every path binds the columns by name), and a long multibyte text in a
 DuckDB-written file lands without min and max in the log, a new trigger of issue #85, recorded
 only, by the user's decision of 2026-09-25; the `_stat_converter` docstring stayed with the
-pdoc review's PR #127.
-`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `plan/PLAN-STAGE-5.md`,
-`plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+pdoc review's PR #127. `src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`,
+`.claude/memory/OPEN_QUESTIONS.md`
 
 ## The target's examples in the project library (2026-10-05)
 
@@ -1866,8 +1798,8 @@ on a decision card (2026-10-05, 01:09 UTC), the option the PR already implemente
 citation ("Manter"). `pyproject.toml` drops `examples` from the Ruff `extend-exclude` of 2026-10-01,
 the header of `.github/workflows/tests.yml` no longer lists the examples among what the tests leave
 out, and the `examples/` row of `plan/CURRENT_STATE.md` left with its citation of the notebook the
-user deleted in 429af3b. `SUITE.md` never cited the folder.
-`README.md`, `plan/CURRENT_STATE.md`, `pyproject.toml`, `src/serialize_db/engine/redshift.py`
+user deleted in 429af3b. `SUITE.md` never cited the folder. `README.md`, `pyproject.toml`,
+`src/serialize_db/engine/redshift.py`
 
 ## The planning documents in the project library (2026-10-05)
 

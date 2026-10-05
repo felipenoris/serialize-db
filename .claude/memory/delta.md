@@ -1,6 +1,6 @@
 # Delta Lake and delta-rs
 
-Read before code that touches `serialize_db.delta`, a Delta table or the `deltalake` package. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before code that touches `serialize_db.delta`, a Delta table or the `deltalake` package. A fact that a file of the repository details ends with that file, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## delta-rs behavior
 
@@ -18,18 +18,18 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   resolves the version against the log on storage. `scripts/migrate_parquet_to_delta.py` reopened
   the table after every partition until the code review of 2026-09-21 measured this and removed the
   reopen; what the in-memory object holds matters to `get_add_actions`, which the load reads once
-  before the loop. `plan/POC.md`
+  before the loop.
 - `DeltaTable.create` takes the contract schema with nullability, column comments in field
   metadata, partition columns and table properties; `mode="ignore"` makes it idempotent. Time travel
   reads a version with that version's schema, `restore` re-commits an older version, and `vacuum`
   refuses a retention below the table's deleted-file retention (168 h by default) unless
   `enforce_retention_duration=False`. Alembic has no role with Delta as the source of truth: a
-  reconcile step applies additive schema diffs and refuses destructive ones. `plan/estrategia.md`
+  reconcile step applies additive schema diffs and refuses destructive ones.
 - delta-rs `alter.add_columns` accepts a `nullable=False` column on a table with data and leaves it
   null in every row; `append` casts incoming data to the table type (int32, double and string into
   `long` accepted, decimal(20,4) into decimal(18,2) refused) without changing the table; type changes
   need `mode="overwrite"` with `schema_mode="overwrite"`. The reconcile step must refuse NOT NULL
-  additions, and the Arrow cast must enforce types before writing. `plan/estrategia.md`
+  additions, and the Arrow cast must enforce types before writing.
 - Two delta-rs writers on the same version: append plus append both commit; overwrite of the same
   month fails with `CommitFailedError`; overwrites of different months both commit. App transactions
   (`Transaction(app_id, version)`) are recorded but not enforced: a repeated write with the same
@@ -43,10 +43,10 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   predicate `p = 'd'agua'` fails with `Unterminated string literal` (2026-09-23,
   `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`). This is
   why the partition value and the `execution_id` follow `[0-9A-Za-z][0-9A-Za-z_.-]*`.
-  `docs/tecnologias.md` (Delta Lake), `plan/PLAN-STAGE-6.md`
+  `docs/tecnologias.md` (Delta Lake)
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
   partition key must derive from a column in the file for Redshift `COPY`; DuckLake keeps identity
-  and source columns inside the files. `plan/estrategia.md`
+  and source columns inside the files.
 - `DeltaTable.create_write_transaction` with `AddAction` registers Parquet files written by others
   (the `UNLOAD` path) and checks nothing (2026-09-21): a missing path, false statistics and a file
   without a `NOT NULL` column all commit, and the readers obey the action: false min/max make
@@ -55,7 +55,6 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   that does not cast fails only when its column is read, and `optimize.compact` rewrites registered
   `INT96`/`FIXED_LEN_BYTE_ARRAY` files as `INT64` with statistics. `ducklake_add_data_files` does
   the same registration for DuckLake but failed on a table partitioned by `year()`/`month()`.
-  `plan/POC.md`, `plan/estrategia.md`
 - Renaming or dropping a column with delta-rs 1.6.4 is a rewrite of every live file in one commit
   (`remove` of all, `add` of all, `metaData`); `dt.alter` has no `rename_column` or `drop_columns`.
   `write_deltalake(reader, mode="overwrite", schema_mode="overwrite")` held 1,140 MB RSS for 135 MB
@@ -84,11 +83,11 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   the file. `timestamp[us]` is truncated to milliseconds (`...59.999999` becomes `...59.999`) and
   both readers still found the row; `float64` and `string` are exact, and `NaN` stays out of min and
   max. The defect is the writer's, so `publish_partition` carries it too; the client model has no
-  `Numeric` column. `test_deltalake.py::test_written_stats_lose_the_row_on_decimal`, `plan/POC.md`
+  `Numeric` column. `test_deltalake.py::test_written_stats_lose_the_row_on_decimal`
 - A table's `description`, `name` and column comments survive `write_deltalake(mode="overwrite")`
   with and without a predicate; `alter.set_table_description` and `alter.set_column_metadata` change
   them in a commit of `commitInfo` and `metaData` alone.
-  `test_deltalake.py::test_description_and_comments_survive_overwrite`, `plan/POC.md`
+  `test_deltalake.py::test_description_and_comments_survive_overwrite`
 - Two `create_write_transaction(mode="overwrite", partition_filters=...)` of the same partition from
   the same read version: the second raises `CommitFailedError` (`a concurrent transaction deleted
   data this operation read`); the method returns `None` and leaves the calling object at the read
@@ -96,7 +95,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   by the pruning (`valor > 3` 0 rows with the file pruned, `valor >= 2` 2 rows with `NaN` inside,
   because DuckDB orders `NaN` above every number); delta-rs writes `null` for an infinite extreme,
   and `float("inf")` from `RETURN_STATS` would put `Infinity`, invalid JSON, in the log
-  (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `tests/proof_of_concept/test_deltalake.py`
+  (2026-09-23). `tests/proof_of_concept/test_deltalake.py`
 - The Delta log and the Parquet footer follow different `NaN` conventions (read 2026-09-23). The
   protocol keeps file statistics in the JSON `stats` of the `add` action, `maxValues` being the
   largest valid value, with no `NaN` count; delta-kernel-rs writes `NaN` as the maximum
@@ -109,15 +108,14 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   the `NaN`, and `delta_scan` still loses the row by the row-group pruning of DuckDB's Parquet
   reader. `ColumnProperties(statistics_enabled="NONE")` in `WriterProperties(column_properties=...)`
   removes the column's min and max from the footer and the log (its `nullCount` too), and
-  `delta_scan` finds the row. `plan/POC.md`, `docs/tecnologias.md` (Delta Lake), `plan/PLAN-STAGE-3.md`,
+  `delta_scan` finds the row. `docs/tecnologias.md` (Delta Lake),
   `tests/proof_of_concept/test_deltalake.py`
 - `writer_properties` applies to one `write_deltalake` call, so each partition written by
   `mode="overwrite", predicate=...` keeps or drops the float statistics on its own: a partition
   written with `statistics_enabled="NONE"` on `valor` and one written with the default gave
   `delta_scan ... WHERE valor > 3` the `NaN` row of the first and never opened the file of the
   second, pruned by its maximum 2.5 (2026-09-23). Statistics live per file, one `add` action each,
-  with `partitionValues`; the table keeps no aggregate. `plan/POC.md`, `plan/PLAN-STAGE-3.md`,
-  `tests/proof_of_concept/test_deltalake.py`
+  with `partitionValues`; the table keeps no aggregate. `tests/proof_of_concept/test_deltalake.py`
 
 - Read while implementing stage 3 (2026-09-23): `pa.schema(dt.schema())` returns every contract
   type of `arrow_schema(table)` unchanged, with nullability; `alter.set_column_metadata` merges the
@@ -129,7 +127,6 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `write_deltalake(..., mode="error", name=..., description=..., configuration=...)` makes a deep
   copy at version 0 with all three; `get_add_actions(flatten=True)` types `min.<col>`/`max.<col>` by
   the column (`date32`, `decimal128`, `timestamp[us]`) and `partition.<col>` as `string not null`.
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 
 - `write_deltalake` splits a partition at the default target file size, 104,857,600 bytes:
   20,000,000 rows of a `BigInteger` and a `Double` from a reader of 100,000-row batches gave files
@@ -143,8 +140,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   change data feed on inserting an all-null row for each row a `when_not_matched_insert`
   predicate rejects, affecting 1.6.4 and 1.6.5 (read by the documentation review on 2026-09-25);
   1.6.5 is also yanked, and 1.6.6 (2026-09-24, not yanked) fixes it with PR #4785; the package
-  uses neither `MERGE` nor the change data feed. `plan/POC.md`, `plan/PLAN-STAGE-9.md`,
-  `.claude/memory/OPEN_QUESTIONS.md`
+  uses neither `MERGE` nor the change data feed. `.claude/memory/OPEN_QUESTIONS.md`
 
 - The pin is `deltalake==1.6.6` since 2026-09-25 (user request): the three local sessions (no
   variable, the local root, the local root with the stand-in) read the same counts on 1.6.4 and
@@ -158,7 +154,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   and `datafusion` 55.1.0 stayed, and the AWS SDK crates moved up (`aws-runtime` 1.10.0,
   `aws-sigv4` 1.6.0, `aws-smithy-runtime` 1.15.0), so the container credential chain is read only
   by the S3 suite in the target, whose prepared folder gets 1.6.6 when `prepare_offline.sh` runs
-  again. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  again. `.claude/memory/OPEN_QUESTIONS.md`
 
 - `to_pyarrow_dataset()` gives each fragment a `partition_expression` built from the file's log
   statistics, and a null min or max becomes `column >= null` or `column <= null`, so PyArrow skips
@@ -181,7 +177,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `IS NOT NULL` right (3 and 2) and `valor > 1.5` 0 of 1, and an all-null column (`nullCount` equal
   to the rows) gets `is_null(valor)` in the guarantee and reads right.
   `delta.dataSkippingStatsColumns` without the affected columns leaves them out of the guarantee,
-  and the engine file's filters read 2, 2 and 1. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`,
+  and the engine file's filters read 2, 2 and 1. `.claude/memory/OPEN_QUESTIONS.md`,
   `tests/proof_of_concept/test_deltalake.py`
 
 - The dataset filter defect has no fix upstream on 2026-09-25: `filestats_to_expression_next` is
@@ -205,8 +201,8 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `get_add_actions`, with `flatten=True` and `flatten=False`, showed only `id` statistics, also for
   the older files whose log keeps `valor`'s. The protocol makes the statistics optional and accepts
   wide bounds with `tightBounds` false. `docs/index.md`, section "Ler a base com o modelo", lists
-  the readers that filter right and the ones that lose rows. `plan/POC.md`,
-  `.claude/memory/OPEN_QUESTIONS.md`, `REFERENCES.md`
+  the readers that filter right and the ones that lose rows. `.claude/memory/OPEN_QUESTIONS.md`,
+  `REFERENCES.md`
 
 - `optimize.compact` packs a partition's files into bins up to the target size, `target_size` or
   the table property `delta.targetFileSize`, 100 MB without both, and rewrites only the bins with
@@ -217,7 +213,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   one-file partition, 0 for a partition with no file) and `totalFilesSkipped` the ones left.
   `serialize-db compact` prints `nada a juntar em <n> arquivo(s), nenhum commit` from them.
   `tests/proof_of_concept/test_deltalake.py::test_compact_packs_files_up_to_the_target_size`,
-  `plan/POC.md`, `docs/tecnologias.md` (Delta Lake)
+  `docs/tecnologias.md` (Delta Lake)
 
 ## Performance measured
 
@@ -241,13 +237,12 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `read_parquet` read the values; without the key the same three files read correctly
   (2026-09-21, DuckDB 1.5.5, delta extension `45c4087`). `serialize_db.schema.delta_schema` drops
   the key before `from_arrow`, and the versioned `.delta.json` files carry no ids.
-  `plan/POC.md`, `plan/PLAN-STAGE-1.md`
 - `delta_scan` prunes partition files by `=`, by a one-value `IN`, by `BETWEEN` and by `>=`, and
   opens every file for an `IN` of two or more values and for an `OR` of equalities; a range added
   beside the `IN` prunes to the range, and `EXPLAIN ANALYZE` of that form fails with
   `InternalException: ... total_files inconsistent!` while the query and a `CREATE TABLE AS` run.
   Read pruning through `CALL enable_logging('FileSystem')` and the `OPEN` messages of
-  `duckdb_logs` (2026-09-23, DuckDB 1.5.5). `docs/tecnologias.md` (Delta Lake), `plan/PLAN-STAGE-4.md`,
+  `duckdb_logs` (2026-09-23, DuckDB 1.5.5). `docs/tecnologias.md` (Delta Lake),
   `tests/proof_of_concept/test_deltalake.py`
 
 ## The library's use of Delta
@@ -258,7 +253,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   at the environment root, written with `IfMatch`, reconstructible from `history()` only while the
   log lasts because `commitInfo` is not in checkpoints. The library stores no schema, file list or
   statistics; the DDL of an old snapshot comes from that version's Delta schema, not from the
-  current model. `plan/serialize-db.md`, `docs/tecnologias.md` (Delta Lake)
+  current model. `docs/tecnologias.md` (Delta Lake)
 
 - The archive copies instead of rewriting (2026-09-24, user decision): `deep_copy` creates the
   destination with `DeltaTable.create` from the version's own schema, name, description and
@@ -278,7 +273,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   12 tables (one commit per partition, the partitions in the reverse order of the load) and moved
   the entry; the resume path ran only on the stand-in. Since the user's decision of the same day
   `deep_copy` logs each partition's copy time, and `serialize-db archive` prints the time and the
-  peak RSS per table. `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+  peak RSS per table.
 
 - A partition commit by `create_write_transaction(mode="overwrite")` with a changed `schema=`
   writes a `metaData` with the new schema and keeps the destination's id, name, description,
@@ -291,22 +286,21 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   read-back, `rewrite`, the export by rewrite, the copy's row count) open with
   `environment_limits()`. A probe running `deep_copy`, `reconcile`, `publish_partition` and
   `deep_copy`, then `to_pyarrow_dataset().to_table()` on the copy, hung at interpreter exit on the
-  old and the new code, and exited without that last read. `plan/PLAN-STAGE-3.md`,
-  `plan/PLAN-STAGE-9.md`, `plan/POC.md`
+  old and the new code, and exited without that last read.
 
 ## Alternatives assessed
 
 - DuckLake inlines inserts of up to 10 rows into the catalog by default (`DATA_INLINING_ROW_LIMIT`),
   producing no Parquet file (a 10-row insert wrote nothing to the data path); publishing to Redshift
-  requires inlining off or a flush. `plan/estrategia.md`
+  requires inlining off or a flush.
 - A DuckLake catalog file served over HTTP attaches read-only with `ATTACH 'ducklake:http://...'`;
   a SQLite catalog on S3 is unsupported by design; without PostgreSQL the model is one writer at a
-  time, with the catalog file moved by the library. `plan/estrategia.md`
+  time, with the catalog file moved by the library.
 - PyIceberg 0.12.0 with a SQLite `sql` catalog writes Iceberg without a service: hidden partition by
   `month(data_ref)`, `overwrite` with a filter, rename and add columns, `add_files`; the catalog
   holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,
   because PyIceberg writes no `version-hint.text` and names metadata `<N>-<uuid>.metadata.json`.
-  Partition transforms on write need the `pyiceberg-core` extra. `plan/estrategia.md`
+  Partition transforms on write need the `pyiceberg-core` extra.
 
 ## Drafts of 2026-09-21
 
@@ -320,17 +314,14 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `VACUUM END`) without library metadata. A `publish_delta` that compared versions by equality would
   abort after a `vacuum`, `compact` or `reconcile`: `Execution.publish_delta` compares by
   `version_diff`.
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-6.md`
 - `Schema.to_json()` serializes each field's `metadata` map in arbitrary order (two consecutive
   generations of the same model differed) and writes `PARQUET:field_id` as an integer
   `parquet.field.id`; `schema_files` dumps the parsed document with `sort_keys=True` and
-  `indent=2`, and the versioned `.delta.json` is that canonical text (2026-09-21). `plan/POC.md`,
-  `plan/PLAN-STAGE-1.md`
+  `indent=2`, and the versioned `.delta.json` is that canonical text (2026-09-21).
 - `write_deltalake(dt, ...)` with the `DeltaTable` object leaves `dt.version()` at its own commit,
   even with another writer's commit in between (1, then 3 with 2 written by another object);
   `create_write_transaction` does not update the object, and `DeltaTable(uri).version()` after a
   write returns the log's latest version, possibly another writer's (2026-09-22).
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 - `deep_copy` (stage 3) is `write_deltalake` over the reader of the whole table at a version, so
   its memory grows with the table outside DuckDB's limit: by the 2026-09-23 measurement (1,140 MB
   for 12,000,000 rows, 1,960 MB for 24,000,000) a copy of `cad_lancamentos` (141,901,795 rows) would
@@ -339,7 +330,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   one commit per partition, no data through the machine, files identical to the source (the
   DuckDB `COPY` path stays for `export --mode rewrite` and compaction). `optimize.compact` runs in
   delta-rs too, with its default parallel tasks, memory unmeasured.
-  `plan/PLAN-STAGE-9.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The registration of UNLOAD files (2026-09-24)
 
@@ -349,5 +340,4 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   empty partition and registers it. `file_from_footer` (protected) reads `null_count` for every
   contract column and min and max for integer, `Double` and date columns only: pyarrow 25.0.1
   exposes no `is_min_value_exact`, and a string's footer min and max may be truncated.
-  `partition_values` (protected) lists the partitions with files in a version. `plan/POC.md`,
-  `plan/PLAN-STAGE-5.md`
+  `partition_values` (protected) lists the partitions with files in a version.
