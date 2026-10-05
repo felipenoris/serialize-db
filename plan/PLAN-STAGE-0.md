@@ -13,13 +13,13 @@ execuções limpas que a etapa exige, e a etapa está concluída. Ele roda com o
 arquivos sob `SERIALIZE_DB_TEST_S3_ROOT` e as tabelas no esquema de
 `SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, no banco de `SERIALIZE_DB_REDSHIFT_SHARE_DATABASE`. O caminho
 de conexão já está fixado: a credencial temporária do workgroup serverless, de
-[`../examples/redshift_native.py`](../examples/redshift_native.py), executado no ambiente alvo em
-2026-09-20.
+`target_env_examples/redshift_native.py`, da biblioteca do projeto Claude, executado no ambiente
+alvo em 2026-09-20.
 
 - `COPY ... FORMAT AS PARQUET MANIFEST` de arquivos gravados pelo delta-rs: o comando passou no
   datashare em 2026-09-21, com 500.000 linhas em `INT64`, `INT32` de data, `BYTE_ARRAY` e `DOUBLE`
-  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). As colunas que a base
-  de origem não tem nem gera passaram pela suíte no mesmo dia, às 12:08 e às 12:10: `DECIMAL(18, 2)`
+  (`target_env_examples/redshift_manifest.py`). As colunas que a base de origem não tem nem gera
+  passaram pela suíte no mesmo dia, às 12:08 e às 12:10: `DECIMAL(18, 2)`
   em `INT64` e `timestamp_ntz` em `INT64` de microssegundos carregam; uma string acima do `VARCHAR`
   de destino aborta o `COPY` (`Spectrum Scan Error` 15007, o motivo em `sys_load_error_detail`); a
   lista de colunas carrega um arquivo anterior a uma coluna nova, com a coluna nova nula;
@@ -28,12 +28,12 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
   enquanto `COPY ... FORMAT JSON 'auto'` e `INSERT ... JSON_PARSE` carregam um documento de 80.901
   bytes (o teto do campo JSON é decisão da [etapa 8](PLAN-STAGE-8.md)).
 - `UNLOAD ... PARTITION BY (<coluna de partição>) MANIFEST VERBOSE`: **verificado** em 2026-09-21
-  por [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), que exercita este
-  item e o `COPY ... MANIFEST` do item anterior num script só, com `cast` para `DECIMAL` e
-  `TIMESTAMP` no `select` porque a base de origem não tem coluna de nenhum dos dois tipos. O
-  comando é aceito a partir de uma tabela do datashare, grava na convenção Hive com a coluna de
-  partição fora dos arquivos, e `create_write_transaction` registrou os arquivos numa tabela Delta
-  que devolveu as linhas. Os tipos físicos, a obrigatoriedade das colunas e as estatísticas estão em
+  por `target_env_examples/redshift_manifest.py`, que exercita este item e o `COPY ... MANIFEST` do
+  item anterior num script só, com `cast` para `DECIMAL` e `TIMESTAMP` no `select` porque a base de
+  origem não tem coluna de nenhum dos dois tipos. O comando é aceito a partir de uma tabela do
+  datashare, grava na convenção Hive com a coluna de partição fora dos arquivos, e
+  `create_write_transaction` registrou os arquivos numa tabela Delta que devolveu as linhas. Os
+  tipos físicos, a obrigatoriedade das colunas e as estatísticas estão em
   [`POC.md`](POC.md) e [`redshift.md`](redshift.md); o `TIMESTAMP` sai em `INT96`, o
   `DECIMAL(18, 2)` em `FIXED_LEN_BYTE_ARRAY(8)`, toda coluna sai `optional` e há mínimo e máximo.
 - O `COPY` associa as colunas por posição e recusa um arquivo com colunas a menos
@@ -42,13 +42,12 @@ de conexão já está fixado: a credencial temporária do workgroup serverless, 
 - O banco do esquema do projeto: a sessão enxerga `datalake_rw_shared.sbx_aco_decon` (`RS-16`,
   2026-09-20), e depois de `USE datalake_rw_shared` o `CREATE TABLE`, o `COPY` de uma pasta, o
   `SELECT` e o `UNLOAD` passaram por `sbx_aco_decon.<tabela>`
-  ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)); o `SELECT` em três
-  partes passou de `dev`. Em 2026-09-21 passaram também o `COPY ... MANIFEST`, o `INSERT ... SELECT`
-  e o `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE`
-  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)). A publicação da
-  [etapa 8](PLAN-STAGE-8.md) troca as partições por `DELETE`, sem `MERGE`, os dois na lista de
-  comandos que a documentação aceita no datashare, e os testes `redshift` dela passaram no ambiente
-  alvo em 2026-09-24 às 13:05 e às 13:08; a suíte exercitou o `TRUNCATE`, o
+  (`target_env_examples/redshift_copy_unload.py`); o `SELECT` em três partes passou de `dev`. Em
+  2026-09-21 passaram também o `COPY ... MANIFEST`, o `INSERT ... SELECT` e o
+  `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` (`target_env_examples/redshift_manifest.py`). A
+  publicação da [etapa 8](PLAN-STAGE-8.md) troca as partições por `DELETE`, sem `MERGE`, os dois na
+  lista de comandos que a documentação aceita no datashare, e os testes `redshift` dela passaram no
+  ambiente alvo em 2026-09-24 às 13:05 e às 13:08; a suíte exercitou o `TRUNCATE`, o
   `INSERT ... SELECT`, o `ALTER TABLE ADD COLUMN` e a tabela temporária depois do `USE`. Os
   requisitos da escrita num datashare que a sessão não lê (isolamento do produtor, slices) não
   impediram a escrita.
@@ -68,9 +67,9 @@ onde as tabelas de execução podem nascer (`RS-9`), a questão de
 ## Interface
 
 A etapa não entrega módulo: as suas APIs são as dos pacotes externos, exercitadas por
-`tests/proof_of_concept/` e por `examples/`. O que ela fixa para as etapas seguintes são os
-parâmetros do ambiente alvo (`RedshiftConfig` da [etapa 5](PLAN-STAGE-5.md), lidos de
-`SERIALIZE_DB_REDSHIFT_*`) e os comandos que passaram lá, repetidos verbatim pelos motores.
+`tests/proof_of_concept/` e pelos scripts de `target_env_examples/`. O que ela fixa para as etapas
+seguintes são os parâmetros do ambiente alvo (`RedshiftConfig` da [etapa 5](PLAN-STAGE-5.md), lidos
+de `SERIALIZE_DB_REDSHIFT_*`) e os comandos que passaram lá, repetidos verbatim pelos motores.
 
 ## Pré-requisitos e pós-condições
 
@@ -78,7 +77,7 @@ parâmetros do ambiente alvo (`RedshiftConfig` da [etapa 5](PLAN-STAGE-5.md), li
 | --- | --- | --- |
 | Probes no ambiente alvo | `space.py`, `diagnose_aws.py`, `bucket.py` sobre a raiz escolhida, `redshift.py` e `parquet_source.py` executados no ambiente, cada relatório colado na conversa. | Cada leitura que contraria um documento dispara a revisão dele na mesma unidade de trabalho; as leituras `RS-5`, `RS-8` e `RS-19` fecham o item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) sobre o `USE`. |
 | Suíte `-m redshift` | As variáveis de `README.md` (`SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`, `SERIALIZE_DB_TEST_S3_ROOT`, `SERIALIZE_DB_TEST_LOCAL_ROOT`, sem a qual os casos `redshift` que também são `local`, os da publicação e o do leitor, são pulados, `SERIALIZE_DB_REDSHIFT_WORKGROUP`, `_DATABASE`, `_SHARE_DATABASE`), a identidade da sessão com `s3:GetObject`, `PutObject` e `DeleteObject` sob a raiz, e `SERIALIZE_DB_TEST_REPORT` apontando para um arquivo, porque o relatório é a resposta. | Cada `redshift.*` do relatório responde uma linha da tabela de testes desta etapa e entra em [`redshift.md`](redshift.md), e [`POC.md`](POC.md) ganha a seção da execução com a data; a suíte é reexecutada uma segunda vez antes de qualquer consequência entrar num arquivo de etapa; cumprido em 2026-09-21, às 13:35 e às 13:39. |
-| Exemplos | Um script novo só entra em `examples/` depois de rodar; até lá ele é o próximo experimento, dito no docstring. | O script fica como rodou, o probe e a suíte repetem as suas chamadas. |
+| Exemplos | Um script novo só entra em `target_env_examples/`, na biblioteca do projeto Claude, depois de rodar; até lá ele é o próximo experimento, dito no docstring. | O script fica como rodou, o probe e a suíte repetem as suas chamadas. |
 
 ## Testes por caso
 

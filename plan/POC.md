@@ -133,9 +133,9 @@ e às 03:44); o `bucket.py` depois da sessão das 04:41 encontrou só a sessão 
 ## O que os exemplos de conexão com o Redshift mostraram
 
 Em 2026-09-20 o usuário executou no ambiente alvo dois scripts de conexão, guardados como foram
-executados em [`../examples/`](../examples/): um pela Data API e outro pelo protocolo nativo. Os
-dois terminaram com sucesso, e o relatório de execução não foi transcrito: o que eles fixam são os
-parâmetros do ambiente e os caminhos que funcionam, não medições.
+executados na pasta `target_env_examples/` da biblioteca do projeto Claude: um pela Data API e outro
+pelo protocolo nativo. Os dois terminaram com sucesso, e o relatório de execução não foi transcrito:
+o que eles fixam são os parâmetros do ambiente e os caminhos que funcionam, não medições.
 
 O ambiente alvo não é o laboratório lido nas seções acima. A região é `sa-east-1`, o Redshift é
 serverless no workgroup `controladoria-wg`, a conexão é no banco `dev`, e o esquema do projeto é
@@ -244,10 +244,10 @@ recusada na própria sessão por `sys_load_error_detail`, nunca por `stl_load_er
 ## O que o experimento de `COPY` e `UNLOAD` no datashare mostrou
 
 Em 2026-09-20 o usuário executou no ambiente alvo um terceiro script, guardado em
-[`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py): ele conecta pela
-credencial temporária, troca o banco da sessão, cria `cad_contas` no esquema do datashare, carrega
-por `COPY` a pasta Parquet da base de origem, lê o resultado e descarrega por `UNLOAD`. Passou
-inteiro, e com isso fecha três questões que estavam abertas.
+`target_env_examples/redshift_copy_unload.py`: ele conecta pela credencial temporária, troca o banco
+da sessão, cria `cad_contas` no esquema do datashare, carrega por `COPY` a pasta Parquet da base de
+origem, lê o resultado e descarrega por `UNLOAD`. Passou inteiro, e com isso fecha três questões que
+estavam abertas.
 
 **O produtor concedeu escrita.** `CREATE TABLE`, `COPY`, `SELECT` e `UNLOAD` passaram em
 `sbx_aco_decon`. A pergunta sobre o `GRANT` do produtor sai de
@@ -285,9 +285,9 @@ foi aceito como está, com chave primária e unicidade informativas e `DISTSTYLE
 
 ## O que os comandos com manifesto no datashare mostraram
 
-Em 2026-09-21 o usuário executou [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)
-no ambiente alvo, sobre 500.000 linhas da partição `data_str=2026-02-28` de `cad_contratos`. O ciclo
-inteiro passou: a partição Parquet virou tabela Delta, o manifesto do `COPY` saiu das ações `add`, o
+Em 2026-09-21 o usuário executou `target_env_examples/redshift_manifest.py` no ambiente alvo, sobre
+500.000 linhas da partição `data_str=2026-02-28` de `cad_contratos`. O ciclo inteiro passou: a
+partição Parquet virou tabela Delta, o manifesto do `COPY` saiu das ações `add`, o
 `COPY ... MANIFEST` carregou a staging, o `INSERT` acrescentou a coluna de partição, o
 `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` gravou de volta e `create_write_transaction`
 registrou os arquivos numa tabela Delta que devolveu as 500.000 linhas.
@@ -358,7 +358,7 @@ consequência.
 
 A soma de `meta.record_count` das entradas bateu com as 500.000 linhas, que é a conferência que o
 `register_files` faz antes do commit. O exemplo gravou `minValues`, `maxValues` e `nullCount`
-vazios e ficou como rodou, conforme a regra de [`../examples/README.md`](../examples/README.md); o
+vazios e ficou como rodou, conforme a regra de `target_env_examples/README.md`; o
 `register_files` da [etapa 3](PLAN-STAGE-3.md) os preenche do rodapé, que agora se sabe que os tem.
 
 
@@ -588,9 +588,8 @@ e `ds.dataset().to_table()` sozinhos encerram limpos, então o gatilho é o cami
 A suíte nunca viu isso porque o pytest sempre tem trabalho depois da última leitura; quem vê é um
 script ou um comando que lê e termina. A consequência está nas regras de [`PLAN.md`](PLAN.md): um
 programa que encerra logo depois de ler uma tabela Delta lê por `to_pyarrow_dataset()`. Foi assim
-que o defeito apareceu — o ensaio local de
-[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) imprimiu tudo e ficou 30
-minutos sem encerrar.
+que o defeito apareceu — o ensaio local de `target_env_examples/redshift_manifest.py` imprimiu tudo
+e ficou 30 minutos sem encerrar.
 
 ## O que a fronteira por lotes mostrou
 
@@ -779,12 +778,13 @@ histórico do git. O que eles mostraram além do que já estava medido:
   (`cad_lancamentos`) como `column_name` e `data` como `unreserved`; `CREATE TABLE t1 (to
   VARCHAR(2))` falha com `Parser Error: syntax error at or near "to"`, e `"to"`, `timestamp` e
   `"timestamp"` passam. A lista de palavras reservadas do Redshift tem `TO` e `TIMESTAMP`, e
-  `examples/redshift_manifest.py` já cita `"to"`. O `duckdb_engine` e o `sqlalchemy-redshift` citam
-  `"to"` no `CREATE TABLE` e no `select` (`cad_contratos."to"`), o do Redshift também `"timestamp"`,
-  e `redshift_distkey="to"` sai como `DISTKEY ("to") SORTKEY ("to", data)`. O DDL do modelo
-  cliente compilado pelo `duckdb_engine` executou as 12 tabelas no DuckDB em memória (23 colunas
-  `BIGINT`, 24 `VARCHAR`, 10 `DATE`, 10 `DOUBLE`, 6 `INTEGER`, 3 `BOOLEAN`, 1 `TIMESTAMP`). A
-  biblioteca cita todo identificador que emite ([etapa 1](PLAN-STAGE-1.md)).
+  `target_env_examples/redshift_manifest.py` já cita `"to"`. O `duckdb_engine` e o
+  `sqlalchemy-redshift` citam `"to"` no `CREATE TABLE` e no `select` (`cad_contratos."to"`), o do
+  Redshift também `"timestamp"`, e `redshift_distkey="to"` sai como
+  `DISTKEY ("to") SORTKEY ("to", data)`. O DDL do modelo cliente compilado pelo `duckdb_engine`
+  executou as 12 tabelas no DuckDB em memória (23 colunas `BIGINT`, 24 `VARCHAR`, 10 `DATE`, 10
+  `DOUBLE`, 6 `INTEGER`, 3 `BOOLEAN`, 1 `TIMESTAMP`). A biblioteca cita todo identificador que emite
+  ([etapa 1](PLAN-STAGE-1.md)).
 - O rascunho da etapa 1 na forma do módulo, com o DDL gerado pela tabela de tipos e sem dialeto,
   executou no DuckDB em memória um `CREATE TABLE` com os 15 tipos do contrato e os nomes entre
   aspas, `"{prefix}cad_operacoes"` inclusive: `information_schema.columns` leu `DECIMAL(18, 2)`
@@ -856,7 +856,7 @@ JSON leva a mensagem de cada teste reprovado (`failed.<teste>`).
 
 **O que a execução respondeu**, apesar das reprovações:
 
-- A suíte conecta pelo caminho de `examples/redshift_native.py`: usuário
+- A suíte conecta pelo caminho de `target_env_examples/redshift_native.py`: usuário
   `IAMR:<usuário>@<projeto>`, versão `1.0.436211`, que o driver
   devolve com um byte nulo no fim (`Redshift 1.0.436211\0`).
 - Depois do `USE`, `current_schema()` é nulo e `current_database()` continua `dev`, como no probe.
@@ -891,7 +891,7 @@ execuções limpas das 13:35 e das 13:39.
   o mesmo erro: `Spectrum Scan Error: File not found`, com a URL `…/operacoes//mes%3D2026-01/…`.
   `write_manifest` montava a URL como `f"{table.table_uri}/{path}"`, e `DeltaTable.table_uri` termina
   em barra (sonda local do mesmo dia: `file:///…/tabela/`); uma chave S3 com `//` é outra chave. O
-  exemplo que passou, [`../examples/redshift_manifest.py`](../examples/redshift_manifest.py), monta a
+  exemplo que passou, `target_env_examples/redshift_manifest.py`, monta a
   URL a partir da sua própria string, sem a barra. O `%3D` é o Redshift codificando o `=` ao pedir o
   objeto: `sys_load_error_detail` mostra as duas formas, e o delta-rs 1.6.4 grava e devolve
   `mes=2026-01/…` sem codificar, no log e em `get_add_actions`, também para uma `AddAction` registrada

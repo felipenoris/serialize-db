@@ -313,19 +313,19 @@ auditoria de chaves estrangeiras vem depois da carga, por `serialize-db audit --
 
 # Exemplos: conectividade com o Redshift
 
-[`examples/`](examples/) guarda os scripts que rodaram no ambiente alvo, como foram executados:
-[`redshift_native.py`](examples/redshift_native.py), o protocolo nativo com credencial temporária do
-workgroup serverless, que é o caminho da biblioteca; [`redshift_data_api.py`](examples/redshift_data_api.py),
-a Data API por HTTPS, assíncrona; e [`redshift_copy_unload.py`](examples/redshift_copy_unload.py), o
-`USE` no banco do datashare com `CREATE TABLE`, `COPY` e `UNLOAD` pelas credenciais de quem chama. O
-probe, a suíte e a etapa 5 repetem as chamadas que estão lá, e
-[`examples/README.md`](examples/README.md) diz o que cada um fixa.
+Os scripts que rodaram no ambiente alvo, como foram executados, estão na pasta
+`target_env_examples/` da biblioteca do projeto Claude, fora do repositório; o histórico do git os
+guarda em `examples/`. `redshift_native.py` é o protocolo nativo com credencial temporária do
+workgroup serverless, que é o caminho da biblioteca; `redshift_data_api.py`, a Data API por HTTPS,
+assíncrona; e `redshift_copy_unload.py`, o `USE` no banco do datashare com `CREATE TABLE`, `COPY` e
+`UNLOAD` pelas credenciais de quem chama. O probe, a suíte e a etapa 5 repetem as chamadas que estão
+lá, e o `README.md` da pasta diz o que cada um fixa.
 
-[`redshift_manifest.py`](examples/redshift_manifest.py) rodou em 2026-09-21: ele converte uma
-partição de `cad_contratos` de Parquet para Delta e roda os dois comandos com manifesto, o
-`COPY ... MANIFEST` e o `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` numa tabela do datashare, que
-são os pré-requisitos do `export_partition` e do `COPY` da publicação. Os dois são aceitos, e o
-que o rodapé do `UNLOAD` respondeu está em [`plan/POC.md`](plan/POC.md).
+`redshift_manifest.py` rodou em 2026-09-21: ele converte uma partição de `cad_contratos` de Parquet
+para Delta e roda os dois comandos com manifesto, o `COPY ... MANIFEST` e o
+`UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` numa tabela do datashare, que são os pré-requisitos
+do `export_partition` e do `COPY` da publicação. Os dois são aceitos, e o que o rodapé do `UNLOAD`
+respondeu está em [`plan/POC.md`](plan/POC.md).
 
 # Credenciais do delta-rs e proxy
 

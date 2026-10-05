@@ -1,15 +1,16 @@
 """O motor Redshift: o sandbox da execução nas tabelas ``exec_<id>_*`` do esquema, numa sessão sob
 um lock.
 
-A conexão vem de ``RedshiftConfig``, pelo caminho de ``examples/redshift_native.py``: a credencial
-temporária do workgroup serverless (``GetWorkgroup`` e ``GetCredentials``) ou o par informado,
-``redshift_connector.connect`` sem ``timeout`` e com ``max_prepared_statements=0``, o ``USE`` no
-banco do datashare e o ``search_path`` no esquema. O motor guarda uma conexão, a sessão da
-execução, e um ``threading.RLock`` que toda primitiva toma pelo tempo do seu comando; ``session()``
-dá a conexão crua ao bloco, com o lock tomado e reentrante na mesma thread, e ``new_session()``
-abre outra conexão, com o seu lock. Uma conexão derrubada pelo servidor é reaberta uma vez por
-comando, fora de transação, e o comando é repetido; a carga de cada partição de ``ingest`` e de
-``pinned_delta`` roda numa transação, para o ``COPY`` e o ``INSERT`` nunca se repetirem.
+A conexão vem de ``RedshiftConfig``, pelo caminho de ``target_env_examples/redshift_native.py``, na
+biblioteca do projeto Claude: a credencial temporária do workgroup serverless (``GetWorkgroup`` e
+``GetCredentials``) ou o par informado, ``redshift_connector.connect`` sem ``timeout`` e com
+``max_prepared_statements=0``, o ``USE`` no banco do datashare e o ``search_path`` no esquema. O
+motor guarda uma conexão, a sessão da execução, e um ``threading.RLock`` que toda primitiva toma
+pelo tempo do seu comando; ``session()`` dá a conexão crua ao bloco, com o lock tomado e reentrante
+na mesma thread, e ``new_session()`` abre outra conexão, com o seu lock. Uma conexão derrubada pelo
+servidor é reaberta uma vez por comando, fora de transação, e o comando é repetido; a carga de cada
+partição de ``ingest`` e de ``pinned_delta`` roda numa transação, para o ``COPY`` e o ``INSERT``
+nunca se repetirem.
 
 As primitivas:
 
@@ -245,7 +246,8 @@ def _workgroup_login(
     config: RedshiftConfig,
 ) -> dict[str, object]:
     """O endereço e o par usuário e senha do workgroup: ``GetWorkgroup`` e
-    ``GetCredentials(durationSeconds=3600)``, o caminho de ``examples/redshift_native.py``."""
+    ``GetCredentials(durationSeconds=3600)``, o caminho de
+    ``target_env_examples/redshift_native.py``."""
     serverless = boto3.client("redshift-serverless", region_name=config.region)
     endpoint = serverless.get_workgroup(workgroupName=config.workgroup)["workgroup"]["endpoint"]
     credentials = serverless.get_credentials(

@@ -2,20 +2,20 @@
 
 A suíte cria tabelas ``serialize_db_poc_<id>_*`` no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``
 e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``; sem uma das duas é pulada, e com elas a falta de
-conexão é falha. A conexão é a de ``examples/redshift_native.py``, o caminho executado no ambiente
-alvo: endereço e credencial temporária do workgroup serverless. Com
-``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``, cada conexão roda ``USE <banco>`` e as tabelas são citadas
-por ``esquema.tabela``, como em ``examples/redshift_copy_unload.py``; o nome em três partes fica
-para quem está conectado a outro banco, como a Data API. O ``COPY`` e o ``UNLOAD`` levam o papel IAM
-configurado ou, sem ele, as credenciais da sessão ``boto3``, porque o namespace do ambiente alvo não
-tem papel associado.
+conexão é falha. A conexão é a de ``target_env_examples/redshift_native.py``, da biblioteca do
+projeto Claude, o caminho executado no ambiente alvo: endereço e credencial temporária do workgroup
+serverless. Com ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``, cada conexão roda ``USE <banco>`` e as
+tabelas são citadas por ``esquema.tabela``, como em ``target_env_examples/redshift_copy_unload.py``;
+o nome em três partes fica para quem está conectado a outro banco, como a Data API. O ``COPY`` e o
+``UNLOAD`` levam o papel IAM configurado ou, sem ele, as credenciais da sessão ``boto3``, porque o
+namespace do ambiente alvo não tem papel associado.
 
 Os testes exercitam o ``redshift_connector`` (sessão, ``paramstyle`` nomeado), o banco do esquema e
 o ida e volta depois do ``USE``, o DDL compilado pelo SQLAlchemy, o ``COPY ... MANIFEST`` de
 arquivos gravados pelo delta-rs (o ``DECIMAL`` em ``INT64``, o ``timestamp_ntz``, a lista de colunas
 e o ``FILLRECORD``), o ``VARCHAR`` excedido, o ``SUPER``, o ``UNLOAD ... PARTITION BY`` registrado
-no Delta e lido pelo DuckDB, a Data API pelo ciclo de ``examples/redshift_data_api.py``, e o
-``COPY`` e o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por tabela, o caminho de
+no Delta e lido pelo DuckDB, a Data API pelo ciclo de ``target_env_examples/redshift_data_api.py``,
+e o ``COPY`` e o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por tabela, o caminho de
 ``publish_redshift`` da etapa 8. As leituras que as decisões da etapa 5 de 2026-09-23 esperam vêm no
 fim: o ``UNLOAD`` sem ``PARTITION BY`` para a pasta Hive, o ``stream`` por ``UNLOAD`` com os valores
 como literais e os seus casos de borda, o ``row_desc`` de cada tipo, o custo de uma carga pequena
@@ -857,7 +857,7 @@ def test_unload_partition_by_and_register(
     record("redshift.unload.partition_by", unload)
 
     # PARTITION BY MANIFEST VERBOSE, que a documentação não lista, passou no ambiente alvo em
-    # 2026-09-21 (examples/redshift_manifest.py): a recusa é regressão e reprova.
+    # 2026-09-21 (target_env_examples/redshift_manifest.py): a recusa é regressão e reprova.
     assert unload == "ok", unload
 
     manifest = json.loads(read_object(s3_location, f"{destination}/manifest"))
@@ -939,8 +939,8 @@ def test_data_api_runs_the_statement_and_pages_the_result(
     """A Data API executa por HTTPS, assíncrona: cada célula é um dicionário de um item, e
     ``DECIMAL`` volta como texto.
 
-    É o ciclo de ``examples/redshift_data_api.py``. O que ele prova é que existe caminho sem a porta
-    5439; o que ele mostra é por que a troca de dados da biblioteca não passa por aqui.
+    É o ciclo de ``target_env_examples/redshift_data_api.py``. O que ele prova é que existe caminho
+    sem a porta 5439; o que ele mostra é por que a troca de dados da biblioteca não passa por aqui.
     """
     workgroup = os.environ.get("SERIALIZE_DB_REDSHIFT_WORKGROUP")
     if not workgroup:

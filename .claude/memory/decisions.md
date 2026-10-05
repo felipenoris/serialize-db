@@ -1833,3 +1833,21 @@ only, by the user's decision of 2026-09-25; the `_stat_converter` docstring stay
 pdoc review's PR #127.
 `src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `plan/PLAN-STAGE-5.md`,
 `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
+## The target's examples in the project library (2026-10-05)
+
+On 2026-10-05 the user asked to rename `examples/` to `target_env_examples/` and to move it out of
+the repository, to the Claude project's library at `/mnt/project-files/target_env_examples/`. The
+four scripts went byte for byte (`redshift_native.py`, `redshift_data_api.py`,
+`redshift_copy_unload.py`, `redshift_manifest.py`), their docstrings still citing the repository's
+documents by paths relative to `examples/`; git history keeps the folder as it was. The assistant
+adjusted the folder's `README.md` as it did the readings folder's: the title, one sentence on where
+the folder lives, the links to `plan/` and `probes/` pointed at GitHub, and the run commands taking
+the path of the copy. No test, probe or package code used a file of the folder, only cited one: the
+citations in `src/`, `tests/`, `probes/`, `plan/`, `README.md` and `REFERENCES.md` name
+`target_env_examples/` in the library, while the dated entries of this memory and of `lessons.md`
+keep `examples/`. `pyproject.toml` drops `examples` from the Ruff `extend-exclude` of 2026-10-01,
+the header of `.github/workflows/tests.yml` no longer lists the examples among what the tests leave
+out, and the `examples/` row of `plan/CURRENT_STATE.md` left with its citation of the notebook the
+user deleted in 429af3b. `SUITE.md` never cited the folder.
+`README.md`, `plan/CURRENT_STATE.md`, `pyproject.toml`

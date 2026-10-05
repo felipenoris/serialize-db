@@ -12,12 +12,13 @@ alterar ou apagar nada no banco. A credencial temporária do workgroup (``GetCre
 usuário do banco quando ele ainda não existe; é o único efeito colateral possível, e a checagem
 ``RS-4`` o aponta. O relatório sai no terminal e em ``probes/output/redshift_<data-hora>.txt``.
 
-A conexão repete ``examples/redshift_native.py``, executado no ambiente alvo em 2026-09-20:
-``redshift-serverless:GetWorkgroup`` dá o endereço e a porta, ``GetCredentials`` dá o par usuário e
-senha derivado da identidade IAM, e ``redshift_connector.connect`` abre a sessão com esse par. Um
-par informado em ``_USER`` e ``_PASSWORD``, ou lido do secret da conexão do projeto, entra na mesma
-chamada. O IAM interno do ``redshift_connector`` e o cluster provisionado não são caminhos deste
-probe: ninguém os executou no ambiente alvo, que não tem cluster.
+A conexão repete ``target_env_examples/redshift_native.py``, da biblioteca do projeto Claude,
+executado no ambiente alvo em 2026-09-20: ``redshift-serverless:GetWorkgroup`` dá o endereço e a
+porta, ``GetCredentials`` dá o par usuário e senha derivado da identidade IAM, e
+``redshift_connector.connect`` abre a sessão com esse par. Um par informado em ``_USER`` e
+``_PASSWORD``, ou lido do secret da conexão do projeto, entra na mesma chamada. O IAM interno do
+``redshift_connector`` e o cluster provisionado não são caminhos deste probe: ninguém os executou no
+ambiente alvo, que não tem cluster.
 
 Seções:
 
@@ -26,15 +27,15 @@ Seções:
 2. APIs: ``redshift-serverless:GetWorkgroup`` do workgroup configurado, ``ListWorkgroups`` e
    ``GetNamespace``, com o papel IAM padrão e os associados; ``redshift:DescribeClusters`` como
    fotografia, porque o ambiente alvo não tem cluster; a Data API, pelo ciclo completo de
-   ``examples/redshift_data_api.py`` com ``select 1``, o caminho alternativo quando a porta 5439
-   está fechada.
+   ``target_env_examples/redshift_data_api.py`` com ``select 1``, o caminho alternativo quando a
+   porta 5439 está fechada.
 3. Rede: DNS dos endpoints regionais e TCP até o host.
 4. Sessão: a credencial temporária do workgroup; versão, usuário, banco, ``search_path``, esquemas,
    ``SUPER``, as configurações da sessão, privilégios no banco da conexão (``CREATE``, ``TEMP``),
    ``sys_load_error_detail`` (o diagnóstico de um ``COPY`` reprovado) e os esquemas externos; os
    bancos visíveis e em qual deles está o esquema do projeto, os requisitos da escrita num banco de
-   datashare; o ``USE`` nesse banco (``examples/redshift_copy_unload.py``) e, depois dele, os
-   privilégios no esquema e as tabelas com o prefixo da biblioteca.
+   datashare; o ``USE`` nesse banco (``target_env_examples/redshift_copy_unload.py``) e, depois
+   dele, os privilégios no esquema e as tabelas com o prefixo da biblioteca.
 5. Quem alcança o S3 no ``COPY`` e no ``UNLOAD``: as credenciais de quem chama, ou o papel de
    ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, e o alcance sobre a raiz pela simulação de política do IAM,
    uma chamada por recurso: ``ListBucket`` contra o bucket, ``GetObject`` e ``PutObject`` contra os
@@ -472,7 +473,7 @@ def data_api_select(
     sql: str,
     timeout: float = 30.0,
 ) -> tuple[list[str], list[list[object]], int]:
-    """O ciclo de ``examples/redshift_data_api.py``: dispara, espera o fim e pagina o resultado.
+    """O ciclo de ``target_env_examples/redshift_data_api.py``: dispara, espera o fim e pagina.
 
     Devolve as colunas, as linhas e a duração em milissegundos. Um estado final diferente de
     ``FINISHED`` e a espera estourada viram ``RuntimeError``, para a chamada entrar na seção final
@@ -564,9 +565,9 @@ def apis(
                 ]
             )
 
-    # GetWorkgroup é o passo 1 de examples/redshift_native.py: dá o endereço e a porta da conexão, e
-    # a biblioteca depende dele. ListWorkgroups é a fotografia da conta, que a biblioteca não chama;
-    # sem workgroup configurado, ela diz ao leitor o que informar.
+    # GetWorkgroup é o passo 1 de target_env_examples/redshift_native.py: dá o endereço e a porta da
+    # conexão, e a biblioteca depende dele. ListWorkgroups é a fotografia da conta, que a biblioteca
+    # não chama; sem workgroup configurado, ela diz ao leitor o que informar.
     workgroup = None
     workgroup_reason: str | None = None
     if target.workgroup:
@@ -623,7 +624,8 @@ def apis(
     # RS-6: IAM_ROLE só aceita papel associado ao cluster ou ao namespace; o padrão é o que IAM_ROLE
     # default usa. A biblioteca só emite IAM_ROLE com SERIALIZE_DB_REDSHIFT_IAM_ROLE: sem ela, o
     # COPY e o UNLOAD levam as credenciais de quem chama (RS-18), o caminho de
-    # examples/redshift_copy_unload.py, o único possível quando o namespace não tem papel nenhum.
+    # target_env_examples/redshift_copy_unload.py, o único possível quando o namespace não tem papel
+    # nenhum.
     defaults, attached = iam_roles(clusters, namespaces)
     if clusters is not None or namespaces:
         target.namespace_roles = (defaults, attached)
@@ -664,8 +666,8 @@ def apis(
             )
 
     # RS-10: a Data API executa SQL por HTTPS, sem a porta 5439: o caminho de reserva se a rede
-    # fechar a porta. O ciclo é o de examples/redshift_data_api.py, com select 1, que não lê dado
-    # nenhum do banco.
+    # fechar a porta. O ciclo é o de target_env_examples/redshift_data_api.py, com select 1, que não
+    # lê dado nenhum do banco.
     if target.database and target.workgroup:
         data = boto3.client("redshift-data", region_name=resolved, config=config)
         parameters = {"Database": target.database, "WorkgroupName": target.workgroup}
@@ -922,9 +924,10 @@ def session(
 
     resolved = region()
 
-    # RS-15: a credencial temporária do workgroup, o passo 2 de examples/redshift_native.py. O
-    # usuário sai da identidade IAM (IAMR:<papel>), entra em PUBLIC e a senha dura no máximo uma
-    # hora; sem durationSeconds seriam 900 segundos. A senha fica fora do relatório.
+    # RS-15: a credencial temporária do workgroup, o passo 2 de
+    # target_env_examples/redshift_native.py. O usuário sai da identidade IAM (IAMR:<papel>), entra
+    # em PUBLIC e a senha dura no máximo uma hora; sem durationSeconds seriam 900 segundos. A senha
+    # fica fora do relatório.
     temporary = False
     if target.user and target.password:
         report.note(
@@ -964,11 +967,11 @@ def session(
                 f"{report.last_reason}; sem ela a sessão precisa do par em _USER e _PASSWORD",
             )
 
-    # RS-4: o passo 3 de examples/redshift_native.py, a mesma chamada de tests/conftest.py, com o
-    # par da credencial temporária ou o informado. O timeout do redshift_connector vale para
-    # conectar e para ler: 10 s abortaram sys_load_error_detail no ambiente alvo (2026-09-20) e a
-    # conexão não voltou a servir, e o primeiro comando de uma sessão lá custou 10,8 s (o USE de
-    # 2026-09-21); 30 s bastam para as visões de sistema que o probe lê.
+    # RS-4: o passo 3 de target_env_examples/redshift_native.py, a mesma chamada de
+    # tests/conftest.py, com o par da credencial temporária ou o informado. O timeout do
+    # redshift_connector vale para conectar e para ler: 10 s abortaram sys_load_error_detail no
+    # ambiente alvo (2026-09-20) e a conexão não voltou a servir, e o primeiro comando de uma sessão
+    # lá custou 10,8 s (o USE de 2026-09-21); 30 s bastam para as visões de sistema que o probe lê.
     def connect() -> tuple[str, object]:
         if not (target.host and target.user and target.password):
             raise RuntimeError(
@@ -1281,11 +1284,12 @@ def session(
             report.ok("RS-17", "escrita no banco do datashare", verdict)
 
     # RS-19: depois do USE, esquema.tabela resolve no banco do datashare, que é como o CREATE, o
-    # COPY e o UNLOAD passaram (examples/redshift_copy_unload.py e redshift_manifest.py, este com os
-    # dois comandos de manifesto em 2026-09-21) e como tests/conftest.py abre cada conexão. A prova
-    # da troca é resolver um nome em duas partes de uma tabela que svv_all_tables lista no esquema:
-    # current_database() continuou respondendo o banco da conexão depois do USE (ambiente alvo,
-    # 2026-09-21), então ele é leitura, não critério. Nada é criado, alterado nem apagado.
+    # COPY e o UNLOAD passaram (target_env_examples/redshift_copy_unload.py e redshift_manifest.py,
+    # este com os dois comandos de manifesto em 2026-09-21) e como tests/conftest.py abre cada
+    # conexão. A prova da troca é resolver um nome em duas partes de uma tabela que svv_all_tables
+    # lista no esquema: current_database() continuou respondendo o banco da conexão depois do USE
+    # (ambiente alvo, 2026-09-21), então ele é leitura, não critério. Nada é criado, alterado nem
+    # apagado.
     share = target.share_database
     used_share = False
     if not schema:
@@ -1666,9 +1670,9 @@ def copy_role(
     report.h1("Quem alcança o S3 no COPY e no UNLOAD")
 
     # RS-18: sem SERIALIZE_DB_REDSHIFT_IAM_ROLE, o COPY e o UNLOAD levam as credenciais da sessão no
-    # texto do comando (examples/redshift_copy_unload.py). Elas expiram, e um comando montado antes
-    # da renovação falha: a biblioteca as pede a cada comando, e a expiração diz quanto um COPY
-    # pode durar.
+    # texto do comando (target_env_examples/redshift_copy_unload.py). Elas expiram, e um comando
+    # montado antes da renovação falha: a biblioteca as pede a cada comando, e a expiração diz
+    # quanto um COPY pode durar.
     frozen = report.call(
         "boto3.Session().get_credentials()",
         caller_credentials,
