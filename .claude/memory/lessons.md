@@ -3,7 +3,7 @@
 Read a story when the reason behind a rule in `CLAUDE.md` matters, or before adding a lesson. Process lessons from the sessions so far, each with the mistake that cost a retry or the verification that changed the plan, and its date; the rule distilled from each one lives in the "Working rules" section of `CLAUDE.md`, and the technical facts live in the theme files beside this one and in the study suites. A new lesson is appended here at the end of the unit of work, and its rule is added to `CLAUDE.md` in the same commit.
 
 - **A documented behavior becomes a test assertion only after a probe reproduces it**
-  (2026-09-19). Three claims taken from `plan/duckdb.md` and `plan/delta.md` failed as assertions:
+  (2026-09-19). Three claims taken from `docs/tecnologias.md` (DuckDB and Delta Lake) failed as assertions:
   the DuckDB Arrow reader returns zero rows after another command instead of raising;
   `read_parquet` on a single file under `mes=.../` adds `mes` by Hive auto-detection, so a file's
   real columns come from `parquet_schema`; the `DECIMAL` inferred from a pandas column came from all
@@ -325,7 +325,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   Arrow IPC files was faster on a file (0.400 s against 0.565 s) and 20% slower in memory. A
   timing that decides a design is taken best of three, on the same database, the same data and the
   same batch size, for every alternative. `plan/POC.md`
-- **A library's warning is a reading, never a guard** (2026-09-22). `plan/sqlalchemy.md` said since
+- **A library's warning is a reading, never a guard** (2026-09-22). `docs/tecnologias.md` (SQLAlchemy) said since
   2026-09-19 that a valueless `bindparam` and `text("mes = :mes")` both render `mes = NULL` under
   `literal_binds` with a `SAWarning`, and the stage 2 draft of 2026-09-21 turned that warning into
   an error. The review of the study suites probed seven forms: the warning fires only for the two
@@ -334,7 +334,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `compiled.binds` marks the parameter `required` in all seven. The warning-based guard would have
   let five of seven through, and the claim about `text()` had been generalized from the one case
   the draft ran. `render` already read `compiled.binds` for thread safety; the documents now give
-  the second reason. `plan/POC.md`, `plan/sqlalchemy.md`, `plan/PLAN-STAGE-2.md`
+  the second reason. `plan/POC.md`, `docs/tecnologias.md` (SQLAlchemy), `plan/PLAN-STAGE-2.md`
 - **A requirement is measured in the user's own words before it is reported kept** (2026-09-23).
   On 2026-09-22 the user asked that the client work on the next or previous batch while the
   connection does I/O, and the single-session design was reported as keeping the requirement:

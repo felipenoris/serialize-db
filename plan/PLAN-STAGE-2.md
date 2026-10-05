@@ -4,7 +4,7 @@ A entrega e o critério de aceite desta etapa estão na tabela de etapas de [`PL
 também fixa as decisões, as regras que toda etapa obedece e a ordem do trabalho.
 
 O módulo `serialize_db.sql` gera o texto SQL de cada dialeto a partir de um statement Core, a
-opção de migração para fora do SQLAlchemy descrita em `sqlalchemy.md`, e a cópia prefixada que os
+opção de migração para fora do SQLAlchemy descrita em `docs/tecnologias.md` (SQLAlchemy), e a cópia prefixada que os
 motores compilam. O caminho padrão é o statement Core submetido ao motor, que o compila pelo
 dialeto com os parâmetros do cliente (decisão do usuário de 2026-09-22); o texto versionado é
 opcional.
@@ -19,7 +19,7 @@ opcional.
 | `write_sql_files(statements, metadata, directory)` | Grava `sql_files`, sem apagar nada, e `check_sql_files` compara a pasta com a geração, como na [etapa 1](PLAN-STAGE-1.md); `serialize-db sql write` e `serialize-db sql check`. |
 | `read_sql(directory, name, dialect, prefix)` | O texto versionado com o sentinela `{prefix}` trocado pelo `prefix` informado, para a `query` e o `stream` dos motores. |
 
-Testes: `tests/test_sql.py`, sem gravar fora dos casos `local`: o statement de `sqlalchemy.md`
+Testes: `tests/test_sql.py`, sem gravar fora dos casos `local`: o statement de `docs/tecnologias.md` (SQLAlchemy)
 (parâmetro, `%` em literal, prefixo) renderizado nos dois dialetos e executado no DuckDB em
 memória com `$data_base_str`; `bindparam` sem valor como `:nome`, o statement num `Connection`
 criado fora da biblioteca, a coluna com `key` diferente do nome, e parâmetro faltante como erro;
@@ -131,7 +131,7 @@ analisa (decisão do usuário de 2026-09-22; `sqlglot` fixado no grupo `dev`, e 
 ## Testes por caso
 
 `tests/test_sql.py`, sem gravar fora dos casos `local`, com o statement de
-[`sqlalchemy.md`](sqlalchemy.md), os quatro de `tests/client_model/statements.py` e os do rascunho.
+[`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy), os quatro de `tests/client_model/statements.py` e os do rascunho.
 
 | Caso | Teste | O que confere |
 | --- | --- | --- |

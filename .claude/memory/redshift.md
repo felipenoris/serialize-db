@@ -17,7 +17,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   probe uses 30 s over system views, the suite and the library connect without one because a `COPY`
   outlives any read timeout; `ssl=True` is the default. The driver's internal IAM (`iam=True`) and
   `GetClusterCredentials` are out: nobody ran them in the target, which has no cluster.
-  `/mnt/project-files/target_env_examples/`, `plan/redshift.md`, `plan/POC.md`
+  `/mnt/project-files/target_env_examples/`, `docs/tecnologias.md` (Redshift), `plan/POC.md`
 - The target's Redshift, read on 2026-09-20 (the reports left `plan/readings/` on 2026-09-23 and
   stay in git history): workgroup `controladoria-wg`,
   namespace `controladoria-ns`, account `<conta>`, base capacity 8, no provisioned cluster; the
@@ -55,7 +55,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `optional`, min and max are present except on the `INT96`, and it fragments by slice (32 files for
   500,000 rows, which `PARALLEL OFF` or compaction undoes). An `INT96` file registered in a
   `timestamp_ntz` table reads back as `timestamp[us]` in delta-rs and in `delta_scan`, values
-  intact. `plan/POC.md`, `plan/redshift.md`
+  intact. `plan/POC.md`, `docs/tecnologias.md` (Redshift)
 - The `UNLOAD` read on 2026-09-23, twice: the `select` is a literal that treats the backslash as an
   escape (the docs escape a quote as `\'`), so the text goes in with the backslash and the quote
   doubled; with only the quote doubled, a literal with a backslash reached the inner `select`
@@ -69,7 +69,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `schema.cast` turns into `string`. In a row group with `NaN`, the footer's min and max of a
   `DOUBLE PRECISION` leave the `NaN` out, as pyarrow does, and DuckDB's `read_parquet` pruned the
   group (0 rows for `valor > 3`), wherever the `NaN` sat; with the infinities, the footer holds
-  `-inf` and `inf`. `plan/POC.md`, `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
+  `-inf` and `inf`. `plan/POC.md`, `docs/tecnologias.md` (Redshift), `plan/PLAN-STAGE-5.md`
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
@@ -83,7 +83,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
 
 - With `redshift_connector`, `executemany` makes one round trip per row and the dialect does not
   rewrite it into a multi-row `VALUES`: bulk loads go through Parquet on S3 and `COPY`, small batches
-  through `insert(Modelo).values(lista)`. `plan/redshift.md`
+  through `insert(Modelo).values(lista)`. `docs/tecnologias.md` (Redshift)
 - With autocommit off, `redshift_connector` issues `begin transaction` before the first `execute`
   of a cursor, and setting `autocommit = True` afterwards does not close the open transaction: a
   session that ran `USE` before switching autocommit on stayed in one transaction, the denied
@@ -103,20 +103,20 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   makes the driver use the unnamed statement, parsed right before every execute, and cache nothing
   (`get_statement_name_bin`; the cache insertion runs only above zero). The suite and the library
   connect with it; `connect_redshift(statement_cache=True)` keeps the driver default for the
-  reading that reproduces the error. `plan/redshift.md`, `plan/POC.md`
+  reading that reproduces the error. `docs/tecnologias.md` (Redshift), `plan/POC.md`
 - The driver materializes a result in `execute`: `EXECUTE_MSG` asks the portal for all rows,
   `handle_messages` returns only at `READY_FOR_QUERY`, each `DATA_ROW` lands in
   `cursor._cached_rows`, and `fetchmany` is `islice` over `Cursor.__next__`, which pops that deque.
   `stream` on Redshift always goes through `UNLOAD` and `query` through the cursor (user decision of
   2026-09-23); the suite read 5 rows in the queue before the first `fetchmany` (2026-09-21, 13:35
-  and 13:39), now an assertion. `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
+  and 13:39), now an assertion. `docs/tecnologias.md` (Redshift), `plan/PLAN-STAGE-5.md`
 - `cursor.description` of `redshift_connector` 2.1.16 is `(name, oid, None, None, None, None,
   None)` per column (`Cursor._getDescription`); the `type_modifier` of each column is in
   `cursor.ps["row_desc"]`, stored by `Connection.handle_ROW_DESCRIPTION`, and the driver itself
   decodes the binary `NUMERIC` with scale `(type_modifier - 4) & 0xFFFF`
   (`Cursor.truncated_row_desc`); precision is `((type_modifier - 4) >> 16) & 0xFFFF`. `RedshiftOID`
   lists `REAL` 700, `BPCHAR` 1042, `TEXT` 25, `UNKNOWN` 705 and `SUPER` 4000, which the driver reads
-  as text (code reading of 2026-09-23). `plan/redshift.md`, `plan/PLAN-STAGE-5.md`
+  as text (code reading of 2026-09-23). `docs/tecnologias.md` (Redshift), `plan/PLAN-STAGE-5.md`
 - The literal text of the `stream` by `UNLOAD` (local probe of 2026-09-23): the
   `RedshiftDialect_redshift_connector` default `paramstyle` (`format`) doubles `%` inside literals
   and `named` does not, and `redshift_connector` sends a statement executed without parameters
@@ -167,7 +167,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   slash, and delta-rs 1.6.4 stores and returns `mes=2026-01/...` unencoded, also for an `AddAction`
   registered with the raw path. The verbose `UNLOAD` manifest's `schema.elements` lists the
   partition column (`mes`, `character varying`, `max_length` 7) that the files do not have. The
-  Data API answered in 444 ms: the 30 s `PICKED` was transient. `plan/POC.md`, `plan/redshift.md`
+  Data API answered in 444 ms: the 30 s `PICKED` was transient. `plan/POC.md`, `docs/tecnologias.md` (Redshift)
 - Third and fourth runs (2026-09-21 12:08 and 12:10 UTC, 10 passed and 1 failed each; reports not
   kept, the clean runs repeat their readings; identical reading by reading): `COPY ... FORMAT AS PARQUET MANIFEST` loads `DECIMAL(18,2)` as `INT64` and
   `timestamp_ntz` as `INT64` µs (sum and min checked); a five-column file into a six-column table
@@ -214,7 +214,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `search_path`, may carry the name of a permanent table and shadows it until the permanent one is
   schema-qualified, gets `RAW` encoding by default unless a column says `ENCODE`, and is absent
   from `svv_table_info`. `redshift_connector.Cursor.execute` delegates to `Connection.execute`, so
-  every cursor of a connection is the same session. `plan/redshift.md`
+  every cursor of a connection is the same session. `docs/tecnologias.md` (Redshift)
 - The Redshift engine keeps one session per execution under a `threading.RLock` (user decision of
   2026-09-22), the `exec_<id>_*` tables stay permanent in the datashare schema, and the user
   reverted the temporary-table proposal the same day; a temporary table the pipeline creates in
@@ -241,7 +241,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   rows. `stv_db_isolation_level` is denied (42501). The stage 8 transaction reads the control row
   first and writes it last, by `INSERT` or by the `UPDATE` conditioned on the version read, and the
   unpublish flow deletes it with the published table (user decision of 2026-09-23,
-  `decisions.md`). `plan/redshift.md`, `plan/POC.md`, `plan/PLAN-STAGE-8.md`
+  `decisions.md`). `docs/tecnologias.md` (Redshift), `plan/POC.md`, `plan/PLAN-STAGE-8.md`
 - An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
   credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two

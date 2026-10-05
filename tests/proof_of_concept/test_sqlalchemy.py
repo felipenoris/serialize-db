@@ -651,8 +651,8 @@ def test_generic_function_subclass_registers_in_sa_func_for_the_whole_process() 
 
     assert type(sa.func.serialize_db_sonda_len(column)) is serialize_db_sonda_len
 
-    # A subclasse de FunctionElement, como o month_of de plan/sqlalchemy.md: uma regra por dialeto,
-    # e o sa.func intacto.
+    # A subclasse de FunctionElement, como o month_of da seção SQLAlchemy de docs/tecnologias.md:
+    # uma regra por dialeto, e o sa.func intacto.
     # N801: o nome da classe segue o da função SQL.
     class serialize_db_sonda_bytes(FunctionElement):  # noqa: N801
         type = sa.Integer()

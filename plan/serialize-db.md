@@ -6,9 +6,9 @@ ao Redshift só as partições que uma execução do pipeline precisa, publica o
 e carrega no Redshift as tabelas que os clientes consultam. Este documento reúne a modelagem: o que
 a biblioteca faz, os metadados que ela mantém, as primitivas de cada módulo e o fluxo de cada caso
 de uso. As razões do desenho estão em [`estrategia.md`](estrategia.md); o comportamento verificado
-do Delta, em [`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e
-[`redshift.md`](redshift.md); o contrato, em [`schema.md`](schema.md) e
-[`sqlalchemy.md`](sqlalchemy.md); as práticas de ETL que o desenho segue, em [`guia.md`](guia.md); as
+do Delta, em [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake); os motores, em [`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb) e
+[`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift); o contrato, em [`schema.md`](schema.md) e
+[`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy); as práticas de ETL que o desenho segue, em [`guia.md`](guia.md); as
 etapas de implementação, em [`PLAN.md`](PLAN.md), e o plano de cada etapa, com as primitivas do
 módulo, em `PLAN-STAGE-<n>.md`.
 
@@ -26,7 +26,7 @@ módulo, em `PLAN-STAGE-<n>.md`.
   cada statement vira texto SQL do DuckDB e do Redshift, com as constantes embutidas, a partição
   como parâmetro nomeado e o prefixo do sandbox como sentinela, versionado no repositório do
   pipeline e executado no lugar da compilação, uma interação por vez
-  ([`sqlalchemy.md`](sqlalchemy.md)).
+  ([`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy)).
 - **Banco em tabelas Delta.** Uma pasta por ambiente e uma subpasta por tabela. A biblioteca cria
   cada tabela a partir do contrato, de forma idempotente, e reconcilia o esquema da tabela com o
   modelo: o diff aditivo é aplicado, o destrutivo exige a reescrita explícita.
@@ -93,7 +93,7 @@ comentário da tabela na `description` da ação `metaData`, o esquema de cada v
 comentários de coluna, as estatísticas por arquivo e os metadados que a biblioteca
 grava em cada commit (`serialize_db_execution_id`, `serialize_db_input_versions` e, quando houver,
 `serialize_db_snapshot`). O modelo SQLAlchemy dá o DDL e os tipos do contrato atual, e a
-reconciliação descrita em [`delta.md`](delta.md), seção "Evolução de esquema", garante que ele e o
+reconciliação descrita em [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake), seção "Evolução de esquema", garante que ele e o
 esquema atual do log são o mesmo. A biblioteca não guarda cópia de esquema, lista de arquivos nem
 estatísticas.
 
@@ -102,7 +102,7 @@ das tabelas: `snapshots.json`, com
 `{"snapshots": {"2026T3": {"cad_lancamentos": 143, "cad_contratos": 88}}}`. O sublinhado inicial
 deixa a pasta fora dos globs `<coluna>=*` e dos leitores no estilo Hive, que ignoram nomes com esse
 prefixo. Os nomes de tabela são relativos, sem URI, para a realocação descrita em
-[`delta.md`](delta.md), seção "Realocação e cópia do banco", continuar valendo. A escrita é atômica,
+[`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake), seção "Realocação e cópia do banco", continuar valendo. A escrita é atômica,
 com `IfMatch` no S3, a mesma primitiva do log, e só a biblioteca escreve. O arquivo é a fonte
 primária e o log é a reconstrução: a marca `serialize_db_snapshot` vive no `commitInfo`, que não
 entra nos checkpoints e some do log quando a limpeza passa de `delta.logRetentionDuration`. O
@@ -285,7 +285,7 @@ erro.
 4. Renomear, remover ou mudar o tipo de uma coluna é recusado pela reconciliação, e só entra por
    `rewrite`, uma ordem explícita fora da execução mensal: a tabela inteira num commit, sem
    predicado, porque o `overwrite` de uma partição com `schema_mode="overwrite"` troca o esquema da
-   tabela toda e deixa as outras partições lendo nulo ([`delta.md`](delta.md), seção "Evolução de esquema").
+   tabela toda e deixa as outras partições lendo nulo ([`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake), seção "Evolução de esquema").
    A versão anterior continua lendo com o esquema antigo.
 5. As tabelas publicadas seguem o mesmo diff: `ADD COLUMN` no caso aditivo, recriação e recarga no
    destrutivo.
@@ -346,7 +346,7 @@ A opção de migração para fora do SQLAlchemy, não o caminho padrão (decisã
 2026-09-22).
 
 1. O pipeline escolhe uma interação com o banco: um statement Core que hoje é compilado pelo
-   dialeto a cada execução, com a partição como parâmetro (`param("mes")` no exemplo de `sqlalchemy.md`).
+   dialeto a cada execução, com a partição como parâmetro (`param("mes")` no exemplo de `docs/tecnologias.md` (SQLAlchemy)).
 2. `write_sql_files({"total_por_cliente": statement}, metadata, "sql/")` grava
    `sql/total_por_cliente.duckdb.sql` e `.redshift.sql`, com as constantes embutidas, `:mes` e o
    sentinela `{prefix}`; os arquivos entram no repositório do pipeline e no diff da revisão.
@@ -431,7 +431,7 @@ cliente, na seção "Multithreading" de `docs/index.md`.
   o pool `threads` é da instância e muda em execução por `SET threads`; duas consultas simultâneas o
   dividem, cada uma também com a thread que a chamou, e ganham quando uma espera o S3, quando as
   consultas são pequenas ou quando um operador não se paraleliza (as medições de 2026-09-23 estão
-  em [`duckdb.md`](duckdb.md)); no Redshift, cada comando corre nas slices.
+  em [`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb)); no Redshift, cada comando corre nas slices.
   Várias threads chamam `run.sandbox.query` e `stream` ao mesmo tempo e esperam a vez na
   sessão, e a leitura dos lotes de cada `stream` corre fora dela. A ingestão de várias tabelas corre
   em paralelo, uma sessão a mais por tabela: em disco local, quatro tabelas de 150.000 linhas

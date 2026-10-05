@@ -148,7 +148,7 @@ o texto.
 - As consultas nascem como construções do SQLAlchemy, e o motor as compila pelo dialeto com os
   parâmetros do cliente; o texto SQL gerado por dialeto é a opção de um pipeline que queira sair do
   SQLAlchemy, uma interação por vez (decisão do usuário de 2026-09-22,
-  [`sqlalchemy.md`](sqlalchemy.md)).
+  [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy)).
 - Funções com nomes ou semânticas diferentes nos dois bancos ganham uma regra `@compiles` por dialeto.
   A lista sai do código atual do pipeline.
 - Todo identificador que a biblioteca emite vai entre aspas duplas: `to` é palavra reservada no

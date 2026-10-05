@@ -16,8 +16,9 @@ compactação que normaliza arquivos de outro escritor, a descrição e os comen
 no rodapé e no log, também por partição, o filtro do dataset do delta-rs sobre a coluna sem mínimo
 e máximo no log, dois registros concorrentes da mesma partição, a poda do ``delta_scan`` por forma
 de predicado, e o valor de partição codificado na pasta e no log, com a aspa que quebra o
-predicado. Os comportamentos estão descritos em ``plan/delta.md``; aqui eles viram asserções. A
-reescrita pelo ``COPY`` particionado e o registro com as estatísticas do ``RETURN_STATS`` são os
+predicado. Os comportamentos estão descritos na seção Delta Lake de ``docs/tecnologias.md``; aqui
+eles viram asserções. A reescrita pelo ``COPY`` particionado e o registro com as estatísticas do
+``RETURN_STATS`` são os
 de ``serialize_db.delta``, testados em ``tests/test_delta.py``.
 """
 

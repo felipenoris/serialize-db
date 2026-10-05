@@ -34,7 +34,7 @@ foi medido em [`POC.md`](POC.md).
   que a chave tem pela frente, no mínimo, na entrada da sessão (o botocore a renova entre 15 e 10
   minutos antes da expiração), o `COPY` mais longo que a credencial que ele leva, a queda de uma
   conexão Redshift no meio de um `COPY` e a sessão ociosa e a transação inativa do serverless,
-  encerradas depois de 3.600 s e 21.600 s ([`redshift.md`](redshift.md)). A cláusula do `COPY` e do
+  encerradas depois de 3.600 s e 21.600 s ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)). A cláusula do `COPY` e do
   `UNLOAD` é montada a cada comando, no motor da [etapa 5](PLAN-STAGE-5.md) e, desde a decisão do
   usuário de 2026-09-26, na publicação da [etapa 8](PLAN-STAGE-8.md), que passou assim no alvo em
   2026-09-27, e leva uma chave com cerca de 29 minutos ou mais pela frente; o motor reconecta uma

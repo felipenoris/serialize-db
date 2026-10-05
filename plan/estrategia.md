@@ -5,7 +5,7 @@ ferramentas candidatas: qual camada gerencia os arquivos Parquet no S3 sem um se
 qual camada gera o SQL que roda no DuckDB e no Redshift, o que substitui a migração de esquema e se
 uma extensão em Rust com PyO3 compensa. A decisão que sai daqui, as etapas e o pipeline mensal
 estão em [`PLAN.md`](PLAN.md); o estado do projeto, em [`CURRENT_STATE.md`](CURRENT_STATE.md); o
-uso do Delta, em [`delta.md`](delta.md). As fontes
+uso do Delta, em [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake). As fontes
 estão em [`REFERENCES.md`](../REFERENCES.md). As verificações locais deste documento rodaram em
 2026-09-19 com Python 3.13, deltalake 1.6.4, DuckDB 1.5.5 com as extensões `delta` e `ducklake`,
 PyArrow 25.0.1 e SQLGlot 30.18.0, num macOS arm64; a prova de conceito no S3, feita no espaço do
@@ -66,7 +66,7 @@ perfis de `~/.aws/config`:
   `aws_config::profile::credentials` de uma falha mostra a cadeia consultando o perfil `default`. No
   espaço do SageMaker Unified Studio o escritor encontra as credenciais do contêiner do projeto; a
   falha com 403 de 2026-09-19 vinha de uma `NO_PROXY` vazia, que o cliente HTTP do delta-rs lê antes
-  de `no_proxy`, e os detalhes estão em [`delta.md`](delta.md).
+  de `no_proxy`, e os detalhes estão em [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake).
 - `write_deltalake(data, mode=..., partition_by=..., predicate=..., schema_mode=...)` aceita tabela
   PyArrow, DataFrame pandas ou iterador de `RecordBatch`; `mode="overwrite"` com `predicate` substitui
   só as linhas que casam com o predicado e rejeita dados fora dele; `schema_mode="merge"` acrescenta
@@ -251,11 +251,11 @@ Estas regras mantêm os arquivos legíveis pelo `COPY`:
   grava nos dados e o `COPY` não lê diretórios. No DuckLake, a coluna permanece no arquivo.
 - `DECIMAL(18, 2)` sai como `INT64` do delta-rs, do DuckLake e do próprio DuckDB; o PyArrow grava
   `FIXED_LEN_BYTE_ARRAY`. O `COPY` com `DECIMAL` em `INT64` passou no ambiente alvo em 2026-09-21
-  ([`parquet.md`](parquet.md)), e cobre os três escritores.
+  ([`docs/tecnologias.md`, Parquet](../docs/tecnologias.md#parquet)), e cobre os três escritores.
 - O `COPY` é posicional e exige o mesmo número de colunas. Uma coluna nova entra no fim do esquema
   nos dois formatos, e os arquivos antigos ficam com uma coluna a menos. `FILLRECORD` consta das opções
   aceitas para Parquet e carregou o arquivo antigo com a coluna nova nula em 2026-09-21, como a
-  lista de colunas ([redshift.md](redshift.md)). A biblioteca passa a lista das colunas do rodapé
+  lista de colunas ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)). A biblioteca passa a lista das colunas do rodapé
   a cada `COPY`, com um manifesto por lista, porque uma coluna nova no meio do modelo deslocaria
   as seguintes num `COPY` sem ela (decisão do usuário de 2026-09-28).
 
@@ -269,8 +269,8 @@ que é a convenção do Delta, e o `MANIFEST VERBOSE` traz `content_length` e `r
 ### SQLAlchemy Core
 
 O estado atual. Os dois dialetos existem (`sqlalchemy-redshift` 1.0.0 e `duckdb_engine` 0.17.0, este
-sem lançamento desde 2025-03-29) e seus limites estão em [`sqlalchemy.md`](sqlalchemy.md),
-[`duckdb.md`](duckdb.md) e [`redshift.md`](redshift.md): sem cache de statements, `executemany` linha
+sem lançamento desde 2025-03-29) e seus limites estão em [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy),
+[`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb) e [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift): sem cache de statements, `executemany` linha
 a linha no Redshift, `SERIAL` rejeitado e `DEFERRABLE` descartado pelo DuckDB, `TEXT` como `VARCHAR(256)`,
 `RETURNING` emitido pelo ORM. Nenhum deles impede o uso do Core para `SELECT` e `INSERT ... SELECT`, e
 o `Table` do modelo continua uma boa fonte do contrato (esquema Arrow, DDL dos dois bancos e, agora,
@@ -284,7 +284,7 @@ interação com o banco por vez. O padrão é o motor compilar o statement Core 
 cliente, e por isso `duckdb-engine` e `sqlalchemy-redshift` são dependências de execução. O que
 cada parte do
 SQLAlchemy entrega ao projeto, a recomendação sem a compatibilidade com o pipeline e os
-comportamentos do compilador que a geração contorna estão em [`sqlalchemy.md`](sqlalchemy.md).
+comportamentos do compilador que a geração contorna estão em [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy).
 
 ### SQLGlot
 
@@ -346,7 +346,7 @@ e serve de referência de implementação para o destino Redshift e para o DuckL
 ## Contrato de esquema, auditoria e migração
 
 O contrato pode continuar nos modelos SQLAlchemy, dos quais derivam o esquema Arrow
-([`sqlalchemy.md`](sqlalchemy.md)), o esquema Delta (o `write_deltalake` recebe o esquema Arrow) ou o
+([`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy)), o esquema Delta (o `write_deltalake` recebe o esquema Arrow) ou o
 DDL do DuckLake, e o DDL do sandbox nos dois bancos. Se o SQLAlchemy sair, o esquema Arrow assume o
 papel de fonte, e o SQLGlot gera o DDL por dialeto. Nas duas formas, as opções físicas (partição, chave
 de ordenação, `DISTKEY`) ficam em metadados da biblioteca, como [`schema.md`](schema.md) já propõe.
@@ -402,7 +402,7 @@ retiram da biblioteca:
 
 O que se perde é a migração de dados escrita em SQL, como um backfill; no pipeline isso é uma
 reexecução dos meses afetados ou um `update` com predicado no Delta. A correspondência recurso a
-recurso está em [`delta.md`](delta.md).
+recurso está em [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake).
 
 ## Rust e PyO3
 
@@ -446,14 +446,14 @@ decisão, com as consequências de cada premissa e as partes da biblioteca, est�
   forem habilitados: a tabela seria registrada por `register_table` sem conversão, e o Redshift
   passaria a lê-la por esquema externo. A diferença de fundo entre os dois formatos, o ponteiro da
   versão atual implícito no log do Delta e trocado no catálogo do Iceberg, está em
-  [`delta.md`](delta.md).
+  [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake).
 - **Diretórios Hive com manifesto próprio**, não adotado: reimplementa o que o delta-rs faz com a
   mesma primitiva do S3.
 - **SQLAlchemy Core** permanece porque o pipeline já o usa nos modelos e em `select` e `insert`, e
   o `Table` do modelo é a fonte do esquema Arrow, do esquema Delta e do DDL dos dois motores. O que
   muda é o caminho dos DataFrames, que passa por Arrow; a compilação pelo dialeto continua o
   caminho padrão, e o texto gerado por dialeto é a opção de migração para fora do SQLAlchemy
-  (decisão do usuário de 2026-09-22, [`sqlalchemy.md`](sqlalchemy.md)). O `insert(...)` executado
+  (decisão do usuário de 2026-09-22, [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy)). O `insert(...)` executado
   com listas de linhas sai, porque no Redshift ele vira uma ida ao servidor por linha.
 - **SQLGlot puro** no lugar do SQLAlchemy exigiria reescrever as consultas sem ganho de
   portabilidade, porque os dois exigem os mesmos testes no Redshift; o SQLGlot entra só no grupo
@@ -492,7 +492,7 @@ Redshift, e é somente leitura para clientes Iceberg. As regras que mantêm a sa
 etapas: sem vetores de exclusão, sem column mapping, um único escritor, caminhos relativos. O gatilho
 de reavaliação é a disponibilidade do Glue, do S3 Tables ou de um catálogo acessível ao Redshift;
 nesse dia a tabela de "Comparação para os requisitos do projeto" é refeita com o Iceberg registrável,
-e a saída do Delta para pastas Parquet está em [`delta.md`](delta.md).
+e a saída do Delta para pastas Parquet está em [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake).
 
 ## Referências
 

@@ -1,9 +1,10 @@
 # Referências
 
 Este arquivo lista os sites consultados na pesquisa do
-plano de implementação e dos documentos sobre
-[arquivos Parquet](plan/parquet.md), [DuckDB](plan/duckdb.md), [Redshift](plan/redshift.md),
-[SQLAlchemy](plan/sqlalchemy.md), [Delta Lake](plan/delta.md) e a
+plano de implementação, da revisão das tecnologias em `docs/tecnologias.md`, com as seções
+[Parquet](docs/tecnologias.md#parquet), [Delta Lake](docs/tecnologias.md#delta-lake),
+[DuckDB](docs/tecnologias.md#duckdb), [Redshift](docs/tecnologias.md#redshift) e
+[SQLAlchemy](docs/tecnologias.md#sqlalchemy), e da
 [estratégia de implementação](plan/estrategia.md), agrupados por assunto.
 
 ## Projetos de referência

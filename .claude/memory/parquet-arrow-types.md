@@ -6,7 +6,7 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
 
 - The DuckDB Parquet writer marks every column `optional`, even `NOT NULL`, writes `DECIMAL(18, 2)`
   as `INT64` and writes no page index; PyArrow writes `required` and `FIXED_LEN_BYTE_ARRAY(8)`.
-  `plan/parquet.md`
+  `docs/tecnologias.md` (Parquet)
 - delta-rs, DuckLake and DuckDB all write `DECIMAL(18, 2)` as `INT64`; PyArrow writes
   `FIXED_LEN_BYTE_ARRAY`. The Redshift `COPY ... MANIFEST` loaded the delta-rs files on 2026-09-21
   and the DuckDB files in the battery of 2026-09-24 at 12:38 (`redshift.md`).
@@ -21,7 +21,7 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   `nan_count` even when zero; a reader without `nan_count` must assume `NaN` may be present and
   ignore min and max in a search the `NaN` satisfies. PARQUET-1246 (2018, parquet-mr 1.10.0) was a
   Java reader fix that ignores a min or max that is itself `NaN`, not a rule to omit statistics.
-  `plan/POC.md`, `plan/delta.md`
+  `plan/POC.md`, `docs/tecnologias.md` (Delta Lake)
 - DuckDB 1.5.5 `COPY ... (FORMAT parquet)` writes format 1.0, SNAPPY and `PLAIN`: `DECIMAL(18, 2)`
   as `INT64` and `DECIMAL(38, 6)` as `FIXED_LEN_BYTE_ARRAY`, `TIMESTAMP` as `INT64` µs, `DATE` as
   `INT32`, `VARCHAR` as `BYTE_ARRAY` `String`, `BOOLEAN`, `DOUBLE`, and `JSON` as `BYTE_ARRAY`
@@ -39,7 +39,7 @@ Read before `cast`, the schema mapping of stage 1, a Parquet footer check or a c
   `JSON` column with `Malformed JSON`), `string` in Delta (the extension name kept in field metadata
   when an Arrow schema carries it), `JSON` logical type in Parquet written by PyArrow or
   DuckDB and `String` when written by delta-rs; DuckDB reads `delta_scan` JSON as `VARCHAR` and
-  validates only on `::JSON`; Arrow and Delta never validate. `plan/schema.md`, `plan/delta.md`
+  validates only on `::JSON`; Arrow and Delta never validate. `plan/schema.md`, `docs/tecnologias.md` (Delta Lake)
 
 ## PyArrow casts and pandas conversions
 

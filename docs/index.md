@@ -11,7 +11,9 @@ os argumentos, o retorno e as exceções de cada função, está no menu: `seria
 `serialize_db.engine.redshift`), `serialize_db.resources`, `serialize_db.execution`,
 `serialize_db.parquet_import`, `serialize_db.publication`, `serialize_db.reader`,
 `serialize_db.errors` e `serialize_db.cli`, com o runbook da operação e as opções de cada subcomando
-da linha de comando.
+da linha de comando. A página `serialize_db.technology_review`, a revisão das tecnologias, descreve
+o funcionamento do Parquet, do Delta Lake, do DuckDB, do Redshift e do SQLAlchemy e o que a
+biblioteca faz com cada um.
 
 ## Como o pacote funciona
 

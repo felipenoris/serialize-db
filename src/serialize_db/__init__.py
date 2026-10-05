@@ -35,4 +35,5 @@ __all__ = [
     "schema",
     "sql",
     "storage",
+    "technology_review",
 ]

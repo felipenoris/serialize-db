@@ -5,19 +5,19 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
 ## Ingestion and results
 
 - Arrow is the ingestion path for both engines: 300,000 rows into DuckDB from an Arrow table took
-  0.008 s, against 5.2 s for 50,000 rows through `executemany`. `plan/duckdb.md`
+  0.008 s, against 5.2 s for 50,000 rows through `executemany`. `docs/tecnologias.md` (DuckDB)
 - A pandas `object` column of `Decimal` gets its DuckDB type from the values present, not from the
-  contract (`plan/duckdb.md` reports a 1,000-value sample giving `DECIMAL(7, 2)`; on 2026-09-19 a
+  contract (the DuckDB section of `docs/tecnologias.md` reports a 1,000-value sample giving `DECIMAL(7, 2)`; on 2026-09-19 a
   5,001-row column with the large value last gave `DECIMAL(11,2)` and materialized); casting to Arrow
-  with the contract schema first fixes the type. `plan/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`
+  with the contract schema first fixes the type. `docs/tecnologias.md` (DuckDB), `tests/proof_of_concept/test_duckdb.py`
 - `pandas.read_sql` turns `Decimal` into `float` unless `coerce_float=False`, and
   `dtype_backend="pyarrow"` returns `double` for `DECIMAL` and `string` for `DATE`; only the Arrow
-  path preserves `decimal128(18, 2)` and `date32`. `plan/duckdb.md`
+  path preserves `decimal128(18, 2)` and `date32`. `docs/tecnologias.md` (DuckDB)
 - `COPY ... FROM` in DuckDB is positional and silently casts convertible types, so type
-  enforcement belongs on the metadata, before the load. `plan/parquet.md`
+  enforcement belongs on the metadata, before the load. `docs/tecnologias.md` (Parquet)
 - Constraints cost on load and do not help queries in either engine: a DuckDB load of 300,000 rows
   went from 0.008 s to 0.073 s with a composite primary key, and Redshift keys are informational.
-  `plan/schema.md`, `plan/duckdb.md`
+  `plan/schema.md`, `docs/tecnologias.md` (DuckDB)
 - A foreign key needs a primary key or `UNIQUE` constraint on the referenced columns, in the same
   order: `FOREIGN KEY (b, a) REFERENCES alvo (b, a)` against `UNIQUE (a, b)` fails with
   `Binder Error: ... does not have a primary key or unique constraint on the columns b,a`, and a
@@ -111,7 +111,7 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   `PARQUET:field_id` produces Parquet field ids. DuckDB cannot read `BYTE_STREAM_SPLIT` on a
   DECIMAL column written by PyArrow. `DeltaTable.alter.add_columns` needs `deltalake.schema.Field`,
   not `pyarrow.Field`. A pandas `dict` column enters a DuckDB `JSON` column without a cast.
-  `plan/duckdb.md`, `plan/parquet.md`, `plan/redshift.md`, `plan/sqlalchemy.md`
+  `docs/tecnologias.md` (DuckDB, Parquet, Redshift, SQLAlchemy)
 - A DuckDB listing glob over S3 crosses `/` only with `**`: `*` does not, which gave a count of 0 beside boto3's 16
   in `probes/diagnose_aws.py` before the fix (2026-09-20). `probes/README.md`
 - `interrupt()` called from another thread stops a query stuck in a blocking operator in about
@@ -187,7 +187,7 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
 - `memory_limit` takes only a value with a unit: `'60%'` and `'60'` are refused with
   `Parser Error: Unknown unit for memory`, `'4.5GiB'` passes. The default is 80% of the memory
   DuckDB detects (14.3 GiB where `os.sysconf` reads 18.0 GiB; 6.1 GiB of the target's 7.6 GiB), so a
-  fraction of the machine is Python's arithmetic (2026-09-22). `plan/duckdb.md`
+  fraction of the machine is Python's arithmetic (2026-09-22). `docs/tecnologias.md` (DuckDB)
 - A `CREATE TEMP TABLE` belongs to the connection that created it: `con.cursor()` is a new
   connection and gets `Catalog Error` on it, a second `connect(path)` in the same process cannot
   see it either, and the same connection object used from another thread can; `duckdb_tables()`
@@ -205,7 +205,7 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   with `threads` at the 11 cores, 0.313 s against 0.079 s, their time in series, and 22 threads
   changed nothing. `range()` generates rows on one thread whatever `threads` says. The docs
   ("How to Tune Workloads") parallelize by 122,880-row row groups and advise 2 to 5 times the cores
-  for remote files, whose I/O is synchronous, one HTTP request per thread. `plan/duckdb.md`,
+  for remote files, whose I/O is synchronous, one HTTP request per thread. `docs/tecnologias.md` (DuckDB),
   `tests/proof_of_concept/test_concurrency.py`
 - DuckDB's Parquet reader prunes a row group by the footer maximum that pyarrow
   (`parquet-cpp-arrow 25.0.1`) and delta-rs (`parquet-rs 59.3.0`) write without the `NaN`, and loses
@@ -214,7 +214,7 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   duckdb/duckdb#25521 (open, `reproduced`, also `!=` losing and `<=` adding the row). DuckDB's own
   writer omits min and max of a group with `NaN`, and its native storage keeps `NaN` as the segment
   maximum; both answer 4. The documented deviation is from IEEE 754, not from Parquet: `NaN` equals
-  `NaN` and is greater than every float. `plan/POC.md`, `plan/delta.md`,
+  `NaN` and is greater than every float. `plan/POC.md`, `docs/tecnologias.md` (Delta Lake),
   `tests/proof_of_concept/test_duckdb.py`
 - DuckDB 1.5.5 has `enable_external_file_cache` on by default, `GLOBAL` in scope (a `SET` on the
   connection holds for its cursors), and `duckdb_external_file_cache()` lists what it holds: on the
@@ -248,7 +248,7 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   1,188 MB (from 191 MB), still 1,188 MB after `DROP TABLE`, and 208 MB after `close`; the external
   file cache held 1,042 entries and 271,906 bytes after reading that local file. `memory_limit`
   takes `'6771MiB'` and `'7516192768B'`, shown as `6.6 GiB` and `7.0 GiB`; `'768MiB'` shows as
-  `768.0 MiB`. `plan/duckdb.md`, `plan/POC.md`, `src/serialize_db/resources.py`
+  `768.0 MiB`. `docs/tecnologias.md` (DuckDB), `plan/POC.md`, `src/serialize_db/resources.py`
 
 - Threads against the machine (target, 2026-09-24, 16 vCPUs of 8 physical cores, external file
   cache off, partition 2026-06-30 of `cad_lancamentos`, 542 MB, 32,218,190 rows): materializing

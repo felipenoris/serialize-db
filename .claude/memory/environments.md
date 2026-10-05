@@ -249,8 +249,8 @@ and an empty `HOME`, 10 passed; on macOS after the glob fix of PR #12). `uv sync
 
 ## The environments of the measurements
 
-Each document dates its measurements and pins their versions in its opening lines: `plan/parquet.md`,
-`plan/duckdb.md` and `plan/sqlalchemy.md` on 2026-09-18, over 300,000 rows of `operacoes`
+Each section of `docs/tecnologias.md` dates its measurements and pins their versions in its opening
+lines: Parquet, DuckDB and SQLAlchemy on 2026-09-18, over 300,000 rows of `operacoes`
 (`poc_delta.sample_table`), the Redshift statements compiled only; `plan/estrategia.md` on 2026-09-19;
 the S3 proof of concept of 2026-09-19 (Python 3.13.15) in `plan/POC.md`. What they do not say: the
 local proof of concept ran on macOS arm64 through `uv run --with` in the scratchpad, with 11 DuckDB

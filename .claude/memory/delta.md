@@ -10,7 +10,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   PR 4732, column mapping on write is issue 3936), no identity columns and no symlink manifest, while
   its S3 conditional-put commits need no DynamoDB, which delta-spark still documents. Redshift `COPY`
   reads the raw files, so deletion vectors and column mapping stay off with any writer; DuckDB reads
-  through `delta-kernel-rs`, and delta-rs `main` pins the fork `buoyant_kernel`. `plan/delta.md`
+  through `delta-kernel-rs`, and delta-rs `main` pins the fork `buoyant_kernel`. `docs/tecnologias.md` (Delta Lake)
 - `create_write_transaction` does not refresh the `DeltaTable` object it is called on, and does not
   need it refreshed: three commits in a row on one object (delta-rs 1.6.4, local folder, one
   partition each, `mode="overwrite"` with `partition_filters`) left the object at version 0 with 0
@@ -33,17 +33,17 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
 - Two delta-rs writers on the same version: append plus append both commit; overwrite of the same
   month fails with `CommitFailedError`; overwrites of different months both commit. App transactions
   (`Transaction(app_id, version)`) are recorded but not enforced: a repeated write with the same
-  version was accepted. `plan/delta.md`
+  version was accepted. `docs/tecnologias.md` (Delta Lake)
 - `add`/`remove` paths are relative to the table folder: a copied folder opened at the same version
   with the same rows in delta-rs and DuckDB, history and time travel intact. Never register files
-  by absolute URI; Iceberg manifests store absolute paths. `plan/delta.md`
+  by absolute URI; Iceberg manifests store absolute paths. `docs/tecnologias.md` (Delta Lake)
 - deltalake 1.6.4 percent-encodes the partition value in the folder name (`p=a%3Ab` for `a:b`,
   `p=d%27agua` for `d'agua`, `p=a%C3%A7%C3%A3o` for `ação`) and the `add` path encodes the folder
   again (`p=a%253Ab`); a value of letters, digits, `_`, `.` and `-` comes out unchanged in both. The
   predicate `p = 'd'agua'` fails with `Unterminated string literal` (2026-09-23,
   `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`). This is
   why the partition value and the `execution_id` follow `[0-9A-Za-z][0-9A-Za-z_.-]*`.
-  `plan/delta.md`, `plan/PLAN-STAGE-6.md`
+  `docs/tecnologias.md` (Delta Lake), `plan/PLAN-STAGE-6.md`
 - Delta data files do not contain the partition column (it lives in the `add` action), so a
   partition key must derive from a column in the file for Redshift `COPY`; DuckLake keeps identity
   and source columns inside the files. `plan/estrategia.md`
@@ -63,13 +63,13 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `create_write_transaction(mode="overwrite", schema=new)` gave the same commit at a flat 600 MB.
   `schema_mode="overwrite"` with a `predicate` is accepted and switches the schema of the whole
   table, so the other months read the renamed column as null; the library refuses the combination.
-  `plan/delta.md`
+  `docs/tecnologias.md` (Delta Lake)
 - delta-rs log cleanup is automatic at checkpoint time and removes log files older than
   `delta.logRetentionDuration` (30 days by default): with `interval 0 days` version 0 became
   unreadable after five commits. `vacuum(keep_versions=[...])` preserves the files of chosen
   versions (database snapshots) while removing those of intermediate versions; `full=True` also
   lists orphan files. A deep copy of a version is `write_deltalake(destino,
-  DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader())`. `plan/delta.md`
+  DeltaTable(uri, version=v).to_pyarrow_dataset().scanner().to_reader())`. `docs/tecnologias.md` (Delta Lake)
 - The Delta table folder keeps every data file ever written until `vacuum`: after 20 commits, 20
   files on disk for 14 in the snapshot, and a raw `read_parquet` of the folder returned 330,000 rows
   too many; the `**` glob also reads the checkpoints in `_delta_log/`. Going back to Parquet folders
@@ -77,7 +77,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   keeps the schema of its write, so only readers that match by name fill the added columns) or
   rewriting with DuckDB `COPY (SELECT * FROM delta_scan(...)) TO ... (PARTITION_BY (mes))`, which
   gave one `data_0.parquet` per month with 11 threads and keeps the partition column out of the
-  files unless `WRITE_PARTITION_COLUMNS true`. `plan/delta.md`
+  files unless `WRITE_PARTITION_COLUMNS true`. `docs/tecnologias.md` (Delta Lake)
 - The writer's own `minValues`/`maxValues` are JSON numbers, so a wide `decimal` loses rows:
   `decimal(18,2)` holding `123456789012345.21` was written as `123456789012345.2`, and
   `WHERE valor = 123456789012345.21` returned 0 rows in delta-rs and in `delta_scan` with the row in
@@ -109,7 +109,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   the `NaN`, and `delta_scan` still loses the row by the row-group pruning of DuckDB's Parquet
   reader. `ColumnProperties(statistics_enabled="NONE")` in `WriterProperties(column_properties=...)`
   removes the column's min and max from the footer and the log (its `nullCount` too), and
-  `delta_scan` finds the row. `plan/POC.md`, `plan/delta.md`, `plan/PLAN-STAGE-3.md`,
+  `delta_scan` finds the row. `plan/POC.md`, `docs/tecnologias.md` (Delta Lake), `plan/PLAN-STAGE-3.md`,
   `tests/proof_of_concept/test_deltalake.py`
 - `writer_properties` applies to one `write_deltalake` call, so each partition written by
   `mode="overwrite", predicate=...` keeps or drops the float statistics on its own: a partition
@@ -217,7 +217,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   one-file partition, 0 for a partition with no file) and `totalFilesSkipped` the ones left.
   `serialize-db compact` prints `nada a juntar em <n> arquivo(s), nenhum commit` from them.
   `tests/proof_of_concept/test_deltalake.py::test_compact_packs_files_up_to_the_target_size`,
-  `plan/POC.md`, `plan/delta.md`
+  `plan/POC.md`, `docs/tecnologias.md` (Delta Lake)
 
 ## Performance measured
 
@@ -227,14 +227,14 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `delta_scan` aggregates in 0.3 s (0.77 s cold) against 0.06 s for `read_parquet` and 0.002 s on a
   materialized table, which took 0.29 s to build; 20 point queries took 6.0 s through `delta_scan`,
   3.1 s through `ATTACH ... PIN_SNAPSHOT`, 1.3 s through `read_parquet` and 0.013 s on a table.
-  Each `delta_scan` rereads the log: materialize every table queried more than once. `plan/delta.md`
+  Each `delta_scan` rereads the log: materialize every table queried more than once. `docs/tecnologias.md` (Delta Lake)
 
 ## DuckDB access to Delta
 
 - DuckDB `INSERT INTO` an attached Delta table works (commitInfo shows `UNKNOWN`) but writes the
   partition column inside the file, unlike delta-rs; mixing writers breaks positional `COPY`.
   `COPY ... (RETURN_STATS)` plus `AddAction` with stats gives files that both readers prune
-  (`Scanning Files: 0/12`). `plan/delta.md`
+  (`Scanning Files: 0/12`). `docs/tecnologias.md` (Delta Lake)
 - A Delta schema whose fields carry `parquet.field.id` metadata (what `DeltaSchema.from_arrow`
   keeps from an Arrow `PARQUET:field_id`) makes `delta_scan` read every column as null: for a
   DuckDB `COPY` file, a delta-rs file with the ids and one without, while delta-rs and
@@ -247,7 +247,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   beside the `IN` prunes to the range, and `EXPLAIN ANALYZE` of that form fails with
   `InternalException: ... total_files inconsistent!` while the query and a `CREATE TABLE AS` run.
   Read pruning through `CALL enable_logging('FileSystem')` and the `OPEN` messages of
-  `duckdb_logs` (2026-09-23, DuckDB 1.5.5). `plan/delta.md`, `plan/PLAN-STAGE-4.md`,
+  `duckdb_logs` (2026-09-23, DuckDB 1.5.5). `docs/tecnologias.md` (Delta Lake), `plan/PLAN-STAGE-4.md`,
   `tests/proof_of_concept/test_deltalake.py`
 
 ## The library's use of Delta
@@ -258,7 +258,7 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   at the environment root, written with `IfMatch`, reconstructible from `history()` only while the
   log lasts because `commitInfo` is not in checkpoints. The library stores no schema, file list or
   statistics; the DDL of an old snapshot comes from that version's Delta schema, not from the
-  current model. `plan/serialize-db.md`, `plan/delta.md`
+  current model. `plan/serialize-db.md`, `docs/tecnologias.md` (Delta Lake)
 
 - The archive copies instead of rewriting (2026-09-24, user decision): `deep_copy` creates the
   destination with `DeltaTable.create` from the version's own schema, name, description and
