@@ -433,7 +433,7 @@ def test_literal_binds_renders_a_bindparam_without_value_as_null(
 
     No ``LIKE``, no ``coalesce``, no ``VALUES`` de um ``INSERT`` e no ``text()`` o ``NULL`` sai
     calado, e o texto gerado filtraria ou gravaria nulo sem que ninguém percebesse. Por isso o
-    ``render`` da [etapa 2](../../plan/PLAN-STAGE-2.md) não se apoia no aviso e lê
+    ``render`` de ``serialize_db.sql`` não se apoia no aviso e lê
     ``compiled.binds`` (o teste seguinte).
     """
     operations = Operacao.__table__
@@ -468,7 +468,7 @@ def test_compiled_binds_marks_the_bindparam_without_value_as_required() -> None:
     """Sem ``literal_binds``, ``compiled.binds`` marca ``required`` todo ``bindparam`` sem valor, e
     um ``literal_column(":nome")`` no lugar dele atravessa ``literal_binds`` como texto.
 
-    São as duas peças do ``render`` da [etapa 2](../../plan/PLAN-STAGE-2.md): ``required`` diz quais
+    São as duas peças do ``render`` de ``serialize_db.sql``: ``required`` diz quais
     nós trocar, e ``replacement_traverse`` os troca numa cópia do statement.
     """
     operations = Operacao.__table__
@@ -514,7 +514,7 @@ def test_default_paramstyle_doubles_the_percent_in_literals() -> None:
     ``%`` dobram o ``%`` dos literais; ``paramstyle="named"`` não dobra.
 
     O texto dobrado é o comando que o DBAPI recebe e desdobra, e fora dele é SQL errado: por isso o
-    ``render`` da [etapa 2](../../plan/PLAN-STAGE-2.md) compila com ``paramstyle="named"``.
+    ``render`` de ``serialize_db.sql`` compila com ``paramstyle="named"``.
     """
     operations = Operacao.__table__
     query = sa.select(operations.c.id_operacao).where(
@@ -687,8 +687,8 @@ def test_three_part_name_needs_quoted_name_without_quotes() -> None:
     ``quoted_name(quote=False)``.
 
     O ``IdentifierPreparer`` cita qualquer identificador com caractere fora do permitido, e o ponto
-    é um deles: o esquema em texto simples vira um nome só, entre aspas. O motor Redshift da
-    [etapa 5](../../plan/PLAN-STAGE-5.md) roda ``USE`` no banco do datashare e cita
+    é um deles: o esquema em texto simples vira um nome só, entre aspas. O motor Redshift
+    (``serialize_db.engine.redshift``) roda ``USE`` no banco do datashare e cita
     ``esquema.tabela``; o nome em três partes serve a uma sessão aberta em outro banco, como a da
     Data API.
     """

@@ -731,8 +731,8 @@ def test_return_stats_leave_nan_out_and_bound_long_text(
 
     Transcrito por ``float``, o ``NaN`` ficaria fora do máximo registrado, e ``float("inf")``
     viraria ``Infinity`` no JSON do log
-    (``test_deltalake.py::test_nan_statistics_hide_rows_from_delta_scan``): ``register_files`` da
-    [etapa 3](../../plan/PLAN-STAGE-3.md) deixa fora do log o mínimo e o máximo não finitos e os das
+    (``test_deltalake.py::test_nan_statistics_hide_rows_from_delta_scan``): ``register_files`` de
+    ``serialize_db.delta`` deixa fora do log o mínimo e o máximo não finitos e os das
     colunas de ``columns_without_min_max`` (issue #59). No texto, o máximo truncado continua acima
     de todo valor do arquivo, e a poda não perde linha.
     """

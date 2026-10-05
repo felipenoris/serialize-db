@@ -50,9 +50,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   (transactional there), `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE` and `COPY` with no
   `COMPUPDATE` clause (the Parquet `COPY` rejects it; the columns' encoding comes from the DDL or
   `ENCODE AUTO`, and an `ANALYZE COMPRESSION` on a real sample is what settles it,
-  `plan/PLAN-STAGE-5.md`), writes one database per transaction and creates no views. `svv_all_schemas`,
-  `svv_all_tables` and `svv_redshift_databases` cross databases; `has_schema_privilege` and
-  `svv_table_info` see only the session's. `COPY ... MANIFEST` and
+  `plan/PLAN-STAGE-5.md`), writes one database per transaction and creates no views.
+  `svv_all_schemas`, `svv_all_tables` and `svv_redshift_databases` cross databases;
+  `has_schema_privilege` and `svv_table_info` see only the session's. `COPY ... MANIFEST` and
   `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` passed there on 2026-09-21 over 500,000 rows (4.6 s
   and 0.8 s), and the session's first statement cost 10.8 s. The `UNLOAD` writes `TIMESTAMP` as `INT96` and `DECIMAL(18,2)` as
   `FIXED_LEN_BYTE_ARRAY(8)`, where the library writes `INT64` for both; every column comes out
