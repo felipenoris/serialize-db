@@ -1,6 +1,6 @@
 # Redshift
 
-Read before code on `engine.redshift`, the publication of stage 8, the Redshift suite or `probes/redshift.py`; the scripts that fixed the target are in the Claude project's library, `/mnt/project-files/target_env_examples/`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift suite or `probes/redshift.py`; the scripts that fixed the target are in the Claude project's library, `/mnt/project-files/target_env_examples/`. A fact that a file of the repository details ends with that file, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## The target
 
@@ -17,7 +17,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   probe uses 30 s over system views, the suite and the library connect without one because a `COPY`
   outlives any read timeout; `ssl=True` is the default. The driver's internal IAM (`iam=True`) and
   `GetClusterCredentials` are out: nobody ran them in the target, which has no cluster.
-  `/mnt/project-files/target_env_examples/`, `docs/tecnologias.md` (Redshift), `plan/POC.md`
+  `/mnt/project-files/target_env_examples/`, `docs/tecnologias.md` (Redshift)
 - The target's Redshift, read on 2026-09-20 (the reports left `plan/readings/` on 2026-09-23 and
   stay in git history): workgroup `controladoria-wg`,
   namespace `controladoria-ns`, account `<conta>`, base capacity 8, no provisioned cluster; the
@@ -29,9 +29,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `has_database_privilege(dev, CREATE)` is false and `TEMP` true, so the execution sandbox is either
   a temporary table or the datashare itself, and no external schema reads the Delta in place:
   Redshift loads it only through `COPY ... MANIFEST`, as the diagnosis of 2026-09-13 in PR #2 had
-  found (`plan/estrategia.md`). `stv_slices` and `stl_load_errors` are denied
+  found. `stv_slices` and `stl_load_errors` are denied
   to a regular user (42501) while `sys_load_error_detail` answers; `pg_settings` on serverless lists
-  neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns. `plan/POC.md`,
+  neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns.
   `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The datashare, COPY and UNLOAD
@@ -49,8 +49,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `CREATE`/`DROP`/`SHOW TABLE`, CTAS, `ALTER TABLE ADD`/`DROP COLUMN`, `RENAME`, `TRUNCATE`
   (transactional there), `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE` and `COPY` with no
   `COMPUPDATE` clause (the Parquet `COPY` rejects it; the columns' encoding comes from the DDL or
-  `ENCODE AUTO`, and an `ANALYZE COMPRESSION` on a real sample is what settles it,
-  `plan/PLAN-STAGE-5.md`), writes one database per transaction and creates no views.
+  `ENCODE AUTO`, and an `ANALYZE COMPRESSION` on a real sample is what settles it), writes one
+  database per transaction and creates no views.
   `svv_all_schemas`, `svv_all_tables` and `svv_redshift_databases` cross databases;
   `has_schema_privilege` and `svv_table_info` see only the session's. `COPY ... MANIFEST` and
   `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` passed there on 2026-09-21 over 500,000 rows (4.6 s
@@ -59,7 +59,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `optional`, min and max are present except on the `INT96`, and it fragments by slice (32 files for
   500,000 rows, which `PARALLEL OFF` or compaction undoes). An `INT96` file registered in a
   `timestamp_ntz` table reads back as `timestamp[us]` in delta-rs and in `delta_scan`, values
-  intact. `plan/POC.md`, `docs/tecnologias.md` (Redshift)
+  intact. `docs/tecnologias.md` (Redshift)
 - The `UNLOAD` read on 2026-09-23, twice: the `select` is a literal that treats the backslash as an
   escape (the docs escape a quote as `\'`), so the text goes in with the backslash and the quote
   doubled; with only the quote doubled, a literal with a backslash reached the inner `select`
@@ -73,7 +73,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `schema.cast` turns into `string`. In a row group with `NaN`, the footer's min and max of a
   `DOUBLE PRECISION` leave the `NaN` out, as pyarrow does, and DuckDB's `read_parquet` pruned the
   group (0 rows for `valor > 3`), wherever the `NaN` sat; with the infinities, the footer holds
-  `-inf` and `inf`. `plan/POC.md`, `docs/tecnologias.md` (Redshift), `plan/PLAN-STAGE-5.md`
+  `-inf` and `inf`. `docs/tecnologias.md` (Redshift)
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
@@ -81,7 +81,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   16,384,000 for `SUPER`, -1 elsewhere; `sum` and `avg` of `DECIMAL(18, 2)` come out
   `NUMERIC(38, 2)`, a text literal `VARCHAR`, `1.5` `NUMERIC(2, 1)`; `SUPER` reaches Python as
   `str`. A 10-row load took 0.91 s and 0.97 s by `COPY` against 0.53 s and 0.55 s by a multi-row
-  `INSERT` (best of three). `plan/POC.md`, `plan/PLAN-STAGE-5.md`
+  `INSERT` (best of three).
 
 ## The driver
 
@@ -95,7 +95,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   with 25P02 (target, 2026-09-21). The suite and the library set autocommit right after `connect`,
   before the `USE`. `select version()` comes back with a trailing NUL byte, `current_schema()` is
   null after the `USE`, and `svv_redshift_databases` reports `datalake_rw_shared` as `shared` with
-  isolation `UNKNOWN` and `dev` as `local` with `Snapshot Isolation`. `plan/POC.md`
+  isolation `UNKNOWN` and `dev` as `local` with `Snapshot Isolation`.
 - `redshift_connector` 2.1.16 keeps a named prepared statement per SQL text (`Connection.execute`,
   key `(operation, params)`, cache per paramstyle and pid), reuses it with `Bind` and `Execute` and
   no new `Parse`, and closes and clears the cache only when a `CommandComplete` starts with `ALTER`,
@@ -107,20 +107,20 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   makes the driver use the unnamed statement, parsed right before every execute, and cache nothing
   (`get_statement_name_bin`; the cache insertion runs only above zero). The suite and the library
   connect with it; `connect_redshift(statement_cache=True)` keeps the driver default for the
-  reading that reproduces the error. `docs/tecnologias.md` (Redshift), `plan/POC.md`
+  reading that reproduces the error. `docs/tecnologias.md` (Redshift)
 - The driver materializes a result in `execute`: `EXECUTE_MSG` asks the portal for all rows,
   `handle_messages` returns only at `READY_FOR_QUERY`, each `DATA_ROW` lands in
   `cursor._cached_rows`, and `fetchmany` is `islice` over `Cursor.__next__`, which pops that deque.
   `stream` on Redshift always goes through `UNLOAD` and `query` through the cursor (user decision of
   2026-09-23); the suite read 5 rows in the queue before the first `fetchmany` (2026-09-21, 13:35
-  and 13:39), now an assertion. `docs/tecnologias.md` (Redshift), `plan/PLAN-STAGE-5.md`
+  and 13:39), now an assertion. `docs/tecnologias.md` (Redshift)
 - `cursor.description` of `redshift_connector` 2.1.16 is `(name, oid, None, None, None, None,
   None)` per column (`Cursor._getDescription`); the `type_modifier` of each column is in
   `cursor.ps["row_desc"]`, stored by `Connection.handle_ROW_DESCRIPTION`, and the driver itself
   decodes the binary `NUMERIC` with scale `(type_modifier - 4) & 0xFFFF`
   (`Cursor.truncated_row_desc`); precision is `((type_modifier - 4) >> 16) & 0xFFFF`. `RedshiftOID`
   lists `REAL` 700, `BPCHAR` 1042, `TEXT` 25, `UNKNOWN` 705 and `SUPER` 4000, which the driver reads
-  as text (code reading of 2026-09-23). `docs/tecnologias.md` (Redshift), `plan/PLAN-STAGE-5.md`
+  as text (code reading of 2026-09-23). `docs/tecnologias.md` (Redshift)
 - The literal text of the `stream` by `UNLOAD` (local probe of 2026-09-23): the
   `RedshiftDialect_redshift_connector` default `paramstyle` (`format`) doubles `%` inside literals
   and `named` does not, and `redshift_connector` sends a statement executed without parameters
@@ -132,16 +132,16 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   types each value. The `UNLOAD` literal also treats the backslash as an escape, so the `select`
   goes in with the backslash and the quote doubled again (target reading of 2026-09-23, below);
   the six cases of `test_stream_by_unload_with_literal_values` wait for the next run with that
-  escape. `plan/PLAN-STAGE-5.md`, `plan/POC.md`
+  escape.
 - The stage 5 readings of `tests/proof_of_concept/test_redshift.py` (seven tests after
   `test_parallel_copy_and_unload_on_two_connections`) ran in the target on 2026-09-23, twice; what
-  is left for the next run is in `.claude/memory/OPEN_QUESTIONS.md`. `plan/POC.md`
+  is left for the next run is in `.claude/memory/OPEN_QUESTIONS.md`.
 - The stage 1 `ddl` and the stage 4 `audit_sql` cite tables without a schema, so on Redshift the
   engine relies on `SET search_path TO <schema>` after `USE`, which passed on the datashare schema
   on 2026-09-23; one refused measure fails the whole rows check, so
   `test_audit_sql_under_search_path_and_nan_comparison` also runs each measure alone beside the
   expected counters, and the client model's texts on empty tables.
-  `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
+  `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The reading of 2026-09-21
 
@@ -155,12 +155,12 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `false` without error in the suite of 2026-09-21 (one reading), in the schema where `CREATE TABLE`
   works: the function does not prove the privilege on a datashare schema, the `CREATE` does;
   `svv_table_info` after the `USE` answered `permission denied for relation svv_table_info` (42501)
-  to the project's role (probe `RS-8`, 2026-09-23), so stage 8 needs another source for the assigned
-  distribution (`plan/PLAN-STAGE-8.md`). Other
+  to the project's role (probe `RS-8`, 2026-09-23), so the publication needs another source for the
+  assigned distribution (the `EXPLAIN` of a typical join, `.claude/memory/OPEN_QUESTIONS.md`). Other
   readings: `enable_case_sensitive_identifier` off, `datestyle` `ISO, MDY`, `statement_timeout` 0,
   `wlm_query_slot_count` 1, `sys_load_error_detail` answered 0 in 2.4 s; the Data API `select 1` stayed
   `PICKED` for 30 s (23 ms the day before); `iam.simulate_principal_policy` times out in the target
-  (no IAM endpoint), so the first `COPY` proves the permission. `plan/POC.md`, `plan/PLAN-STAGE-5.md`
+  (no IAM endpoint), so the first `COPY` proves the permission.
 - Second suite run in the target (2026-09-21 11:28 UTC, 7 passed, 4 failed; report not kept, the
   clean runs repeat its readings): `information_schema.columns` is empty for
   the datashare schema after the `USE` (local database only, like `has_schema_privilege`, which
@@ -171,7 +171,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   slash, and delta-rs 1.6.4 stores and returns `mes=2026-01/...` unencoded, also for an `AddAction`
   registered with the raw path. The verbose `UNLOAD` manifest's `schema.elements` lists the
   partition column (`mes`, `character varying`, `max_length` 7) that the files do not have. The
-  Data API answered in 444 ms: the 30 s `PICKED` was transient. `plan/POC.md`, `docs/tecnologias.md` (Redshift)
+  Data API answered in 444 ms: the 30 s `PICKED` was transient. `docs/tecnologias.md` (Redshift)
 - Third and fourth runs (2026-09-21 12:08 and 12:10 UTC, 10 passed and 1 failed each; reports not
   kept, the clean runs repeat their readings; identical reading by reading): `COPY ... FORMAT AS PARQUET MANIFEST` loads `DECIMAL(18,2)` as `INT64` and
   `timestamp_ntz` as `INT64` µs (sum and min checked); a five-column file into a six-column table
@@ -188,10 +188,10 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   on S3 is not empty`, a new subprefix under a folder with files accepted), so stage 5 unloads
   without `PARTITION BY` to a prefix new per partition and per attempt,
   `<uri>/<coluna>=<valor>/<execution_id>_<uuid>/` (user decision of 2026-09-23); two parallel `COPY` 4.5 s and 3.6 s, two parallel `UNLOAD` 1.9 s
-  and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `plan/POC.md`
-- Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs stage 0
-  required; the two JSON reports left `plan/readings/` on 2026-09-23, in git history, and the
-  folder then held the 2026-09-23 runs): with
+  and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times.
+- Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs the proof
+  of concept required; the two JSON reports left `plan/readings/` on 2026-09-23, in git history, and
+  the folder then held the 2026-09-23 runs): with
   `max_prepared_statements=0` the same `select count(*)` passes before and after a `TRUNCATE`; with
   the driver's cache the repeat after the `TRUNCATE` and a second repeat both get 34510 (the stale
   entry stays), the repeat after an `ALTER TABLE ... ADD COLUMN` passes, and the same sequence on a
@@ -205,7 +205,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   it (`json_typeof` `object`, `json_size` 80901). Data API 270 ms and 240 ms; parallel `COPY` 4.3 s
   and 3.8 s, `UNLOAD` 1.6 s and 1.5 s; `has_schema_privilege` `false` six times. Proposals awaiting
   the user: `FILLRECORD` on every library `COPY`, and the 65,535-byte ceiling of the JSON field
-  checked by the audit. `plan/POC.md`, `plan/PLAN-STAGE-8.md`
+  checked by the audit.
 
 ## Sessions and temporary tables
 
@@ -222,7 +222,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
 - The Redshift engine keeps one session per execution under a `threading.RLock` (user decision of
   2026-09-22), the `exec_<id>_*` tables stay permanent in the datashare schema, and the user
   reverted the temporary-table proposal the same day; a temporary table the pipeline creates in
-  the session is lost when the engine reconnects. `plan/PLAN-STAGE-5.md`
+  the session is lost when the engine reconnects.
 - Concurrent transactions, from the AWS docs read on 2026-09-23: a transaction's snapshot starts at
   its first `SELECT`, DML, `CREATE`/`DROP`/`ALTER`/`TRUNCATE TABLE`, not at `BEGIN`; `SNAPSHOT` is
   the default level of new clusters and workgroups, and under it two `UPDATE`s of distinct rows of
@@ -245,12 +245,12 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   rows. `stv_db_isolation_level` is denied (42501). The stage 8 transaction reads the control row
   first and writes it last, by `INSERT` or by the `UPDATE` conditioned on the version read, and the
   unpublish flow deletes it with the published table (user decision of 2026-09-23,
-  `decisions.md`). `docs/tecnologias.md` (Redshift), `plan/POC.md`, `plan/PLAN-STAGE-8.md`
+  `decisions.md`). `docs/tecnologias.md` (Redshift)
 - An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
   credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two
   parallel `COPY`s, each opening its connection inside the task, took 4.3 s and 3.8 s in the target
-  on 2026-09-21. `plan/PLAN-STAGE-5.md`
+  on 2026-09-21.
 
 - Redshift's `COUNT` has no `FILTER (WHERE ...)` clause (`COUNT( * | expression )` in the docs, read
   2026-09-23), so the audit counts with `count(CASE WHEN <defect> THEN 1 END)` on both engines.
@@ -264,8 +264,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   (scale float to decimal)`; the `CAST` of a constant `NaN` to `NUMERIC(38, 6)` is `22P02`, and a
   `sum` with a `NaN` is `nan`. The text now compiles `is_finite` as `(x > '-Infinity'::float8 AND
   x < 'Infinity'::float8)`, false for `NaN` under both rules, and `json_valid` as `true`, because
-  the JSON column is `SUPER`; the new text waits for the next suite run. `plan/PLAN-STAGE-4.md`,
-  `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  the JSON column is `SUPER`; the new text waits for the next suite run.
+  `.claude/memory/OPEN_QUESTIONS.md`
 - The suite runs of 2026-09-23 at 22:56 and 23:01 UTC (30 passed each, readings equal but ids and
   times): the stream with literals gave the same rows by the three paths in the six cases, the
   backslash doubled in the `UNLOAD` literal; the empty `UNLOAD` passed without manifest or object
@@ -283,7 +283,6 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `NaN` row. The `redshift.py` run of 22:49 got no row from `select count(*) from
   sys_load_error_detail where start_time > ...` (12.8 s) and stopped the session section on
   `IndexError` before `RS-5`, `RS-8`, `RS-12`, `RS-13`, `RS-16`, `RS-17` and `RS-19`.
-  `plan/POC.md`, `plan/PLAN-STAGE-8.md`, `plan/PLAN-STAGE-4.md`
 
 - The suite runs of 2026-09-24 at 01:46 and 01:49 UTC (30 passed each): `naofinito_valor` counted
   2 of 2 by `count(x) - count(CASE WHEN finite ...)`, every measure matched the expected, and on
@@ -292,7 +291,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `NaN`; both are assertions now, the row only in the target, because the stand-in's DuckDB reads
   `NaN > -inf` as true. `redshift.py` at 01:41 read the whole session section: 25 load errors in
   30 days in `sys_load_error_detail` (1.5 s), no external schema, two tables in the schema, none
-  with the library prefix. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+  with the library prefix.
 
 ## The engine and the publication as implemented (2026-09-24)
 
@@ -305,8 +304,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   without time zone`, `double precision`, `super` (the publication compares by type family, so
   `varchar`, `decimal` and `timestamp` also match); the manifest of an `UNLOAD` to a prefix with
   `=` keeps the `=` unencoded and names the `PARALLEL OFF` file `000.parquet` (target reading of
-  2026-09-24, `redshift.unload_hive.files`). `plan/PLAN-STAGE-5.md`,
-  `.claude/memory/OPEN_QUESTIONS.md`
+  2026-09-24, `redshift.unload_hive.files`). `.claude/memory/OPEN_QUESTIONS.md`
 - The first target run of the engine suite (2026-09-24, 05:10 and 05:12 UTC) passed five of the
   six cases: `COPY ... MANIFEST FILLRECORD` of a delta-rs file, the `UNLOAD` stream equal to the
   cursor `query`, the loader's `CREATE TABLE` rolled back by a failed `COPY`, the audit with the
@@ -317,7 +315,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   and the stand-in describes `current_database()` with OID 19. Its value stays `dev` after the
   `USE` (reading of 2026-09-21, recalled by the user on 2026-09-24): the test records it and
   never asserts it. The publication suite did not run:
-  the target's `SERIALIZE_DB_TEST_LOCAL_ROOT` folder was missing. `plan/POC.md`
+  the target's `SERIALIZE_DB_TEST_LOCAL_ROOT` folder was missing.
 - The battery of 2026-09-24 at 12:38 (the folder created) passed the six engine cases (13:01,
   13:03) and the eight publication cases (13:05, 13:08) twice each. Readings: a missing relation
   answers SQLSTATE `XX000` with `Relation <name> does not exist in the database.`, not `42P01`
@@ -330,7 +328,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `ExecutionConflict` carrying the `1023`; a failed `COPY` is a `ProgrammingError` with nothing
   published; two published tables at `AUTO` join with `DS_DIST_ALL_NONE`; the `UNLOAD` file's
   `SUPER` column registered by `export_partition` reads as `VARCHAR` text through `delta_scan`; a
-  10-row `load` took 1.66 s to 2.06 s. `plan/POC.md`, `/mnt/project-files/readings/`
+  10-row `load` took 1.66 s to 2.06 s. `/mnt/project-files/readings/`
 - The publication of the whole base (2026-09-24, the 16:51 battery, from `main` with #73):
   `publish --init` created `sbx_aco_decon.serialize_db_publications`, `--tables cad_contas`
   published version 1, `--max-workers 4` skipped it ("a versão 1 já está publicada") and
@@ -339,7 +337,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `--status` read the 12 tables as `prod_<table>` with published equal to current and no pending
   partition; the CLI printed no duration then, so nothing of the publication's time was read;
   since the user's decision of the same day each published table's log line carries the
-  partitions, the time and the process's peak RSS. `plan/POC.md`
+  partitions, the time and the process's peak RSS.
 - The publication of the whole base by channel (2026-09-26, 8 vCPUs, the root loaded that day):
   `publish --init` created the control table; `snapshot --name carga-2026-09-25` (12 tables,
   `cad_lancamentos` at version 5) and `channel --name default --snapshot carga-2026-09-25`;
@@ -352,26 +350,24 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   second, and the peak does not. `--status` read the 12 `prd_<table>` with published equal to
   current. `--channel current` and `--snapshot carga-2026-09-25 --tables cad_contas` answered
   `a versão <n> já está publicada` for every table, because the snapshot is the current version:
-  a revert over the base needs a commit after the snapshot. `plan/POC.md`,
-  `plan/PLAN-STAGE-10.md`
+  a revert over the base needs a commit after the snapshot.
 - The whole base published again by channel (2026-09-27, 8 vCPUs, the same base), the first time
   with the credentials clause built for each `COPY`: `--init` created the control table again;
   `cad_contas` 3.4 s at 249 MB, the unpartitioned tables 3.4 s to 4.0 s, `cad_contratos` 37.9 s,
   `cad_operacoes` 60.5 s, `rel_contrato_operacao` 66.1 s and `cad_lancamentos` 328.5 s at 270 MB,
   11% to 21% slower than on 2026-09-26 with the cause unmeasured (the credential read takes under
   0.05 s and `cad_lancamentos` runs five `COPY`). The publication suite passed its 8 cases twice on
-  the same code. `plan/POC.md`, `plan/PLAN-STAGE-8.md`
+  the same code.
 - A positional `COPY` cannot load a subset of a file's columns (the column list must match the
   file's count, reading of 2026-09-21), so the audit's staging of the pinned version carries every
   contract column and is the same `exec_<id>_<tabela>_versao_<versão>` as `pinned_delta()`, loaded
   once per execution and version, and only when a check that cites it runs. The stream's schema
   comes from the `row_desc` of `select * from (<texto>) as t limit 0`, and each batch of the
   `UNLOAD` file is cast to it (`INT96` coerced to microseconds, `SUPER` as text).
-  `plan/PLAN-STAGE-5.md`
 - The appender of a table with a JSON column loads through a `CREATE TEMP TABLE` staging with the
   JSON in `VARCHAR(65535)` and `INSERT ... JSON_PARSE`, because the Parquet `COPY` into `SUPER`
   needs `SERIALIZETOJSON`, never read on a small string; the export serializes the column with
-  `JSON_SERIALIZE` so the `UNLOAD` file carries text. `plan/PLAN-STAGE-5.md`
+  `JSON_SERIALIZE` so the `UNLOAD` file carries text.
 - The review of 2026-09-28 fixed on the stand-in: the appender's `COPY`, direct and through the
   `_carga` staging, lists the file's columns, the first batch's (`COPY <alvo> ("a", "b") FROM ...
   FORMAT AS PARQUET FILLRECORD`), because the positional Parquet `COPY` put a nullable middle column
@@ -386,7 +382,6 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   transaction: an `InterfaceError` at `COMMIT` rises with the outcome unknown, where the old code
   reconnected and repeated `COMMIT` outside a transaction, which returned success. A second
   `RedshiftAppender.close` does nothing (it ran another `COPY` of the deleted file).
-  `plan/PLAN-STAGE-5.md`, `plan/POC.md`
 - The user's decision of 2026-09-28 extended the column list to every `COPY` from Delta (`ingest`,
   `pinned_delta`, publication): `delta.copy_manifest` reads each file's footer once, in series,
   groups the files by their column-name tuple and writes `1.manifest`, `2.manifest` in a folder,
@@ -397,7 +392,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `redshift` cases of `tests/test_engine_redshift.py` and `tests/test_publication.py` read the list
   with `FILLRECORD` passing in the target on 2026-09-28 at 20:14 and at 23:09, and reading the
   footers cost the base's publication 0.5% to 2.0% per partitioned table on 2026-09-29, with one
-  file per partition. `plan/PLAN-STAGE-3.md`
+  file per partition.
 - A Parquet `COPY` without `MANIFEST` reads its path as a key prefix, and a prefix that matches no
   object loaded nothing without error in the target on 2026-09-28 (inferred from
   `test_appender_copies_the_file_at_close` failing with `DID NOT RAISE` four times; until PR #104
@@ -414,18 +409,18 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   23:09, the missing mandatory file failed the `COPY` with `Spectrum Scan Error: File not found` and
   SQLSTATE `XX000` in the four runs, loading no row (`redshift.engine.copy_missing_mandatory_file`);
   the stand-in gives the same message and SQLSTATE since the user's decision of 2026-09-29
-  (`decisions.md`), and the test still only records it. `plan/POC.md`, `plan/PLAN-STAGE-5.md`
+  (`decisions.md`), and the test still only records it.
 - The Redshift audit's refused ingest printed in the target on 2026-09-28 as `Cannot insert a NULL
   value into column valor` (code 8007) and `Invalid input` (code 8001, `JSON_PARSE() error:
   End-of-input inside object or array: {`), both `XX000`, with the driver's whole dict, the
   server's source path included. `RS-12` counted 85 load errors in 30 days that day (no row on
-  2026-09-26 and 2026-09-27, 25 on 2026-09-24). `plan/POC.md`
+  2026-09-26 and 2026-09-27, 25 on 2026-09-24).
 - The stand-in maps DuckDB's `TransactionContext Error: Conflict on tuple deletion!` to the
   `1023` message, catalog `does not exist` to `XX000` with the target's `Relation <name> does not
   exist in the database.` (since 2026-09-24; `42P01` before) and `already exists` to `42P07`, and lists
   `svv_all_columns` from the DDL it remembers, in Redshift's spelling; the concurrent publication
   test pauses every connection of the second publication after its control-row read through the
-  `driver_connect` seam. `plan/POC.md`, `tests/emulator.py`
+  `driver_connect` seam. `tests/emulator.py`
 - A sandbox table outlived its run in the target: the `svv_all_tables` listing `RS-8` prints showed
   on 2026-09-29 at 13:31 `exec_poc_faa78dd7_cad_append_0` among 17 tables, where the listings of
   2026-09-27 and 2026-09-28 held only `teste` and `teste3`, and `RS-19` resolved it by name after
@@ -454,7 +449,6 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   the stand-in, the probe run with `-o log_cli=true --log-cli-level=WARNING` dropped every table
   without a warning. The schema also keeps the base publication of 2026-09-29 (the 12 `prd_*` tables
   and `serialize_db_publications`), so `redshift.engine.control_table_present` read `True` at 13:31.
-  `plan/POC.md`, `plan/PLAN-STAGE-5.md`
 - `redshift_connector` 2.1.17 does not mark a connection when an exception leaves
   `Connection.handle_messages` in the middle of a response, and each later command on it reads the
   previous command's response, without error (2026-09-29, a fake PostgreSQL wire server in the
@@ -463,12 +457,11 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `SELECT` waited for the slow one and returned `()`, a `DROP TABLE IF EXISTS` returned on its own
   `Parse` response with its execution response unread, and the server ran every command in order and
   got the `close`'s `Terminate` after the last. The engine reuses the connection in `_run`, and the
-  user decided on 2026-09-29 to leave it so (`decisions.md`). `plan/POC.md`
+  user decided on 2026-09-29 to leave it so (`decisions.md`).
 - The reconnect of `execute` repeats a command the server may have applied: the driver's
   `InterfaceError` on a closed socket says nothing about the command's outcome, and on the
   stand-in a `COPY` or `INSERT` passed to the server before the drop ran twice (240 rows of a
   120-row partition, 2026-10-04). Since 2026-10-04 `_copy_partition` runs each partition's
   `DELETE`, `COPY` and `INSERT` in `transaction()`, where the drop rises as `InterfaceError`
   after the `ROLLBACK` and the server discards the transaction; the appender already loaded
-  inside one, and the publication's `_Connection` never retries. `plan/PLAN-STAGE-5.md`,
-  `plan/POC.md`
+  inside one, and the publication's `_Connection` never retries.

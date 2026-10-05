@@ -5,9 +5,9 @@ e as variáveis da dica que autoriza a suíte.
 O ``USE`` corre com o autocommit já ligado: com ele desligado, o ``redshift_connector`` abre uma
 transação antes do primeiro comando, e o primeiro erro do servidor aborta a sessão inteira. A
 conexão vai com ``max_prepared_statements=0``, porque o datashare recusa com ``34510`` o prepared
-statement que o driver reaproveita depois de um ``TRUNCATE`` (``plan/POC.md``). Os testes trocam o
-``redshift_connector`` por um módulo fabricado que registra os argumentos da conexão e, a cada
-comando, o estado do autocommit no momento.
+statement que o driver reaproveita depois de um ``TRUNCATE`` (leituras de 2026-09-21). Os testes
+trocam o ``redshift_connector`` por um módulo fabricado que registra os argumentos da conexão e, a
+cada comando, o estado do autocommit no momento.
 """
 
 from __future__ import annotations

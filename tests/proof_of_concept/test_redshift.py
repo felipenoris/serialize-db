@@ -1,4 +1,4 @@
-"""Prova de conceito no Redshift: os itens de ``plan/PLAN-STAGE-0.md`` que esperam uma conexão.
+"""Prova de conceito no Redshift: o que a biblioteca pede ao Redshift, provado numa conexão.
 
 A suíte cria tabelas ``serialize_db_poc_<id>_*`` no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA``
 e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``; sem uma das duas é pulada, e com elas a falta de
@@ -16,15 +16,14 @@ arquivos gravados pelo delta-rs (o ``DECIMAL`` em ``INT64``, o ``timestamp_ntz``
 e o ``FILLRECORD``), o ``VARCHAR`` excedido, o ``SUPER``, o ``UNLOAD ... PARTITION BY`` registrado
 no Delta e lido pelo DuckDB, a Data API pelo ciclo de ``target_env_examples/redshift_data_api.py``,
 e o ``COPY`` e o ``UNLOAD`` de duas tabelas em paralelo, uma conexão por tabela, o caminho de
-``publish_redshift`` da etapa 8. As leituras que as decisões da etapa 5 de 2026-09-23 esperam vêm no
+``publish_redshift``. As leituras que o motor Redshift pediu em 2026-09-23 vêm no
 fim: o ``UNLOAD`` sem ``PARTITION BY`` para a pasta Hive, o ``stream`` por ``UNLOAD`` com os valores
 como literais e os seus casos de borda, o ``row_desc`` de cada tipo, o custo de uma carga pequena
-por ``COPY``, o rodapé do ``UNLOAD`` com ``NaN`` (issue #59), o texto da auditoria da etapa 4 sob
-``search_path`` no esquema do datashare, com a comparação do ``NaN``, e, para a etapa 8, o
+por ``COPY``, o rodapé do ``UNLOAD`` com ``NaN`` (issue #59), o texto da auditoria sob
+``search_path`` no esquema do datashare, com a comparação do ``NaN``, e, para a publicação, o
 aumento de ``VARCHAR(n)`` por ``ALTER COLUMN ... TYPE`` e o ``EXPLAIN`` de um join no datashare. Os
 resultados que a documentação não fixa vão para o relatório da sessão; os que duas execuções
-limpas no ambiente alvo leram iguais são asserções. O que cada execução no ambiente alvo leu está
-em ``plan/POC.md``.
+limpas no ambiente alvo leram iguais são asserções.
 """
 
 from __future__ import annotations
@@ -75,8 +74,8 @@ from serialize_db.engine import redshift
 pytestmark = [pytest.mark.redshift, pytest.mark.s3]
 
 REDSHIFT = RedshiftDialect_redshift_connector()
-# O compilador do stream e do query da etapa 5: com paramstyle "named", o % dos literais não sai
-# dobrado, e o padrão "format" o dobra (sonda local de 2026-09-23, plan/POC.md).
+# O compilador do stream e do query do motor Redshift: com paramstyle "named", o % dos literais
+# não sai dobrado, e o padrão "format" o dobra (sonda local de 2026-09-23).
 REDSHIFT_NAMED = RedshiftDialect_redshift_connector(paramstyle="named")
 
 # Os erros que uma leitura registra em vez de reprovar: os do servidor, pelo driver, e os dos
@@ -264,8 +263,8 @@ def test_session_and_named_parameters(
     cursor.execute("select :mes as mes", {"mes": "2026-08"})
     assert cursor.fetchone()[0] == "2026-08"
 
-    # has_schema_privilege responde false pelo esquema do datashare depois do USE (leitura RS-5,
-    # plan/POC.md): fica como leitura, e a prova do privilégio é o CREATE TABLE do ida e volta.
+    # has_schema_privilege responde false pelo esquema do datashare depois do USE (leitura RS-5):
+    # fica como leitura, e a prova do privilégio é o CREATE TABLE do ida e volta.
     privilege = "select has_schema_privilege(%s, 'CREATE')"
     record(
         "redshift.has_schema_privilege_create",
@@ -322,7 +321,7 @@ def test_schema_location_and_use_of_the_share_database(
 
     # 0. O USE de connect_redshift faz o nome em duas partes resolver no banco do datashare, e o
     # passo 4 é a prova. current_database() continua a responder o banco da conexão depois do USE
-    # (ambiente alvo, 2026-09-21, plan/POC.md), então o valor é leitura, não asserção.
+    # (ambiente alvo, 2026-09-21), então o valor é leitura, não asserção.
     record("redshift.current_database", session.execute("select current_database()")[0][0])
 
     # 1. Os bancos que a sessão enxerga: o tipo diz local ou shared, e o isolamento precisa ser de
@@ -500,7 +499,7 @@ def test_copy_column_list_and_fillrecord(
             results[label] = f"ok: {loaded} linhas, canal nulo em {nulls}"
             record(f"redshift.copy.{label}", results[label])
 
-    # Lido igual em 2026-09-21 às 13:35 e às 13:39 (plan/POC.md): o posicional reprova por contagem
+    # Lido igual em 2026-09-21 às 13:35 e às 13:39: o posicional reprova por contagem
     # de colunas (Spectrum Scan Error 15007, Unmatched number of columns), e a lista de colunas e o
     # FILLRECORD carregam as 100 linhas com a coluna nova nula.
     assert results["positional"].startswith("ProgrammingError"), results
@@ -520,7 +519,7 @@ def test_repeated_statement_after_truncate_and_the_driver_cache(
     repetição guardada depois de um ``TRUNCATE`` com ``[Data Sharing] Error Code 34510: Concurrent
     DDL committed on <tabela> between Prepare and Execute``, e por isso a conexão da sessão vai com
     ``max_prepared_statements=0``. A segunda conexão deste teste mantém o padrão do driver; no
-    ambiente alvo, em 2026-09-21 às 13:35 e às 13:39 (``plan/POC.md``), ela leu ``34510`` na
+    ambiente alvo, em 2026-09-21 às 13:35 e às 13:39, ela leu ``34510`` na
     repetição e de novo na segunda repetição (a entrada guardada fica), ``ok`` depois de um
     ``ALTER`` (que o driver reconhece) e ``ok`` numa tabela temporária do banco da conexão (a
     recusa é do datashare).
@@ -634,8 +633,8 @@ def test_copy_varchar_overflow(
             )
             result = f"{result}; sys_load_error_detail: {rows[0][0].strip() if rows else '(vazio)'}"
     record("redshift.copy.varchar_overflow", result)
-    # O COPY aborta em vez de truncar (2026-09-21, quatro execuções): a auditoria de tamanho da
-    # etapa 4 é a barreira, e um COPY que passasse a truncar seria regressão.
+    # O COPY aborta em vez de truncar (2026-09-21, quatro execuções): a auditoria de tamanho é a
+    # barreira, e um COPY que passasse a truncar seria regressão.
     assert not result.startswith("ok"), result
 
     # TRUNCATECOLUMNS não é aceito com Parquet: 0A000, "TRUNCATECOLUMNS argument is not supported
@@ -724,7 +723,7 @@ def test_super_and_json_parse(
     # 4. O documento como objeto num arquivo JSON de uma linha, por COPY ... FORMAT JSON 'auto': o
     # caminho da documentação para um documento grande numa coluna SUPER, que carregou o objeto de
     # 80.901 bytes em 2026-09-21 (13:35 e 13:39). É o caminho dos documentos acima do teto do
-    # VARCHAR, se a etapa 8 o adotar (.claude/memory/OPEN_QUESTIONS.md).
+    # VARCHAR, que a publicação não adota enquanto nenhuma tabela precisar dele (2026-09-23).
     key = f"{s3_location.prefix}/redshift/super/documento.json"
     s3.put_object(
         Bucket=s3_location.bucket,
@@ -882,7 +881,7 @@ def test_unload_partition_by_and_register(
     statistics = parquet.metadata.row_group(0).column(0).statistics
     record("redshift.unload.has_min_max", bool(statistics and statistics.has_min_max))
 
-    # Medido no ambiente alvo em 2026-09-21 (plan/POC.md): TIMESTAMP sai em INT96, obsoleto no
+    # Medido no ambiente alvo em 2026-09-21: TIMESTAMP sai em INT96, obsoleto no
     # formato e sem estatística, e DECIMAL(18,2) em FIXED_LEN_BYTE_ARRAY, como o PyArrow grava e não
     # como grava o delta-rs. Toda coluna sai optional, inclusive as NOT NULL da origem.
     assert physical["data_ref"] == "INT96", physical
@@ -894,7 +893,7 @@ def test_unload_partition_by_and_register(
     register_unloaded(destination, entries)
 
     # data_ref está declarada timestamp[us] na tabela Delta e INT96 no arquivo: os dois leitores
-    # convertem e devolvem os valores intactos (sondagem de 2026-09-21, plan/POC.md).
+    # convertem e devolvem os valores intactos (sondagem de 2026-09-21).
     def read_by_delta_rs() -> None:
         """A tabela registrada, lida inteira pelo delta-rs."""
         DeltaTable(destination).to_pyarrow_table()
@@ -907,7 +906,7 @@ def test_unload_partition_by_and_register(
 
     # Onde o UNLOAD recusa gravar sem ALLOWOVERWRITE: o mesmo prefixo, um prefixo pai com arquivos
     # abaixo, e um subprefixo novo e vazio dentro de uma pasta com arquivos, que é o destino novo
-    # por tentativa da etapa 5 (test_unload_to_a_hive_prefix_and_register). Leituras.
+    # por tentativa do motor Redshift (test_unload_to_a_hive_prefix_and_register). Leituras.
     parent = s3_location.child("redshift/unload")
     for label, target in (
         ("same_prefix", f"{destination}/"),
@@ -1005,8 +1004,8 @@ def test_parallel_copy_and_unload_on_two_connections(
 
     O ``redshift_connector`` declara ``threadsafety`` 1: uma conexão não serve a duas threads ao
     mesmo tempo, e cada tarefa abre a sua pela mesma resolução de ``connect_redshift``, que pede
-    uma credencial temporária por conexão. É o caminho de ``publish_redshift`` da etapa 8, uma
-    conexão por tabela; o motor da etapa 5 guarda uma sessão só por execução, sob um
+    uma credencial temporária por conexão. É o caminho de ``publish_redshift``, uma conexão por
+    tabela; o motor Redshift guarda uma sessão só por execução, sob um
     ``threading.RLock``, e os comandos do pipeline correm nela em série.
     """
     session = redshift_session
@@ -1078,7 +1077,7 @@ def test_parallel_copy_and_unload_on_two_connections(
         assert files and sum(pq.read_metadata(file).num_rows for file in files) == 1000
 
 
-# ---------------------------------------------------------------- as leituras da etapa 5
+# ------------------------------------------------------- as leituras do motor Redshift
 
 
 def unload_text(
@@ -1086,7 +1085,7 @@ def unload_text(
     destination: str,
     credentials: str,
 ) -> str:
-    """O ``UNLOAD`` do ``stream`` da etapa 5, pelo motor: o ``select`` em Parquet para
+    """O ``UNLOAD`` do ``stream`` do motor Redshift: o ``select`` em Parquet para
     ``destination``, com manifesto verboso e ``PARALLEL OFF``, a contrabarra e a aspa simples
     dobradas no literal (leituras de 2026-09-23). O texto devolvido carrega a cláusula de
     credenciais: ele vai só para ``session.execute``, nunca para o relatório."""
@@ -1202,14 +1201,14 @@ def test_unload_to_a_hive_prefix_and_register(
     duckdb_connection: duckdb.DuckDBPyConnection,
 ) -> None:
     """O ``UNLOAD`` sem ``PARTITION BY``, com a coluna de partição fora do ``select``, para
-    ``mes=<valor>/<execution_id>_<uuid>/`` na pasta da tabela: o destino de ``export_partition`` da
-    etapa 5.
+    ``mes=<valor>/<execution_id>_<uuid>/`` na pasta da tabela: o destino de ``export_partition`` do
+    motor Redshift.
 
-    A decisão do usuário de 2026-09-23 tirou o ``PARTITION BY`` e fez o destino novo por partição e
-    por tentativa. Os arquivos entram no Delta por ``AddAction`` com o caminho abaixo da pasta
-    Hive, e a sonda local de 2026-09-23 leu esse caminho no delta-rs e no ``delta_scan``
-    (``plan/POC.md``). O ``=`` no prefixo do ``UNLOAD``, o ``schema.elements`` do manifesto sem a
-    coluna de partição e o segundo ``UNLOAD`` no mesmo destino são leituras do ambiente alvo.
+    O destino é novo por partição e por tentativa, sem ``PARTITION BY`` (2026-09-23). Os arquivos
+    entram no Delta por ``AddAction`` com o caminho abaixo da pasta Hive, e a sonda local de
+    2026-09-23 leu esse caminho no delta-rs e no ``delta_scan``. O ``=`` no prefixo do ``UNLOAD``,
+    o ``schema.elements`` do manifesto sem a coluna de partição e o segundo ``UNLOAD`` no mesmo
+    destino são leituras do ambiente alvo.
     """
     session = redshift_session
     name = session.table("unload_hive")
@@ -1287,13 +1286,13 @@ def test_stream_by_unload_with_literal_values(
     redshift_session: RedshiftSession,
     s3_location: S3Location,
 ) -> None:
-    """O ``stream`` da etapa 5 por ``UNLOAD``: os valores do cliente entram no texto como literais,
-    e as linhas lidas dos arquivos são comparadas com as do ``query``, que leva os mesmos valores
-    como parâmetros do driver.
+    """O ``stream`` do motor Redshift por ``UNLOAD``: os valores do cliente entram no texto como
+    literais, e as linhas lidas dos arquivos são comparadas com as do ``query``, que leva os mesmos
+    valores como parâmetros do driver.
 
     O texto do ``UNLOAD`` é um literal e não recebe parâmetro. O dialeto com ``paramstyle="named"``
     dobra a aspa simples, mantém o ``%`` e dobra a contrabarra, o escape do PostgreSQL (sonda local
-    de 2026-09-23, ``plan/POC.md``), e ``unload_text`` dobra as duas de novo. Cada caso roda por
+    de 2026-09-23), e ``unload_text`` dobra as duas de novo. Cada caso roda por
     três caminhos, que separam as hipóteses: os parâmetros do driver, o texto com os literais direto
     no cursor e o mesmo texto dentro do ``UNLOAD``. Cada caso é registrado antes da comparação, e
     todos rodam antes da asserção: as execuções de 2026-09-23 às 22:56 e às 23:01 UTC leram os três
@@ -1413,8 +1412,8 @@ def test_unload_limit_empty_result_temp_table_and_super(
     redshift_session: RedshiftSession,
     s3_location: S3Location,
 ) -> None:
-    """Os casos de borda do ``stream`` por ``UNLOAD`` da etapa 5: o ``LIMIT`` no ``select`` externo,
-    o resultado vazio, a tabela temporária da sessão e a coluna ``SUPER`` no Parquet.
+    """Os casos de borda do ``stream`` por ``UNLOAD`` do motor Redshift: o ``LIMIT`` no ``select``
+    externo, o resultado vazio, a tabela temporária da sessão e a coluna ``SUPER`` no Parquet.
 
     A documentação recusa o ``LIMIT`` externo (``docs/tecnologias.md``, Redshift), e a mensagem é a
     leitura. O ``UNLOAD`` de um resultado vazio não grava manifesto nem arquivo, e
@@ -1545,13 +1544,13 @@ def test_row_description_oids_and_type_modifier(
     redshift_session: RedshiftSession,
 ) -> None:
     """O OID e o ``type_modifier`` de cada coluna de um resultado: a tabela de
-    ``schema_from_row_description`` da etapa 5.
+    ``schema_from_row_description`` do motor Redshift.
 
     O ``cursor.description`` do ``redshift_connector`` 2.1.16 devolve só o nome e o OID; o
     ``type_modifier`` fica em ``cursor.ps["row_desc"]``, e o driver o usa para decodificar o
     ``NUMERIC`` binário, com a escala ``(type_modifier - 4) & 0xFFFF`` (leitura do código de
-    2026-09-23, ``plan/POC.md``). O que o servidor manda para cada tipo do contrato, para ``SUPER``,
-    para os agregados e para os literais é leitura.
+    2026-09-23). O que o servidor manda para cada tipo do contrato, para ``SUPER``, para os
+    agregados e para os literais é leitura.
     """
     session = redshift_session
     name = session.table("tipos")
@@ -1616,10 +1615,10 @@ def test_small_load_copy_cost(
     s3_location: S3Location,
 ) -> None:
     """O custo fixo de carregar 10 linhas, como leitura: o Parquet no S3 mais ``COPY``, o caminho do
-    ``append`` da etapa 5, contra o ``INSERT`` de várias linhas que saiu dele.
+    ``append`` do motor Redshift, contra o ``INSERT`` de várias linhas que saiu dele.
 
-    A decisão do usuário de 2026-09-23 levou o ``load`` sempre pelo ``loader``, hoje ``append``
-    pelo ``appender``; é esta leitura que traria o ``INSERT`` de volta. O melhor de três de cada,
+    O ``append`` do motor Redshift carrega sempre pelo ``appender``, nunca por ``INSERT``
+    (2026-09-23); é esta leitura que traria o ``INSERT`` de volta. O melhor de três de cada,
     na mesma tabela e com as mesmas linhas, e o tempo do ``COPY`` inclui a gravação do arquivo no
     S3, como no ``appender``.
     """
@@ -1690,8 +1689,8 @@ def test_unload_footer_statistics_with_nan(
 
     O Redshift aceita ``NaN``, ``Infinity`` e ``-Infinity`` em ``DOUBLE PRECISION``. O leitor
     Parquet do DuckDB poda o grupo de linhas pelo máximo do rodapé e perde a linha do ``NaN`` quando
-    o máximo a deixa de fora (duckdb/duckdb#25521, ``plan/POC.md``). A biblioteca registra sem
-    mínimo e máximo a coluna ``Double`` com valor não finito (``plan/PLAN-STAGE-3.md``), mas o
+    o máximo a deixa de fora (duckdb/duckdb#25521). A biblioteca registra sem mínimo e máximo a
+    coluna ``Double`` com valor não finito (``register_files``), mas o
     rodapé do arquivo registrado é o do ``UNLOAD``. O ``NaN`` vai no início, no meio e no fim do
     grupo de linhas, pela ordem de ``posicao``.
     """
@@ -1767,14 +1766,13 @@ def as_text(
 def test_audit_sql_under_search_path_and_nan_comparison(
     redshift_session: RedshiftSession,
 ) -> None:
-    """O texto da auditoria da etapa 4 pelo caminho do motor da etapa 5, e como o Redshift compara o
-    ``NaN``.
+    """O texto da auditoria pelo caminho do motor Redshift, e como o Redshift compara o ``NaN``.
 
-    O ``ddl`` da etapa 1 e o ``audit_sql`` citam as tabelas sem esquema, e o motor conta com o
-    ``search_path`` no esquema do datashare depois do ``USE``, que passou no ambiente alvo em
-    2026-09-23; o caso roda numa conexão própria, com o ``SET search_path`` do ``connect`` da
-    etapa 5. O ``is_finite`` do Redshift é a comparação estrita com os infinitos. Em 2026-09-23 a
-    constante comparou o ``NaN`` igual a si mesmo; na varredura da tabela, ``NOT IN
+    O ``ddl`` de ``serialize_db.schema`` e o ``audit_sql`` citam as tabelas sem esquema, e o motor
+    conta com o ``search_path`` no esquema do datashare depois do ``USE``, que passou no ambiente
+    alvo em 2026-09-23; o caso roda numa conexão própria, com o ``SET search_path`` do ``connect``
+    do motor Redshift. O ``is_finite`` do Redshift é a comparação estrita com os infinitos. Em
+    2026-09-23 a constante comparou o ``NaN`` igual a si mesmo; na varredura da tabela, ``NOT IN
     ('NaN'::float8, ...)`` contou só o infinito e levou o ``NaN`` ao ``CAST`` para
     ``NUMERIC(38, 6)``, e a comparação estrita deixou o ``NaN`` fora da soma, mas a negação dela
     também não o contou. A contagem dos não finitos passou a ser a dos não nulos menos a dos
@@ -1820,7 +1818,7 @@ def test_audit_sql_under_search_path_and_nan_comparison(
         for label, text in comparisons.items():
             record(f"redshift.audit.{label}", reading(functools.partial(run_as_text, text)))
 
-        # 2. O search_path no esquema do datashare: o que o connect da etapa 5 roda depois do USE.
+        # 2. O search_path no esquema do datashare: o que o connect do motor roda depois do USE.
         record(
             "redshift.audit.search_path",
             outcome(functools.partial(run, f"SET search_path TO {session.schema}")),
@@ -1830,7 +1828,7 @@ def test_audit_sql_under_search_path_and_nan_comparison(
             reading(functools.partial(run_as_text, "select current_schema()")),
         )
 
-        # 3. A tabela com defeitos plantados, criada pelo ddl da etapa 1 com o nome sem esquema.
+        # 3. A tabela com defeitos plantados, criada pelo ddl do contrato com o nome sem esquema.
         metadata = sa.MetaData()
         model = sa.Table(
             "auditoria",
@@ -1926,7 +1924,7 @@ def test_audit_sql_under_search_path_and_nan_comparison(
         )
         record("redshift.audit.planted.sample", reading(functools.partial(run_as_text, sample)))
 
-        # 5. Os textos do modelo cliente sobre as tabelas vazias, criadas pelo ddl da etapa 1.
+        # 5. Os textos do modelo cliente sobre as tabelas vazias, criadas pelo ddl do contrato.
         results = {}
         for table in ClientBase.metadata.sorted_tables:
             session.table(table.name)
@@ -1953,13 +1951,12 @@ def test_alter_column_type_on_the_share(
     """O aumento de ``VARCHAR(n)`` por ``ALTER TABLE ... ALTER COLUMN ... TYPE`` no esquema do
     datashare, numa coluna comum e numa da chave primária informativa.
 
-    A etapa 8 trata a largura de ``String(n)`` que cresce como diff destrutivo, com recriação e
-    recarga, e esta leitura diz se o comando entra depois como atalho (decisão do usuário de
-    2026-09-23): ele não está na lista do que a escrita por datashare aceita, e a documentação o
-    recusa numa coluna com chave. As execuções de 2026-09-23 às 22:56 e às 23:01 UTC recusaram os
-    dois comandos com ``0A000 Operation is not supported through datashares``, e a recusa é
-    asserção; a largura em ``svv_all_columns`` e a inserção de um valor de dez caracteres ficam
-    como leitura.
+    A publicação trata a largura de ``String(n)`` que cresce como diff destrutivo, com recriação e
+    recarga, e esta leitura diz se o comando entra depois como atalho (2026-09-23): ele não está na
+    lista do que a escrita por datashare aceita, e a documentação o recusa numa coluna com chave. As
+    execuções de 2026-09-23 às 22:56 e às 23:01 UTC recusaram os dois comandos com
+    ``0A000 Operation is not supported through datashares``, e a recusa é asserção; a largura em
+    ``svv_all_columns`` e a inserção de um valor de dez caracteres ficam como leitura.
     """
     session = redshift_session
     name = session.table("largura")
@@ -2002,10 +1999,10 @@ def test_explain_of_a_join_on_the_share(
     redshift_session: RedshiftSession,
 ) -> None:
     """O ``EXPLAIN`` de um join entre duas tabelas do esquema do datashare, a leitura da
-    distribuição que a etapa 8 faz depois da primeira publicação.
+    distribuição feita depois da primeira publicação.
 
     O papel do projeto não lê ``svv_table_info`` depois do ``USE`` (42501, probe de 2026-09-23), e
-    a decisão do usuário de 2026-09-23 põe no lugar dela o ``EXPLAIN`` de um join típico: uma
+    no lugar dela entra o ``EXPLAIN`` de um join típico (2026-09-23): uma
     ``distkey`` explícita só entra quando o plano mostra ``DS_BCAST_INNER`` ou ``DS_DIST_BOTH``. As
     tabelas nascem com a distribuição ``AUTO``, como as publicadas. O plano inteiro, ou a recusa do
     ``EXPLAIN``, e os rótulos ``DS_*`` que ele traz são leituras.

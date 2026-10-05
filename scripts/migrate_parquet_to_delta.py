@@ -1,21 +1,21 @@
 """A migração adiantada: a base Parquet de origem vira tabelas Delta, uma partição por commit,
 com o relatório da execução em JSON.
 
-O script é a ferramenta de operação da carga inicial (``plan/PLAN-STAGE-7.md``) sobre
-``serialize_db.parquet_import``: ``import_table`` grava cada partição ainda fora do log, com a
-conferência da partição, o ``COPY ... RETURN_STATS`` na ordem da ``sort_key`` e o registro pelo
-``register_files``, e ``import_report`` confere contagem e somas por partição entre a origem e o
-Delta. Para cada tabela do modelo, as sem partição primeiro e as particionadas depois, na ordem do
-modelo (``import_order``), o script chama ``import_table`` partição por partição, imprime as linhas,
-o tempo e o pico de memória do processo até ali e, com ``--report``, regrava o JSON depois de cada
+O script é a ferramenta de operação da carga inicial sobre ``serialize_db.parquet_import``:
+``import_table`` grava cada partição ainda fora do log, com a conferência da partição, o
+``COPY ... RETURN_STATS`` na ordem da ``sort_key`` e o registro pelo ``register_files``, e
+``import_report`` confere contagem e somas por partição entre a origem e o Delta. Para cada tabela
+do modelo, as sem partição primeiro e as particionadas depois, na ordem do modelo
+(``import_order``), o script chama ``import_table`` partição por partição, imprime as linhas, o
+tempo e o pico de memória do processo até ali e, com ``--report``, regrava o JSON depois de cada
 partição gravada, com a tabela da vez em ``in_progress``: um processo morto no meio da carga, pela
 falta de memória por exemplo, deixa o que já conferiu e gravou. O relatório final leva a máquina, as
 versões, os limites do DuckDB lidos do ambiente e os argumentos, cada tabela com o relatório de
 ``import_report`` e as partições gravadas agora, e o que a raiz da origem tem fora do modelo. A raiz
 Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``, e a origem fica
-intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas, que toda
-tabela particionada precisa ter na origem: uma que falta recusa a execução antes de qualquer
-gravação, e a tabela sem partição fica inteira de fora, sem carga, relatório nem entrada no JSON.
+intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas, que toda tabela
+particionada precisa ter na origem: uma que falta recusa a execução antes de qualquer gravação, e a
+tabela sem partição fica inteira de fora, sem carga, relatório nem entrada no JSON.
 
 Uma partição fora do contrato interrompe a execução sem commit, com a tabela, a partição e a
 coluna na mensagem, e a execução seguinte recomeça dela; o script sai com 1 nesse caso, na

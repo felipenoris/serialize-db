@@ -2,7 +2,7 @@
 
 É a cópia de ``tests/reference_model/`` (o modelo SQLAlchemy da base original em Parquet
 particionado, que fica como está) corrigida como a biblioteca cliente a escreveria para usar o
-pacote, segundo ``plan/PLAN-STAGE-1.md``:
+pacote:
 
 - uma ``Base`` só, em ``base.py``, e cada tabela declarada uma vez (o original monta
   ``cad_lancamentos`` e ``cad_contratos`` em dois módulos por ``extend_existing``);
@@ -10,7 +10,7 @@ pacote, segundo ``plan/PLAN-STAGE-1.md``:
   colunas que as referenciam; os demais inteiros continuam ``Integer``;
 - chaves estrangeiras sem ``DEFERRABLE``, inclusive as compostas, que a auditoria verifica, e
   sem a de ``cad_contratos`` para ``rel_contrato_operacao``, cujo destino não é único;
-- ``String(n)`` com o comprimento escolhido das leituras da base (``plan/POC.md``), com folga;
+- ``String(n)`` com o comprimento escolhido das leituras da base, com folga;
 - a coluna de partição ``data_str`` (``data_base_str`` em ``cad_lancamentos``), ``String(10)``
   em ``AAAA-MM-DD``, no fim das quatro tabelas particionadas, declarada em
   ``Table.info["serialize_db"]`` com ``partition_by``, ``partition_source`` e ``sort_key``;
@@ -21,7 +21,7 @@ pacote, segundo ``plan/PLAN-STAGE-1.md``:
 Os índices não únicos e o ``sqlite_strict`` do original ficam de fora: nenhum motor da biblioteca
 os usa. ``tests/test_client_model.py`` confere a cópia contra o original. ``statements.py`` traz
 os statements Core do pipeline fictício (``STATEMENTS``) e ``sql/`` os arquivos de texto SQL
-gerados deles pela etapa 2.
+gerados deles por ``serialize_db.sql``.
 
 Exemplo::
 

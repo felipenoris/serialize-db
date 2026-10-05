@@ -10,8 +10,7 @@ os valores que a carga inicial tem de tratar, a leitura pelos dois leitores da b
 controle de esquema da biblioteca anterior e a consistência da base com o modelo de referência. O
 esquema esperado é a seção 3 do relatório, transcrita; a saída do probe fica em ``probes/output/``,
 fora do git, e a transcrição é o que o teste guarda dela. A base é o material de
-``tests/test_migrate_parquet_to_delta.py``, o teste da migração adiantada da carga inicial
-(``plan/PLAN-STAGE-7.md``).
+``tests/test_migrate_parquet_to_delta.py``, o teste da migração adiantada da carga inicial.
 """
 
 from __future__ import annotations
@@ -483,7 +482,7 @@ def test_cad_lancamentos_values_reproduce_what_the_initial_load_handles(
     base: source.SourceBase,
 ) -> None:
     """Os valores de ``cad_lancamentos`` que a carga inicial tem de tratar, um por regra de
-    ``plan/PLAN-STAGE-7.md``."""
+    ``serialize_db.parquet_import``."""
     entries = read_partitioned(base, "cad_lancamentos")
 
     # ``valor`` é double com três casas na leitura de desenvolvimento (cinco no extremo da
@@ -528,7 +527,7 @@ def test_cad_contratos_values_reproduce_what_the_initial_load_handles(
     base: source.SourceBase,
 ) -> None:
     """Os valores de ``cad_contratos`` que a carga inicial tem de tratar, um por regra de
-    ``plan/PLAN-STAGE-7.md``."""
+    ``serialize_db.parquet_import``."""
     contracts = read_partitioned(base, "cad_contratos")
 
     # Cada ``data_base`` de ``cad_lancamentos`` tem os seus contratos: as quatro datas.
@@ -542,7 +541,7 @@ def test_unpartitioned_values_reproduce_what_the_initial_load_handles(
     base: source.SourceBase,
 ) -> None:
     """Os valores das tabelas sem partição que a carga inicial tem de tratar, um por regra de
-    ``plan/PLAN-STAGE-7.md``."""
+    ``serialize_db.parquet_import``."""
     # ``fator`` com cinco casas e ``data_fim_validade`` toda nula.
     rates = pq.read_table(base.files["cad_aliquotas"][0])
     assert 0.59895 in rates.column("fator").to_pylist()

@@ -1,6 +1,6 @@
 # SQLAlchemy and the SQL layer
 
-Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL rule per dialect or generated SQL text. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before `serialize_db.schema` and `serialize_db.sql`, a DDL rule per dialect or generated SQL text. A fact that a file of the repository details ends with that file, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## Dialects and compilation
 
@@ -44,14 +44,14 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `timestamp` (`cad_lancamentos`) in Redshift (`column_name` in DuckDB, accepted bare). Both
   SQLAlchemy dialects quote `"to"` on their own in DDL and DML, the Redshift one also `"timestamp"`,
   and `redshift_distkey="to"` renders `DISTKEY ("to") SORTKEY ("to", data)`; the library's own
-  text generation quotes every identifier (2026-09-21). `plan/PLAN-STAGE-1.md`, `plan/POC.md`
+  text generation quotes every identifier (2026-09-21).
 - Stage 1 generates the DDL from the type table without the dialect packages (user decision of
   2026-09-21): `sql_type` spells `DECIMAL(p, s)`, `VARCHAR(n)` on both engines
   (DuckDB ignores the length), `VARCHAR` / `VARCHAR(65535)` for `Text`, `VARCHAR(36)` for `Uuid`,
   `JSON` / `SUPER`, `DOUBLE` / `DOUBLE PRECISION`, `TIMESTAMP` / `TIMESTAMPTZ`; DuckDB read the
   fully quoted `CREATE TABLE` back as `DECIMAL(18,2)`, `TIMESTAMP WITH TIME ZONE`, `VARCHAR` and
   `JSON`. The `with_variant(SUPER(), "redshift")` on a JSON column stays optional: `isinstance(kind,
-  sa.JSON)` holds with or without it. `plan/PLAN-STAGE-1.md`, `plan/schema.md`
+  sa.JSON)` holds with or without it.
 - A `bindparam` without value shows in the plain compilation as `compiled.binds[name]` with
   `required=True` (`value=None`); one with a value has `required=False`; constants and `in_` lists
   enter under anonymous names with `required=False`; a `literal_column(":nome")` never appears.
@@ -60,7 +60,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   forms probed on 2026-09-22, so the warning is no guard.
   Stage 2 reads `binds` instead of catching the warning: `warnings.catch_warnings` swaps the
   process-wide filter and the `warnings` docs call it unsafe with threads below Python 3.14's
-  `context_aware_warnings`; the project runs 3.13 (2026-09-21). `plan/PLAN-STAGE-2.md`, `plan/POC.md`
+  `context_aware_warnings`; the project runs 3.13 (2026-09-21).
 - For a portable `SELECT`, an `INSERT ... SELECT` and a `CAST`, `duckdb_engine.Dialect`,
   `RedshiftDialect_redshift_connector` and SQLAlchemy's own `postgresql.dialect`, all with
   `paramstyle="named"`, compile byte-identical text; the only difference measured is the quoting
@@ -72,7 +72,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   they become runtime dependencies with stage 2, and `prefixed` builds its copies with
   `quoted_name(quote=True)` on the table name and every column, so the DML quotes every contract
   identifier like the DDL, sentinel inside the quotes (user decision of 2026-09-21, measured on
-  both dialects). `plan/PLAN-STAGE-2.md`, `plan/POC.md`
+  both dialects).
 - `str(compiled)` leaves a space before each line break (`" \nFROM"`, `" \nWHERE"`) in both
   dialects; `render` strips line ends so the versioned file survives an editor that trims them.
   `RedshiftDialect_redshift_connector` imports the driver only in `import_dbapi`, which `compile`
@@ -82,7 +82,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   boolean column, three-condition join with `LIKE 'TI%'`, `"to"` and `"timestamp"` with
   `CAST(... AS NUMERIC(18, 2))`, `INSERT ... SELECT DISTINCT ... WHERE NOT EXISTS` on the target
   table) compile byte-identical on both dialects and run in DuckDB over the stage 1 DDL with the
-  prefix empty and with `exec_42_`. `plan/POC.md`
+  prefix empty and with `exec_42_`.
 - Without `literal_binds`, an `IN` list compiles as `__[POSTCOMPILE_<name>]`, which DuckDB refuses
   (`Parameter argument/count mismatch`). The engines' path is `statement.params(**client_params)`
   then `compile(..., compile_kwargs={"render_postcompile": True})` and `construct_params()`: lists
@@ -90,24 +90,22 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   missing value is `InvalidRequestError` at compile time. A `GenericFunction` subclass registers
   its name in `sa.func` for the whole process (the client's `sa.func.json_valid` then compiles by
   the audit's Redshift rule); a `FunctionElement` subclass with `name` and `@compiles` per dialect
-  does not (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_sqlalchemy.py`
+  does not (2026-09-23). `tests/proof_of_concept/test_sqlalchemy.py`
 
 - `Table.constraints` and `Table.indexes` are sets, and their iteration order changed between
   processes (SQLAlchemy 2.0.54, 2026-09-28): `table_options` orders the keys as the primary key,
   then the `UniqueConstraint`s by their column names, then the unique indexes the same way.
-  `plan/PLAN-STAGE-1.md`
 
 ## SQL tooling
 
 - SQLGlot transpiles function names and syntax between DuckDB and Redshift but passes through
   constructs the target lacks (`INSERT ... BY NAME`, `list_aggregate`) and turned DuckDB
   `VARCHAR(200)` into Redshift `VARCHAR(MAX)`; Redshift integration tests remain necessary.
-  `plan/estrategia.md`
 - `sqlglot.parse_one(text, dialect="redshift")` (30.18.0) accepts the sentinel inside a quoted
   identifier (`"{prefix}cad_contas"`), so the versioned SQL file parses; the `ParseError` of
   2026-09-21 was on the bare sentinel of the `quote=False` draft. It accepts `||`, `CAST(... AS
   NUMERIC(18, 2))`, `NOT (EXISTS (...))` and both `:name` and `$name` markers, and raises
-  `TokenError` on an unbalanced quote (2026-09-22). `plan/POC.md`
+  `TokenError` on an unbalanced quote (2026-09-22).
 - `duckdb.paramstyle` is `qmark`, `duckdb_engine.Dialect()` compiles `pyformat` and
   `Dialect(paramstyle="named")` `named`; `redshift_connector.paramstyle` and
   `RedshiftDialect_redshift_connector()` are `format`. A statement compiled with the named dialect
@@ -126,13 +124,12 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   DuckDB failed at `rel_contrato_operacao` while its composite foreign key targeted the columns
   of a unique index; the model declares them as `UniqueConstraint` since 2026-09-22 (user
   decision), the whole model creates on a `duckdb-engine` `Connection`, and `check_models`
-  checks the target of every foreign key. `plan/POC.md`, `plan/PLAN-STAGE-2.md`,
-  `plan/PLAN-STAGE-1.md`
+  checks the target of every foreign key.
 
 - A `FunctionElement` subclass with `@compiles` only for some dialects has no default rule and fails
   with `UnsupportedCompilationError` elsewhere, the `duckdb_engine` dialect included, which compiles
   through the `PGCompiler`; `serialize_db.audit` gives each of its functions a default rule, the
-  name with its arguments (2026-09-23). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+  name with its arguments (2026-09-23).
 
 ## SQLAlchemy 2.1
 
@@ -145,7 +142,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   expanding `bindparam` raises `InvalidRequestError` in the DuckDB engine and the Redshift cursor.
   `Float` and `Double` no longer derive from `Numeric`, so `import_report` drops the `Double`
   columns from its sums; and the duckdb-engine 0.17.0 reflection fails on
-  `pg_catalog.pg_collation`. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  `pg_catalog.pg_collation`. `.claude/memory/OPEN_QUESTIONS.md`
 - SQLAlchemy 2.1.3 (2026-10-02) fixed the `NULL` of `params()` values under `literal_binds`
   (#13635) and still breaks the package (2026-10-03, on the stand-in: 6 package cases and 3 study
   cases failed). `construct_params()` merges the values `params()` stored on the statement and
@@ -161,7 +158,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   through `params(x=1)`, and `render` writes it with `:x`. A copy with `construct_expanded_state()`
   in both engines, `(sa.Numeric, sa.Float)` in the `import_report` sums and an explicit
   `_backslash_escapes` (true on the Redshift dialects of `sql` and `engine.redshift`, false on the
-  DuckDB one of `sql`) passed every package test on 2.1.3 and on 2.0.54. `plan/POC.md`,
+  DuckDB one of `sql`) passed every package test on 2.1.3 and on 2.0.54.
   `.claude/memory/OPEN_QUESTIONS.md`
 - On 2.0.54, the true `_backslash_escapes` makes the DuckDB dialect double the backslash of every
   constant it writes, and DuckDB, which has no backslash escape, reads both (2026-10-03):
@@ -174,8 +171,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   same `ESCAPE`. The fix the user chose the same day sets `_backslash_escapes = False` on
   `serialize_db.sql`'s DuckDB dialect and on `engine.duckdb._QMARK`, guarded by
   `test_render_writes_the_backslash_as_each_engine_reads_it` and
-  `test_query_keeps_backslash_literals`, which failed on the old code. `plan/POC.md`,
-  `plan/PLAN-STAGE-2.md`, `plan/PLAN-STAGE-4.md`
+  `test_query_keeps_backslash_literals`, which failed on the old code.
 
 ## duckdb-sqlalchemy
 
@@ -186,7 +182,7 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   `duckdb-engine` 0.17.0 (2025-03-29) is the last release, its commits stop in 2025-10 with bot
   bumps, and the `pg_collation` reflection fix sits in an open PR of 2026-03-28; the DuckDB
   Jupyter guide and the MotherDuck docs still install `duckdb-engine`, at 1,841,220 monthly
-  downloads against 8,973 (2026-09-26). `plan/POC.md`
+  downloads against 8,973 (2026-09-26).
 - `Dialect(paramstyle="named")` of both compiles the stage 1 DDL types, the `select` with
   `bindparam`, `LIKE`, `>=` and an expanding `IN` (plain, `literal_binds`, `render_postcompile`)
   and the `INSERT ... SELECT` byte-identical; the fork differs in `driver`,
@@ -196,4 +192,4 @@ Read before `serialize_db.schema` and `serialize_db.sql` (stages 1 and 2), a DDL
   key (`['id_operacao']`), which `test_create_all_and_reflection` asserts absent. Swapped in a
   copy of the repository, every package test passed on 2.0.54, and on 2.1.0 the same 8 cases of
   2026-09-25 failed, the reflection one at the key assertion instead of `pg_collation`
-  (2026-09-26). `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  (2026-09-26). `.claude/memory/OPEN_QUESTIONS.md`

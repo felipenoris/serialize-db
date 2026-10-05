@@ -1,33 +1,32 @@
-"""Transações simultâneas no Redshift: duas publicações da etapa 8 que se cruzam no esquema do
+"""Transações simultâneas no Redshift: duas publicações que se cruzam no esquema do
 datashare.
 
 A publicação troca as partições de uma tabela e grava a sua linha em ``serialize_db_publications``
-numa transação só, e essa tabela de controle é a única que dois ambientes escrevem ao mesmo tempo
-(``plan/PLAN.md``, premissas). A documentação do Redshift diz o que esperar
-(``docs/tecnologias.md``, Redshift, seção "Transações concorrentes"): ``DELETE`` e ``UPDATE``
-tomam o lock da tabela e o segundo espera
-o primeiro terminar; sob isolamento de snapshot, dois escritores de linhas distintas confirmam, e
-sob o serializável o segundo recebe ``1023``; o snapshot de uma transação nasce no primeiro
-``SELECT``, DML ou DDL dela; o ``LOCK`` no início força a ordem, mas não está na lista de comandos
-que a escrita por datashare aceita. O banco do datashare informou isolamento ``UNKNOWN`` no ambiente
-alvo, e a escrita por datashare exige snapshot no banco do produtor. Estes testes medem o que o
-esquema do datashare faz.
+numa transação só, e essa tabela de controle é a única que dois ambientes escrevem ao mesmo tempo. A
+documentação do Redshift diz o que esperar (``docs/tecnologias.md``, Redshift, seção "Transações
+concorrentes"): ``DELETE`` e ``UPDATE`` tomam o lock da tabela e o segundo espera o primeiro
+terminar; sob isolamento de snapshot, dois escritores de linhas distintas confirmam, e sob o
+serializável o segundo recebe ``1023``; o snapshot de uma transação nasce no primeiro ``SELECT``,
+DML ou DDL dela; o ``LOCK`` no início força a ordem, mas não está na lista de comandos que a escrita
+por datashare aceita. O banco do datashare informou isolamento ``UNKNOWN`` no ambiente alvo, e a
+escrita por datashare exige snapshot no banco do produtor. Estes testes medem o que o esquema do
+datashare faz.
 
 Cada cenário de concorrência abre duas conexões próprias, A e B, pela resolução de
-``connect_redshift``, e segue a sequência da etapa 8 com ``INSERT ... VALUES`` no lugar do ``COPY``,
-que toma o mesmo lock. A roda
-até o ponto de conflito e segura a transação aberta; B roda numa thread, e o relatório registra se B
-esperou, em que comando, o desfecho de cada comando dos dois e o estado final das tabelas. O
-``COMMIT`` de A solta B. Nenhum desfecho do Redshift vira asserção antes de uma execução no ambiente
-alvo; cada teste confere só que o estado final bate com os desfechos lidos, isto é, que a transação
-confirmada deixou as suas linhas e a abortada nenhuma. Uma thread que não termina no prazo depois do
-``COMMIT`` de A é registrada como presa, e a sessão dela é encerrada por ``pg_terminate_backend``.
+``connect_redshift``, e segue a sequência da publicação com ``INSERT ... VALUES`` no lugar do
+``COPY``, que toma o mesmo lock. A roda até o ponto de conflito e segura a transação aberta; B roda
+numa thread, e o relatório registra se B esperou, em que comando, o desfecho de cada comando dos
+dois e o estado final das tabelas. O ``COMMIT`` de A solta B. Nenhum desfecho do Redshift vira
+asserção antes de uma execução no ambiente alvo; cada teste confere só que o estado final bate com
+os desfechos lidos, isto é, que a transação confirmada deixou as suas linhas e a abortada nenhuma.
+Uma thread que não termina no prazo depois do ``COMMIT`` de A é registrada como presa, e a sessão
+dela é encerrada por ``pg_terminate_backend``.
 
 Os cenários: escritas em tabelas distintas (a ingestão em paralelo e ``publish_redshift`` com uma
 conexão por tabela); dsv e prd publicando ao mesmo tempo, com linhas distintas da tabela de
-controle; duas publicações da mesma tabela e partição, com a staging de nome fixo da etapa 8; o
+controle; duas publicações da mesma tabela e partição, com a staging de nome fixo da publicação; o
 ``LOCK`` da tabela de controle no início da transação; a linha de controle gravada por um
-``UPDATE`` condicionado à versão lida, como primeiro comando; e a publicação que a etapa 8 adotou,
+``UPDATE`` condicionado à versão lida, como primeiro comando; e a publicação como o pacote a adotou,
 com a linha de controle lida no início da transação e gravada no fim. Dois cenários de uma conexão
 só leem a staging temporária da publicação, cheia dentro da transação e antes do ``BEGIN``: a
 escrita de uma transação vai para um banco só no datashare, e a documentação não diz em que banco
@@ -88,7 +87,7 @@ class Participant:
     """Uma das duas conexões de um cenário e os comandos que ela rodou, em ordem.
 
     A conexão vem de ``connect_redshift``, com o autocommit ligado e o ``USE`` no banco do
-    datashare, e a transação é o ``BEGIN`` explícito da etapa 8. O primeiro erro encerra a
+    datashare, e a transação é o ``BEGIN`` explícito da publicação. O primeiro erro encerra a
     sequência, porque numa transação abortada cada comando seguinte receberia ``25P02``. O
     participante é um gerenciador de contexto, que fecha a conexão na saída do bloco.
     """
@@ -244,8 +243,8 @@ def replace_partition(
     table: str,
     execution_id: str,
 ) -> list[Step]:
-    """A troca da partição da etapa 8, com ``INSERT`` no lugar do ``COPY`` na staging: o mesmo lock
-    de escrita."""
+    """A troca da partição da publicação, com ``INSERT`` no lugar do ``COPY`` na staging: o mesmo
+    lock de escrita."""
     return [
         Step("apaga a partição", f"DELETE FROM {table} WHERE data_str = '{PARTITION}'"),
         Step(
@@ -262,7 +261,8 @@ def write_control_row(
     version: int,
     execution_id: str,
 ) -> list[Step]:
-    """A linha de controle como a etapa 8 a grava, no fim da transação: ``DELETE`` e ``INSERT``."""
+    """A linha de controle como a publicação a grava, no fim da transação: ``DELETE`` e
+    ``INSERT``."""
     return [
         Step(
             "apaga a linha de controle",
@@ -418,8 +418,8 @@ def test_two_environments_write_distinct_control_rows(
     """prd e dsv publicam ao mesmo tempo: tabelas de dados distintas e linhas distintas da tabela
     de controle.
 
-    A sequência é a da etapa 8: a versão publicada lida antes da transação, a partição trocada e a
-    linha de controle gravada no fim. B troca a sua partição antes do ``COMMIT`` de A, então o
+    A sequência é a da publicação: a versão publicada lida antes da transação, a partição trocada e
+    a linha de controle gravada no fim. B troca a sua partição antes do ``COMMIT`` de A, então o
     snapshot de B é anterior a ele; o ``DELETE`` da linha de controle de B é o comando que pode
     esperar pelo lock que A tomou na tabela de controle.
     """
@@ -451,7 +451,7 @@ def test_two_environments_write_distinct_control_rows(
 def test_two_publications_of_the_same_table(
     redshift_session: RedshiftSession,
 ) -> None:
-    """Duas publicações de prd da mesma tabela e partição, com a staging de nome fixo da etapa 8.
+    """Duas publicações de prd da mesma tabela e partição, com a staging de nome fixo da publicação.
 
     O ``CREATE TABLE`` da staging abre o snapshot de cada transação. B cria a mesma staging e troca
     a mesma partição enquanto A segura a sua transação aberta: o relatório diz onde B espera (o
@@ -518,7 +518,7 @@ def swap_from_staging(
     execution_id: str,
     version: int,
 ) -> list[Step]:
-    """A troca da partição de prd a partir da staging e a linha de controle, como a etapa 8 as
+    """A troca da partição de prd a partir da staging e a linha de controle, como a publicação as
     grava."""
     return [
         Step("apaga a partição", f"DELETE FROM {tables.prd} WHERE data_str = '{PARTITION}'"),
@@ -574,8 +574,8 @@ def test_temporary_staging_filled_before_the_transaction(
 ) -> None:
     """A publicação com a staging temporária cheia antes do ``BEGIN``, em autocommit.
 
-    A transação só escreve no banco do datashare, e a carga da staging, o ``COPY`` da etapa 8, fica
-    fora dela e dos locks que ela segura.
+    A transação só escreve no banco do datashare, e a carga da staging, o ``COPY`` da publicação,
+    fica fora dela e dos locks que ela segura.
     """
     session = redshift_session
     tables = create_tables(session, "temporaria_antes")
@@ -685,7 +685,7 @@ def test_conditional_update_of_the_control_row(
 def test_control_row_read_first_and_written_last(
     redshift_session: RedshiftSession,
 ) -> None:
-    """A publicação da etapa 8 como o usuário a decidiu em 2026-09-23: a linha de controle lida no
+    """A publicação como o pacote a faz (2026-09-23): a linha de controle lida no
     início da transação, a partição trocada e a linha gravada no fim, pelo ``UPDATE`` condicionado à
     versão lida.
 

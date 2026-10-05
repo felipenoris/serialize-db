@@ -1,6 +1,6 @@
 # The Parquet source base and its fixture
 
-Read before stage 7 (`serialize_db.parquet_import`), `tests/source_db_projetado.py`, `tests/reference_model/` or `probes/parquet_source.py`; the user's decisions on the load are in `decisions.md`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before `serialize_db.parquet_import`, `tests/source_db_projetado.py`, `tests/reference_model/` or `probes/parquet_source.py`; the user's decisions on the load are in `decisions.md`. A fact that a file of the repository details ends with that file, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## The development base, read on 2026-09-20
 
@@ -17,8 +17,8 @@ Read before stage 7 (`serialize_db.parquet_import`), `tests/source_db_projetado.
   tables match the files in columns, order, types and nullability except seven `cad_contratos`
   columns nullable in the files and `NOT NULL` in the model with no null in the data. The report was
   pasted in the conversation, never saved; its sections 2, 6, 7 and 9 survive in the transcript of
-  session `1b1640bf` on this machine, and the numbers below come from there. `plan/POC.md`,
-  `plan/PLAN-STAGE-7.md`, `tests/source_db_projetado.py`
+  session `1b1640bf` on this machine, and the numbers below come from there.
+  `tests/source_db_projetado.py`
 
 ## The production base, read on 2026-09-21
 
@@ -42,7 +42,7 @@ Read before stage 7 (`serialize_db.parquet_import`), `tests/source_db_projetado.
   without it are 3, 4 and 14 in the three `data_str` tables, the size of one partition each, and
   the report does not say which). The reference model matches it as it matches dsv, no `NOT NULL`
   column of the model has a null, and the composite foreign-key orphans repeat (`data_base`
-  2026-01-31 without `cad_contratos`, `desemb-999`). `plan/POC.md`, `plan/PLAN-STAGE-7.md`
+  2026-01-31 without `cad_contratos`, `desemb-999`).
 
 ## The fixture
 
@@ -55,7 +55,7 @@ comments of the client model, the regenerated `rel_contrato_operacao.delta.json`
 did not change: still N×N, the pair `(data, operacao, sistema, contrato)` still unique, the same
 row count per partition. It does not rescue the foreign key `cad_contratos` declares to
 `rel_contrato_operacao`: with N operations per contract, `(data, sistema, contrato)` is still not
-unique at the target. `plan/POC.md`
+unique at the target.
 
 The fictitious Parquet source base `db_projetado`, reproducing the structure common to the two readings (section 3, the partitions, the `chunk_<n>` files, the `INT96` timestamps, the layout): the 14 tables with the read columns, types and nullability (12 match the reference model; `alembic_version` and `meta_update_status` are outside it), the Hive partitions, and the previous library's real `schema.json` at the root (`source_db_projetado_schema.json`). The values that differ between the bases follow the dsv reading (`valor` with three decimals, `fator` with five, `id_lancamento` up to 1,113,599,996, the `meta_update_status` ids). The `pandas` footer key follows the production base: `written_by_pandas` leaves the last partition of each partitioned table and the two control tables without it, so every partitioned table has files of both kinds; the probe run on the fixture on 2026-09-21 printed section 3 identical to the transcription and the footer table with the mix. The data is consistent with the reference model (unique keys, every foreign key satisfied, the four dates in every partitioned table, `rel_contas_hierarquias` a tree of accounting accounts, one root and five levels, with no account its own parent (the user stated on 2026-09-23 that in the real base `id_parent` and `id_child` always differ and that the table implements a tree of accounting accounts), the N×N `rel_contrato_operacao` with `fator_rateio` 1 or 1/2, dyadic, summing to 1 per contract, since a contract is in one or two operations; the builders make one dict per row since the review of 2026-09-23, with the written base byte-identical). `write_source(root)` returns the files and row counts; `tests/test_source_db_projetado.py` checks the written files against the transcribed section 3 of the report, the model's keys and the schema control, and `tests/test_reference_model.py` reads the reference model through SQLAlchemy (with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules) and checks it against `SCHEMAS` and the transcribed keys. The material of the stage 7 test.
 
@@ -113,13 +113,12 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `rewrite` took 1.14 to 1.52 times the `register` time sorted and 1.14 to 1.46 unsorted, the sort
   1.23 to 1.63 times the `register` time with files at 74% to 92% of the size; `rel_contrato_operacao`
   2026-03-31 (13,637,568 rows) took 13.1 s and 2,442 MB sorted in `register`. The raw reports stay
-  out of git; the numbers are in `plan/POC.md`. `decisions.md`
+  out of git. `decisions.md`
 - The `cad_lancamentos` load of the second migration died for lack of memory: the user did not keep
   the terminal output but saw `Killed` several times in that part (2026-09-24), the kernel's OOM
   killer, under DuckDB's default `memory_limit` of 12.3 GiB on the 15,786 MB machine. The script
   now opens every DuckDB connection with half the memory still available and gives each table its
-  own connection; the rerun of `cad_lancamentos` confirms the partition fits. `plan/POC.md`,
-  `plan/PLAN-STAGE-7.md`
+  own connection; the rerun of `cad_lancamentos` confirms the partition fits.
 - The second migration ran one process per table in the order of `SUITE.md` (alphabetical):
   `cad_lancamentos` ran alone between `cad_contratos`, whose report was written at 23:06 UTC, and
   `cad_operacoes`, which started at 23:14:58, and the threads probe came after, at 23:21: by the
@@ -128,7 +127,7 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   the whole table: `rel_contrato_operacao` 2.2 s, 13.3 s and 11.3 s with the process peak at 508,
   2,459 and 2,712 MB, growing on the third partition although it is smaller than the second;
   `cad_operacoes` 4.3 s to 5.1 s and up to 1,801 MB; `cad_contratos` 3.2 s to 3.6 s and up to
-  1,142 MB; the unpartitioned tables 0.4 s to 0.6 s at about 270 MB. `plan/POC.md`
+  1,142 MB; the unpartitioned tables 0.4 s to 0.6 s at about 270 MB.
 
 - The third migration (2026-09-24, 01:53 to 02:02 UTC, `main` with #69, one process per table on
   a 16 vCPU and 31,159 MB machine, `memory_limit` 13.1 to 13.6 GiB and 16 threads, `register`
@@ -142,7 +141,7 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   against 905,7 MB for 2026-03-31), unlike the other three partitioned tables, where
   the sort still costs 1.1 to 1.4 times and shrinks the files to 74% to 92%. With 16 threads
   `rel_contrato_operacao` 2026-03-31 loaded in 4.7 s with a 3,251 MB peak (13.3 s and 2,459 MB with
-  4 vCPUs). The raw reports stay out of git. `plan/POC.md`, `plan/PLAN-STAGE-7.md`
+  4 vCPUs). The raw reports stay out of git.
 
 - The load through the package (2026-09-24, 14:16 to 14:19 UTC, `scripts/migrate_parquet_to_delta.py
   --environment prod` from `main` with #72, one process, an engine per partition with 16 threads
@@ -158,7 +157,7 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   the known absence of a 2026-01-31 partition in `cad_contratos`; `total_valor`
   117,667,407,519.194421, no non-finite `Double`. `history`, `snapshot carga-2026-09-24` (12
   tables) and `vacuum` (0 files) ran; `archive` died in the copy of the 2026-06-30 file
-  (`aws-s3.md`). The raw report stays out of git. `plan/POC.md`
+  (`aws-s3.md`). The raw report stays out of git.
 - The load through the package again (2026-09-24, `started_at` 16:51:12 UTC, from `main` with
   #73, the same machine and limits, `memory_limit` 14,036 MiB, the root loaded anew): every table
   matched, 187,340,509 rows in 21 files; `cad_lancamentos` 19.9 s, 15.3 s, 31.8 s and 19.4 s (9%
@@ -168,7 +167,6 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `cad_contratos` up to 5.1 s, the unpartitioned tables 2.1 s to 2.7 s; the audit read the same
   as at 14:16. `history`, `snapshot`, `vacuum`, the whole `archive` (21 files, `aws-s3.md`) and
   the publication of the 12 tables (`redshift.md`) followed. The raw report stays out of git.
-  `plan/POC.md`
 - The load of the grown production base (2026-09-26, `started_at` 15:55:29 UTC, from `main` of
   2026-09-25 at 22:35 or later, on 8 vCPUs and 15,617 MB with 12,768 MB available, 8 threads and
   a 6,384 MiB `memory_limit`, the root of 2026-09-25 loaded anew): the source gained the month
@@ -181,14 +179,14 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   second against about 1 million for the others) with the process peak at 9,161 MB. The audit
   read the same 989,852 orphans of 2026-01-31; `snapshot carga-2026-09-24`, `vacuum` (0 files)
   and `archive` (25 files, `cad_lancamentos` 19.1 s at 348 MB) ran. The raw report stays out of
-  git. `plan/POC.md`
+  git.
 - The load of 2026-09-27 (`started_at` 16:34:17 UTC, 8 vCPUs, 12,547 MB available, 8 threads,
   6,273 MiB): the source had not changed since 2026-09-26, with the same counts and sums in every
   partition and the same three entries outside the model; 354,048,596 rows in 25 partitions in
   496.8 s, `cad_lancamentos` 30.6 s, 21.2 s, 54.7 s, 30.7 s and 245.0 s (2026-07-31 at 0.58 million
   rows per second), the process peak at 8,625 MB from 2026-03-31 on. The audit of 2026-01-31 read
   the same 989,852 orphans and the `valor` total 117,667,407,519.194421, and `archive` copied
-  `cad_lancamentos` in 16.8 s at 350 MB. `plan/POC.md`
+  `cad_lancamentos` in 16.8 s at 350 MB.
 - The load of 2026-09-28 (`started_at` 21:14:56 UTC, 8 vCPUs, 12,515 MB available, 8 threads,
   6,257 MiB, a fresh root): the source was being rewritten [inferred]. `cad_aliquotas` had 21 rows
   (22 before), `cad_operacoes` and `rel_contrato_operacao` had no 2026-07-31 folder (5,579,536 and
@@ -203,7 +201,7 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `archive` copied 22 files, `cad_lancamentos` in 11.9 s at 329 MB. The INT96 truncation of
   sub-microsecond parts is the load's fourth loss, documented with the reach of the `conversões`
   line (first file of the first partition only, no lossy marker; user decision "Só a doc" of
-  2026-09-28). `plan/POC.md`
+  2026-09-28).
 - The load of 2026-09-29 (`started_at` 00:01:30 UTC, 8 vCPUs, 12,042 MB available, 8 threads,
   6,021 MiB, a reloaded root whose `cad_lancamentos` history begins at the `CREATE TABLE` of
   00:03:54): the source was back to 2026-09-27, with the same 354,048,596 rows in 25 partitions, the
@@ -212,4 +210,4 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   249.9 s, the process peak at 8,734 MB. The resume of the stopped load and the `vacuum --full` of
   its orphan did not run, because the root was reloaded. The audit of 2026-01-31 (version 5) read
   the same 989,852 orphans and `valor` total, and `archive` copied the 25 files, `cad_lancamentos`
-  in 17.7 s at 349 MB. `plan/POC.md`
+  in 17.7 s at 349 MB.

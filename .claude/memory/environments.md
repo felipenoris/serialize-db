@@ -1,6 +1,6 @@
 # The environments
 
-Read before running anything in the SageMaker space or the target, preparing the offline folder, or dating a measurement. The target Redshift's readings are in `redshift.md`; the lab's probe readings of 2026-09-20 are in `plan/POC.md`.
+Read before running anything in the SageMaker space or the target, preparing the offline folder, or dating a measurement. The target Redshift's readings are in `redshift.md`; the lab's probe readings of 2026-09-20 are in the library's `plan/POC.md`.
 
 ## The SageMaker Unified Studio lab, as observed on 2026-09-19
 
@@ -25,9 +25,9 @@ Read before running anything in the SageMaker space or the target, preparing the
   probe run of 2026-09-20 found no `gh` on the PATH and the 03:44 and 04:40 runs found `/usr/bin/gh`
   (with `/usr/local/bin/aws` and no `duckdb` CLI), so check for it before relying on it.
 - Probe readings of 2026-09-20 in the same space (four runs, the last at 04:40 UTC) are recorded in
-  `plan/POC.md`, which also holds the lab-only readings (IMDS, the `~/shared` mount, Athena, the
-  container credential's lifetime). This lab is not the target: the target has Redshift and no
-  internet (user statement of 2026-09-20).
+  the library's `plan/POC.md`, which also holds the lab-only readings (IMDS, the `~/shared` mount,
+  Athena, the container credential's lifetime). This lab is not the target: the target has Redshift
+  and no internet (user statement of 2026-09-20).
 - The probes import `sagemaker-studio` from the system interpreter, because nothing unpinned enters the project venv
   (`lessons.md`).
 
@@ -37,11 +37,11 @@ The target is a sandbox, not production (user statement of 2026-09-23): the sour
 `databases/prd/db_projetado` are a copy of the production base, and the S3 bucket and the Redshift
 schema are sandbox resources; `prd` in the path names the base copied, not the environment.
 Redshift serverless `controladoria-wg` in `sa-east-1`, account `<conta>`, with no internet: the readings of
-2026-09-20 and 2026-09-21 are in `redshift.md` and `plan/POC.md`, and the project library's
-`readings/` (`/mnt/project-files/readings/`, `plan/readings/` until 2026-10-04) holds the masked
-reports a pending stage consults and the source-base reading of 2026-09-21. The five probes of 2026-09-21
+2026-09-20 and 2026-09-21 are in `redshift.md`, and the project library's `readings/`
+(`/mnt/project-files/readings/`) holds the masked reports a pending item consults and the
+source-base reading of 2026-09-21. The five probes of 2026-09-21
 (03:47 to 03:51 UTC, Linux x86_64, Python 3.13.15, the project venv; reports in `secrets/probes-aws-bn/`,
-outside git; interpreted in `plan/POC.md`) read the machine and the network: 2 vCPUs, 7.6 GiB, 29.8 GiB
+outside git) read the machine and the network: 2 vCPUs, 7.6 GiB, 29.8 GiB
 free of 37.0 GiB on one disk serving `HOME`, `/tmp` and the repository, `ulimit -n` 65536; DuckDB
 1.5.5 `linux_amd64` with 2 threads, `memory_limit` 6.1 GiB, `temp_directory` `.tmp`, extensions loaded
 from the prepared `.duckdb/`; `uv`, `git`, `aws` and `duckdb` on the PATH, no `gh`, no `~/shared`, no
@@ -64,20 +64,20 @@ of 12.3 GiB; the network, the credentials and the bucket read as on 2026-09-21. 
 reach tests failed their 2 s TCP test and skipped the calls, Lake Formation timed out in 60.6 s
 and S3 Tables in 30.2 s, and `svv_table_info` is denied to the role after the `USE` (42501).
 The early migration's reports show a process peak of 19,595 MB, more than this instance's RAM,
-so the migration ran on a larger instance (`source-base.md`). `plan/POC.md`
+so the migration ran on a larger instance (`source-base.md`).
 
 The battery of 2026-09-24 at 12:38 UTC (from `main` with #72) ran on 16 vCPUs and 31,383 MB with
 28,061 MB available, the same network and credentials (the caller's credential expiring in 36
 minutes, the workgroup's in an hour), Lake Formation and S3 Tables timing out in 60.3 s and
 30.4 s, and 907 non-current versions (32,966,477 bytes) with 859 delete markers under the test
 root (`BK-14`). `catalog.py`, `bucket.py` and `space.py` exit with 1 because failed calls count,
-all of them expected readings; no check failed. `plan/POC.md`
+all of them expected readings; no check failed.
 
 The battery of 2026-09-24 at 16:51 UTC (from `main` with #73, the root loaded anew) ran on the
 same machine, 16 vCPUs and 31,383 MB with 28,074 MB available (Python 3.13.15, DuckDB 1.5.5,
 deltalake 1.6.4, pyarrow 25.0.1, `sa-east-1`), and finished the whole `SUITE.md` flow: the load,
 the audit, `history`, `snapshot`, `vacuum`, `archive` and the publication of the whole base;
-`export`, `compact` and the threads probe did not run. `plan/POC.md`
+`export`, `compact` and the threads probe did not run.
 
 The first target run of 2026-09-24 at 05:10 passed five of the six engine cases (`COPY ...
 MANIFEST`, `UNLOAD`, the loader, the audit, the export by registration, the `NaN` swap) and failed
@@ -104,7 +104,7 @@ battery of 2026-09-24 at 23:25, on a new root in `prd`, passed every suite case 
 twice, engine 6 and publication 8 twice each) and read them: `archive` of `cad_lancamentos` 11.1 s,
 its publication 153.9 s at a 273 MB peak, the first `export` 8.8 s by copy and 17.3 s at 5,425 MB by
 `--mode rewrite`; `compact` ran only on a one-file partition, which does not commit, so a real
-compaction stays unread there (`plan/POC.md`).
+compaction stays unread there.
 
 The three target-only suites ran in the target on 2026-09-23 from `main`, at 18:48 and again at
 22:53 (S3, 445 passed with the `VmHWM` memory measurements) and 22:56 and 23:01 (Redshift, 30
@@ -119,7 +119,7 @@ is `count(x) - count(finite)` and waits for two runs, as does the reading
 Data API and none of Redshift's `NaN` scan behavior. `probes/duckdb_threads.py` ran at 23:21, but
 DuckDB's external file cache served its later repetitions from memory; it now turns the cache off,
 measures half the CPUs too (user request of 2026-09-24), and its run of 2026-09-24 at 02:02 on
-16 vCPUs fixed the default at the process's CPUs. `plan/POC.md`
+16 vCPUs fixed the default at the process's CPUs.
 
 The battery of 2026-09-25 at 17:25 to 19:37 UTC (from `main` of the day, the folder prepared
 again: deltalake 1.6.6, boto3 1.43.102, `redshift_connector` 2.1.17 and sqlglot 30.19.0 by
@@ -130,7 +130,7 @@ minutes (`RS-18`), 45 load errors in 30 days (`RS-12`), 2,980 non-current versio
 bytes) and 2,788 delete markers under the test root (`BK-14`), Lake Formation and S3 Tables
 timing out in 60.7 s and 30.3 s. Every suite case passed; `duckdb_threads.py` stopped at `DT-1`
 because `SUITE.md` passed the root without `prd`, and `compact` refused the partition because a
-snapshot pointed at the current version. `plan/POC.md`
+snapshot pointed at the current version.
 
 The first part of the battery of 2026-09-26, the five probes and the seven pytest sessions from
 15:14 to 15:47 UTC (from `main` of 2026-09-25 at 22:35 or later, inferred from the 576 cases
@@ -149,7 +149,7 @@ whole base by `--channel default` (`cad_lancamentos` 295.1 s at a 266 MB peak), 
 Delta reader's 12 views in 0.582 s) and the export block (`cad_lancamentos` by copy 15.6 s at
 258 MB, by `--mode rewrite` 55.0 s at 6,989 MB; `compact` refused by the snapshot at the current
 version); the consistency probes ran from 18:30:31 with every check passing, the Redshift one in
-53.6 s, and `duckdb_threads.py` had not been sent by 18:35 UTC. `plan/POC.md`
+53.6 s, and `duckdb_threads.py` had not been sent by 18:35 UTC.
 
 The battery of 2026-09-27 from 15:58 UTC (from `main` of 15:47 UTC with the corrected probes,
 inferred from the 541 cases of the S3 session) ran on 8 vCPUs and 15,617 MB (Python 3.13.15, DuckDB
@@ -165,7 +165,7 @@ the source of 2026-09-26 unchanged in 496.8 s, peak 8,625 MB; the whole base was
 `export` took 14.7 s by copy and 56.7 s at 6,938 MB by rewrite, and `compact` refused; the
 consistency probes ran from 17:33:03 with every check passing, `probes/credentials.py` from 17:35:23
 to 18:38:25 with no read failing, and `probes/duckdb_threads.py` from 17:35:54 beside it, complete
-(`duckdb.md`). `plan/POC.md`
+(`duckdb.md`).
 
 The battery of 2026-09-28 from 20:14 UTC (from `main` with PR #104, inferred from the 662 cases
 collected) ran only the "Probes e Testes - BN" block and the migration block, on 8 vCPUs and
@@ -176,7 +176,6 @@ differed from 2026-09-27 in what changes per run and in `RS-12` (85 load errors 
 Redshift 51 of 52 and engine 9 of 10 twice each, `test_appender_copies_the_file_at_close` failing
 every time (`redshift.md`); publication 10 twice. The load from 21:14:56 (12,515 MB available,
 6,257 MiB) stopped at `cad_lancamentos` 2026-07-31 on `RegistrationRefused` (`source-base.md`).
-`plan/POC.md`
 
 The battery of 2026-09-28 from 23:09 UTC (from `main` with PR #105, inferred from the report key
 `redshift.engine.copy_missing_mandatory_file`, which only its test writes) ran the
@@ -193,7 +192,7 @@ of 2026-09-27 in 514.3 s, peak 8,734 MB (`source-base.md`); the whole base was p
 than on 2026-09-27, the footer reading), the Delta reader opened in 0.556 s, `export` took 15.6 s by
 copy and 58.4 s at 6,902 MB by rewrite, and `compact` refused; `probe_append_test.py` passed in both
 engines (`concurrency.md`), `credentials.py` ran from 00:31:00 to 01:34:02 with no read failing, and
-`duckdb_threads.py` from 00:27:53 (`duckdb.md`). `plan/POC.md`
+`duckdb_threads.py` from 00:27:53 (`duckdb.md`).
 
 The battery of 2026-09-29 from 13:31 UTC (from `main` with PR #106, inferred from the sessions
 collecting `test_two_writers_on_the_same_table_both_enter`) ran only the "Probes e Testes - BN"
@@ -204,7 +203,7 @@ two-writers test (`concurrency.md`). The probes differed from 23:09 in `RS-8` (1
 the `serialize_db` prefix, `serialize_db_publications`, and in its listing a sandbox table of an
 append probe run that stopped at 00:29, `redshift.md`), `RS-12` (88 load errors in 30 days) and
 `BK-14`, whose listing stopped at its 20,000-entry limit (10,434 non-current versions, 283,570,979
-bytes, and 9,565 delete markers, now a floor). `plan/POC.md`
+bytes, and 9,565 delete markers, now a floor).
 
 The battery of 2026-09-29 from 17:04 UTC repeated the "Probes e Testes - BN" block with the same
 versions, after the user dropped the leftover sandbox table by hand. Every case and check passed: S3
@@ -212,7 +211,6 @@ versions, after the user dropped the leftover sandbox table by hand. Every case 
 publication 10 twice (210.4 s, 204.9 s). The probes differed from 13:31 in the `RS-8` listing (16
 tables, no `exec_` table), `RS-12` (100 load errors in 30 days) and `BK-14` (10,481 non-current
 versions, 283,880,162 bytes, and 9,518 delete markers, the listing again at its limit).
-`plan/POC.md`
 
 The battery of 2026-09-30 from 14:58 UTC (from `main` with PRs #109, #110 and #111, inferred from
 the sessions' counts) repeated the "Probes e Testes - BN" block on 8 vCPUs and 15.3 GiB with the
@@ -222,7 +220,7 @@ same versions. Every case and check passed: S3 614 in 274.9 s (the three `Confli
 `test_redo_a_snapshot_and_revert_by_the_channel`, its first target run. The probes differed from
 17:04 in `RS-12` (112 load errors in 30 days) and `BK-14` (10,460 non-current versions, 283,526,691
 bytes, and 9,539 delete markers, the listing again at its limit); the `RS-8` listing held the same
-16 tables, no `exec_` table. `plan/POC.md`
+16 tables, no `exec_` table.
 
 ## The prepared folder and the venv
 
@@ -239,7 +237,7 @@ extensions from the PyPI wheels `duckdb-extension-delta` and `duckdb-extension-h
 statement of 2026-10-04; the wheel's README installs one with `duckdb_extensions.import_extension`),
 each version requiring the same exact `duckdb`, and the newest was 1.5.5, of 2026-08-10; with
 `duckdb==1.5.6`, `uv pip compile` resolved the unpinned wheels to 1.0.3 without an error. A DuckDB
-bump waits for those wheels. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+bump waits for those wheels. `.claude/memory/OPEN_QUESTIONS.md`
 
 The suites exist so the same proof of concept runs in the target, without internet; the local suite
 validates the prepared folder there (verified 2026-09-19: extracted at another path with dead proxies
@@ -251,8 +249,8 @@ and an empty `HOME`, 10 passed; on macOS after the glob fix of PR #12). `uv sync
 
 Each section of `docs/tecnologias.md` dates its measurements and pins their versions in its opening
 lines: Parquet, DuckDB and SQLAlchemy on 2026-09-18, over 300,000 rows of `operacoes`
-(`poc_delta.sample_table`), the Redshift statements compiled only; `plan/estrategia.md` on 2026-09-19;
-the S3 proof of concept of 2026-09-19 (Python 3.13.15) in `plan/POC.md`. What they do not say: the
+(`poc_delta.sample_table`), the Redshift statements compiled only; the S3 proof of concept of
+2026-09-19 (Python 3.13.15). What they do not say: the
 local proof of concept ran on macOS arm64 through `uv run --with` in the scratchpad, with 11 DuckDB
 threads and the files in the page cache, nothing against S3 or Redshift; the Python examples added
 to every document on 2026-09-19 ran under the same pinned versions.
@@ -270,26 +268,26 @@ to every document on 2026-09-19 ran under the same pinned versions.
   the first run failed at `Set up job` (`Unable to resolve action astral-sh/setup-uv@v10`, the
   repository tags major versions only up to `v7`), the second passed the 105 package tests in
   about a minute with `@v10.2.0`. The corporate index left `pyproject.toml` the same day, and the
-  `UV_CONFIG_FILE` workaround left the workflows with it. `plan/CURRENT_STATE.md`, `README.md`
+  `UV_CONFIG_FILE` workaround left the workflows with it. `README.md`
 
 The battery of 2026-09-23 at 22:49 to 23:36 UTC ran on the same kind of machine (4 vCPUs, 15,786 MB,
 DuckDB `memory_limit` 12.3 GiB) with the venv without the `emulator` group (`SP-9`) and new roots
 under `.../shared/<usuário>/serialize-db/`: `serialize-db-tests` for the suites and probes and
 `delta/db_projetado` for the migration. The session container of this repository's cloud sessions
 is also 4 vCPUs and 16,095 MB (30 GiB free), where DuckDB picks a 10.6 GiB `memory_limit`: local
-reproductions of target memory behavior run on a comparable machine. `plan/POC.md`
+reproductions of target memory behavior run on a comparable machine.
 
 The session container (2026-09-24) is cgroup v1 for memory: `/proc/self/cgroup` puts `memory` in a
 folder of its own (`/process_api/<id>/claude-code-bash`) with `memory.limit_in_bytes`
 14,345,912,320, the mount root unlimited, and a `0::/` v2 line with no controller; `MemTotal`
 16,481,980 kB, no CPU quota, one thread per core (`lscpu`, `smt/control` `notsupported`).
 `available_memory()` reads 14,197,641,216 bytes there (the cgroup room) and `environment_limits()`
-gives 4 threads and 6,761 MiB. `plan/POC.md`
+gives 4 threads and 6,761 MiB.
 Shared memory counts in the cgroup's file cache and cannot be reclaimed: 256 MiB of shared `mmap`
 in that container (no swap) raised `total_cache` and `total_shmem` by 256 MiB each, the old room
 (limit − usage + cache) fell 2 MiB and the room since 2026-09-28 (minus `total_shmem` in v1,
 `shmem` in v2) fell 274 MiB, as the usage rose 274 MiB; the kernel's cgroup-v2 text says `file`
-includes tmpfs and shared memory. `plan/PLAN-STAGE-4.md`, `plan/POC.md`
+includes tmpfs and shared memory.
 
 The battery of 2026-09-24 at 01:41 to 02:19 UTC ran on a 16 vCPU (two per physical core) and
 31,159 MB instance, DuckDB defaulting to 16 threads and a 24.3 GiB `memory_limit`,
@@ -299,7 +297,7 @@ and `main` with #69; the whole migration finished there, `cad_lancamentos` peaki
 under a 13.4 GiB limit with the sort faster than none at 16 threads (`source-base.md`). The threads
 probe with the cache off fixed `threads` at the process's CPUs: materialization best there, worse
 at half and at double, the S3 read 1.4x faster at triple (`duckdb.md`); the audit's non-finite
-count and the `NaN` row became assertions (`redshift.md`). `plan/POC.md`
+count and the `NaN` row became assertions (`redshift.md`).
 
 A new cloud session container (2026-09-24) starts without `.duckdb/`: the package tests with
 `SERIALIZE_DB_TEST_LOCAL_ROOT` failed on the missing `delta` extension until the GitHub
@@ -322,7 +320,7 @@ expired, since only `httpfs` triggers `REFRESH auto`. The user chose the same da
 `boto3`'s key, which the DuckDB engine recreates at each session entry when it changes; the battery
 of 2026-09-26 passed every suite case again (S3 531, the stale-key case among them), loaded the
 source's new month 2026-07-31 (`.claude/memory/source-base.md`), published the whole base by
-channel and read, in the probe, the engine's secret renewed before each expiry. `plan/POC.md`
+channel and read, in the probe, the engine's secret renewed before each expiry.
 
 ## The Windows runner (2026-10-01)
 
@@ -331,7 +329,7 @@ channel and read, in the probe, the engine's secret renewed before each expiry. 
   (`defaults.run.shell: bash`). The user ran a client project on Windows, where
   `import serialize_db` failed on `import resource`; Windows has neither `resource` nor
   `os.sysconf`, and `resources.py` reads `GlobalMemoryStatusEx` and `K32GetProcessMemoryInfo`
-  through `ctypes` there. The third run passed 354 cases with 75 skipped. `plan/POC.md`
+  through `ctypes` there. The third run passed 354 cases with 75 skipped.
 - What differs on Windows: PyArrow's `LocalFileSystem` lists with `/` (`D:/a/...`), so the local
   root goes through `as_posix()`; DuckDB's partitioned `COPY ... RETURN_STATS` joins the partition
   folders with `\` (`duckdb.md`); `Path.from_uri("file:///tmp/x")` raises `URI is not absolute`; a
@@ -351,7 +349,7 @@ channel and read, in the probe, the engine's secret renewed before each expiry. 
   Linux path without a drive is not absolute, `read_text()` decodes in cp1252, and a URI built
   from the `\` root fails `Storage.relative` and the `RETURN_STATS` registration, which compare
   with `/`. After the fixes: 252 passed and 441 skipped without variables, 568 and 125 with the
-  local root. `plan/POC.md`
+  local root.
 
 ## The package suites' counts
 
@@ -361,4 +359,4 @@ and 119 with the local root, and 691 passed with the local root and `SERIALIZE_D
 skipping only the Data API test and the Windows memory test; the container read 256 and 437, and
 574 and 119, again on 2026-10-05 at `f32398f`. The GitHub workflow on 2026-10-01: 362 passed and 76
 skipped on Windows, 363 and 75 on Ubuntu. The Windows counts of the whole suite are in the section
-above, and the target batteries' counts in the sections on them. `plan/CURRENT_STATE.md`
+above, and the target batteries' counts in the sections on them.

@@ -4,10 +4,9 @@ contra a metade delas e valores acima delas, e a sessão a mais por tabela de ``
 O DuckDB lê arquivo remoto com E/S síncrona, uma requisição HTTP por thread, e a documentação
 recomenda ``threads`` de 2 a 5 vezes os núcleos para essa leitura (``docs/tecnologias.md``, seção
 DuckDB). Este probe mede, sobre as tabelas Delta que a migração grava
-(``scripts/migrate_parquet_to_delta.py``), a
-ingestão pelo motor DuckDB do pacote com cada valor de ``threads``: é a medição que decide o padrão
-de ``DuckDBConfig.threads`` numa raiz no S3 (etapa 4) e o que a sessão a mais por tabela de
-``run.ingest`` ganha no ambiente alvo (etapa 6).
+(``scripts/migrate_parquet_to_delta.py``), a ingestão pelo motor DuckDB do pacote com cada valor de
+``threads``: é a medição que decide o padrão de ``DuckDBConfig.threads`` numa raiz no S3 e o que a
+sessão a mais por tabela de ``run.ingest`` ganha no ambiente alvo.
 
 Uso:
 

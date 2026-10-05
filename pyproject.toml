@@ -9,11 +9,11 @@ authors = [
 requires-python = ">=3.13"
 # As dependências de execução, nas versões fixadas pelos documentos e pelas suítes de estudo, são
 # tudo o que a interface pública usa: o uv sync do projeto cliente as instala sem grupo nem extra.
-# Os dialetos duckdb-engine e sqlalchemy-redshift são os compiladores de serialize_db.sql.render
-# (decisão do usuário de 2026-09-21), e duckdb-engine importa o duckdb. O boto3 faz a escrita
-# condicional do arquivo de controle no S3 (serialize_db.storage). O redshift-connector é o driver
-# do motor Redshift, da publicação e do leitor Redshift, fixado porque o motor lê o type_modifier
-# do row_desc privado do driver (serialize_db.engine.redshift).
+# Os dialetos duckdb-engine e sqlalchemy-redshift são os compiladores de serialize_db.sql.render,
+# e duckdb-engine importa o duckdb. O boto3 faz a escrita condicional do arquivo de controle no
+# S3 (serialize_db.storage). O redshift-connector é o driver do motor Redshift, da publicação e
+# do leitor Redshift, fixado porque o motor lê o type_modifier do row_desc privado do driver
+# (serialize_db.engine.redshift).
 dependencies = [
     "boto3==1.43.108",
     "deltalake==1.6.6",
@@ -29,7 +29,7 @@ dependencies = [
 serialize-db = "serialize_db:main"
 
 [dependency-groups]
-# Versões fixadas nas usadas pelos exemplos em plan/ e pela prova de conceito.
+# Versões fixadas nas usadas pela prova de conceito.
 dev = [
     "boto3>=1.40",
     "deltalake==1.6.6",
@@ -76,12 +76,12 @@ line-length = 100
 # Só os arquivos Python: o padrão do Ruff 0.16 inclui `*.md`, e formataria os blocos de código de
 # docs/, que são registros.
 include = ["*.py", "*.pyi", "**/pyproject.toml"]
-# O modelo de referência fica como está (decisão do usuário de 2026-09-21).
+# O modelo de referência fica como está.
 extend-exclude = ["tests/reference_model"]
 
 [tool.ruff.format]
 # A vírgula final depois do último parâmetro mantém um parâmetro por linha e o `) -> T:` em linha
-# própria, o padrão das assinaturas do repositório (decisão do usuário de 2026-10-01).
+# própria, o padrão das assinaturas do repositório.
 skip-magic-trailing-comma = false
 
 [tool.ruff.lint]

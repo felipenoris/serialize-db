@@ -1,4 +1,4 @@
-"""A biblioteca padrão do Python nos papéis que as etapas (``plan/PLAN-STAGE-<n>.md``) lhe dão.
+"""A biblioteca padrão do Python nos papéis que a biblioteca lhe dá.
 
 Sem gravar arquivo: a ordem dos valores de partição e o valor derivado de uma data (``datetime``),
 os identificadores de execução e de sandbox (``uuid``, ``re``), o protocolo e a configuração de um

@@ -2,7 +2,7 @@
 
 Os testes conferem o texto de cada verificação do modelo cliente nos dois dialetos, com as funções
 de cada motor e sem a cláusula ``FILTER``, que o Redshift não tem; o texto do DuckDB rodando num
-DuckDB em memória sobre o DDL da etapa 1; o escopo da chave pela coluna de partição e pela de
+DuckDB em memória sobre o DDL do contrato; o escopo da chave pela coluna de partição e pela de
 ``partition_source``, com ``key_scope`` e o ``skip_when`` da chave primária inteira; as chaves
 estrangeiras só com ``foreign_keys=True``; a recusa do valor de partição fora da regra; e o texto do
 ``is_finite`` do Redshift sobre o ``NaN``, os infinitos, um número e o nulo, rodando no DuckDB.
@@ -100,7 +100,7 @@ def names_of(
 
 def test_audit_sql_per_dialect() -> None:
     """Cada verificação do modelo cliente renderiza nos dois dialetos, com as funções de cada motor
-    e sem ``FILTER`` no Redshift; o texto do DuckDB roda sobre o DDL da etapa 1."""
+    e sem ``FILTER`` no Redshift; o texto do DuckDB roda sobre o DDL do contrato."""
     # Cada verificação do modelo cliente nos dois dialetos, e o texto do DuckDB rodando sobre o DDL.
     connection = duckdb.connect()
     for table in ClientBase.metadata.sorted_tables:
@@ -134,7 +134,7 @@ def test_audit_sql_per_dialect() -> None:
 def test_rows_check_measures_uuid_text() -> None:
     """A verificação de linhas conta o texto de uma coluna ``Uuid`` acima dos 36 bytes do
     ``VARCHAR(36)``, com ``strlen`` no DuckDB e ``octet_length`` no Redshift sobre o ``CAST``
-    para texto. O texto do DuckDB roda sobre o DDL da etapa 1, com o texto canônico, o nulo e um
+    para texto. O texto do DuckDB roda sobre o DDL do contrato, com o texto canônico, o nulo e um
     texto de 37 bytes, e sobre a coluna ``UUID`` nativa de uma tabela criada por SQL, que o
     ``strlen`` sem o ``CAST`` recusa com ``Binder Error`` (leitura de 2026-09-25)."""
     table = sa.Table(

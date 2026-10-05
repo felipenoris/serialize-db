@@ -146,7 +146,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   native reader pulls, and keep helper threads free of references to their owner so an abandoned
   object is collected. The same destructor hangs with no generator: `DeltaTable.to_pyarrow_table()`
   leaves an Acero task in flight, so a process exiting right after it never returns, which
-  `to_pyarrow_dataset()` or half a second of other work avoids (`plan/POC.md`).
+  `to_pyarrow_dataset()` or half a second of other work avoids.
 - **A reader built by `from_batches` trusts its batches** (2026-09-20). A batch with the columns in
   another order went through `RecordBatchReader.from_batches(schema, ...)` and DuckDB's `arrow_scan`
   without an error and came out with the bytes swapped. Cast every batch to the declared schema
@@ -297,7 +297,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `context_aware_warnings`, the project runs 3.13, and the engines of stages 4 and 5 call `render`
   from helper threads. The review read the compiled statement instead: without `literal_binds`,
   `compiled.binds` lists the parameter with `required=True`; with it, the list is empty and the
-  text carries `NULL`. Two compilations, no global state. `plan/PLAN-STAGE-2.md`, `plan/POC.md`
+  text carries `NULL`. Two compilations, no global state.
 - **A verdict measured on a draft is measured again after a decision changes the draft's output**
   (2026-09-22). The SQLGlot trial of 2026-09-21 read a `ParseError` on the generated text with the
   sentinel, when the draft's prefixed copy used `quote=False` and the sentinel stood bare
@@ -306,7 +306,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `plan/POC.md`, the decisions memory and the user's decision of 2026-09-22 to parse only the text
   with the prefix empty. The first run of `tests/test_sql.py` parsed the versioned files with the
   sentinel. The test now parses the versioned file of every statement, and the three documents
-  were revised in the same commit. `plan/POC.md`
+  were revised in the same commit.
 - **A conversion rule is probed with every input type and parameter that reaches it** (2026-09-22).
   `cast` measured text only when the input column was `string` (`pa.types.is_string`), which is
   false for `large_string`, the type `pa.Table.from_pandas` gives the pandas 3 `str`, and for
@@ -316,7 +316,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   needs the precision of the whole integer type (19 digits plus the scale for `int64`), and
   `p + 3 = 21` was a coincidence of the one case measured. Both rules were written from a single
   measurement and asserted on it. The fix measures text after the conversion to the contract type,
-  and the tests feed each input type the pandas paths produce. `plan/POC.md`, `plan/PLAN-STAGE-1.md`
+  and the tests feed each input type the pandas paths produce.
 - **A comparison between two designs runs both under the same conditions** (2026-09-22). The first
   probe of the single session put the new design on a file-backed DuckDB database, the stage 4
   default, against the cursor sketches of `test_parallel.py` on an in-memory one, and read the
@@ -324,7 +324,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `INSERT` into a file database dominating; on the same database kind the single session with
   Arrow IPC files was faster on a file (0.400 s against 0.565 s) and 20% slower in memory. A
   timing that decides a design is taken best of three, on the same database, the same data and the
-  same batch size, for every alternative. `plan/POC.md`
+  same batch size, for every alternative.
 - **A library's warning is a reading, never a guard** (2026-09-22). `docs/tecnologias.md` (SQLAlchemy) said since
   2026-09-19 that a valueless `bindparam` and `text("mes = :mes")` both render `mes = NULL` under
   `literal_binds` with a `SAWarning`, and the stage 2 draft of 2026-09-21 turned that warning into
@@ -334,7 +334,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `compiled.binds` marks the parameter `required` in all seven. The warning-based guard would have
   let five of seven through, and the claim about `text()` had been generalized from the one case
   the draft ran. `render` already read `compiled.binds` for thread safety; the documents now give
-  the second reason. `plan/POC.md`, `docs/tecnologias.md` (SQLAlchemy), `plan/PLAN-STAGE-2.md`
+  the second reason. `docs/tecnologias.md` (SQLAlchemy)
 - **A requirement is measured in the user's own words before it is reported kept** (2026-09-23).
   On 2026-09-22 the user asked that the client work on the next or previous batch while the
   connection does I/O, and the single-session design was reported as keeping the requirement:
@@ -346,7 +346,6 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   against 0.842 s, and the stream now writes each batch while the query runs (0.005 s and
   0.939 s). A requirement that names what overlaps with what is timed on exactly that overlap,
   with the work it names, and a design that keeps it in a weaker form says so in the report.
-  `plan/POC.md`
 - **A primitive is measured in the documented usage, with every command its implementation runs**
   (2026-09-23). The reference `Loader` of `test_parallel.py` wrote into tables the tests created
   beforehand, so the three-stage pipeline measured on 2026-09-22 and 2026-09-23 never ran the
@@ -355,7 +354,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   query of the stream: over 20,000,000 rows the first batch came at 0.811 s instead of 0.006 s,
   and the requirement reported kept on 2026-09-23 held only with the loader opened first. A sketch
   that stands in for a primitive runs every command the primitive's plan lists, in the order the
-  documented usage opens them, before its timings back a requirement. `plan/POC.md`
+  documented usage opens them, before its timings back a requirement.
 - **A claim that a type round-trips is probed with the type's special values** (2026-09-22,
   2026-09-23). The stage 3 decision registered min and max of the four types "that transcribe
   exactly", measured with finite doubles; `NaN` stays out of the maximum in both Delta writers,
@@ -363,14 +362,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   invalid JSON, through `float`. The same `NaN` makes the audit's control total fail with
   `ConversionException`, a check nobody had fed a special value. Before calling a type exact or
   safe, feed it `NaN`, the infinities, null, the empty value and the longest value.
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 - **A statement path is probed with every clause form the plan writes** (2026-09-23). The engines'
   compile path was probed on 2026-09-22 with `=` and `LIKE`, and an `IN` list compiles there as
   `__[POSTCOMPILE_...]`, which DuckDB refuses; the `delta_scan` pruning was read on `=` and
   `BETWEEN`, and the stage 4 `ingest` wrote `IN`, which opens every file. Grep the stage files for
   each clause form that reaches a path (`IN`, `NOT IN`, `OR`, expanding parameters, table
   functions) and probe each one, reading pruning through the files the engine opens.
-  `plan/POC.md`, `plan/PLAN-STAGE-4.md`
 - **A concurrency test is repeated before it is trusted, and its failure paths are read** (2026-09-23).
   The hybrid `stream` passed its eight cases on the first run; repeated six times, it left the spool
   file of an abandoned stream in three runs, because the file is born mid-query and can appear after
@@ -378,7 +375,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `AttributeError` from `__del__`, which read an event the failed `__init__` never created, only as
   a warning in the suite's output. Run a new test of threads or finalizers several times in a row,
   read the warnings the run prints, and give every field a finalizer reads a value before the first
-  line of `__init__` that can raise. `plan/POC.md`
+  line of `__init__` that can raise.
 - **A statistic is probed at every layer that prunes and in every position of the file, and a
   standard is read in its current text** (2026-09-23). The first `NaN` probe read only the Delta log
   over one-row-group files, and missed that DuckDB's Parquet reader prunes by the footer of the
@@ -387,20 +384,19 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   came from PARQUET-1246, a Java reader fix of 2018, while the spec's rule dates from 2022 and
   changed in May 2026. Put the special value in the first, a middle and the last row group, read it
   through the log and through `read_parquet`, and quote the spec file at its current commit.
-  `plan/POC.md`
 - **A path chosen by a quantity needs the quantity before the path runs** (2026-09-23). The stage 5
   plan switched `stream` from `fetchmany` to `UNLOAD` above a row threshold and waited on a
   measurement in the target to fix it; the row count exists only after the `execute` that already
   materialized the whole result in the driver, so no threshold could ever be applied, and the
   measurement would have sized a rule that cannot run. Before measuring a threshold, write down
-  where the quantity is read and whether that happens before the choice. `plan/PLAN-STAGE-5.md`
+  where the quantity is read and whether that happens before the choice.
 - **"Empty by construction" is read against the caller's loop and the rerun** (2026-09-23). The
   stage 5 `UNLOAD` destinations were empty only on the first call: `rewrite` sent every partition to
   `staging/<execution_id>/<tabela>/`, which the first partition of `run.publish`'s loop fills, and
   `register` reused `<uri>/<execution_id>/<valor>/` on the rerun with the same `execution_id` that
   stage 6 supports, while the DuckDB `register` already carried a `uuid` for that rerun. Read a
   uniqueness claim against the loop that calls the primitive and against the rerun, and end every
-  write destination with a segment new per call. `plan/PLAN-STAGE-5.md`
+  write destination with a segment new per call.
 - **A checkout shared with another session is read from git before a branch or a commit**
   (2026-09-23). Two sessions worked in the same folder: while one discussed the stage 6 decisions,
   the other created `claude/nan-estatisticas-parquet-delta`, committed and opened PR #60. The first
@@ -424,8 +420,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   where a valueless `IN` list renders `IN (NULL)`: the guard walks the statement for
   `BindParameter.required`. Run a target-only test against a local stand-in first, and give the
   stand-in the target's contract where the test reads it (the emulator's first `description` and
-  `row_desc` disagreed, a defect of the emulator, not of the test). `plan/POC.md`,
-  `plan/PLAN-STAGE-5.md`
+  `row_desc` disagreed, a defect of the emulator, not of the test).
 
 - **A shared venv is restored with every group** (2026-09-23). While implementing stage 3 in a
   checkout two other sessions used, the assistant pinned `boto3` in the runtime dependencies and ran
@@ -442,12 +437,12 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the loader), `SandboxEngine` kept `preserve_insertion_order` on, which the engine turns off, so
   seven twin tests timed a setup the engine never runs, and `test_stdlib.py` still stated the old
   partition rule. The user retired the drafts; the unique cases moved to the package tests.
-  `CLAUDE.md`, `plan/PLAN-STAGE-4.md`
+  `CLAUDE.md`
 - **A promised behavior without a failing assertion can be false** (2026-09-23). The `DuckDBLoader`
   docstring and stage 4 said an abandoned loader deletes its spool file; the case moved from the
   sketch asserted only that the thread ended and no table appeared, and a direct check showed the
   file stayed until `cleanup`. The writer thread now deletes the file when it ends with an error,
-  and the new assertion was run against the old code, where it fails. `CLAUDE.md`, `plan/POC.md`
+  and the new assertion was run against the old code, where it fails. `CLAUDE.md`
 - **A mask at the entry misses what nests** (2026-09-23). `record` masked the credential clauses
   of a string value; the Redshift suite recorded a dict whose `"unload"` entry was the `repr` of the
   `UNLOAD` outcome, an error text that can quote the command. The mask moved to the two outputs, the
@@ -463,7 +458,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `SERIALIZE_DB_TEST_LOCAL_ROOT` authorizes; the test points `tempfile.tempdir` at the local root
   first. The same review found `test_stdlib.py` leaving `NO_PROXY` and `AWS_DEFAULT_REGION` in the
   process, because `monkeypatch.delenv` on an absent variable records nothing to restore.
-  `CLAUDE.md`, `plan/POC.md`
+  `CLAUDE.md`
 - **Planned code is not speculative code** (2026-09-23). The code review reported the three
   `Database` prefixes of stages 5, 8 and 9 (`staging_prefix`, `publication_prefix`,
   `archive_prefix`) as code without a caller, against the style rule "nothing speculative", and
@@ -477,14 +472,14 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the old code ran beside the new one from a worktree: the old code recorded the missing manifest
   as an empty result and as `ok: sem manifesto linhas`, skipped the refused `PARTITION BY`, left A's
   aborted transaction open until its connection closed, and raised `TypeError` on the refused
-  `pg_backend_pid`. A green run proves only the path without failure. `CLAUDE.md`, `plan/POC.md`
+  `pg_backend_pid`. A green run proves only the path without failure. `CLAUDE.md`
 - **A compatibility the library claims is run against an instance of it** (2026-09-23).
   `storage.py` read `AWS_ENDPOINT_URL` "for an S3-compatible service" and passed it to boto3,
   PyArrow and delta-rs, while the DuckDB secret carried only the host: with DuckDB's default
   virtual-host style and TLS, it never reached an `http` endpoint or one at an IP, and no test ran
   it against such a service. The moto stand-in found it when the package's `s3` tests read through
   `Storage.duckdb_connect`; the secret now adds `URL_STYLE 'path'` and, for `http`,
-  `USE_SSL false`. `CLAUDE.md`, `plan/POC.md`
+  `USE_SSL false`. `CLAUDE.md`
 
 - **A memory reading in a child process reads the child's own peak and counts from its base**
   (2026-09-23). The two memory tests of `tests/proof_of_concept/test_duckdb.py` passed on macOS and
@@ -497,8 +492,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   reader's reading was pytest's peak. Read through `VmHWM`, the process base after importing DuckDB
   and PyArrow and connecting is 92 MB, more than half of the 168 MB ceiling, so the spool passed
   with as little as 23 MB to spare; counted from the base, the table adds 243 MB, the reader 10 MB
-  and the spool 37 to 45 MB. The macOS runs never exercised the parent's peak. `CLAUDE.md`,
-  `plan/POC.md`
+  and the spool 37 to 45 MB. The macOS runs never exercised the parent's peak. `CLAUDE.md`
 - **A difference the stand-in shows is read against the target's documentation before it is blamed
   on the stand-in** (2026-09-23). The first stand-in run of the stream case printed different rows
   for the backslash through the literal text and through the `UNLOAD`, and the difference went into
@@ -509,7 +503,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   passed, and an empty result writes none, so the test stopped there twice and lost four cases. The
   stand-in now reads Redshift literals with the backslash escape and writes nothing for an empty
   `UNLOAD`, the old code fails in it with the target's message, and the helper tells an empty
-  result from a missing manifest by `pg_last_unload_count()`. `CLAUDE.md`, `plan/POC.md`
+  result from a missing manifest by `pg_last_unload_count()`. `CLAUDE.md`
 - **A predicate is probed on table rows as well as on constants, and a function with the type the
   generated DDL gives its argument** (2026-09-23). The Redshift audit's `is_finite`,
   `x NOT IN ('NaN'::float8, ...)`, was false for `NaN` on constants in the target and let the `NaN`
@@ -517,7 +511,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the scan, so the count saw 1 of 2 non-finite values and the control total hit `NaN input (scale
   float to decimal)`. The same run refused `is_valid_json` on the `SUPER` column that the stage 1
   DDL gives a JSON column (42883), which `plan/POC.md` had marked [uncertain] without a probe of
-  that type; the refusal took down every measure of the rows check. `CLAUDE.md`, `plan/POC.md`
+  that type; the refusal took down every measure of the rows check. `CLAUDE.md`
 - **A repetition in the same process measures the caches the first run filled** (2026-09-24). The
   threads probe took the best of three repetitions per configuration, each in a new process but the
   three in one: DuckDB's external file cache served repetitions two and three from memory, and the
@@ -648,7 +642,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `column >= null`, and PyArrow skips the file. The package filters that reader only by the
   partition column, whose guarantee is the partition value, so no suite saw it. Read an omitted
   statistic through `delta_scan`, the delta-rs dataset and `read_parquet`, with a filter on the
-  column itself. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  column itself. `.claude/memory/OPEN_QUESTIONS.md`
 - **A test double calls the function it replaces through a reference saved before the swap, and a
   failure case names its failure** (2026-09-28). The repository review found the double of
   `copy_text` in `test_appender_copies_the_file_at_close` calling `redshift.copy_text`, which after
@@ -661,14 +655,14 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the same day found it again in `test_failed_copy_leaves_control_row_untouched`: the double
   rewritten for the new API raised `AttributeError` on the old code, which
   `pytest.raises(Exception)` swallowed; the case now asserts that the double wrote the invalid
-  manifest once. `plan/PLAN-STAGE-5.md`, `plan/PLAN-STAGE-3.md`, `plan/PLAN-STAGE-8.md`
+  manifest once.
 - **A double of a concurrent writer changes the bytes it writes** (2026-09-28). The check of the
   snapshot name added a read of the control file to `run.snapshot`, and
   `test_cli_run_parses_and_exits_by_result` exited 0 instead of 2: its double of the other writer
   rewrote the same content after each read, and the local storage's fingerprint is the content's
   `sha256`, so the file read before the commits matched the one the exit read, and the exit's
   conditional write passed. The double now writes a new snapshot (`outroN`) after each read and
-  passes on the old and the new code. `plan/PLAN-STAGE-6.md`
+  passes on the old and the new code.
 - **A stand-in reads an input the way the target's documentation does** (2026-09-28). With its
   double fixed by the review, `test_appender_copies_the_file_at_close` passed on the stand-in and
   failed four times in the target with `DID NOT RAISE`: the stand-in's `COPY` read the exact key and
@@ -676,7 +670,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   key prefix, and the target loaded nothing without error. The stand-in imitated only the readings
   of the target, and the prefix rule was documented, not read. It now lists the prefix, and the old
   code fails on it as in the target. Before a failure case is trusted on the stand-in, read the
-  target's documentation for the input the case breaks. `plan/POC.md`, `tests/emulator.py`
+  target's documentation for the input the case breaks. `tests/emulator.py`
 - **A probe's count is read against its filter before a finding is attributed to it** (2026-09-29).
   The battery of 13:31 showed `exec_poc_faa78dd7_cad_append_0` in the `svv_all_tables` listing that
   `RS-8` prints, and the report of that day attributed to it the count `RS-8` moved from 0 of 2 to 1
@@ -686,7 +680,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   disproved: the table's execution ran at 00:29 and stopped after its first round. Both claims
   reached `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md` and the thread before the probe's
   `TABLE_PREFIX` and the server's history were read. This is the rule of 2026-09-20 that reads a
-  label against each item it covers. `plan/POC.md`
+  label against each item it covers.
 - **A Parquet footer is read by each leaf's `path`, never its `name`** (2026-10-01). The second
   review after PR #120 wrote a file with the contract column `valor` inside a struct `s`:
   `_check_footer_schema` keyed the footer by `ColumnSchema.name`, the leaf's name, so the file had
@@ -695,7 +689,6 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   by the leaf's name (`x`, `element`). The check now reads `ColumnSchema.path` and refuses any
   dotted path as a column outside the contract, which has no nested type; the case
   `coluna aninhada` of `test_register_files_refuses_each_defect` fails on the old code.
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 - **A DuckDB version bump waits for the PyPI extension wheels** (2026-10-04). The dependency
   review of 2026-10-03 read the PyPI versions of the packages in `pyproject.toml` only, pinned
   DuckDB 1.5.6 and passed every suite with the extensions `INSTALL` fetched from the DuckDB
@@ -703,7 +696,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   from the wheels `duckdb-extension-delta` and `duckdb-extension-httpfs`, each version requiring the
   exact `duckdb`, and the newest was 1.5.5. With `duckdb==1.5.6` the resolver picked the 1.0.3
   wheels without an error. Before bumping DuckDB, read those wheels' versions on PyPI; the rule
-  lives here because `CLAUDE.md` is at its size budget. `plan/POC.md`
+  lives here because `CLAUDE.md` is at its size budget.
 - **A command repeated after a connection drop is read with the command applied before the
   drop** (2026-10-04). `RedshiftEngine.execute` reopened a dropped connection and repeated the
   command, and the bug review of 2026-10-04 read the case the design never had: the driver's
@@ -714,4 +707,4 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   adds rows runs inside one, where the drop rises and the server rolls back. The test double
   drops the connection on a named command after passing it to the stand-in
   (`FakeConnection.drop_on`), so the repeat is measured, not assumed; the rule lives here
-  because `CLAUDE.md` is at its size budget. `plan/POC.md`, `plan/PLAN-STAGE-5.md`
+  because `CLAUDE.md` is at its size budget.

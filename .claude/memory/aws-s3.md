@@ -1,18 +1,18 @@
 # S3, credentials, region and proxy
 
-Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a probe that reaches AWS. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a probe that reaches AWS. A fact that a file of the repository details ends with that file, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## S3 primitives and IAM needs
 
 - S3 `PutObject` accepts `IfNoneMatch='*'` (since 2024-08-20) and `IfMatch=<etag>` (since
   2024-11-25); failures return 412, conflicts 409. This is the primitive a table format needs for
-  atomic commits, and it answers the open question in `plan/guia.md`. `plan/estrategia.md`
+  atomic commits.
 - The botocore 1.43.105 S3 model documents `409 ConditionalRequestConflict` on a conditional
   `PutObject` when a conflicting operation runs during the upload: with `IfMatch`, re-read the
   ETag and retry; with `IfNoneMatch`, retry. botocore's retry rules (`data/_retry.json`,
   `retries/standard.py`) name no `ConditionalRequestConflict`, so the 409 reaches the caller.
   `Storage._put_s3` turns it into `ConflictError` like the 412 (user decision of 2026-09-30);
-  no reading produced a 409, in the target or in moto. `plan/PLAN-STAGE-3.md`
+  no reading produced a 409, in the target or in moto.
 - S3 needs for Delta: `ListBucket` (prefix), `GetObject`, `PutObject` (commits use
   `If-None-Match: *`, no extra IAM action; `object_store` defaults `aws_conditional_put` to
   `etag`), `DeleteObject` for vacuum, KMS actions only with SSE-KMS; no lifecycle expiration under
@@ -29,7 +29,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   botocore's retries per part); moto 5.2.3 serves `UploadPartCopy`, and `test_list_copy_delete`
   copies a 9 MiB object in both roots. The rerun of 2026-09-24 at 16:51, on the root loaded anew,
   copied the 21 files of the 12 tables through the managed transfer, the four `cad_lancamentos`
-  files included, with no error and no duration printed. `plan/POC.md`, `plan/PLAN-STAGE-3.md`
+  files included, with no error and no duration printed.
 
 ## Credentials, region and proxy in the clients
 
@@ -44,7 +44,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   library exports `NO_PROXY` from `no_proxy` when absent or empty; its `storage_options` carries no
   credential (decision of 2026-09-22, `.claude/memory/decisions.md`), and
   `test_delta_rs_storage_options_fallback` keeps measuring the `boto3` fallback's shape.
-  `docs/tecnologias.md` (Delta Lake), `plan/estrategia.md`
+  `docs/tecnologias.md` (Delta Lake)
 - botocore 1.43.98 reads `AWS_DEFAULT_REGION` or the profile, never `AWS_REGION`, and without a
   region uses the global endpoint `s3.amazonaws.com`, which a regional VPC endpoint does not serve;
   delta-rs reads both variables and without either queries IMDS and falls back to `us-east-1`. The S3
@@ -56,14 +56,12 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   up over the network at construction (0.49 s and `OSError: Bucket ... not found` in a stripped
   environment); `?region=...` in the URI or `S3FileSystem(region=...)` builds in 0.00 s without
   network, so stage 3 builds the filesystem with the environment's region (2026-09-23).
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 
 - The delta-rs retry bound, read on 2026-09-23 in a stripped subprocess: against an unroutable
   endpoint (`http://10.255.255.1:9`) `is_deltatable` gave up in 57.0 s with the defaults and in
   10.3 s with `retry_timeout=10s`, whether `max_retries` was 1 or 3; against a closed local port in
   2.4, 0.3 and 0.6 s. `serialize_db.storage` passes `max_retries=3` and `retry_timeout=10s`: the
-  timeout is the ceiling, and the retries cover a passing S3 error. `plan/POC.md`,
-  `plan/PLAN-STAGE-3.md`
+  timeout is the ceiling, and the retries cover a passing S3 error.
 - DuckDB 1.5.5's `credential_chain` secret stores `key_id`, `secret` and `session_token` resolved
   at `CREATE SECRET` (`duckdb_secrets()` shows them, redacted), and nothing renews them; `REFRESH
   auto` is accepted with and without `CHAIN`, adds `refresh_info={'refresh': auto, ...}` to the
@@ -71,8 +69,8 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `REFRESH auto` requests and `CHAIN 'sts'` and `'web_identity'` switch on by themselves (probe of
   2026-09-24; when the refresh runs, the page does not say). `storage.duckdb_setup` and the
   migration script created the secret with `REFRESH auto` (user decision of 2026-09-24) until the
-  target read on 2026-09-25 that only `httpfs` triggers it (below). `plan/POC.md`,
-  `.claude/memory/OPEN_QUESTIONS.md`, `plan/PLAN-STAGE-3.md`
+  target read on 2026-09-25 that only `httpfs` triggers it (below).
+  `.claude/memory/OPEN_QUESTIONS.md`
 - In the stand-in of 2026-09-25 (moto behind a proxy answering `400 ExpiredToken` to a key past
   its 70 s lifetime, a local IMDS issuing a new key every 40 s, because delta-rs ignored
   `AWS_CONTAINER_CREDENTIALS_FULL_URI` and 169.254.170.2 does not exist in the container):
@@ -84,8 +82,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   (object_store 0.13.2) refreshed by itself. `S3FileSystem` and boto3 failed for IMDS reasons
   the target does not share: botocore's IMDS fetcher pushes a near expiry 12 to 20 minutes
   ahead (`ec2_credential_refresh_window` 10 min plus 2 to 10 random), and the AWS C++ SDK
-  1.11.800 of PyArrow reloaded about every five minutes. `plan/POC.md`,
-  `.claude/memory/OPEN_QUESTIONS.md`
+  1.11.800 of PyArrow reloaded about every five minutes. `.claude/memory/OPEN_QUESTIONS.md`
 - In the target on 2026-09-25 (`probes/credentials.py`, 18:33 to 19:36 UTC, 14 rounds 5 minutes
   apart over `<root>/prd/cad_contas`, `plan/readings/credentials-2026-09-25-1833.txt` in git
   history), the `boto3` chain served a new container key about every 30.6 minutes (the first
@@ -98,7 +95,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `_delta_log/_last_checkpoint`), the same round's `read_parquet` read, the secret moved to the new
   key, and `delta_scan` read in the three later rounds. `credentials_clause` followed the container
   key from 18:53:55 on (a new `boto3` session per call). botocore refreshes a held container
-  credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry. `plan/POC.md`,
+  credential 15 minutes (advisory) to 10 minutes (mandatory) before its expiry.
   `.claude/memory/OPEN_QUESTIONS.md`
 - The user chose on 2026-09-25 (card "Chave boto3") the DuckDB secret built from the key of the
   `boto3` credential (`storage.aws_credentials`; `KEY_ID ?`, `SECRET ?` and `SESSION_TOKEN ?` as
@@ -110,7 +107,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   old engine failed from 72 s and the new one read every round; `probes/credentials.py`, which
   reads DuckDB through the engine since, failed `CR-4` on the old code and passed on the new.
   With `FULL_URI`, `S3FileSystem` and `boto3` renewed, unlike the IMDS stand-in.
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  `.claude/memory/OPEN_QUESTIONS.md`
 - In the target on 2026-09-26 (`probes/credentials.py` on the new code, 16:15:59 to 17:19:00 UTC,
   14 rounds over `<root>/prd/cad_contas`), no read failed and the exit code was 0: the engine's
   `delta_scan` read in the 5 rounds past the opening key's expiry at 17:00:22 (`CR-4`, which
@@ -121,7 +118,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   between 16:56:06 and 17:01:06; 34 to 60 minutes left at the rounds), `credentials_clause`
   followed it from 16:31:02 (`CR-10`), delta-rs, `read_parquet`, `S3FileSystem` and `boto3` read
   past the expiry, and the Redshift connection answered twice past its 17:16:00 password expiry
-  (`CR-8`). `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  (`CR-8`). `.claude/memory/OPEN_QUESTIONS.md`
 - In the target on 2026-09-27 (17:35:23 to 18:38:25 UTC, 14 rounds over the same table) no read
   failed: the secret moved to the new key at 18:20:31, 10.2 minutes before the 18:30:43 expiry (the
   18:15:30 round was 15.2 minutes before it, outside botocore's window), and `delta_scan` read in
@@ -129,13 +126,12 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   and the one expiring at 19:31:50 between 18:30:33 and 18:35:34 (30 to 56 minutes left at the
   rounds). The four switches read on 2026-09-26 and 2026-09-27 all fit one about 30 minutes before
   the old key's expiry (inferred). `credential_expiry` read the container expiry in `space.py`,
-  `RS-18` and `CR-1`. `plan/POC.md`
+  `RS-18` and `CR-1`.
 - botocore keeps a credential's expiry only in the private `RefreshableCredentials._expiry_time`
   (botocore 1.43.103; <https://github.com/boto/botocore/issues/2694>, asking for a public field,
   open since 2022-06-13), and a credential from the `AWS_*` variables is a
   `RefreshableCredentials` only with `AWS_CREDENTIAL_EXPIRATION` (`EnvProvider`).
   `credential_expiry` in `probes/probelib.py` is the one place the probes read it (2026-09-27).
-  `plan/POC.md`
 
 ## The target's network, read on 2026-09-21
 
@@ -144,7 +140,6 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   in `bucket.py` and `redshift.py`). `diagnose_aws.py` had boto3, delta-rs as found and DuckDB list
   the test prefix with both region variables set: the S3 suite needs no maintenance there, and the
   library never calls IAM or KMS (SSE-KMS is applied by S3; the first write proves the permission).
-  `plan/POC.md`, `plan/PLAN.md`
 
 ## The local stand-in for S3
 
@@ -156,7 +151,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `test_s3.py`, the Redshift suites and the package's `s3` tests on 2026-09-23: the conditional
   `PutObject` (`IfNoneMatch='*'`, `IfMatch`) returns 412, and `HeadObject` returns no
   `ServerSideEncryption`. Its output goes to `/dev/null`, because it logs every request and a pipe
-  without a reader would block it. `plan/POC.md`
+  without a reader would block it.
 - Each client reaches it its own way: `boto3` and `pyarrow` read `AWS_ENDPOINT_URL`, delta-rs also
   needs `AWS_ALLOW_HTTP=true`, and DuckDB 1.5.5 ignores the variable: its secret needs `ENDPOINT`
   without the scheme, `URL_STYLE 'path'` (without it the bucket becomes a subdomain of the IP) and
@@ -166,10 +161,9 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `LocationConstraint` got `IllegalLocationConstraintException`: the stand-in sets
   `AWS_DEFAULT_REGION` too. With keys in
   `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, `boto3` reports the credential method `env`.
-  `plan/POC.md`, `plan/PLAN-STAGE-3.md`
 - `AWS_ENDPOINT_URL_S3` alone, pointed at moto on 2026-09-27 (boto3 1.43.102, deltalake 1.6.6,
   pyarrow 25.0.1): `boto3` listed the bucket and delta-rs found the table, both reading the
   variable from the environment, while PyArrow's `S3FileSystem` went elsewhere (`HeadObject`
   `ACCESS_DENIED`, which moto never returns). The package reads only `AWS_ENDPOINT_URL`
   (`storage._endpoint`), so the DuckDB secret and PyArrow get no endpoint from the `_S3` one;
-  the endpoint line of `probes/diagnose_aws.py` says so. `plan/POC.md`
+  the endpoint line of `probes/diagnose_aws.py` says so.

@@ -1,6 +1,6 @@
 # Threads, the GIL and the batch boundary
 
-Read before `stream`, `appender`, `max_workers`, any helper thread, or a change in how batches cross the library's boundary. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before `stream`, `appender`, `max_workers`, any helper thread, or a change in how batches cross the library's boundary. A fact that a file of the repository details ends with that file, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 - `duckdb` and `redshift_connector` declare DB-API `threadsafety` 1: threads share the module, never a
   connection. DuckDB, delta-rs and PyArrow release the GIL during native work (a Python loop in
@@ -14,13 +14,12 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   beside a thread running pure Python waits the switch interval per reacquisition: 200 `os.stat` took
   0.3 s against 0.2 ms alone (0.035 s with `sys.setswitchinterval(0.0005)`), and the lazy
   `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import at
-  startup and keep hot pure-Python loops out of the library's threads. `plan/PLAN.md`, section "A troca de dados com o
-  código cliente", records the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
+  startup and keep hot pure-Python loops out of the library's threads (decisions of 2026-09-20,
+  `decisions.md`). `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
 - Rust already enters through the `deltalake` wheel and DuckDB's `delta` extension; an extension of
   the project's own (PyO3, `pyo3-arrow`) pays only when a profile shows a hot Python
   loop that neither SQL nor Polars expresses, contract-by-contract projection rules for example,
   or when a log store beyond what delta-rs offers is needed (assessment of 2026-09-19).
-  `plan/estrategia.md`, section "Rust e PyO3"
 - The client boundary by batches (2026-09-20, macOS arm64, DuckDB 1.5.5 with `threads = 2`): a
   `to_arrow_reader` on its own `cursor()` delivers its query's snapshot while other cursors insert
   into the same table and change the catalog, and closing that cursor mid-stream did not stop it;
@@ -39,8 +38,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   not close a generator-backed reader. `to_batches`/`from_batches`/`RecordBatch.to_pandas(ArrowDtype)`/
   `RecordBatch.from_pandas` share buffers (0.04 ms, 0.003 ms, 1.4 ms, 0.5 ms). A mid-read query
   error reaches Python as `OSError` with DuckDB's message. Objects with `__arrow_c_stream__` are
-  accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `plan/PLAN.md`, `plan/POC.md`,
-  `docs/tecnologias.md` (DuckDB), `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
+  accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `docs/tecnologias.md`
+  (DuckDB), `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
 - Both engines keep one session per execution under a `threading.RLock` (user decision of
   2026-09-22, first for Redshift, then for DuckDB the same day, so a temporary table serves every
   later command on both engines); `session()` hands the raw connection to the client with the lock
@@ -63,8 +62,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   Redshift `stream` goes through `UNLOAD ... PARALLEL OFF`, with the files read by a helper thread,
   and `query` through the cursor (user decision of 2026-09-23), and the DuckDB `loader` is the
   `appender` (user decision of 2026-09-28), with the same IPC file and `INSERT ... BY NAME` at
-  `close`. `plan/PLAN.md`,
-  `plan/PLAN-STAGE-4.md`, `plan/PLAN-STAGE-5.md`, `plan/POC.md`, `tests/proof_of_concept/test_parallel.py`
+  `close`. `tests/proof_of_concept/test_parallel.py`
 - The DuckDB `stream` writes each batch while the query runs (2026-09-23): a helper thread takes the
   session lock, pulls `to_arrow_reader`, writes each batch to the Arrow IPC spool and counts the
   batches written under a `threading.Condition`; the client reads each written batch in its own
@@ -81,8 +79,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   when client work dominated. `new_session()` is `cursor()` on DuckDB: it sees tables the main
   session committed, refuses its temporary tables with `CatalogException`, and runs while the main
   session is held; four 150,000-row tables entered by `delta_scan` in 0.017 s in four extra
-  sessions against 0.066 s in series. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md`, `plan/POC.md`,
-  `tests/proof_of_concept/test_parallel.py`, `tests/proof_of_concept/test_duckdb.py`
+  sessions against 0.066 s in series. `tests/proof_of_concept/test_parallel.py`,
+  `tests/proof_of_concept/test_duckdb.py`
 - The 2026-09-23 review measured alternatives to the single-session `stream` and `loader` (macOS,
   11 cores, file database, best of three, `threads = 2`, 100,000-row batches). `stream` over
   13,333,333 rows (134 batches), total without work / 5 ms pure Python per batch / pandas: current
@@ -105,8 +103,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   3.498 s in series with `threads = 2` (1.037 against 1.382 s with 11), peak memory 373 to 514 MB and
   803 to 917 MB; part of the gain is the calling threads added to the pool, which the target's
   2 vCPUs lack. The proposals (table created at close, hybrid stream, `interrupt()`) await the user
-  in `.claude/memory/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`,
-  `tests/proof_of_concept/test_duckdb.py`
+  in `.claude/memory/OPEN_QUESTIONS.md`. `tests/proof_of_concept/test_duckdb.py`
 - The hybrid `stream` (user decision of 2026-09-23, implemented in `serialize_db.engine.duckdb`)
   keeps batches in a deque while their bytes fit a 64 MiB budget and writes the first batch that
   does not fit, and every later one, to the LZ4 spool; the client drains the deque before reading
@@ -117,7 +114,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   proposal needs). Against the current design over 13,333,333 rows at `threads = 2`: 0.622 → 0.411 s
   without work, 0.965 → 0.673 s with 5 ms pure Python per batch, 0.641 → 0.411 s with pandas, and
   1.086 → 0.908 s with a lagging client (96 batches spilled, 297 MB peak; 256 MiB gave 0.839 s at
-  522 MB). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+  522 MB).
 - The stage 4 sketches (2026-09-23; `test_parallel.py` held them until the review of the same day
   retired them, user decision, and `DuckDBStream` and `DuckDBLoader` implemented them; the loader
   is `DuckDBAppender` since 2026-09-28, and `create_table` creates the table):
@@ -131,7 +128,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   three-stage pipeline 0.365 to 0.370 s against 0.406 to 0.436 s before; with `stream` then `loader`
   in one `with`, the first batch arrives while the query runs. Five runs of the suite were green;
   the orphan-file race and a `__del__` reading a field the failed `__init__` never set appeared only
-  on repetition. `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+  on repetition.
 - A read racing a `load` fired in a thread and forgotten without `result()` fails with
   `CatalogException: Table with name ... does not exist!` on the main session and on an extra
   session, never reads old rows: the reference `Loader` creates the table only at `close` and
@@ -142,7 +139,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   `create_table` or `ingest(materialize=True)`, and a read during an `append` in flight sees the
   table without the new rows
   (`test_engine_duckdb.py::test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows`,
-  `.claude/memory/decisions.md`). `plan/POC.md`, `plan/PLAN-STAGE-4.md`
+  `.claude/memory/decisions.md`).
 - Two writers on one sandbox table entered in both engines in the target on 2026-09-29
   (`probes/consistencia/probe_append_test.py`, `-m redshift` in 41.4 s with 20,000 rows per writer,
   `-m local` in 11.6 s with 200,000): two `append` at once in extra sessions, two on the main
@@ -160,7 +157,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   together and saw the empty table; on Redshift the refusal and the drop wrap the whole `close`,
   because `_copy_file` already runs under the transaction's lock. The test passed in the target on
   2026-09-29 at 13:31, on DuckDB in the `-m "not redshift"` session with the local root and on
-  Redshift in the four sessions that collect it. `plan/POC.md`
+  Redshift in the four sessions that collect it.
 
 - A pool that receives every task at once cannot promise that nothing new starts after the first
   failure: with one worker, the worker took the third table before the main loop saw the second
@@ -173,7 +170,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   Under load, DuckDB can hand a stream's first batch only at the
   end of the query (4.531 s in a three-process reproducer, with the second batch already in memory),
   so a test that closes a stream "mid-query" asserts the thread ended and the session is free, with
-  the error null or the interrupt's. `plan/POC.md`, `plan/PLAN-STAGE-6.md`
+  the error null or the interrupt's.
 - The memory probes of `tests/proof_of_concept/test_duckdb.py` on Linux x86_64 (2026-09-23, 4 vCPUs,
   Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1): a new process's `ru_maxrss` starts at its parent's
   peak on Linux, so the probes read `VmHWM` from `/proc/self/status` there and `ru_maxrss` on macOS,
@@ -182,7 +179,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   `import pyarrow` 39 MB, PyArrow's default pool `mimalloc`). 10,000,000 rows: the whole table
   335 MB (242 to 243 MB over the base), the direct reader 102 MB (9 to 10 MB), the spool 130 to
   138 MB (37 to 45 MB, 81 MB of file); PyArrow imported by `to_arrow_reader` mid-query left the
-  reader at 103 MB over a 53 MB base. `plan/POC.md`, `tests/proof_of_concept/test_duckdb.py`
+  reader at 103 MB over a 53 MB base. `tests/proof_of_concept/test_duckdb.py`
 
 - `python_rate_during` (the GIL helper of `tests/proof_of_concept/test_concurrency.py`) waits for
   the counter thread's first iteration before timing the action: without the wait, 200 `os.stat`
@@ -191,12 +188,12 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   (usually 0.08 s to 0.75 s beside the loop); five runs passed after the wait. It failed again in
   whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the shorter
   interval) and on 2026-10-03, and passed alone and in the other sessions; the item is in
-  `.claude/memory/OPEN_QUESTIONS.md`. `plan/POC.md`
+  `.claude/memory/OPEN_QUESTIONS.md`.
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
   2026-09-25), and 79 of 400 (175 conflicts) in the target machine's local folder on 2026-09-26;
-  S3's `IfMatch` is server-side. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  S3's `IfMatch` is server-side. `.claude/memory/OPEN_QUESTIONS.md`
 - `Execution.publish_delta` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
@@ -205,8 +202,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   section D deterministically; section D again in the target on 2026-09-26, where section C's race
   took the `ExecutionConflict` path). delta-rs 1.6.6 opened at the pinned version refuses the commit
   after an overwrite of the same partition or a schema change, and passes after another partition, a
-  compaction of the same partition or a metadata-only commit. `plan/POC.md`,
-  `.claude/memory/OPEN_QUESTIONS.md`
+  compaction of the same partition or a metadata-only commit. `.claude/memory/OPEN_QUESTIONS.md`
 - The threaded APIs against their serial form, 2026-10-04, this container (Linux, 4 vCPUs, 16 GB,
   DuckDB 1.5.5, PyArrow 25.0.1, deltalake 1.6.6, pandas 3.0.6), each measure in a new process, best
   of three, 10,000,000 rows of six columns in a DuckDB file database, 100,000-row batches: `stream`
@@ -228,5 +224,5 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   earlier measures misses the memory the process kept: one query read +418 MB first and +205 MB on
   each repeat, and +365 MB with the Arrow pool's `release_unused()` and glibc's `malloc_trim(0)`
   before `/proc/self/clear_refs`. `probes/operacao/probe_parallel_gain.py` repeats the measures for
-  the Redshift engine, S3 and `publish_redshift` in the target. `plan/POC.md`,
-  `.claude/memory/OPEN_QUESTIONS.md`, `docs/index.md`
+  the Redshift engine, S3 and `publish_redshift` in the target. `.claude/memory/OPEN_QUESTIONS.md`,
+  `docs/index.md`

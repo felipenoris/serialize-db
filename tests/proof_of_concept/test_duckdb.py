@@ -137,8 +137,9 @@ def test_arrow_reader_on_its_own_cursor_survives_commands_on_another(
     """O leitor preso a um cursor entrega o snapshot da sua consulta enquanto outro cursor insere na
     mesma tabela, cria, altera e apaga tabelas.
 
-    É o que isola o ``stream`` da etapa 4 dos comandos que a thread do cliente roda no cursor dela.
-    O cursor fechado no meio da leitura e o custo de abrir um cursor são leituras do relatório.
+    É o que isola o ``stream`` do motor DuckDB dos comandos que a thread do cliente roda no cursor
+    dela. O cursor fechado no meio da leitura e o custo de abrir um cursor são leituras do
+    relatório.
     """
     con.execute("CREATE TABLE numeros AS SELECT range AS id FROM range(1_000_000)")
     reading = con.cursor()
@@ -863,7 +864,7 @@ def test_control_total_fails_on_nan_and_infinity(
     A soma é ``sum(CAST(valor AS DECIMAL(38, 6)))``, e falha também sob
     ``FILTER (WHERE isfinite(valor))``; um ``CASE`` com ``isfinite`` soma só os finitos.
 
-    Um ``Double`` não finito derrubaria a verificação ``linhas`` inteira da etapa 4 em vez de
+    Um ``Double`` não finito derrubaria a verificação ``linhas`` inteira da auditoria em vez de
     aparecer como contagem. O ``FILTER`` do agregado não evita o erro, porque o ``CAST`` é avaliado
     em toda linha antes dele.
     """
@@ -915,8 +916,8 @@ def test_interrupt_stops_a_blocking_query_from_another_thread() -> None:
     A conexão continua usável, um ``interrupt()`` ocioso não afeta o comando seguinte, e o de uma
     conexão não para a consulta de um cursor dela.
 
-    O ``close`` de um ``stream`` da etapa 4 só confere o pedido de parada entre lotes; uma ordenação
-    não entrega lote algum antes de terminar. O tempo até parar é leitura do relatório.
+    O ``close`` de um ``stream`` do motor DuckDB só confere o pedido de parada entre lotes; uma
+    ordenação não entrega lote algum antes de terminar. O tempo até parar é leitura do relatório.
     """
     con = duckdb.connect(config={"threads": 2})
     con.execute("CREATE TABLE t AS SELECT range AS id, hash(range) AS h FROM range(20_000_000)")
@@ -963,8 +964,8 @@ def test_cursor_opens_while_the_connection_runs_a_query() -> None:
     """``cursor()`` volta na hora com uma consulta em curso na conexão, de outra thread, e o cursor
     novo consulta o mesmo banco.
 
-    ``new_session()`` da etapa 4 e um cursor próprio não precisam do lock da sessão para nascer: a
-    sessão a mais pedida durante um comando longo da principal não espera por ele.
+    ``new_session()`` do motor DuckDB e um cursor próprio não precisam do lock da sessão para
+    nascer: a sessão a mais pedida durante um comando longo da principal não espera por ele.
     """
     con = duckdb.connect(config={"threads": 2})
     con.execute("CREATE TABLE t AS SELECT range AS id, hash(range) AS h FROM range(20_000_000)")
