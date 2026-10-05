@@ -4846,13 +4846,12 @@ Comportamento do `UNLOAD ... FORMAT AS PARQUET` segundo a documentação:
 
 O `UNLOAD` do projeto grava uma partição por comando, sem `PARTITION BY` e com a coluna de partição
 fora do `SELECT`, num prefixo novo por tentativa dentro da pasta da partição,
-`<coluna>=<valor>/<execution_id>_<uuid>/`, com `MANIFEST VERBOSE` e `MAXFILESIZE` igual ao tamanho
-alvo da tabela. O `SELECT`
-lista as colunas na ordem do modelo, com casts para os tipos do contrato e `ORDER BY` pela chave de
-ordenação. A
-biblioteca confere o manifesto do `UNLOAD` e o rodapé de cada arquivo antes de registrá-los no log do
-Delta, e relê a versão depois (seção "O manifesto entre o log do Delta e o Redshift"). `CLEANPATH`
-não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo `vacuum`.
+`<coluna>=<valor>/<execution_id>_<uuid>/`, com `MANIFEST VERBOSE` e sem `MAXFILESIZE`, cujo padrão
+é 6,2 GB. O `SELECT` lista as colunas na ordem do modelo, com o JSON serializado em texto por
+`JSON_SERIALIZE`, e `ORDER BY` pela chave de ordenação. A biblioteca confere o manifesto do `UNLOAD`
+e o rodapé de cada arquivo antes de registrá-los no log do Delta, e relê a versão depois (seção "O
+manifesto entre o log do Delta e o Redshift"). `CLEANPATH` não é usado: arquivos de execuções
+abortadas ficam fora do log e saem pelo `vacuum`.
 
 A documentação do `UNLOAD` não informa os tipos físicos Parquet, a obrigatoriedade das colunas nem a
 presença de estatísticas, e os três afetam o registro dos arquivos no log do Delta.
