@@ -55,13 +55,19 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
 - **O `COPY` do `ingest` do motor Redshift com uma coluna do Delta que o modelo não tem.** A
   docstring diz que o `COPY` é recusado, porque a lista de colunas do rodapé nomeia a coluna e a
   staging, criada do modelo, não a tem (decisão do usuário de 2026-10-01: documentar, sem projeção
-  do modelo); o caso não rodou no alvo nem no substituto, e nenhum teste o cobre, porque a
-  mensagem do alvo não foi lida (etapa 5). No DuckDB, o caso tem teste
+  do modelo). `tests/test_engine_redshift.py::test_ingest_refuses_a_delta_column_outside_the_model`
+  confere a recusa do `COPY` e a tabela do sandbox vazia, e grava o SQLSTATE e a mensagem do
+  servidor; passou no substituto em 2026-10-05, com a recusa do DuckDB (`Binder Error`), e espera a
+  rodada no alvo, que lê a mensagem do Redshift. No DuckDB, o caso tem teste
   (`test_materialized_ingest_refuses_a_delta_column_outside_the_model`).
 - **A `NOT NULL` ausente no `COPY` do appender Redshift.** A docstring de `RedshiftAppender` e a
-  etapa 5 dizem que a coluna `NOT NULL` que o lote não trouxe faz a carga
-  falhar, pela documentação do `FILLRECORD` da AWS; o caso não rodou no alvo, e o substituto não o
-  prova, porque a recusa dele seria a do `NOT NULL` do DuckDB.
+  etapa 5 dizem que a coluna `NOT NULL` que o lote não trouxe faz a carga falhar, pela documentação
+  do `FILLRECORD` da AWS.
+  `tests/test_engine_redshift.py::test_appender_refuses_a_batch_without_a_not_null_column` confere
+  a falha sem linha pelo `COPY` direto e pela staging da tabela com JSON, e grava o comando
+  recusado, o SQLSTATE e a mensagem; no substituto, em 2026-10-05, a recusa foi a do `NOT NULL` do
+  DuckDB, no `COPY` e no `INSERT` da staging, o que não prova o Redshift, e o caso espera a rodada
+  no alvo.
 - **A distribuição das tabelas publicadas.** As tabelas publicadas ficam em `DISTSTYLE AUTO`
   (decisão do usuário de 2026-09-21), e uma chave de distribuição só entra, por
   `ALTER TABLE ... ALTER DISTKEY`, quando o `EXPLAIN` de um join típico entre elas,
@@ -110,10 +116,25 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   chamada, que os mantém.
 
 - **A publicação de uma partição compactada.** O `compact` regrava os arquivos que junta pelo
-  escritor do delta-rs, em ZSTD, e o `COPY` da publicação no Redshift de uma partição compactada
-  não rodou no ambiente alvo: `probes/operacao/probe_compact_memory.py` compactou lá, em
-  2026-10-05, uma partição de 64 arquivos sem publicá-la, e o `compact` de `SUITE.md` sai com a
-  recusa prevista, porque roda depois de um snapshot na versão atual.
+  escritor do delta-rs, em ZSTD, e o `write_deltalake` grava em Snappy (delta-rs 1.6.6, leitura
+  local de 2026-10-05); o `COPY` da publicação no Redshift de uma partição compactada não rodou no
+  ambiente alvo: `probes/operacao/probe_compact_memory.py` compactou lá, em 2026-10-05, uma
+  partição de 64 arquivos sem publicá-la, e o `compact` de `SUITE.md` sai com a recusa prevista,
+  porque roda depois de um snapshot na versão atual.
+  `tests/test_publication.py::test_publication_loads_a_compacted_partition` compacta uma partição
+  em ZSTD e a publica ao lado de uma exportada pelo motor DuckDB em Snappy; passou no substituto em
+  2026-10-05 e espera a rodada no alvo.
+
+- **A compressão dos arquivos do `publish_partition` com `columns_without_min_max`.** As
+  propriedades do escritor que tiram o mínimo e o máximo das colunas (`delta._writer_properties`)
+  não nomeiam o codec, e o delta-rs 1.6.6 grava então o Parquet sem compressão (`UNCOMPRESSED`),
+  enquanto o `write_deltalake` sem propriedades grava em Snappy: 200.000 linhas de quatro colunas
+  deram 3.681.503 bytes contra 2.230.231, e 2.229.915 com `compression="SNAPPY"` nas mesmas
+  propriedades, que mantêm a coluna sem estatística no rodapé (leitura local de 2026-10-05). Os
+  dados ficam certos. Passam por esse caminho a troca do `export_partition` do motor Redshift, na
+  partição com `Double` não finito e em toda tabela com `Double` publicada com `audit=False`, e o
+  cliente que chama `publish_partition` com `columns_without_min_max`. Espera o usuário: pôr
+  `compression="SNAPPY"` nas propriedades, com um teste do codec, ou deixar como está.
 
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente

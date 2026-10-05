@@ -17,7 +17,10 @@ no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``, particionad
 coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
 (``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna anulável no meio;
 ``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de lugar depois de uma
-partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo nome.
+partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo nome. A
+coluna da versão que o modelo não tem faz o ``COPY`` do ``ingest`` falhar, e o lote sem uma coluna
+``NOT NULL`` faz a carga do appender falhar, com o comando recusado, o SQLSTATE e a mensagem do
+servidor como leituras.
 """
 
 from __future__ import annotations
@@ -1658,6 +1661,45 @@ def test_appender_loads_a_batch_without_a_middle_column(
     assert documents == [{"k": 1}, {"k": 2}, {"k": 3}]
 
 
+def refusal_reading(
+    error: BaseException,
+) -> dict:
+    """O comando que o servidor recusou, da nota do motor, o SQLSTATE e a mensagem."""
+    fields = error.args[0]
+    command = error.__notes__[0].removeprefix("comando: ").split(None, 1)[0]
+    return {"command": command, "sqlstate": fields.get("C"), "message": str(fields.get("M"))}
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_appender_refuses_a_batch_without_a_not_null_column(
+    target: Target,
+) -> None:
+    """Um lote sem uma coluna ``NOT NULL`` da tabela faz a carga falhar sem deixar linha, pelo
+    ``COPY`` direto e pela staging da tabela com JSON; o comando recusado, o SQLSTATE e a mensagem
+    do servidor são leituras."""
+    engine = target.engine
+    engine.create_table(MEASURES)
+    heights = pa.table(
+        {"altura": pa.array([1, 2], pa.int64()), "largura": pa.array([10, 20], pa.int64())}
+    )
+    with pytest.raises(redshift_connector.Error) as direct:
+        engine.append(MEASURES, heights)
+    assert direct.value.__notes__[0].startswith("comando: COPY")
+    record("redshift.engine.appender_without_not_null_copy", refusal_reading(direct.value))
+    assert count_of(engine, f"{engine.prefix}cad_medidas") == 0
+
+    # A tabela com coluna JSON, pela staging _carga, que aceita nulo em toda coluna: o lote sem a
+    # coluna codigo.
+    engine.create_table(PROJECTED)
+    rows = entry_rows(MONTHS[0], 1, 3, PROJECTED)
+    with pytest.raises(redshift_connector.Error) as staged:
+        engine.append(PROJECTED, rows.drop_columns(["codigo"]))
+    assert staged.value.__notes__[0].startswith(("comando: COPY", "comando: INSERT"))
+    record("redshift.engine.appender_without_not_null_staging", refusal_reading(staged.value))
+    assert count_of(engine, f"{engine.prefix}cad_lancamentos_projetados") == 0
+
+
 @pytest.mark.redshift
 @pytest.mark.s3
 def test_ingest_and_pinned_delta_load_files_before_a_middle_column(
@@ -1726,6 +1768,33 @@ def test_ingest_and_pinned_delta_load_reordered_columns(
     assert engine.query(sa.select(reordered).order_by(reordered.c.id)).to_pylist() == expected
     pinned = engine.pinned_delta(reordered, uri, version)
     assert engine.query(sa.select(pinned).order_by(pinned.c.id)).to_pylist() == expected
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_ingest_refuses_a_delta_column_outside_the_model(
+    target: Target,
+) -> None:
+    """Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado: o ``COPY`` da
+    partição, cuja lista de colunas do rodapé a nomeia, é recusado, porque a staging criada do
+    modelo não a tem, e a tabela do sandbox fica criada e vazia; o SQLSTATE e a mensagem do
+    servidor são leituras."""
+    storage = target.storage
+    wider = text_columns_table("a", "extra")
+    model = text_columns_table("a")
+    uri = target.uri(wider)
+    delta.create_table(uri, wider, storage)
+    version = delta.publish_partition(
+        uri, wider, "p1", text_columns_rows(wider, "p1", [1, 2]), METADATA, storage
+    )
+    engine = target.engine
+    with pytest.raises(redshift_connector.Error) as refused:
+        engine.ingest(model, uri, version)
+    note = refused.value.__notes__[0]
+    assert note.startswith("comando: COPY")
+    assert '"extra"' in note
+    record("redshift.engine.ingest_column_outside_the_model", refusal_reading(refused.value))
+    assert count_of(engine, f"{engine.prefix}cad_colunas") == 0
 
 
 @pytest.mark.redshift
