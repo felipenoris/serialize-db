@@ -27,7 +27,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   and `sbx_aco_decon` exists only there. The namespace has no IAM role, default or attached, so
   `IAM_ROLE` is unusable and `COPY`/`UNLOAD` carry the caller's credentials.
   `has_database_privilege(dev, CREATE)` is false and `TEMP` true, so the execution sandbox is either
-  a temporary table or the datashare itself. `stv_slices` and `stl_load_errors` are denied
+  a temporary table or the datashare itself, and no external schema reads the Delta in place:
+  Redshift loads it only through `COPY ... MANIFEST`, as the diagnosis of 2026-09-13 in PR #2 had
+  found (`plan/estrategia.md`). `stv_slices` and `stl_load_errors` are denied
   to a regular user (42501) while `sys_load_error_detail` answers; `pg_settings` on serverless lists
   neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns. `plan/POC.md`,
   `plan/OPEN_QUESTIONS.md`
@@ -46,7 +48,9 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   (`1.0.78890` serverless), snapshot isolation on the producer's database and 64 slices; it accepts
   `CREATE`/`DROP`/`SHOW TABLE`, CTAS, `ALTER TABLE ADD`/`DROP COLUMN`, `RENAME`, `TRUNCATE`
   (transactional there), `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE` and `COPY` with no
-  `COMPUPDATE` clause (the Parquet `COPY` rejects it), writes one database per transaction and creates no views. `svv_all_schemas`,
+  `COMPUPDATE` clause (the Parquet `COPY` rejects it; the columns' encoding comes from the DDL or
+  `ENCODE AUTO`, and an `ANALYZE COMPRESSION` on a real sample is what settles it,
+  `plan/PLAN-STAGE-5.md`), writes one database per transaction and creates no views. `svv_all_schemas`,
   `svv_all_tables` and `svv_redshift_databases` cross databases; `has_schema_privilege` and
   `svv_table_info` see only the session's. `COPY ... MANIFEST` and
   `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` passed there on 2026-09-21 over 500,000 rows (4.6 s

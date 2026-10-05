@@ -21,7 +21,9 @@ foi medido em [`POC.md`](POC.md).
   20.000 entradas, [`POC.md`](POC.md)), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
   com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
   `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
-  removidos", traz a regra de exemplo e como mudar a retenção.
+  removidos", traz a regra de exemplo e como mudar a retenção. A mesma pergunta vale para a regra
+  de ciclo de vida que `docs/operacao.md`, seção "Arquivo", espera na pasta `arquivo/`: a passagem
+  dos arquivos dela à classe de armazenamento mais barata.
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
   2026-09-27 e em 2026-09-29 ([`POC.md`](POC.md)), o delta-rs, o `S3FileSystem` e o `boto3`
   renovando a credencial do contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão
@@ -32,15 +34,18 @@ foi medido em [`POC.md`](POC.md).
   quando ela troca (decisão do usuário de 2026-09-25, [etapa 3](PLAN-STAGE-3.md),
   [etapa 4](PLAN-STAGE-4.md)). Seguem sem medida um comando do DuckDB mais longo que os 15 minutos
   que a chave tem pela frente, no mínimo, na entrada da sessão (o botocore a renova entre 15 e 10
-  minutos antes da expiração), o `COPY` mais longo que a credencial que ele leva, a queda de uma
-  conexão Redshift no meio de um `COPY` e a sessão ociosa e a transação inativa do serverless,
-  encerradas depois de 3.600 s e 21.600 s ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)). A cláusula do `COPY` e do
-  `UNLOAD` é montada a cada comando, no motor da [etapa 5](PLAN-STAGE-5.md) e, desde a decisão do
-  usuário de 2026-09-26, na publicação da [etapa 8](PLAN-STAGE-8.md), que passou assim no alvo em
-  2026-09-27, e leva uma chave com cerca de 29 minutos ou mais pela frente; o motor reconecta uma
-  vez por comando fora de transação e perde só a tabela temporária que o pipeline tenha criado na
-  sessão, e a carga de cada partição de `ingest` e de `pinned_delta` roda numa transação desde
-  2026-10-04, para a queda no meio do `COPY` subir sem repetição ([`POC.md`](POC.md)).
+  minutos antes da expiração) ou na abertura das conexões de `rewrite`, `read_back`,
+  `export_parquet` e da troca do motor Redshift, que duram uma tabela ou uma partição e ficam com a
+  chave da abertura; o `COPY` mais longo que a credencial que ele leva; a queda de uma conexão
+  Redshift no meio de um `COPY`; e a sessão ociosa e a transação inativa do serverless, encerradas
+  depois de 3.600 s e 21.600 s ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)).
+  A cláusula do `COPY` e do `UNLOAD` é montada a cada comando, no motor da [etapa 5](PLAN-STAGE-5.md)
+  e, desde a decisão do usuário de 2026-09-26, na publicação da [etapa 8](PLAN-STAGE-8.md), que
+  passou assim no alvo em 2026-09-27, e leva uma chave com cerca de 29 minutos ou mais pela frente;
+  o motor reconecta uma vez por comando fora de transação e perde só a tabela temporária que o
+  pipeline tenha criado na sessão, e a carga de cada partição de `ingest` e de `pinned_delta` roda
+  numa transação desde 2026-10-04, para a queda no meio do `COPY` subir sem repetição
+  ([`POC.md`](POC.md)).
 - **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
   no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam ([`POC.md`](POC.md)):
   ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
@@ -58,6 +63,14 @@ foi medido em [`POC.md`](POC.md).
   [etapa 5](PLAN-STAGE-5.md) dizem que a coluna `NOT NULL` que o lote não trouxe faz a carga
   falhar, pela documentação do `FILLRECORD` da AWS; o caso não rodou no alvo, e o substituto não o
   prova, porque a recusa dele seria a do `NOT NULL` do DuckDB.
+- **A distribuição das tabelas publicadas.** As tabelas publicadas ficam em `DISTSTYLE AUTO`
+  (decisão do usuário de 2026-09-21), e uma chave de distribuição só entra, por
+  `ALTER TABLE ... ALTER DISTKEY`, quando o `EXPLAIN` de um join típico entre elas,
+  `cad_lancamentos` com `cad_contas` por `id_conta`, mostra `DS_BCAST_INNER` ou `DS_DIST_BOTH`
+  (decisão do usuário de 2026-09-23); o papel do projeto não lê `svv_table_info` depois do `USE`
+  (42501, probe de 2026-09-23). O `EXPLAIN` só rodou sobre as tabelas pequenas das suítes, com
+  `DS_DIST_ALL_NONE` (`test_publication.py::test_published_join_redistribution_is_read`,
+  2026-09-24), e espera a leitura sobre a base publicada no alvo.
 - **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
   DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
   `cad_lancamentos` não foi medida ([etapa 9](PLAN-STAGE-9.md)); o `archive` saiu desse risco pela
@@ -95,8 +108,13 @@ foi medido em [`POC.md`](POC.md).
   com `tightBounds` falso, nos tipos que o registro omite e nas `Double` da issue #59; ou deixar o
   pacote como está. A issue #85 acompanha o item, com um exemplo autocontido que reproduz a perda.
   O defeito vai ao delta-rs numa issue com o exemplo mínimo, que o usuário abre. O `compact` das
-  `Double` sem mínimo e máximo da [etapa 9](PLAN-STAGE-9.md) espera esta escolha (decisão do
-  usuário de 2026-09-25).
+  `Double` sem mínimo e máximo da [etapa 9](PLAN-STAGE-9.md) espera esta escolha (decisão do usuário
+  de 2026-09-25): o código da decisão compacta sem a estatística cada coluna `Double` que algum
+  arquivo da partição traz sem mínimo e máximo no log, e uma coluna só de nulos num arquivo, que
+  também sai do log sem os dois, perde a estatística na partição compactada; o teste
+  `tests/test_delta.py::test_compact_keeps_the_columns_without_min_max` entra com esse código, sobre
+  uma partição de dois arquivos, um sem mínimo e máximo de `valor`, e outra, compactada na mesma
+  chamada, que os mantém.
 
 - **A operação no ambiente alvo.** Em 2026-09-24, nas baterias das 16:51 e das 23:25, a carga, a
   auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
@@ -117,6 +135,18 @@ foi medido em [`POC.md`](POC.md).
   `SUITE.md`, seção "Sondas da operação". O `COPY` da publicação de uma partição compactada, que o
   `compact` regrava em ZSTD, também não rodou lá.
 
+- **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
+  base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente
+  ficam fechados antes da carga da produção, porque mudá-los depois é reescrever o Delta: `valor`
+  segue `Double` (decisão do usuário de 2026-09-20), e a troca por `Numeric(18, 2)`, mais adequada a
+  dados contábeis, ficou como melhoria futura, por `rewrite` com o `cast` que recusa o `double` fora
+  da escala. Um `Numeric` largo leva um defeito do escritor do delta-rs, que grava no log o mínimo e
+  o máximo como número JSON: `123456789012345.21` num `decimal(18, 2)` saiu `123456789012345.2`, e
+  `valor = 123456789012345.21` não achou a linha no delta-rs nem no `delta_scan` (2026-09-22,
+  `test_deltalake.py::test_written_stats_lose_the_row_on_decimal`); `register_files` deixa o
+  `decimal` sem mínimo e máximo, e `publish_partition` grava pelo delta-rs. Depois da carga, os
+  leitores passam a abrir o Delta, e as pastas de origem ficam como cópia até a primeira publicação
+  no Redshift. Espera o usuário: a troca de `valor`, se vier, antes da carga da produção.
 - **O acesso de leitura no ambiente alvo.** A [etapa 10](PLAN-STAGE-10.md) rodou no alvo nas
   baterias de 2026-09-25, de 2026-09-26, de 2026-09-27 e de 2026-09-28 às 23:09
   ([`POC.md`](POC.md)): o leitor Delta abriu as 12 views da raiz carregada em 0,645 s, em 0,582 s,
@@ -190,11 +220,38 @@ foi medido em [`POC.md`](POC.md).
   endereço. Espera o usuário: no Windows, ler o usuário e a senha do proxy só do endereço, ou de
   variáveis `SERIALIZE_DB_`, ou manter a leitura enquanto o Windows é só a máquina de quem
   desenvolve.
+- **O caso de estudo do GIL.** `test_gil_reacquisition_waits_the_switch_interval`, em
+  `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões da suíte inteira em 2026-09-25 e
+  em 2026-10-03 e passou isolado e nas demais: a asserção pede que os 200 `os.stat` ao lado do laço
+  Python levem mais que o dobro do tempo que levam com o intervalo de troca dez vezes menor, e numa
+  sessão reprovada levaram 0,011 s contra 0,018 s. A esteira não roda `tests/proof_of_concept/`, e o
+  caso só atrapalha a sessão local antes do commit. Espera o usuário: tornar a medida robusta ou
+  aceitar a reprovação ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   ([`POC.md`](POC.md)), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
   entrega em outro bucket fica com o `boto3` do cliente. Espera o usuário: levar a pasta e a cópia
   de fora da raiz ao pacote quando um segundo pipeline repetir o código, ou mantê-las no cliente.
+- **As funções do pipeline que diferem entre os motores.** Uma função com nome ou semântica
+  diferente no DuckDB e no Redshift ganha uma regra `@compiles` por dialeto, como as da auditoria em
+  `serialize_db.audit`; a lista sai do SQL do pipeline mensal, fora deste repositório, e o
+  levantamento não foi feito. Espera o código do pipeline.
+- **O teste do pipeline no S3 e no Redshift.** `tests/test_pipeline.py` roda o pipeline mensal ponta
+  a ponta no motor DuckDB, sobre a base fictícia numa pasta local; a adaptação ao S3 e ao Redshift
+  fica com o usuário (mensagem de 2026-09-27).
+- **O Delta diante de um catálogo.** O Delta Lake pelo delta-rs é a camada de tabela porque nenhum
+  serviço de catálogo está habilitado (premissa do usuário de 2026-09-19): o Iceberg sem catálogo
+  fica fora da especificação, que exige a troca atômica do ponteiro no catálogo, e o Redshift lê a
+  base só por `COPY ... MANIFEST`, porque um esquema externo exige `CREATE` no banco, negado ao
+  projeto (diagnóstico de 2026-09-13). A avaliação de 2026-09-19 fixou o gatilho de reavaliação: com
+  o Glue, o S3 Tables ou um catálogo que o Redshift alcance disponível no ambiente alvo, a
+  comparação das camadas de tabela do `estrategia.md` é refeita com o Iceberg registrável. A troca
+  não reescreve os dados: um Iceberg registra os Parquet do Delta por `add_files`, e o Apache XTable
+  converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
+  `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
+  tabela Iceberg no Glue ou um table bucket no S3 Tables: na última leitura, na bateria de
+  2026-09-28 às 23:09, o Glue seguia com um banco e uma tabela Parquet, e o Lake Formation e o S3
+  Tables não responderam ao papel do projeto. Espera um catálogo no ambiente alvo.
 
 ## Achados das sondas de consistência de leitura e escrita
 

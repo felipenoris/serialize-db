@@ -677,8 +677,12 @@ variables in both spellings, and the proxy's `username` and `password`), read by
 that define them, and renaming them would break those libraries. The S3 root a probe photographs
 comes from `probelib.s3_root`: the argument, then
 `SERIALIZE_DB_ROOT`, then `SERIALIZE_DB_TEST_S3_ROOT` (user question of 2026-09-20; `S3_TMP_PATH` is
-the space's, not the project's, and nothing in the repository reads it). Data tables and columns stay Portuguese, including the `id_execucao` column of the `Rastreio`
-mixin in the SQLAlchemy section of `docs/tecnologias.md`. SQL placeholders in prose (`COPY (consulta) TO ...`) and staging
+the space's, not the project's, and nothing in the repository reads it). The library reads no
+configuration file: `Database` and the command line take explicit arguments, with the
+`SERIALIZE_DB_*` variables as their defaults, and the database root is always given, never
+inferred from the space's project (`plan/PLAN.md`). Data tables and columns stay Portuguese,
+including the `id_execucao` column of the `Rastreio` mixin in the SQLAlchemy section of
+`docs/tecnologias.md`. SQL placeholders in prose (`COPY (consulta) TO ...`) and staging
 table names (`staging_<tabela>`) count as database identifiers.
 
 Every Python block in `plan/` ran in the session scratchpad through `uv run --no-project

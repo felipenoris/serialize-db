@@ -1944,7 +1944,7 @@ def test_small_append_copy_cost(
     target: Target,
 ) -> None:
     """O tempo de um ``append`` de 10 linhas pelo ``appender``, o ``COPY`` de um arquivo pequeno,
-    como leitura, nunca como reprovação."""
+    como leitura, nunca como reprovação: é a leitura que traria de volta o ``INSERT`` multilinha."""
     engine = target.engine
     accounts = account_rows([f"C{index}" for index in range(10)])
     engine.create_table(ACCOUNTS)

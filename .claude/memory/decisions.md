@@ -1269,6 +1269,13 @@ execução" on what the third argument is for, and the sentence of `plan/PLAN.md
 pipeline.
 `plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
+## The monthly pipeline test (2026-09-27)
+
+`tests/test_pipeline.py`, written on 2026-09-27 at the user's request, runs the monthly pipeline
+end to end on the DuckDB engine over the fixture base loaded into a Delta in a local folder; the
+user keeps its adaptation to S3 and Redshift (message of 2026-09-27), which waits in
+`plan/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
 ## The names of the Delta and Redshift publications (2026-09-27)
 
 Asked on 2026-09-27 how to tell apart by name the publication to the Delta (`run.publish`) from the
