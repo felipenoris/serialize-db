@@ -105,7 +105,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   3.498 s in series with `threads = 2` (1.037 against 1.382 s with 11), peak memory 373 to 514 MB and
   803 to 917 MB; part of the gain is the calling threads added to the pool, which the target's
   2 vCPUs lack. The proposals (table created at close, hybrid stream, `interrupt()`) await the user
-  in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`, `tests/proof_of_concept/test_duckdb.py`
+  in `.claude/memory/OPEN_QUESTIONS.md`. `plan/POC.md`, `plan/PLAN-STAGE-4.md`,
+  `tests/proof_of_concept/test_duckdb.py`
 - The hybrid `stream` (user decision of 2026-09-23, implemented in `serialize_db.engine.duckdb`)
   keeps batches in a deque while their bytes fit a 64 MiB budget and writes the first batch that
   does not fit, and every later one, to the LZ4 spool; the client drains the deque before reading
@@ -190,12 +191,12 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   (usually 0.08 s to 0.75 s beside the loop); five runs passed after the wait. It failed again in
   whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the shorter
   interval) and on 2026-10-03, and passed alone and in the other sessions; the item is in
-  `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
+  `.claude/memory/OPEN_QUESTIONS.md`. `plan/POC.md`
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
   2026-09-25), and 79 of 400 (175 conflicts) in the target machine's local folder on 2026-09-26;
-  S3's `IfMatch` is server-side. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  S3's `IfMatch` is server-side. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
 - `Execution.publish_delta` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
@@ -205,7 +206,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   took the `ExecutionConflict` path). delta-rs 1.6.6 opened at the pinned version refuses the commit
   after an overwrite of the same partition or a schema change, and passes after another partition, a
   compaction of the same partition or a metadata-only commit. `plan/POC.md`,
-  `plan/OPEN_QUESTIONS.md`
+  `.claude/memory/OPEN_QUESTIONS.md`
 - The threaded APIs against their serial form, 2026-10-04, this container (Linux, 4 vCPUs, 16 GB,
   DuckDB 1.5.5, PyArrow 25.0.1, deltalake 1.6.6, pandas 3.0.6), each measure in a new process, best
   of three, 10,000,000 rows of six columns in a DuckDB file database, 100,000-row batches: `stream`
@@ -228,4 +229,4 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   each repeat, and +365 MB with the Arrow pool's `release_unused()` and glibc's `malloc_trim(0)`
   before `/proc/self/clear_refs`. `probes/operacao/probe_parallel_gain.py` repeats the measures for
   the Redshift engine, S3 and `publish_redshift` in the target. `plan/POC.md`,
-  `plan/OPEN_QUESTIONS.md`, `docs/index.md`
+  `.claude/memory/OPEN_QUESTIONS.md`, `docs/index.md`

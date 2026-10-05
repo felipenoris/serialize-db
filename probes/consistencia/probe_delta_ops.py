@@ -387,7 +387,8 @@ def check_conditional_writes(
 ) -> None:
     """Seção C: oito threads somando 50 cada no arquivo de controle por ``read_text`` e
     ``write_text(if_match=...)``, com nova tentativa no ``ConflictError``; as atualizações
-    perdidas na pasta local são o achado conhecido de ``plan/OPEN_QUESTIONS.md``, leitura."""
+    perdidas na pasta local são o achado conhecido de ``.claude/memory/OPEN_QUESTIONS.md``,
+    leitura."""
     path = storage.join("prd", "_serialize_db", "contador.json")
     storage.create_text(path, json.dumps({"n": 0}))
     conflicts = 0

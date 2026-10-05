@@ -2,11 +2,11 @@
 
 O ganho foi medido em 2026-10-04 num contêiner de 4 vCPUs, com o motor DuckDB numa pasta local
 (``plan/POC.md``, seção "O que a medição das APIs com threads mostrou"); o que depende do S3, do
-Redshift e das CPUs da máquina espera esta sonda (``plan/OPEN_QUESTIONS.md``, item "O ganho das
-APIs com threads no ambiente alvo"). A sonda gera quatro tabelas iguais, ``cad_paralelo_a`` a
-``cad_paralelo_d``, com ``--rows`` linhas cada numa partição, publica-as no Delta sob a raiz de
-trabalho e mede cada variante ``--repetitions`` vezes, com a ordem invertida a cada repetição: o
-tempo e o pico de memória residente do processo acima da base, zerado por
+Redshift e das CPUs da máquina espera esta sonda (``.claude/memory/OPEN_QUESTIONS.md``, item "O
+ganho das APIs com threads no ambiente alvo"). A sonda gera quatro tabelas iguais,
+``cad_paralelo_a`` a ``cad_paralelo_d``, com ``--rows`` linhas cada numa partição, publica-as no
+Delta sob a raiz de trabalho e mede cada variante ``--repetitions`` vezes, com a ordem invertida a
+cada repetição: o tempo e o pico de memória residente do processo acima da base, zerado por
 ``/proc/self/clear_refs`` depois de devolver ao sistema a memória que o pool do Arrow e o
 ``malloc`` guardaram das medidas anteriores. Cada seção de ``--only`` compara a forma em série,
 a primeira, com a forma com threads:

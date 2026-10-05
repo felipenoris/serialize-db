@@ -46,7 +46,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   one; a fact removed is a defect.
 - **A change the user did not ask for is named in the report.** Moving the primitives out of
   `plan/serialize-db.md` followed from the plan request and was flagged as such; the `Text` rule
-  proposed in `plan/OPEN_QUESTIONS.md` is marked as awaiting the user's confirmation.
+  proposed in `.claude/memory/OPEN_QUESTIONS.md` is marked as awaiting the user's confirmation.
 - **API details learned by running live in `tests/proof_of_concept/`, not here**:
   `schema_mode="merge"` for an append with fewer columns than the evolved table, the normalized
   `CHECK` expression, `filters=` instead of the deprecated `partitions=`, `pa.schema(dt.schema())`
@@ -107,9 +107,9 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `COMPUPDATE OFF`" in the suite and in two stage files; the script that ran in the target carries
   no `COMPUPDATE` clause, and passed. The question left open after it was answered two documents
   away, by this repo's own table of Parquet `COPY` rules: that `COPY` rejects the parameter. Write
-  the plainest reading, mark the other in `plan/OPEN_QUESTIONS.md`, and grep the repository before
-  calling a question open. A changed fact is then grepped in tables and lists too: `README.md`
-  promised `IAM_ROLE default` two PRs after its prose said the caller's credentials.
+  the plainest reading, mark the other in `.claude/memory/OPEN_QUESTIONS.md`, and grep the
+  repository before calling a question open. A changed fact is then grepped in tables and lists too:
+  `README.md` promised `IAM_ROLE default` two PRs after its prose said the caller's credentials.
 - **A probe's verdict is a hypothesis until the environment answers, and one repetition separates
   the transient from the permanent** (2026-09-20). The first Redshift run in the target failed
   `RS-17` on an isolation level of `UNKNOWN`, which is the consumer not seeing the producer's
@@ -648,7 +648,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `column >= null`, and PyArrow skips the file. The package filters that reader only by the
   partition column, whose guarantee is the partition value, so no suite saw it. Read an omitted
   statistic through `delta_scan`, the delta-rs dataset and `read_parquet`, with a filter on the
-  column itself. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  column itself. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
 - **A test double calls the function it replaces through a reference saved before the swap, and a
   failure case names its failure** (2026-09-28). The repository review found the double of
   `copy_text` in `test_appender_copies_the_file_at_close` calling `redshift.copy_text`, which after
@@ -684,9 +684,9 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `serialize_db_publications`, which the publication of the same night created. The same report
   inferred the table came from the append probe's passing run of 00:32, which `sys_query_history`
   disproved: the table's execution ran at 00:29 and stopped after its first round. Both claims
-  reached `plan/POC.md`, `plan/OPEN_QUESTIONS.md` and the thread before the probe's `TABLE_PREFIX`
-  and the server's history were read. This is the rule of 2026-09-20 that reads a label against each
-  item it covers. `plan/POC.md`
+  reached `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md` and the thread before the probe's
+  `TABLE_PREFIX` and the server's history were read. This is the rule of 2026-09-20 that reads a
+  label against each item it covers. `plan/POC.md`
 - **A Parquet footer is read by each leaf's `path`, never its `name`** (2026-10-01). The second
   review after PR #120 wrote a file with the contract column `valor` inside a struct `s`:
   `_check_footer_schema` keyed the footer by `ColumnSchema.name`, the leaf's name, so the file had

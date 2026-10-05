@@ -1,6 +1,6 @@
 """Sonda da carga inicial parada no meio e retomada pelo mesmo comando.
 
-``plan/OPEN_QUESTIONS.md`` ("A operação no ambiente alvo") espera a leitura no alvo do que
+``.claude/memory/OPEN_QUESTIONS.md`` ("A operação no ambiente alvo") espera a leitura no alvo do que
 ``tests/test_parquet_import.py`` cobre na pasta local. A sonda roda ``serialize-db import`` das
 três primeiras partições de ``cad_lancamentos`` na origem e o encerra por ``SIGKILL``, como o
 kernel sem memória, quando o arquivo da segunda partição aparece na pasta dela, entre o ``COPY`` e

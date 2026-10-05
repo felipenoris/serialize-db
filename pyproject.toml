@@ -74,7 +74,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 # Só os arquivos Python: o padrão do Ruff 0.16 inclui `*.md`, e formataria os blocos de código de
-# plan/ e de docs/, que são registros.
+# docs/, que são registros.
 include = ["*.py", "*.pyi", "**/pyproject.toml"]
 # O modelo de referência fica como está (decisão do usuário de 2026-09-21).
 extend-exclude = ["tests/reference_model"]

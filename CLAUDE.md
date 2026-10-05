@@ -92,11 +92,12 @@ Record in this file every website you visit when searching for information.
 
 ## The documents that track the work
 
-`plan/OPEN_QUESTIONS.md` is the only document under `plan/` that the work keeps updated: it
-holds the pending items, the doubts and the decisions waiting on the user. Add an item when the
+`.claude/memory/OPEN_QUESTIONS.md` is the only planning document the work keeps updated: it holds
+the pending items, the doubts and the decisions waiting on the user, in pt-BR. Add an item when the
 work finds a question it cannot close; remove it when the answer lands where it stays (the
 docstring or test of the code it decides, `.claude/memory/decisions.md` or a theme file of
-`.claude/memory/`), and name that place in the report.
+`.claude/memory/`), and name that place in the report. The repository has no `plan/` folder (user
+decision of 2026-10-05).
 
 A new measurement goes, with its date, to the docstring or test of the code it justifies, to the
 PR description and to its theme file in `.claude/memory/`. The plan, the stage files, the state
@@ -253,10 +254,10 @@ Use this section to store your memory for this project. Keep this file within a 
 
 This file is loaded whole into every session, so it holds what every session needs: the index of the
 repository and of the memory files, the working rules, the naming conventions and where the work stands.
-The facts and the stories live in `.claude/memory/`, one file per theme, read on demand with the Read
-tool and never imported with `@`, which would load them all. Each theme file opens with when to read it,
-and each fact ends with the file that details it, a `plan/` file other than `OPEN_QUESTIONS.md`
-being the library's copy ("The documents that track the work"). A fact found in a session is
+The facts, the stories and the pending items live in `.claude/memory/`, one file per theme, read on
+demand with the Read tool and never imported with `@`, which would load them all. Each theme file
+opens with when to read it, and each fact ends with the file that details it, a `plan/` file being
+the library's copy ("The documents that track the work"). A fact found in a session is
 appended to its theme file; this file changes when a rule, a convention, an index entry or the state
 of the work changes. The budget above is never a reason to drop a fact: what does not fit here goes
 to a theme file.
@@ -264,6 +265,7 @@ to a theme file.
 | Memory file | Read it before |
 | --- | --- |
 | `.claude/memory/decisions.md` | Planning or implementing any stage: what the user stated and decided, with dates (the pipeline outside this repo, the batch boundary, the partition unit, the Redshift target, `export_mode`, the test layout, the read access). |
+| `.claude/memory/OPEN_QUESTIONS.md` | Planning a session, or when the work finds a question it cannot close: what has no answer yet (pt-BR), one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
 | `.claude/memory/lessons.md` | Adding a lesson, or when the reason behind a working rule matters: the dated stories. |
 | `.claude/memory/delta.md` | Code on `serialize_db.delta` or the `deltalake` package: delta-rs behavior, `create_write_transaction`, schema evolution, conflicts, vacuum and log retention, performance, the alternatives assessed. |
 | `.claude/memory/duckdb.md` | Code on `engine.duckdb`, `storage.duckdb_setup` or a probe that opens DuckDB: Arrow in and out, `COPY`, proxy, Python API. |
@@ -293,7 +295,6 @@ repositories. New research appends to the matching group.
 | `prepare_offline.sh` | Makes the project folder self-contained for the target without internet: managed Python in `.python/`, every `pyproject.toml` group and extra in `.venv/` (`uv sync --all-groups --all-extras`), DuckDB extensions in `.duckdb/`, all links relative. **Rerun it whenever a dependency is added**; a new DuckDB extension, a Python version change or another runtime asset is added by hand. Only a folder prepared on Linux x86_64 serves the SageMaker space; the header is the operating procedure, and the extensions block configures the DuckDB proxy through `probelib.duckdb_proxy`. |
 | `probes/` | Read-only scripts that photograph the environment (`.venv/bin/python probes/<script>.py`; the report also lands in `probes/output/`, ignored by git, for pasting into the conversation). `probes/README.md` indexes them, details every check and fixes a probe's structure: `space.py`, `bucket.py`, `diagnose_aws.py`, `redshift.py` (`RS-1` to `RS-19`; the connection repeats `target_env_examples/redshift_native.py`), `catalog.py`, `parquet_source.py` (`--sample N`), `duckdb_threads.py` (the `threads` of the DuckDB engine ingesting the migrated Delta tables, each configuration in a new process with the external file cache off) and `credentials.py` (the library's clients held past the credential's expiry, about an hour), over `probelib.py` (`duckdb_proxy`, `hide_credentials`, `report.last_reason`; DNS, TCP and internet results are readings, never failed calls). `tests/test_probes.py` covers the pure helpers with fabricated responses, with no network but one DNS lookup; its cases that write a report or fabricated files are `local`. `consistencia/` holds consistency probes of 2026-09-25 and `probe_append_test.py` (2026-09-28), under `SERIALIZE_DB_TEST_LOCAL_ROOT` (pytest ones in `poc<id>`), and `operacao/` (2026-09-30) runs `serialize-db` routines over the source's first partitions under a suite root, and `probe_parallel_gain.py` (2026-10-04) times the threaded APIs against serial; commands in `SUITE.md`. |
 | `scripts/` | `migrate_parquet_to_delta.py`, the operator's tool for the stage 7 initial load, thin over `serialize_db.parquet_import` since 2026-09-24 (user decision): per table in `import_order`, `import_table` partition by partition with rows, time and the process's peak RSS printed, `import_report` and `entries_outside_the_model`; `--report` writes the JSON with the machine, the versions, the DuckDB limits read from the environment and the arguments, rewritten after each committed partition with the current table in `in_progress`; `--environment` names the folder under the root (`<root>/<environment>/<table>`); local folder or `s3://`. The measurement of the sorted and unsorted variants left with the same decision (its numbers are in `plan/POC.md`). The commands are in `README.md`, the behavior in the script's header, the tests in `tests/test_migrate_parquet_to_delta.py`. |
-| `plan/OPEN_QUESTIONS.md` | What has no answer yet (pt-BR): one item per pending question, with the run or the decision that will close it; a closed item leaves the file when its answer lands in the owning document. |
 | `src/serialize_db/` | The package: `errors.py`, `schema.py` (stage 1), `sql.py` (stage 2), `storage.py` and `delta.py` (stage 3; `history`, `archive_snapshot` and the copy-and-register `deep_copy` of stage 9; `set_channel`, `channel_snapshot`, `snapshot_versions` and the protected `channels_pointing` of stage 10), `audit.py`, `engine/__init__.py` (the `Engine` protocol and the protected helpers both engines use), `engine/duckdb.py` and `resources.py` (stage 4: the CPUs and memory the process may use, cgroup-aware, behind `environment_limits`, and `peak_rss_mb`, the process's peak RSS the script and the routines print), `engine/redshift.py` (stage 5: `RedshiftConfig`, `RedshiftEngine`, `sandbox_prefix`, `schema_from_row_description`, `mask`, and the protected `connect`, `credentials_clause`, `staging_ddl`, `insert_from_staging`, `copy_text`, `unload_text` and error readers the publication reuses; `driver_connect` is the seam the tests replace with the stand-in), `execution.py` (stage 6; `Database.open_delta` and `open_redshift` since stage 10), `reader.py` (stage 10: `DeltaReader`, `RedshiftReader`, `open_redshift`), `parquet_import.py` (stage 7: `discover_partitions`, `partition_query`, `import_table` on a DuckDB engine per call with the partition check before the `COPY ... RETURN_STATS` and `register_files`, `import_report`, `import_order`, `check_requested_partitions`, the protected `entries_outside_the_model`), `publication.py` (stage 8: the control table, the per-table transaction, unpublish, `reconcile_published`, `publication_status`), `_pool.py` (private: the per-table task pool of `execution`, `publication` and `reader`), `_files.py` (private: writing and diffing the generated files of stages 1 and 2) and `cli.py` (`serialize-db schema\|sql write\|check`, `run`, `audit`, `import`, `publish_redshift` by `--snapshot` or `--channel`, the stage 9 `snapshot`, `vacuum`, `compact`, `archive`, `export` and `history`, and the stage 10 `channel`, only `main` public). What each does is in the docstrings; `pyproject.toml` pins the runtime dependencies, all the public API uses (`redshift-connector==2.1.17` included, imported only when a Redshift path enters), and the groups, which never reach a client, and holds `[tool.ruff]`. |
 | `tests/reference_model/` | The reference model: the SQLAlchemy model of the original partitioned Parquet base, kept as it is (user decision of 2026-09-21); it matches both readings of the source base (`tests/test_reference_model.py`, with `tests/lib_base_contabil.py` and `tests/lib_base_gerencial.py` standing in for the pipeline's modules it imports). The corrected copy is the client model in `tests/client_model/`. |
 | `tests/client_model/` | The client model (user decision of 2026-09-21): the corrected copy of `tests/reference_model/` that the tests hand to the package API as a client library would, the corrections listed in its `__init__.py` and checked by `tests/test_client_model.py`; `statements.py` holds the fictitious pipeline's Core statements (`STATEMENTS`), `schema/` and `sql/` the generated files. |
@@ -401,8 +402,8 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **The writer's own control file explains a difference before a hypothesis does**: ask for the metadata
   beside the data before listing hypotheses (2026-09-20).
 - **A documented phrase is read two ways until something runs**: write the plainest reading, mark the
-  other in `plan/OPEN_QUESTIONS.md`, grep the repository before calling a question open, and grep tables
-  and lists when a fact changes (2026-09-20).
+  other in `.claude/memory/OPEN_QUESTIONS.md`, grep the repository before calling a question open,
+  and grep tables and lists when a fact changes (2026-09-20).
 - **A probe's verdict is a hypothesis until the environment answers, and one repetition separates the
   transient from the permanent**: read a value the reading cannot produce as unread, treat an expected
   absence as a reading (`Report.call(expected=True)`), stop the section when the connection dies, run the
@@ -480,7 +481,8 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A validated instrument is refactored against its own report**: run the probe over the fixture
   base (`tests/source_db_projetado.py` writes it to the scratchpad; `probes/parquet_source.py`
   takes a local folder) before and after, and diff the two reports; one that needs the target
-  environment to run is not restructured, the item goes to `plan/OPEN_QUESTIONS.md` (2026-09-21).
+  environment to run is not restructured, the item goes to `.claude/memory/OPEN_QUESTIONS.md`
+  (2026-09-21).
 - **A schema decision is read back through every reader the pipeline uses, with a file from each
   writer**: `parquet.field.id` in the Delta schema made `delta_scan` read every column as null for
   every writer, and only the migration script's report, the first `delta_scan` over a table created
@@ -703,10 +705,10 @@ check are columns, ORM classes and the loanwords `sandbox` and `staging`.
 
 ## Where the work stands
 
-Read `plan/OPEN_QUESTIONS.md` (what awaits the user or a run) and `.claude/memory/decisions.md`
-(the user's statements) before planning a session; the docstrings and the tests say what each
-module does, and the library's `plan/` keeps the plan, the stage files, the state and the dated
-measurements up to 2026-10-05.
+Read `.claude/memory/OPEN_QUESTIONS.md` (what awaits the user or a run) and
+`.claude/memory/decisions.md` (the user's statements) before planning a session; the docstrings and
+the tests say what each module does, and the library's `plan/` keeps the plan, the stage files, the
+state and the dated measurements up to 2026-10-05.
 
 - Stages 0, 1 and 2 are closed, and stages 3, 4 and 6 were implemented on 2026-09-23 (`storage`,
   `delta`, the partition rule in `schema`; `audit`, the `engine` protocol and the DuckDB engine;
@@ -784,7 +786,7 @@ measurements up to 2026-10-05.
   `--snapshot` or `--channel` (the revert by `version_diff(min, max)`), `run.publish_redshift`
   and `run --redshift` removed, and `serialize_db.reader` with `db.open_delta()`,
   `db.open_redshift()` and `serialize_db.reader.open_redshift(...)`; what the target still has to
-  read is in `plan/OPEN_QUESTIONS.md`, the choices in `.claude/memory/decisions.md`.
+  read is in `.claude/memory/OPEN_QUESTIONS.md`, the choices in `.claude/memory/decisions.md`.
 - Both engines keep one session per execution under an `RLock` (user decision of 2026-09-22), and
   no lock holder waits for client code: DuckDB `stream` hands each batch to memory up to 64 MiB and
   to an intermediate file after it while the query runs, and its `close` interrupts a query still
@@ -814,12 +816,13 @@ measurements up to 2026-10-05.
   same day on the other findings are implemented (`.claude/memory/decisions.md`): every Redshift
   `COPY` lists the file's columns, snapshot names are immutable and checked at `run.snapshot`,
   and `serialize-db audit` prints a refused ingest as a failed audit; what the target still reads
-  is in `plan/OPEN_QUESTIONS.md`. The battery of 2026-09-28 at 20:14 read the column list with
-  `FILLRECORD`, the `diagnose_aws.py` DuckDB line and `SP-10`, and a Parquet `COPY` of a missing
-  path loading nothing without error; that day the user put the `appender` `COPY` on a one-entry
-  mandatory manifest and had the load's fourth loss (`INT96` nanoseconds) and the `conversões`
-  line's reach documented. The battery of 23:09 passed every case, loaded the stable source whole
-  and read two writers on one table entering in both engines (`.claude/memory/environments.md`).
+  is in `.claude/memory/OPEN_QUESTIONS.md`. The battery of 2026-09-28 at 20:14 read the column list
+  with `FILLRECORD`, the `diagnose_aws.py` DuckDB line and `SP-10`, and a Parquet `COPY` of a
+  missing path loading nothing without error; that day the user put the `appender` `COPY` on a
+  one-entry mandatory manifest and had the load's fourth loss (`INT96` nanoseconds) and the
+  `conversões` line's reach documented. The battery of 23:09 passed every case, loaded the stable
+  source whole and read two writers on one table entering in both engines
+  (`.claude/memory/environments.md`).
 - The user's decisions of 2026-10-03 (`.claude/memory/decisions.md`), with no alias:
   `serialize_db.parquet_import` for `serialize_db.load`, with `import_table`, `import_report`,
   `import_order` and `serialize-db import` for `initial_load`, `load_report`, `load_order` and
@@ -835,7 +838,7 @@ measurements up to 2026-10-05.
 - The Redshift target is `sbx_aco_decon` in the datashare database `datalake_rw_shared`, reached by
   `USE` with the workgroup's temporary credential; the probe, `tests/conftest.py` and the Redshift
   suite follow the scripts in the library's `target_env_examples/`.
-- The user's decision of 2026-10-05 (`.claude/memory/decisions.md`): only
-  `plan/OPEN_QUESTIONS.md` keeps being updated; the plan, the stage files, `CURRENT_STATE.md`,
-  `POC.md` and the rationale documents left the repository for the library's `plan/`, after the
-  live items they held went to `plan/OPEN_QUESTIONS.md`.
+- The user's decisions of 2026-10-05 (`.claude/memory/decisions.md`): only `OPEN_QUESTIONS.md`
+  keeps being updated, in `.claude/memory/`, and the repository has no `plan/` folder; the plan, the
+  stage files, `CURRENT_STATE.md`, `POC.md` and the rationale documents left the repository for the
+  library's `plan/`, after the live items they held went to `OPEN_QUESTIONS.md`.

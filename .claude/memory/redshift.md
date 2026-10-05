@@ -32,7 +32,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   found (`plan/estrategia.md`). `stv_slices` and `stl_load_errors` are denied
   to a regular user (42501) while `sys_load_error_detail` answers; `pg_settings` on serverless lists
   neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns. `plan/POC.md`,
-  `plan/OPEN_QUESTIONS.md`
+  `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The datashare, COPY and UNLOAD
 
@@ -135,13 +135,13 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   escape. `plan/PLAN-STAGE-5.md`, `plan/POC.md`
 - The stage 5 readings of `tests/proof_of_concept/test_redshift.py` (seven tests after
   `test_parallel_copy_and_unload_on_two_connections`) ran in the target on 2026-09-23, twice; what
-  is left for the next run is in `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
+  is left for the next run is in `.claude/memory/OPEN_QUESTIONS.md`. `plan/POC.md`
 - The stage 1 `ddl` and the stage 4 `audit_sql` cite tables without a schema, so on Redshift the
   engine relies on `SET search_path TO <schema>` after `USE`, which passed on the datashare schema
   on 2026-09-23; one refused measure fails the whole rows check, so
   `test_audit_sql_under_search_path_and_nan_comparison` also runs each measure alone beside the
-  expected counters, and the client model's texts on empty tables. `plan/OPEN_QUESTIONS.md`,
-  `plan/POC.md`
+  expected counters, and the client model's texts on empty tables.
+  `.claude/memory/OPEN_QUESTIONS.md`, `plan/POC.md`
 
 ## The reading of 2026-09-21
 
@@ -265,7 +265,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `sum` with a `NaN` is `nan`. The text now compiles `is_finite` as `(x > '-Infinity'::float8 AND
   x < 'Infinity'::float8)`, false for `NaN` under both rules, and `json_valid` as `true`, because
   the JSON column is `SUPER`; the new text waits for the next suite run. `plan/PLAN-STAGE-4.md`,
-  `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+  `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
 - The suite runs of 2026-09-23 at 22:56 and 23:01 UTC (30 passed each, readings equal but ids and
   times): the stream with literals gave the same rows by the three paths in the six cases, the
   backslash doubled in the `UNLOAD` literal; the empty `UNLOAD` passed without manifest or object
@@ -305,7 +305,8 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   without time zone`, `double precision`, `super` (the publication compares by type family, so
   `varchar`, `decimal` and `timestamp` also match); the manifest of an `UNLOAD` to a prefix with
   `=` keeps the `=` unencoded and names the `PARALLEL OFF` file `000.parquet` (target reading of
-  2026-09-24, `redshift.unload_hive.files`). `plan/PLAN-STAGE-5.md`, `plan/OPEN_QUESTIONS.md`
+  2026-09-24, `redshift.unload_hive.files`). `plan/PLAN-STAGE-5.md`,
+  `.claude/memory/OPEN_QUESTIONS.md`
 - The first target run of the engine suite (2026-09-24, 05:10 and 05:12 UTC) passed five of the
   six cases: `COPY ... MANIFEST FILLRECORD` of a delta-rs file, the `UNLOAD` stream equal to the
   cursor `query`, the loader's `CREATE TABLE` rolled back by a failed `COPY`, the audit with the

@@ -1,12 +1,13 @@
 # Questões em aberto
 
-Este documento registra o que ainda não tem resposta: as pendências do projeto, as decisões que
-esperam o usuário e as perguntas que uma leitura ou um teste vai fechar. Um item sai daqui quando a
-resposta entra onde ela fica (a docstring ou o teste do código, a memória do repositório em
-`.claude/memory/`), e a saída nomeia esse lugar. É o único documento de `plan/` que o trabalho
-atualiza: o plano, os arquivos de etapa, o estado da implementação e o que foi medido até
-2026-10-05 estão na pasta `plan/` da biblioteca do projeto Claude, fora do repositório, e o
-`POC.md`, o `estrategia.md` e a etapa N (o `PLAN-STAGE-N.md`) citados abaixo são os de lá.
+Leia antes de planejar uma sessão e antes de dar uma pergunta por aberta. Este documento registra
+o que ainda não tem resposta: as pendências do projeto, as decisões que esperam o usuário e as
+perguntas que uma leitura ou um teste vai fechar. Um item sai daqui quando a resposta entra onde ela
+fica (a docstring ou o teste do código, `decisions.md` ou outro arquivo desta pasta), e a saída
+nomeia esse lugar. É o único documento do plano que o trabalho atualiza: o plano, os arquivos de
+etapa, o estado da implementação e o que foi medido até 2026-10-05 estão na pasta `plan/` da
+biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.md` e a etapa N (o
+`PLAN-STAGE-N.md`) citados abaixo são os de lá.
 
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
@@ -40,7 +41,8 @@ atualiza: o plano, os arquivos de etapa, o estado da implementação e o que foi
   `export_parquet` e da troca do motor Redshift, que duram uma tabela ou uma partição e ficam com a
   chave da abertura; o `COPY` mais longo que a credencial que ele leva; a queda de uma conexão
   Redshift no meio de um `COPY`; e a sessão ociosa e a transação inativa do serverless, encerradas
-  depois de 3.600 s e 21.600 s ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)).
+  depois de 3.600 s e 21.600 s
+  ([`docs/tecnologias.md`, Redshift](../../docs/tecnologias.md#redshift)).
   A cláusula do `COPY` e do `UNLOAD` é montada a cada comando, no motor da etapa 5 e, desde a
   decisão do usuário de 2026-09-26, na publicação da etapa 8, que passou assim no alvo em
   2026-09-27, e leva uma chave com cerca de 29 minutos ou mais pela frente; o motor reconecta uma
@@ -205,7 +207,8 @@ atualiza: o plano, os arquivos de etapa, o estado da implementação e o que foi
   `pyproject.toml`, `import duckdb_sqlalchemy` em `serialize_db.sql`, `serialize_db.engine.duckdb`
   e `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
   passa a refleti-la, a lista de `probes/space.py` e a prosa que nomeia o dialeto em `README.md`,
-  `docs/index.md`, `plan/` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a 2.0.54 o serve.
+  `docs/index.md`, `docs/tecnologias.md` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a
+  2.0.54 o serve.
 - **O DuckDB 1.5.6.** Os clientes instalam as extensões do DuckDB pelos wheels
   `duckdb-extension-delta` e `duckdb-extension-httpfs` do PyPI, que exigem o `duckdb` da mesma
   versão e paravam na 1.5.5 em 2026-10-04 (`POC.md`); o pino fica em 1.5.5. A troca

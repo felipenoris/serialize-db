@@ -724,7 +724,7 @@ def test_super_and_json_parse(
     # 4. O documento como objeto num arquivo JSON de uma linha, por COPY ... FORMAT JSON 'auto': o
     # caminho da documentação para um documento grande numa coluna SUPER, que carregou o objeto de
     # 80.901 bytes em 2026-09-21 (13:35 e 13:39). É o caminho dos documentos acima do teto do
-    # VARCHAR, se a etapa 8 o adotar (plan/OPEN_QUESTIONS.md).
+    # VARCHAR, se a etapa 8 o adotar (.claude/memory/OPEN_QUESTIONS.md).
     key = f"{s3_location.prefix}/redshift/super/documento.json"
     s3.put_object(
         Bucket=s3_location.bucket,

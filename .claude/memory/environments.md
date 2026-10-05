@@ -239,7 +239,7 @@ extensions from the PyPI wheels `duckdb-extension-delta` and `duckdb-extension-h
 statement of 2026-10-04; the wheel's README installs one with `duckdb_extensions.import_extension`),
 each version requiring the same exact `duckdb`, and the newest was 1.5.5, of 2026-08-10; with
 `duckdb==1.5.6`, `uv pip compile` resolved the unpinned wheels to 1.0.3 without an error. A DuckDB
-bump waits for those wheels. `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+bump waits for those wheels. `plan/POC.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 The suites exist so the same proof of concept runs in the target, without internet; the local suite
 validates the prepared folder there (verified 2026-09-19: extracted at another path with dead proxies
@@ -337,8 +337,8 @@ channel and read, in the probe, the engine's secret renewed before each expiry. 
   folders with `\` (`duckdb.md`); `Path.from_uri("file:///tmp/x")` raises `URI is not absolute`; a
   new file's mode reads 0o666; `os.path.join` joins with `\`; and `os.environ` uppercases the
   name, so the proxy's `username` variable reads the login's `USERNAME`
-  (`plan/OPEN_QUESTIONS.md`). The job log is the only reading: on 2026-10-01 its download URL
-  was refused by this container's proxy (403), and `get_job_logs` with `tail_lines` returns the
+  (`.claude/memory/OPEN_QUESTIONS.md`). The job log is the only reading: on 2026-10-01 its download
+  URL was refused by this container's proxy (403), and `get_job_logs` with `tail_lines` returns the
   end of it; on 2026-10-04, `get_job_logs` with `return_content: false` gave a `logs_url` that
   `curl -sS -o <file>` downloaded whole, once the job had finished (404 while it ran).
 - On 2026-10-04 the user's `uv run python -m pytest` on Windows 11 (Python 3.13.3) stopped at
