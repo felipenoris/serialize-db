@@ -8,7 +8,7 @@ os quatro statements do pipeline fictício de ``tests/client_model/statements.py
 versionados em ``tests/client_model/sql/``, sobre uma tabela cujos identificadores carregam ``:`` e
 ``'`` e sobre uma com a ``key`` de uma coluna diferente do nome. Nada é gravado, exceto os testes
 marcados ``local``, que gravam os arquivos de texto SQL sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o
-texto executa num DuckDB em memória sobre o DDL da etapa 1, e o statement com ``bindparam`` num
+texto executa num DuckDB em memória sobre o DDL do contrato, e o statement com ``bindparam`` num
 ``sqlalchemy.Connection`` do ``duckdb-engine`` criado fora da biblioteca.
 """
 
@@ -73,7 +73,7 @@ AND "{prefix}cad_lancamentos"."area" LIKE 'TI:%' AND "{prefix}cad_contas"."numer
 GROUP BY "{prefix}cad_contas"."numero" ORDER BY "{prefix}cad_contas"."numero"\
 """
 
-# As linhas do rascunho de plan/PLAN-STAGE-2.md nas duas tabelas do statement de teste.
+# As linhas do rascunho nas duas tabelas do statement de teste.
 DRAFT_ENTRY_ROWS = [
     {
         "id_lancamento": 1,
@@ -104,8 +104,8 @@ CHANGED_STATEMENTS["saldos_por_conta"] = STATEMENTS["saldos_por_conta"].add_colu
 def draft_sandbox(
     prefix: str,
 ) -> duckdb.DuckDBPyConnection:
-    """Um DuckDB em memória com as duas tabelas do statement de teste, criadas pelo DDL da etapa 1
-    com o prefixo, e as linhas do rascunho de ``plan/PLAN-STAGE-2.md``."""
+    """Um DuckDB em memória com as duas tabelas do statement de teste, criadas pelo DDL do contrato
+    com o prefixo, e as linhas do rascunho."""
     connection = duckdb.connect()
     for table in (DRAFT_ENTRIES, DRAFT_ACCOUNTS):
         connection.execute(schema.ddl(table, "duckdb", prefix=prefix))
@@ -344,7 +344,7 @@ def test_prefixed_replaces_every_contract_table() -> None:
 def test_prefixed_keeps_the_column_key() -> None:
     """Uma coluna Core com `key` diferente do nome, `sa.Column("to", ..., key="to_")`, fica com a
     mesma chave na cópia prefixada: o `values(to_=...)` de um `INSERT` e de um `UPDATE` compila com
-    o nome `"to"`, e o texto roda sobre o DDL da etapa 1. Sem a chave na cópia, o SQLAlchemy
+    o nome `"to"`, e o texto roda sobre o DDL do contrato. Sem a chave na cópia, o SQLAlchemy
     recusa o `values(to_=...)` com `Unconsumed column names: to_` (leitura de 2026-09-28)."""
     metadata = sa.MetaData()
     contracts = sa.Table(

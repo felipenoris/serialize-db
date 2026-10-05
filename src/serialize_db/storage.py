@@ -130,9 +130,9 @@ def _duckdb_secret_options() -> list[str]:
     o endereço sem o esquema, o endereço por caminho e, num endpoint ``http``, ``USE_SSL false``.
 
     O DuckDB não lê ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do
-    endereço, que num IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http``
-    tenta TLS e falha (sonda de 2026-09-23 contra o moto, ``plan/POC.md``). O endereço por caminho
-    é o que o delta-rs e o PyArrow usam com um endpoint próprio.
+    endereço, que num IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http`` tenta
+    TLS e falha (sonda de 2026-09-23 contra o moto). O endereço por caminho é o que o delta-rs e o
+    PyArrow usam com um endpoint próprio.
     """
     options = [f"REGION {literal(_region())}"]
     endpoint = _endpoint()
@@ -209,7 +209,7 @@ def renew_duckdb_secret(
 
     O secret guarda a chave da criação, e o ``delta_scan`` não o renova: no ambiente alvo, o
     ``delta_scan`` falhou depois que a chave guardada expirou, com a credencial do ``boto3`` já em
-    outra chave (2026-09-25, ``plan/POC.md``).
+    outra chave (2026-09-25).
 
     :param connection: a conexão do DuckDB, com o ``httpfs`` carregado; o secret vale para a
         instância do banco, com todos os cursores dela.

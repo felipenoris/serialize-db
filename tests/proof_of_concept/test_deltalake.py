@@ -4,8 +4,8 @@ Cada teste exercita uma parte: a criação idempotente a partir de um esquema, o
 substituição por predicado, a evolução de esquema e o ``update`` com predicado, a viagem no tempo e
 o ``restore``, as ações do log e o registro de um arquivo gravado por outro programa, o ``vacuum``
 com ``keep_versions``, a leitura por dataset Arrow e o conteúdo do log. Os testes seguintes cobrem
-as primitivas das etapas 3, 4, 7 e 9 (``plan/PLAN-STAGE-<n>.md``) sobre o DuckDB: a view presa a
-uma versão e o leitor Arrow que alimenta o ``write_deltalake``, a diferença de versões de
+as primitivas de ``serialize_db.delta``, do motor DuckDB e da carga inicial sobre o DuckDB: a view
+presa a uma versão e o leitor Arrow que alimenta o ``write_deltalake``, a diferença de versões de
 ``delta.version_diff`` pelas ações ``add`` e ``remove`` com ``dataChange`` do log, a compactação e
 o checkpoint, a exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e ainda
 ``is_deltatable`` e ``drop_column_not_null``, o que ``create_write_transaction`` não confere
@@ -1088,7 +1088,7 @@ def test_nan_statistics_hide_rows_from_delta_scan(
 
     O ``Double`` transcreve exato os valores finitos; os especiais não. No DuckDB, ``NaN > 3`` é
     verdadeiro: a tabela do sandbox devolve a linha, e a tabela Delta a perde quando o arquivo é
-    podado pelo máximo sem o ``NaN``. É a decisão do ``Double`` não finito no contrato (etapa 1).
+    podado pelo máximo sem o ``NaN``. É o que o contrato aceita do ``Double`` não finito.
     """
     schema = pa.schema([("id", pa.int64()), ("valor", pa.float64())])
 
@@ -1403,7 +1403,7 @@ def test_delta_scan_prunes_by_equality_and_range_not_by_in_list(
     de mais de um valor e um ``OR`` abrem todos.
 
     O log ``FileSystem`` do DuckDB mostra os arquivos abertos. ``BETWEEN`` somado ao ``IN`` abre o
-    intervalo, e é a forma que serve à ``ingest`` da etapa 4 com partições não contíguas. O
+    intervalo, e é a forma que serve à ``ingest`` do motor DuckDB com partições não contíguas. O
     ``EXPLAIN ANALYZE`` dessa forma falha na extensão ``delta`` com ``InternalException``, e a
     consulta roda: a poda dela só se lê pelo log.
     """

@@ -951,7 +951,7 @@ def test_stream_delivers_each_batch_while_the_query_runs(
         engine.stream("SELECT * FROM nao_existe")
     # A consulta que falha no meio roda num motor de uma thread: com duas, o DuckDB 1.5.5 entregou
     # INTERRUPT Error: Interrupted! no lugar do erro de conversão em 3 de 21 execuções de
-    # 2026-09-28 (plan/POC.md).
+    # 2026-09-28.
     failing = (
         "SELECT CAST(CASE WHEN id = 2_900_000 THEN 'x' ELSE CAST(id AS VARCHAR) END "
         "AS INTEGER) AS n FROM numeros"

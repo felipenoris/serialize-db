@@ -6,7 +6,7 @@ compilado para o DuckDB e para o Redshift (com as opções físicas de ``Table.i
 por uma função comum, sem regra ``@compiles``), o ``create_all`` num DuckDB em memória, os
 statements Core de ``insert`` e ``select`` executados pelo ``duckdb_engine``, o caminho por Arrow
 na conexão bruta, a reflexão, a precisão do ``Numeric`` pelo dialeto contra o caminho Arrow, o
-``pandas.read_sql``, os comportamentos do compilador que dão forma ao ``render`` da etapa 2 (o
+``pandas.read_sql``, os comportamentos do compilador que dão forma ao ``render`` do pacote (o
 ``bindparam`` sem valor sob ``literal_binds``, ``compiled.binds``, o ``%`` dobrado, a citação só
 das palavras reservadas), o ``IN`` de lista no caminho dos motores (``statement.params`` com
 ``render_postcompile``, e o estilo ``qmark``), o registro de uma ``GenericFunction`` em ``sa.func``
@@ -541,7 +541,7 @@ def test_dialects_quote_only_their_reserved_words() -> None:
     Redshift; ``quoted_name(quote=True)`` cita todo nome.
 
     É por isso que a cópia prefixada do ``render`` leva ``quote=True`` em toda tabela e coluna do
-    contrato, como o DDL da etapa 1, com o sentinela ``{prefix}`` dentro das aspas. O texto
+    contrato, como o DDL do contrato, com o sentinela ``{prefix}`` dentro das aspas. O texto
     compilado deixa um espaço antes de cada quebra de linha, que o ``render`` apara.
     """
     contracts = sa.Table(
@@ -582,7 +582,7 @@ def test_in_list_needs_render_postcompile_on_the_engine_path() -> None:
     DuckDB recusa; ``statement.params`` e ``render_postcompile`` expandem a lista e o ``bindparam``
     expansível do cliente.
 
-    É o caminho padrão dos motores das etapas 4 e 5, o statement do cliente compilado com os
+    É o caminho padrão dos dois motores, o statement do cliente compilado com os
     parâmetros dele, e o cliente filtra partições por ``in_``. ``params`` dá os valores antes da
     compilação e ignora um nome que o statement não tem; o valor que falta é
     ``InvalidRequestError`` na compilação. O estilo ``qmark``, o do driver do DuckDB, roda com a

@@ -1,10 +1,10 @@
 """A estrutura da base em Parquet particionado: uma pasta por tabela, lida arquivo por arquivo.
 
-A base de origem da carga inicial (etapa 7) é um conjunto de pastas Parquet. Este probe fotografa a
-estrutura dela para duas perguntas: quais são os campos, os tipos e as faixas de valores de cada
-tabela, de modo que um script de teste possa gerar uma base fictícia com a mesma forma; e se todos
-os arquivos de todas as partições de uma tabela têm o mesmo esquema, porque um esquema divergente
-quebra uma leitura posicional.
+A base de origem da carga inicial (``serialize_db.parquet_import``) é um conjunto de pastas Parquet.
+Este probe fotografa a estrutura dela para duas perguntas: quais são os campos, os tipos e as faixas
+de valores de cada tabela, de modo que um script de teste possa gerar uma base fictícia com a mesma
+forma; e se todos os arquivos de todas as partições de uma tabela têm o mesmo esquema, porque um
+esquema divergente quebra uma leitura posicional.
 
 Uso:
 

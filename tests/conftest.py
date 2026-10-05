@@ -385,7 +385,7 @@ class SessionRoot:
 
     As subclasses fixam ``name``, o prefixo das chaves do relatório, e resolvem URIs e listagens no
     seu armazenamento; os testes comuns aos dois tipos usam só esta interface. É a mesma divisão que
-    ``serialize_db.storage`` faz na biblioteca (``plan/PLAN-STAGE-3.md``).
+    ``serialize_db.storage`` faz na biblioteca.
     """
 
     name: ClassVar[str]
@@ -750,7 +750,7 @@ def prepare_redshift_session(
     ``begin transaction`` antes do primeiro ``execute``, e ligá-lo depois não fecha essa
     transação: a sessão inteira corre nela, e o primeiro erro do servidor (a visão de sistema
     negada a um usuário comum) aborta tudo o que vem depois, inclusive a limpeza, com
-    ``25P02`` (``plan/POC.md``). Cada comando confirmado ao terminar é também o que o ``COPY``
+    ``25P02`` (leitura de 2026-09-21). Cada comando confirmado ao terminar é também o que o ``COPY``
     e o ``UNLOAD`` precisam para não ficarem presos numa transação aberta.
 
     O ``USE`` é o passo de ``target_env_examples/redshift_copy_unload.py``: sem ele, quem não está
@@ -809,8 +809,8 @@ def connect_redshift(
     credencial derivada da identidade IAM cria o usuário do banco quando ele ainda não existe.
 
     A conexão vai sem ``timeout``: no ``redshift_connector`` ele é o tempo limite do socket, para
-    conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável
-    (``plan/POC.md``). Uma rede morta aparece como o tempo limite do sistema, não como um teste
+    conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável.
+    Uma rede morta aparece como o tempo limite do sistema, não como um teste
     reprovado no meio de uma carga.
 
     A conexão vai com ``max_prepared_statements=0``. O ``redshift_connector`` guarda um prepared
@@ -818,7 +818,7 @@ def connect_redshift(
     e só descarta os guardados quando o servidor confirma um ``ALTER``, ``CREATE``, ``DROP`` ou
     ``ROLLBACK`` (``core.py``, ``handle_COMMAND_COMPLETE``), nunca num ``TRUNCATE``. Numa tabela do
     datashare, o comando reexecutado depois de um ``TRUNCATE`` recebe ``34510``, ``Concurrent DDL
-    committed ... between Prepare and Execute`` (``plan/POC.md``). Com zero, o driver prepara o
+    committed ... between Prepare and Execute`` (2026-09-21). Com zero, o driver prepara o
     statement sem nome logo antes de cada execução e não guarda nada; ``statement_cache=True``
     mantém o padrão do driver, para a leitura que reproduz o erro.
 

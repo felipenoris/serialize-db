@@ -1,11 +1,10 @@
 # Referências
 
-Este arquivo lista os sites consultados na pesquisa do
-plano de implementação, da revisão das tecnologias em `docs/tecnologias.md`, com as seções
-[Parquet](docs/tecnologias.md#parquet), [Delta Lake](docs/tecnologias.md#delta-lake),
-[DuckDB](docs/tecnologias.md#duckdb), [Redshift](docs/tecnologias.md#redshift) e
-[SQLAlchemy](docs/tecnologias.md#sqlalchemy), e da estratégia de implementação
-(`plan/estrategia.md`, na biblioteca do projeto Claude), agrupados por assunto.
+Este arquivo lista os sites consultados na pesquisa que levou à biblioteca e à revisão das
+tecnologias em `docs/tecnologias.md`, com as seções [Parquet](docs/tecnologias.md#parquet),
+[Delta Lake](docs/tecnologias.md#delta-lake), [DuckDB](docs/tecnologias.md#duckdb),
+[Redshift](docs/tecnologias.md#redshift) e [SQLAlchemy](docs/tecnologias.md#sqlalchemy),
+agrupados por assunto.
 
 ## Projetos de referência
 

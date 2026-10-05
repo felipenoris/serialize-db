@@ -36,8 +36,8 @@ O `uv sync` instala em `.venv/` o Python 3.13, o pacote com as dependências de 
 `pyproject.toml` (`sqlalchemy`, `pyarrow`, `deltalake`, `duckdb`, `boto3`, os dialetos
 `duckdb-engine` e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor, e o driver
 `redshift-connector`), tudo o que a interface pública usa, e o grupo `dev`, que o `uv` inclui por
-padrão: o `pytest` e as bibliotecas só dos testes (`pandas`, `sqlglot`), fixadas nas versões
-usadas pelos documentos do `plan/` da biblioteca do projeto Claude. `uv sync --no-dev` instala só
+padrão: o `pytest` e as bibliotecas só dos testes (`pandas`, `sqlglot`), nas versões fixadas em
+`pyproject.toml`. `uv sync --no-dev` instala só
 o pacote e as dependências de execução, o que um projeto cliente recebe
 ([`docs/index.md`](docs/index.md), seção "Instalação").
 O grupo `docs` traz o `pdoc`, e o grupo `emulator` traz o `moto` e o `flask` do substituto local
@@ -283,7 +283,7 @@ apontam para o mesmo esquema, com significados diferentes.
 
 # Migração da base Parquet para o Delta
 
-A carga inicial é `serialize_db.parquet_import` (a etapa 7): cada partição da base de origem vira um
+A carga inicial é `serialize_db.parquet_import`: cada partição da base de origem vira um
 commit numa tabela Delta sob `<raiz>/<ambiente>/<tabela>`, e o relatório confere contagem e somas
 por partição. `serialize-db import` roda as duas, e
 [`scripts/migrate_parquet_to_delta.py`](scripts/migrate_parquet_to_delta.py) é a ferramenta de
@@ -319,14 +319,13 @@ Os scripts que rodaram no ambiente alvo, como foram executados, estão na pasta
 guarda em `examples/`. `redshift_native.py` é o protocolo nativo com credencial temporária do
 workgroup serverless, que é o caminho da biblioteca; `redshift_data_api.py`, a Data API por HTTPS,
 assíncrona; e `redshift_copy_unload.py`, o `USE` no banco do datashare com `CREATE TABLE`, `COPY` e
-`UNLOAD` pelas credenciais de quem chama. O probe, a suíte e a etapa 5 repetem as chamadas que estão
-lá, e o `README.md` da pasta diz o que cada um fixa.
+`UNLOAD` pelas credenciais de quem chama. O probe, a suíte e o motor Redshift repetem as chamadas
+que estão lá, e o `README.md` da pasta diz o que cada um fixa.
 
 `redshift_manifest.py` rodou em 2026-09-21: ele converte uma partição de `cad_contratos` de Parquet
 para Delta e roda os dois comandos com manifesto, o `COPY ... MANIFEST` e o
 `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` numa tabela do datashare, que são os pré-requisitos
-do `export_partition` e do `COPY` da publicação. Os dois são aceitos, e o que o rodapé do `UNLOAD`
-respondeu está no `plan/POC.md` da biblioteca do projeto Claude.
+do `export_partition` e do `COPY` da publicação. Os dois são aceitos.
 
 # Credenciais do delta-rs e proxy
 
@@ -344,8 +343,8 @@ vazia, e `test_delta_rs_credential_chain` registra no relatório o resultado de 
 (ambiente como encontrado, `NO_PROXY` exportada, ausente, vazia, proxies retirados). Se a cadeia
 padrão falhar em todas, `test_delta_rs_storage_options_fallback` mostra que credenciais congeladas
 do `boto3` em `storage_options` funcionam. A biblioteca não as usa: o `storage_options` dela leva
-região, endpoint, retry e as chaves de SSE, e credencial alguma (decisão do usuário de 2026-09-22),
-porque a cadeia padrão renova as credenciais no `DeltaTable` que a execução segura, enquanto um trio
+região, endpoint, retry e as chaves de SSE, e credencial alguma, porque a cadeia padrão renova as
+credenciais no `DeltaTable` que a execução segura, enquanto um trio
 congelado expiraria em cerca de uma hora e circularia num dicionário que um log ou uma exceção
 imprime.
 

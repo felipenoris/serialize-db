@@ -16,7 +16,7 @@ final "Chamadas que falharam", para um bloco vazio nunca significar "negado". Um
 sistema negada a um usuário comum e o pacote ausente fora de um espaço são leituras do ambiente.
 Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 
-Um relatório que uma etapa pendente ainda consulta é guardado na pasta `readings/` da biblioteca
+Um relatório que uma pendência ainda consulta é guardado na pasta `readings/` da biblioteca
 do projeto Claude, fora do repositório, indexado pelo `README.md` dela; `output/` fica fora do
 git.
 
@@ -179,9 +179,9 @@ em [`.claude/memory/OPEN_QUESTIONS.md`](../.claude/memory/OPEN_QUESTIONS.md) (o 
 `COPY` do DuckDB, as atualizações perdidas do arquivo de controle na pasta local) e a regra dos
 tipos exatos de `register_files` (a cópia sem o mínimo e o máximo de `Boolean` e `DateTime`) saem
 como leituras conhecidas, não como reprovação; a soma de controle da auditoria acima de 1e32 fica
-fora dos dados da sonda da execução. O que a primeira rodada mostrou está no `plan/POC.md` da
-biblioteca do projeto Claude, seção "O que as sondas de consistência de leitura e escrita
-mostraram", e os comandos com as variáveis do ambiente alvo em `SUITE.md`.
+fora dos dados da sonda da execução. Os achados da primeira rodada estão na seção "Achados das
+sondas de consistência de leitura e escrita" de `.claude/memory/OPEN_QUESTIONS.md`, e os comandos
+com as variáveis do ambiente alvo em `SUITE.md`.
 
 | Sonda | O que atravessa |
 | --- | --- |

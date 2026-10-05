@@ -306,7 +306,7 @@ def project(
     for key in ("name", "id", "domain_id", "iam_role", "kms_key_arn", "s3_root"):
         report.value(f"PROJECT_{key.upper()}", data.get(key))
 
-    # Uma linha por conexão; os dados completos só das conexões Redshift, que a etapa 5 usa.
+    # Uma linha por conexão; os dados completos só das conexões Redshift, que o motor Redshift usa.
     connections = data.get("connections", [])
     if connections:
         report.table([["conexão", "tipo", "endpoint", "detalhe"], *connection_rows(connections)])
@@ -317,7 +317,7 @@ def project(
             report.line(f"conexão {item.get('name')}:\n{pretty(item, limit=80)}\n")
 
     # SP-4: o projeto foi lido; SP-5: a conexão Redshift do projeto, o atalho para as variáveis da
-    # etapa 5.
+    # biblioteca.
     summary = (
         ", ".join(f"{item.get('name')} ({item.get('type')})" for item in connections) or "nenhuma"
     )
@@ -332,7 +332,7 @@ def project(
         report.note(
             "SP-5",
             "conexão Redshift no projeto",
-            "nenhuma: a etapa 5 conecta pelas variáveis SERIALIZE_DB_REDSHIFT_*, e a conexão do projeto é só um atalho para elas",
+            "nenhuma: a biblioteca conecta pelas variáveis SERIALIZE_DB_REDSHIFT_*, e a conexão do projeto é só um atalho para elas",
         )
 
 

@@ -14,7 +14,7 @@ que as suítes escrevem. ``stop`` encerra o moto no fim. O moto e o DuckDB guard
 e nada é gravado em disco.
 
 O substituto confere o código Python dos testes. Cada recusa e cada comportamento que ele imita é
-uma leitura do ambiente alvo registrada em ``plan/POC.md``: a contrabarra como escape nos literais
+uma leitura do ambiente alvo: a contrabarra como escape nos literais
 de texto, o ``UNLOAD`` de um resultado vazio sem manifesto nem arquivo, o ``COPY`` sem ``MANIFEST``
 que lê o caminho como prefixo e, sem objeto que case, não carrega nada e não dá erro, o
 ``is_valid_json`` que recusa ``SUPER`` e o ``ALTER COLUMN ... TYPE`` que o esquema do datashare
@@ -109,7 +109,7 @@ MACROS = (
 )
 
 # As tabelas e as visões de sistema do Redshift que as suítes leem, temporárias de cada conexão. O
-# banco do datashare informa isolamento UNKNOWN, como no ambiente alvo (plan/POC.md).
+# banco do datashare informa isolamento UNKNOWN, como no ambiente alvo.
 SYSTEM_TABLES = (
     "CREATE OR REPLACE TEMP TABLE stl_load_errors (err_reason VARCHAR, starttime TIMESTAMP)",
     "CREATE OR REPLACE TEMP TABLE sys_load_error_detail "
@@ -582,7 +582,7 @@ def run_command(
     first_word = words[0].upper() if words else ""
 
     raise_provoked_failure(text)
-    # O esquema do datashare recusa o ALTER COLUMN ... TYPE (2026-09-23, plan/POC.md).
+    # O esquema do datashare recusa o ALTER COLUMN ... TYPE (2026-09-23).
     if re.match(r"ALTER\s+TABLE\s+\S+\s+ALTER\s+COLUMN\s+\S+\s+TYPE\b", text, re.IGNORECASE):
         raise server_error("Operation is not supported through datashares", "0A000")
     answered = session_command(connection, text)
@@ -1042,13 +1042,13 @@ def copy(
     if "FORMAT JSON" in options or "FORMAT AS JSON" in options:
         return copy_json_lines(connection, table, target_columns, source)
 
-    # O Redshift recusa TRUNCATECOLUMNS num COPY de Parquet (2026-09-21, plan/POC.md).
+    # O Redshift recusa TRUNCATECOLUMNS num COPY de Parquet (2026-09-21).
     if "TRUNCATECOLUMNS" in options:
         raise server_error(
             "TRUNCATECOLUMNS argument is not supported for PARQUET based COPY", "0A000"
         )
 
-    # O caminho sem objeto que case não carrega nada e não dá erro (2026-09-28, plan/POC.md).
+    # O caminho sem objeto que case não carrega nada e não dá erro (2026-09-28).
     files = copy_sources(source, options)
     if not files:
         return Result(rowcount=0)
@@ -1079,7 +1079,7 @@ def copy_sources(
 
     O manifesto ausente e a entrada ``mandatory`` ausente são erros do servidor, como a
     documentação do ``COPY`` descreve. A entrada ausente tem a mensagem que o ambiente alvo deu,
-    ``Spectrum Scan Error: File not found`` (2026-09-28, ``plan/POC.md``); a do manifesto ausente é
+    ``Spectrum Scan Error: File not found`` (2026-09-28); a do manifesto ausente é
     do substituto, porque o texto do alvo não foi lido.
     """
     if "MANIFEST" not in options:
@@ -1115,7 +1115,7 @@ def copy_column_names(
     fillrecord: bool,
 ) -> list[str]:
     """As colunas da tabela que recebem as do arquivo, por posição, com as recusas do Redshift
-    (2026-09-21, ``plan/POC.md``): a lista de colunas com outra contagem, e o arquivo com menos
+    (2026-09-21): a lista de colunas com outra contagem, e o arquivo com menos
     colunas que a tabela sem ``FILLRECORD``."""
     if listed is not None:
         if len(listed) != file_columns:
@@ -1142,7 +1142,7 @@ def check_copy(
     *,
     serialize_to_json: bool,
 ) -> None:
-    """As recusas do ``COPY`` que o ambiente alvo mostrou (2026-09-21, ``plan/POC.md``): o texto
+    """As recusas do ``COPY`` que o ambiente alvo mostrou (2026-09-21): o texto
     acima do ``VARCHAR(n)``, com o motivo nas tabelas de erro de carga, a coluna ``SUPER`` sem
     ``SERIALIZETOJSON`` e o texto acima de 65.535 bytes numa coluna ``SUPER``."""
     key = table_key(table)
@@ -1233,7 +1233,7 @@ def unload(
     text: str,
 ) -> Result:
     """O ``UNLOAD`` para Parquet, com ou sem ``PARTITION BY``, e o manifesto, com as recusas que o
-    ambiente alvo mostrou (2026-09-21, ``plan/POC.md``): o ``LIMIT`` externo, e o destino com
+    ambiente alvo mostrou (2026-09-21): o ``LIMIT`` externo, e o destino com
     arquivos sem ``ALLOWOVERWRITE``. O ``select`` é o valor do literal, com a contrabarra como
     escape, e o resultado vazio não grava arquivo nem manifesto (leituras de 2026-09-23)."""
     match = UNLOAD_PATTERN.match(text)

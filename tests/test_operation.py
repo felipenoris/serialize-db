@@ -1,6 +1,5 @@
-"""A operação da etapa 9: ``serialize-db snapshot``, ``vacuum``, ``compact``, ``archive``,
-``export`` e ``history`` sobre as primitivas de ``serialize_db.delta``, e o ``serialize-db
-channel`` da etapa 10.
+"""A operação: ``serialize-db snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e
+``history`` sobre as primitivas de ``serialize_db.delta``, e o ``serialize-db channel``.
 
 Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): o banco de
 ``tests/lancamentos_model.py`` numa raiz por teste, com a pasta temporária do processo apontada

@@ -19,8 +19,8 @@ import sqlalchemy as sa
 import source_db_projetado as source
 from reference_model.model_db_projetado import Base as ReferenceBase
 
-# O tipo Arrow que cada tipo SQLAlchemy do modelo tem nos arquivos: a tabela de tipos de
-# plan/schema.md, com o timestamp gravado em INT96 e lido como nanossegundos.
+# O tipo Arrow que cada tipo SQLAlchemy do modelo tem nos arquivos da origem: o da tabela de tipos
+# de docs/index.md, com o timestamp gravado em INT96 e lido como nanossegundos.
 ARROW_TYPES = (
     (sa.Integer, pa.int32()),
     (sa.String, pa.string()),

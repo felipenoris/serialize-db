@@ -533,10 +533,10 @@ def _stat_converter(
     acima de 256 bytes, o mínimo é o prefixo de até 256 bytes em fronteira de caractere, e o máximo
     é o prefixo de 256 bytes sem os bytes fora do ASCII e sem um byte 127 do fim, com o último byte
     incrementado, limites que contêm os valores do arquivo e não podam linha; sem byte ASCII no
-    prefixo do mínimo ou do máximo, os dois saem omitidos, e a coluna fica sem poda
-    (``plan/POC.md``). ``decimal`` fica de fora porque o log guarda o mínimo e o máximo como
-    número JSON, e um máximo abaixo do valor real poda o arquivo que tem a linha, sem erro, nos
-    dois leitores; ``timestamp``, porque o log o guarda truncado em milissegundos.
+    prefixo do mínimo ou do máximo, os dois saem omitidos, e a coluna fica sem poda. ``decimal``
+    fica de fora porque o log guarda o mínimo e o máximo como número JSON, e um máximo abaixo do
+    valor real poda o arquivo que tem a linha, sem erro, nos dois leitores; ``timestamp``, porque o
+    log o guarda truncado em milissegundos.
     """
     if pa.types.is_integer(field_type):
         return int
