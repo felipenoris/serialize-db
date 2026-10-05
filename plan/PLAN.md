@@ -11,8 +11,8 @@ a situação de cada etapa e o que cada artefato contém, está em
 com as consequências no plano, em [`POC.md`](POC.md); as pendências e as decisões em aberto, em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). As razões das decisões e as comparações entre ferramentas
 estão em [`estrategia.md`](estrategia.md); o comportamento verificado do Delta, em
-[`delta.md`](delta.md); os motores, em [`duckdb.md`](duckdb.md) e [`redshift.md`](redshift.md); o
-esquema a partir dos modelos, em [`schema.md`](schema.md) e [`sqlalchemy.md`](sqlalchemy.md); as
+[`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake); os motores, em [`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb) e [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift); o
+esquema a partir dos modelos, em [`schema.md`](schema.md) e [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy); as
 funcionalidades, os metadados próprios e o fluxo de cada caso de uso, em
 [`serialize-db.md`](serialize-db.md).
 
@@ -55,7 +55,8 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   para uma sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita,
   com o `COPY` sem cláusula `COMPUPDATE` e transação explícita, e o `COPY` e o `UNLOAD` alcançam o
   S3 pelas credenciais de quem chama, porque o namespace não tem papel IAM associado
-  ([`redshift.md`](redshift.md)). A Data API fica fora da biblioteca: ela devolve `DECIMAL` e data e
+  ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)). A Data API fica fora da
+  biblioteca: ela devolve `DECIMAL` e data e
   hora como texto e limita o resultado a 500 MB, o que não serve à troca de lotes Arrow.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
   Delta atende sem código próprio. O Iceberg com catálogo em arquivo fica documentado em
@@ -88,8 +89,8 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   ela é a data em texto `AAAA-MM-DD` derivada de uma coluna de data por `strftime(<coluna de data>,
   '%Y-%m-%d')`, declarada em `partition_source` (`"data"`; em `cad_lancamentos`, `data_base_str` de
   `data_base`), e a biblioteca confere a derivação quando o modelo a declara. A biblioteca não
-  fixa nome nem granularidade; `mes` nos exemplos de `delta.md`, `duckdb.md`, `parquet.md` e
-  `sqlalchemy.md` é uma coluna de partição ilustrativa.
+  fixa nome nem granularidade; `mes` nos exemplos de `docs/tecnologias.md` (Delta Lake, DuckDB, Parquet e
+  SQLAlchemy) é uma coluna de partição ilustrativa.
 - **Toda coluna numérica da base de origem é `double`, e o modelo de referência a mantém `Double`**
   (decisão de 2026-09-20): sem arredondamento nem `Numeric` de precisão fixa. O pacote suporta
   `Numeric(p, s)` pela tabela de tipos da documentação ([`../docs/index.md`](../docs/index.md)), e
@@ -105,7 +106,7 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   not write data in INT96"), e a precisão dos timestamps da origem não importa: a carga trunca a
   microssegundos, o `timestamp[us]` do contrato, e o delta-rs grava `INT64`. A regra vale para o que
   a biblioteca grava; o `UNLOAD` do Redshift grava `INT96` e a exportação o traz de volta, lido como
-  `timestamp[us]` pelos dois leitores e sem estatística (2026-09-21, `redshift.md`).
+  `timestamp[us]` pelos dois leitores e sem estatística (2026-09-21, `docs/tecnologias.md`, Redshift).
 - **A nulidade é a do modelo** (decisão de 2026-09-20): sete colunas de `cad_contratos` são
   anuláveis nos arquivos e `NOT NULL` no modelo, sem nulo nos dados; o `cast` da carga as recusa
   com nulo, e a regra só muda se a migração o mostrar.
@@ -366,13 +367,13 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   e o Redshift a recebe por uma staging sem ela e
   `INSERT INTO <tabela> (<colunas>) SELECT ..., '<valor>', ... FROM <staging>`; a lista de
   colunas no `COPY`, confirmada em 2026-09-21, não fornece o valor da coluna ausente
-  (`delta.md`).
+  (`docs/tecnologias.md`, Delta Lake).
 - `DECIMAL(18, 2)` sai como `INT64` do delta-rs e do DuckDB; o `COPY` desse tipo físico passou no
-  ambiente alvo em 2026-09-21 (`parquet.md`, `POC.md`).
+  ambiente alvo em 2026-09-21 (`docs/tecnologias.md`, Parquet; `POC.md`).
 - O delta-rs não impõe duas regras de evolução: `add_columns` aceita coluna `NOT NULL` em tabela
   com dados e a deixa nula, e o `append` converte os dados para o tipo da tabela em vez de acusar a
-  diferença. `reconcile` recusa a primeira, e `cast` aplica os tipos antes de gravar (`delta.md`).
-- O log é limpo no checkpoint com `delta.logRetentionDuration` de 30 dias por padrão (`delta.md`;
+  diferença. `reconcile` recusa a primeira, e `cast` aplica os tipos antes de gravar (`docs/tecnologias.md`, Delta Lake).
+- O log é limpo no checkpoint com `delta.logRetentionDuration` de 30 dias por padrão (`docs/tecnologias.md`, Delta Lake;
   uma sondagem de 2026-09-19 com `interval 0 days`, seis commits e um checkpoint manteve a versão 0
   legível, então a limpeza não vira asserção); a tabela nasce com `interval 3650 days`,
   `delta.deletedFileRetentionDuration` fica em `interval 400 days`, e `keep_versions` protege os
@@ -381,11 +382,11 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   partições alteradas (decisão do usuário de 2026-09-22).
 - Dois `overwrite` da mesma partição conflitam (`CommitFailedError`); partições diferentes e
   `append` entram. Uma execução por ambiente por vez, e o conflito é o sinal de que houve duas; a ação `txn`
-  não impede repetição, e a idempotência é do `overwrite` por partição (`delta.md`).
+  não impede repetição, e a idempotência é do `overwrite` por partição (`docs/tecnologias.md`, Delta Lake).
 - A biblioteca escreve uma partição pelo registro do arquivo que o motor gravou, o
   `COPY ... (RETURN_STATS)` do DuckDB ou o `UNLOAD` do Redshift mais `create_write_transaction`: o
   `INSERT INTO` do DuckDB numa tabela Delta grava a coluna de partição dentro do arquivo e quebraria
-  o `COPY` do Redshift, que a mandaria para a staging, que não a tem (`delta.md`). O usuário aprovou
+  o `COPY` do Redshift, que a mandaria para a staging, que não a tem (`docs/tecnologias.md`, Delta Lake). O usuário aprovou
   em 2026-09-24 o registro como padrão nas etapas [4](PLAN-STAGE-4.md), [5](PLAN-STAGE-5.md) e
   [7](PLAN-STAGE-7.md), depois das partições medidas no ambiente alvo em 2026-09-23, em que o
   `rewrite` levou de 1,14 a 1,52 vez o tempo do registro (`POC.md`), e tirou o `rewrite` das etapas
@@ -393,7 +394,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   com `Double` não finito.
 - As regras que mantêm o `COPY` do Redshift lendo os arquivos e a saída do Delta aberta: sem vetores
   de exclusão, sem column mapping, sem `Identity`, caminhos relativos no log e nunca um arquivo
-  registrado por URI absoluta (`delta.md`, `estrategia.md`).
+  registrado por URI absoluta (`docs/tecnologias.md`, Delta Lake; `estrategia.md`).
 - Uma tabela alimentada pela biblioteca e pelo `UNLOAD` guarda duas codificações físicas da mesma
   coluna lógica: o delta-rs grava `DECIMAL(18, 2)` em `INT64` e timestamp em `INT64`, o `UNLOAD`
   grava em `FIXED_LEN_BYTE_ARRAY(8)` e `INT96`. Os leitores leem as duas, e o que se perde é a
@@ -403,9 +404,9 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   um dobro, e o máximo abaixo do valor real poda o arquivo que tem a linha, sem erro, nos dois
   leitores. `register_files` registra mínimo e máximo só desses quatro tipos, e uma coluna `Numeric`
   larga carrega o defeito também por `publish_partition`; o modelo cliente não tem nenhuma
-  (2026-09-22, `POC.md`, `delta.md`).
+  (2026-09-22, `POC.md`, `docs/tecnologias.md`, Delta Lake).
 - Ler no lugar custa o mesmo que ler Parquet solto; cada `delta_scan` relê o log, e toda tabela
-  consultada mais de uma vez é materializada no DuckDB (`delta.md`). O `delta_scan` poda partição
+  consultada mais de uma vez é materializada no DuckDB (`docs/tecnologias.md`, Delta Lake). O `delta_scan` poda partição
   por `=`, por `IN` de um valor e por intervalo, e abre todos os arquivos com um `IN` de mais de um
   valor ou um `OR` (2026-09-23, `POC.md`): um filtro de várias partições leva o intervalo delas ao
   lado do `IN`.
@@ -427,12 +428,12 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   `storage_options` leva a região, o endpoint, as chaves de SSE e `max_retries` e `retry_timeout`,
   para uma rede morta falhar em 10 s em vez de 59 s, e credencial alguma (decisão do usuário de
   2026-09-22): um trio congelado expiraria em cerca de uma hora no meio de uma execução longa e
-  circularia num dicionário que um log ou uma exceção imprime (`README.md`, `delta.md`).
+  circularia num dicionário que um log ou uma exceção imprime (`README.md`, `docs/tecnologias.md`, Delta Lake).
 - O cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias e `NO_PROXY` antes de
   `no_proxy`; vazia, `NO_PROXY` anula as exceções e a chamada ao endpoint de credenciais vai pelo
   proxy (403). `prepare_environment` exporta `NO_PROXY` de `no_proxy` quando a maiúscula está
   ausente ou vazia, antes da primeira abertura de tabela; exportar depois do `import deltalake`
-  basta, porque a suíte importa na coleta e exporta na fixture da sessão (`delta.md`).
+  basta, porque a suíte importa na coleta e exporta na fixture da sessão (`docs/tecnologias.md`, Delta Lake).
 - O DuckDB carrega extensões só da pasta configurada, com `autoinstall_known_extensions` e
   `autoload_known_extensions` desligados: o `LOAD` de uma extensão conhecida baixaria a extensão
   para `~/.duckdb` sem aviso, e o destino não tem internet (`README.md`).
@@ -501,7 +502,7 @@ Cada regra vem de um comportamento verificado, registrado no documento citado.
   ocupa a máquina, a ingestão sobre `delta_scan`, medida por `CREATE TABLE AS`, não ocupa, e a
   sessão a mais ganha nela, nas consultas pequenas, nos operadores que não se paralelizam e na
   espera do S3, onde a documentação do DuckDB recomenda `threads` de 2 a 5 vezes os núcleos
-  (2026-09-23, [`duckdb.md`](duckdb.md)). No ambiente alvo, com 4 vCPUs, quatro tabelas de
+  (2026-09-23, [`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb)). No ambiente alvo, com 4 vCPUs, quatro tabelas de
   30.001.596 linhas juntas entraram em 15,588 s em sessões a mais e em 19,547 s em série, e a
   materialização ficou limitada pela CPU, mais lenta com `threads` acima dos núcleos (2026-09-23,
   `POC.md`); com 16 vCPUs e o cache de arquivos desligado, a materialização foi melhor com 16
@@ -606,7 +607,7 @@ leitor Delta da etapa 10 roda em pasta local, e o leitor Redshift exige a conex�
 
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
-| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados pelos scripts de `target_env_examples/`, e a suíte `-m redshift` limpa duas vezes seguidas no ambiente alvo (2026-09-21, 13:35 e 13:39 UTC). | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
+| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados pelos scripts de `target_env_examples/`, e a suíte `-m redshift` limpa duas vezes seguidas no ambiente alvo (2026-09-21, 13:35 e 13:39 UTC). | Cada item respondido em `docs/tecnologias.md` (Delta Lake e Redshift); nenhum bloqueio sem alternativa. |
 | 1. `schema` | O modelo cliente, a cópia corrigida do modelo de referência; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo cliente. | O DDL de cada tabela executa no DuckDB em memória; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |

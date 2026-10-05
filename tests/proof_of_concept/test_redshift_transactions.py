@@ -3,8 +3,9 @@ datashare.
 
 A publicação troca as partições de uma tabela e grava a sua linha em ``serialize_db_publications``
 numa transação só, e essa tabela de controle é a única que dois ambientes escrevem ao mesmo tempo
-(``plan/PLAN.md``, premissas). A documentação do Redshift diz o que esperar (``plan/redshift.md``,
-seção "Transações concorrentes"): ``DELETE`` e ``UPDATE`` tomam o lock da tabela e o segundo espera
+(``plan/PLAN.md``, premissas). A documentação do Redshift diz o que esperar
+(``docs/tecnologias.md``, Redshift, seção "Transações concorrentes"): ``DELETE`` e ``UPDATE``
+tomam o lock da tabela e o segundo espera
 o primeiro terminar; sob isolamento de snapshot, dois escritores de linhas distintas confirmam, e
 sob o serializável o segundo recebe ``1023``; o snapshot de uma transação nasce no primeiro
 ``SELECT``, DML ou DDL dela; o ``LOCK`` no início força a ordem, mas não está na lista de comandos

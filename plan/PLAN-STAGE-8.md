@@ -7,7 +7,7 @@ As tabelas publicadas, `<ambiente>_<tabela>` no esquema único, são derivadas d
 escrito nelas por outro caminho. O esquema único é `sbx_aco_decon` no banco de datashare
 `datalake_rw_shared` (decisão do usuário de 2026-09-20), então todo comando cita a tabela por nome
 em duas partes depois do `USE <banco>` que a conexão roda, e a escrita obedece ao que um datashare
-aceita ([`redshift.md`](redshift.md)): `COPY` sem cláusula `COMPUPDATE`, a escrita de uma transação
+aceita ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)): `COPY` sem cláusula `COMPUPDATE`, a escrita de uma transação
 num banco só, e um comando múltiplo apenas dentro de um bloco de transação. A tabela de controle
 mora no mesmo banco das tabelas publicadas, e a transação da publicação abre com `BEGIN` explícito.
 
@@ -21,8 +21,9 @@ O `COPY ... MANIFEST` numa tabela de datashare passou no ambiente alvo em 2026-0
 em 4,6 s a partir de um arquivo gravado pelo delta-rs
 (`target_env_examples/redshift_manifest.py`, na biblioteca do projeto Claude, e [`POC.md`](POC.md)):
 é o caminho da publicação, e o manifesto é o que impede o `COPY` de ler também os arquivos das
-versões anteriores, que o prefixo da partição guarda até o `vacuum` ([`delta.md`](delta.md)). A
-alternativa que existia enquanto a pergunta estava aberta, copiar os arquivos da versão para
+versões anteriores, que o prefixo da partição guarda até o `vacuum`
+([`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake)). A alternativa que existia
+enquanto a pergunta estava aberta, copiar os arquivos da versão para
 `staging/<execution_id>/` por `storage.copy` e carregar esse prefixo, deixa de ser necessária.
 Os arquivos que a publicação lê são os do registro, gravados pelo `COPY` do DuckDB (etapas
 [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md), decisão do usuário de 2026-09-24): `DECIMAL` até 18
@@ -117,7 +118,7 @@ duas stagings temporárias, lidas no ambiente alvo em 2026-09-23).
   `DROP TABLE <publicada>` e `DELETE FROM <esquema>.serialize_db_publications WHERE table_name =
   '<ambiente>_<tabela>' AND delta_version = <lida>`, e `COMMIT`; o `rowcount` 0 do `DELETE` e o
   `1023` são `ExecutionConflict`. O `DROP TABLE` tira a tabela dos clientes, que passam a receber
-  relação inexistente, e a escrita por datashare o aceita ([`redshift.md`](redshift.md)); o Delta
+  relação inexistente, e a escrita por datashare o aceita ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)); o Delta
   fica intacto, e a publicação seguinte da tabela é uma primeira publicação.
 - **As publicações simultâneas.** A tabela de controle é a única que dois ambientes escrevem, e duas
   publicações do mesmo ambiente podem tocar a mesma tabela (`serialize-db publish_redshift` ao lado
@@ -150,7 +151,7 @@ duas stagings temporárias, lidas no ambiente alvo em 2026-09-23).
   cada coluna da tabela publicada em `svv_all_columns` e a compara com a do modelo. O
   `ALTER TABLE ... ALTER COLUMN ... TYPE VARCHAR(n)` não está na lista do que a escrita por
   datashare aceita, recusa coluna com chave e as codificações `BYTEDICT`, `RUNLENGTH`, `TEXT255` e
-  `TEXT32K`, e roda só fora de transação ([`redshift.md`](redshift.md)); no esquema do datashare ele
+  `TEXT32K`, e roda só fora de transação ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)); no esquema do datashare ele
   foi recusado com `0A000 Operation is not supported through datashares`, na coluna comum e na da
   chave, em 2026-09-23 (`test_redshift.py::test_alter_column_type_on_the_share`), e a recriação fica
   como o caminho.

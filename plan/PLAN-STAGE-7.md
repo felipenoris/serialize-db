@@ -33,7 +33,7 @@ máximos menores (`id_lancamento` 952.517.158 em vez de 1.113.599.996) e cinco c
 
 `cad_lancamentos` tem 2,83 GB em quatro partições, cerca de 35 milhões de linhas e 700 MB de Parquet
 por partição. O `write_deltalake` de um `RecordBatchReader` cresceu com a entrada na medição da
-reescrita (1.140 MB de RSS para 135 MB de Parquet, [`delta.md`](delta.md)), e o
+reescrita (1.140 MB de RSS para 135 MB de Parquet, [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake)), e o
 `COPY ... RETURN_STATS` do DuckDB mais `create_write_transaction` ficou em 600 MB: a carga
 registra o arquivo do `COPY`, o padrão que o usuário aprovou em 2026-09-24 para as etapas 4, 5 e 7
 depois das partições medidas em 2026-09-23 ([`POC.md`](POC.md)), sem o `rewrite`, que saiu da

@@ -1416,8 +1416,9 @@ def test_unload_limit_empty_result_temp_table_and_super(
     """Os casos de borda do ``stream`` por ``UNLOAD`` da etapa 5: o ``LIMIT`` no ``select`` externo,
     o resultado vazio, a tabela temporária da sessão e a coluna ``SUPER`` no Parquet.
 
-    A documentação recusa o ``LIMIT`` externo (``plan/redshift.md``), e a mensagem é a leitura. O
-    ``UNLOAD`` de um resultado vazio não grava manifesto nem arquivo, e ``pg_last_unload_count()``
+    A documentação recusa o ``LIMIT`` externo (``docs/tecnologias.md``, Redshift), e a mensagem é a
+    leitura. O ``UNLOAD`` de um resultado vazio não grava manifesto nem arquivo, e
+    ``pg_last_unload_count()``
     dá 0 nele, o que separa esse caso do manifesto que falta; a tabela temporária da sessão é lida
     pelo ``UNLOAD``. As execuções de 2026-09-23 leram os dois casos iguais, e eles são asserção.
     """

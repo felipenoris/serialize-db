@@ -3,8 +3,8 @@
 Este documento registra o resultado de cada execução: as provas de conceito na AWS e em disco local,
 as suítes de `tests/`, e as leituras do ambiente pelos probes, com a data de cada medição e as
 consequências que ela teve no plano. O comportamento de cada tecnologia fica no documento do seu
-assunto ([`delta.md`](delta.md), [`duckdb.md`](duckdb.md), [`redshift.md`](redshift.md),
-[`parquet.md`](parquet.md), [`sqlalchemy.md`](sqlalchemy.md)), e as asserções, nas suítes de
+assunto ([`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake), [`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb), [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift),
+[`docs/tecnologias.md`, Parquet](../docs/tecnologias.md#parquet), [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy)), e as asserções, nas suítes de
 `tests/proof_of_concept/`. Um achado que contraria [`PLAN.md`](PLAN.md) ou um arquivo de etapa
 dispara a revisão desse arquivo. O estado da implementação está em
 [`CURRENT_STATE.md`](CURRENT_STATE.md), e o que continua sem resposta, em
@@ -63,7 +63,7 @@ escritores na mesma versão: o segundo `overwrite` do mesmo mês falha com `Comm
 diferentes e `append` mais `append` comitam os dois), os caminhos relativos do log com a realocação
 da pasta e a abertura sem variáveis `AWS_*`. Os comportamentos do delta-rs que as etapas assumem
 (substituição por predicado, `schema_mode`, `add_columns`, cast no `append`, `restore`, `vacuum`,
-`keep_versions`, exportação por mês) foram verificados localmente e estão em `delta.md`.
+`keep_versions`, exportação por mês) foram verificados localmente e estão em `docs/tecnologias.md` (Delta Lake).
 
 Em 2026-09-20, uma sessão no espaço com a raiz local e a raiz S3 gravou o relatório de
 `SERIALIZE_DB_TEST_REPORT` com as medições das duas raízes, e a execução das 04:52 UTC, depois das
@@ -160,9 +160,9 @@ Consequências no plano, nesta mesma unidade de trabalho:
   como prova de que existe caminho sem a porta 5439.
 - Toda tabela do Redshift é citada por nome em três partes. No SQLAlchemy, o esquema com ponto só
   atravessa com `quoted_name(..., quote=False)`, medido em 2026-09-20
-  ([`sqlalchemy.md`](sqlalchemy.md)).
+  ([`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy)).
 - A escrita num banco de datashare é restrita: `COPY` só sem `COMPUPDATE`, escrita num banco só por
-  transação, sem `VIEW`, e `UNLOAD` fora da lista de comandos suportados ([`redshift.md`](redshift.md)).
+  transação, sem `VIEW`, e `UNLOAD` fora da lista de comandos suportados ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)).
   A [etapa 8](PLAN-STAGE-8.md) abre a transação com `BEGIN` explícito. A leitura de "`COPY` sem
   `COMPUPDATE`" como "emitir `COMPUPDATE OFF`" durou até o experimento de `COPY` e `UNLOAD` da seção
   adiante, que passou sem cláusula alguma.
@@ -275,7 +275,7 @@ cláusula de credencial antes de gravar o relatório da sessão.
 `COMPUPDATE`" entre os comandos que a escrita num datashare aceita, e eu tinha lido isso como
 "emitir `COMPUPDATE OFF`". O comando que passou não tem cláusula alguma, e a suíte e as etapas 5 e 8
 passaram a emiti-lo assim. Não há `COMPUPDATE OFF` a testar: o `COPY` de Parquet não aceita o
-parâmetro nem aplica compressão automática ([`redshift.md`](redshift.md), "Regras do COPY para
+parâmetro nem aplica compressão automática ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift), "Regras do COPY para
 Parquet"), e a regra do datashare está satisfeita por construção.
 
 Duas leituras menores que o script deixou: o `COPY` lê um prefixo de pasta Parquet direto, sem
@@ -386,7 +386,7 @@ declarado dá o erro do rodapé, um tamanho plausível dá `FileNotFoundError`. 
 ação. E `optimize.compact` sobre dois arquivos registrados com `INT96` e `FIXED_LEN_BYTE_ARRAY`
 gravou um arquivo com os dois em `INT64` e estatística em toda coluna, timestamp incluído. As
 consequências estão em [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), seção "As conferências do registro de
-arquivos", em [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) (`export_mode`) e em [`redshift.md`](redshift.md).
+arquivos", em [`PLAN-STAGE-5.md`](PLAN-STAGE-5.md) (`export_mode`) e em [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift).
 
 ## O que a leitura da base de origem mostrou
 
@@ -516,7 +516,7 @@ vai para `tests/client_model/` (confirmada pelo usuário no mesmo dia e escrita 
 revisão mudou [`PLAN.md`](PLAN.md), [`PLAN-STAGE-1.md`](PLAN-STAGE-1.md),
 [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md), [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md),
 [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), [`serialize-db.md`](serialize-db.md),
-[`sqlalchemy.md`](sqlalchemy.md) e [`CURRENT_STATE.md`](CURRENT_STATE.md).
+[`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy) e [`CURRENT_STATE.md`](CURRENT_STATE.md).
 
 ## O que o proxy com autenticação mostrou
 
@@ -997,14 +997,14 @@ resultado inteiro em objetos Python, e o `stream` do motor Redshift limita a mem
   pela quarta vez; `information_schema.columns` vazia e `svv_all_columns` com as sete colunas; o
   `fetchmany` em fatias, o `SUPER` pequeno e o registro do `UNLOAD` no Delta passaram de novo.
 
-**Consequências nos documentos**: [`redshift.md`](redshift.md) recebe as regras lidas (posição com
+**Consequências nos documentos**: [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift) recebe as regras lidas (posição com
 contagem de colunas, lista de colunas, o `VARCHAR` que aborta, `SERIALIZETOJSON`, o destino do
 `UNLOAD` por prefixo e os nomes dos arquivos, o cache e a leitura do resultado no driver); a
 [etapa 5](PLAN-STAGE-5.md) muda o destino de `export_partition` para `<uri>/<execution_id>/<valor>/`,
 porque `<uri>/<execution_id>/` deixa de estar vazio depois da primeira partição da execução, e passa
 `max_prepared_statements=0` no `connect`; a [etapa 8](PLAN-STAGE-8.md) tem a lista de colunas
 confirmada e ganha a decisão do teto do campo JSON; a [etapa 4](PLAN-STAGE-4.md) tem na auditoria de
-tamanho a barreira; [`schema.md`](schema.md), [`parquet.md`](parquet.md), [`delta.md`](delta.md),
+tamanho a barreira; [`schema.md`](schema.md), [`docs/tecnologias.md`, Parquet](../docs/tecnologias.md#parquet), [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake),
 [`estrategia.md`](estrategia.md) e [`serialize-db.md`](serialize-db.md) perdem as pendências do
 `COPY`; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perde as perguntas do `COPY`, do destino do
 `UNLOAD` e do `fetchmany`, e listou as leituras que as execuções das 13:35 e das 13:39 fizeram.
@@ -1050,7 +1050,7 @@ sem etapa que dependa dela; a [etapa 5](PLAN-STAGE-5.md) e a [etapa 8](PLAN-STAG
 `FILLRECORD` em todo `COPY` da biblioteca, porque o manifesto de uma partição pode listar arquivos
 anteriores e posteriores a uma coluna nova e a lista de colunas exigiria um `COPY` por contagem de
 colunas; a decisão do teto do campo JSON na [etapa 8](PLAN-STAGE-8.md) recebe as duas leituras do
-`SUPER`; [`redshift.md`](redshift.md), [`parquet.md`](parquet.md) e [`schema.md`](schema.md) recebem
+`SUPER`; [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift), [`docs/tecnologias.md`, Parquet](../docs/tecnologias.md#parquet) e [`schema.md`](schema.md) recebem
 os fatos; [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) perde a lista das leituras da suíte.
 
 ## O que o `pdoc` mostrou de um módulo com `__all__`
@@ -1610,7 +1610,7 @@ lido por uma sonda antes de virar asserção.
   `coalesce(coluna, :mes)`, `select(:mes)`, o `VALUES` de um `INSERT` e `text("mes = :mes")` saem
   `NULL` sem aviso algum. Sem `literal_binds`, `compiled.binds` marca o parâmetro `required` nas
   sete formas. Uma guarda pelo aviso, a do rascunho anterior da etapa 2, deixaria passar cinco das
-  sete, e [`sqlalchemy.md`](sqlalchemy.md) dizia que o `text()` também avisa.
+  sete, e [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy) dizia que o `text()` também avisa.
 - **As releituras concordaram com o plano.** `Schema.from_arrow` leva o `PARQUET:field_id` do Arrow
   ao esquema Delta como `parquet.field.id` inteiro, e sem a chave no Arrow ela não aparece. No log,
   o `overwrite` com predicado grava `remove` e `add` com `dataChange` verdadeiro, o `delete` que
@@ -1628,7 +1628,7 @@ lido por uma sonda antes de virar asserção.
   rascunho rodou de novo com o mesmo resultado, e o valor `'ação ação'` (9 caracteres, 13 bytes)
   numa coluna `String(10)` só é acusado pela medida em bytes.
 
-**Consequência**: [`sqlalchemy.md`](sqlalchemy.md) passou a dizer que o aviso sai só na comparação
+**Consequência**: [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy) passou a dizer que o aviso sai só na comparação
 por `=`, e [`PLAN-STAGE-2.md`](PLAN-STAGE-2.md) acrescenta esse fato à razão de `render` ler
 `compiled.binds`; [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md) mede o texto da auditoria em bytes, no
 rascunho, na estratégia e nos testes. `test_sqlalchemy.py` tem 15 casos; sem variável, 186 passam e
@@ -1726,7 +1726,7 @@ linhas): com `threads = 1`, 0,122 s uma sessão e 0,128 s quatro juntas; com 11,
 pool é da instância e que a sessão a mais ganha nas consultas pequenas, nos operadores que não se
 paralelizam e na espera do S3; o `threads` da leitura do S3 entrou em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), à espera de uma medição no ambiente alvo. As medições estão
-em [`duckdb.md`](duckdb.md).
+em [`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb).
 
 ## O que as sondas da revisão das etapas 3 e 4 mostraram
 
@@ -1750,7 +1750,7 @@ asserções estão nas suítes de estudo citadas em cada item.
   `json_valid(GenericFunction)` com `@compiles` para o Redshift, como no rascunho da auditoria, o
   `sa.func.json_valid(meta)` do próprio cliente passou de `json_valid(meta)` a
   `is_valid_json(meta)` no Redshift. Uma subclasse de `FunctionElement` com `name` e `@compiles`
-  por dialeto, como o `month_of` de [`sqlalchemy.md`](sqlalchemy.md), compila igual e deixa o
+  por dialeto, como o `month_of` de [`docs/tecnologias.md`, SQLAlchemy](../docs/tecnologias.md#sqlalchemy), compila igual e deixa o
   `sa.func` do cliente intacto
   (`test_sqlalchemy.py::test_generic_function_subclass_registers_in_sa_func_for_the_whole_process`).
 - **`published` compila para `delta_scan`.** `sa.func.delta_scan(sa.literal(uri),
@@ -2031,7 +2031,7 @@ partição, pela contagem da auditoria. Um caso a mais mediu a regra: o `writer_
 `write_deltalake` vale para a chamada, uma por partição, e o `delta_scan ... WHERE valor > 3`
 devolveu a linha do `NaN` da partição sem estatística e não abriu o arquivo da outra, podado pelo
 máximo 2,5. [`PLAN-STAGE-3.md`](PLAN-STAGE-3.md), [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md),
-[`PLAN-STAGE-6.md`](PLAN-STAGE-6.md), [`delta.md`](delta.md) e [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
+[`PLAN-STAGE-6.md`](PLAN-STAGE-6.md), [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake) e [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md)
 descrevem a regra e o que continua aberto. Os casos entraram nas suítes de estudo:
 `test_duckdb.py::test_return_stats_has_nan_follows_only_the_last_row_group`,
 `test_duckdb.py::test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer`,
@@ -2066,7 +2066,7 @@ responderam às decisões pendentes da etapa 6, e os casos entraram nas suítes 
 `execution_id`, e a barreira por tabela fora das etapas, que saiu de
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md). O `loader` do Redshift passou a recusar o nome ocupado e
 a criar a tabela no `close`, na transação do `COPY` ([`PLAN-STAGE-5.md`](PLAN-STAGE-5.md)), e
-[`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e
+[`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN.md`](PLAN.md), [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake) e
 [`docs/index.md`](../docs/index.md) escrevem a regra. Os casos:
 `test_engine_duckdb.py::test_read_during_a_forgotten_load_fails_instead_of_reading_old_rows` e
 `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`.
@@ -2917,7 +2917,7 @@ DuckDB (instrução do usuário de 2026-09-24, que troca a decisão de 2026-09-2
 tabela do script tem a sua conexão, fechada no fim, e o relatório leva os limites de cada carga e
 de cada variante. O probe das threads mede também a metade das CPUs. As revisões estão em
 [`PLAN-STAGE-4.md`](PLAN-STAGE-4.md), [`PLAN-STAGE-7.md`](PLAN-STAGE-7.md), [`PLAN.md`](PLAN.md) e
-[`duckdb.md`](duckdb.md); a execução de `cad_lancamentos` de 2026-09-24 confirmou a metade, com o
+[`docs/tecnologias.md`, DuckDB](../docs/tecnologias.md#duckdb); a execução de `cad_lancamentos` de 2026-09-24 confirmou a metade, com o
 pico da carga 20% acima do limite (seção "O que a bateria de 2026-09-24 às 01:41 mostrou no
 ambiente alvo").
 
@@ -3833,9 +3833,9 @@ do comportamento, e a do `nullCount` achou a perda de linhas no dataset do delta
   conjunto dos valores saiu vazio.
 
 **Consequências**: o código se afasta da [etapa 6](PLAN-STAGE-6.md) nos códigos de saída, e
-`file_from_footer` supõe zero no `null_count` que falta, o que [`parquet.md`](parquet.md) proíbe
+`file_from_footer` supõe zero no `null_count` que falta, o que [`docs/tecnologias.md`, Parquet](../docs/tecnologias.md#parquet) proíbe
 ao leitor. A frase da [etapa 3](PLAN-STAGE-3.md) de que a estatística ausente só deixa de podar
-vale para o `delta_scan` e não para o dataset do delta-rs, e foi revista; [`delta.md`](delta.md)
+vale para o `delta_scan` e não para o dataset do delta-rs, e foi revista; [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake)
 ganhou o comportamento na seção "As estatísticas por tipo", e
 `tests/proof_of_concept/test_deltalake.py`, o caso dele. Os achados esperam o usuário em
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
@@ -4174,7 +4174,7 @@ um substituto rodou o código anterior e o novo lado a lado.
 **Consequências**: o secret leva a chave da credencial do `boto3`, e o motor DuckDB o recria na
 entrada de cada sessão quando ela troca, sob um lock comum às sessões do banco (decisão do usuário
 de 2026-09-25). As etapas [3](PLAN-STAGE-3.md), [4](PLAN-STAGE-4.md) e [7](PLAN-STAGE-7.md),
-[`PLAN.md`](PLAN.md), [`delta.md`](delta.md) e `docs/index.md` foram revistos; a rodada de
+[`PLAN.md`](PLAN.md), [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake) e `docs/index.md` foram revistos; a rodada de
 `probes/credentials.py` no alvo fecha o item de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md).
 
 ## O que a instalação do pacote num projeto cliente mostrou
@@ -4444,7 +4444,7 @@ de `plan/`, com os achados aqui. Nenhum caso falhou, e as leituras repetem as de
 - **As suítes Redshift, do motor e da publicação** aprovaram 45 casos duas vezes (570,5 s e
   535,5 s), 6 duas vezes (85,3 s e 89,5 s) e 8 duas vezes (183,4 s cada), com as leituras de
   2026-09-25 salvo os tempos, os ids e a slice no nome do arquivo do `UNLOAD`, que muda entre
-  execuções ([`redshift.md`](redshift.md)).
+  execuções ([`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)).
 - **`RS-12` voltou sem linha.** O `count(*)` de `sys_load_error_detail` dos últimos 30 dias não
   devolveu linha, em 15,1 s, como em 2026-09-23 às 22:49 (12,8 s) e em 2026-09-24 às 23:25; às
   01:41 de 2026-09-24 e em 2026-09-25 contou 25 e 45 erros, o último em 3,3 s. A contagem sem
@@ -4602,7 +4602,7 @@ com deltalake 1.6.6, a sonda gravou numa partição arquivos de 512 a 514 bytes 
 **Consequências**: `serialize-db compact` imprime `nada a juntar em <n> arquivo(s), nenhum commit`
 quando o delta-rs não grava nem remove arquivo, com o `totalConsideredFiles` (pedido do usuário de
 2026-09-27). A regra do tamanho alvo entrou em `docs/operacao.md`, no
-[arquivo da etapa 9](PLAN-STAGE-9.md), em [`delta.md`](delta.md) e na suíte de estudo do delta-rs
+[arquivo da etapa 9](PLAN-STAGE-9.md), em [`docs/tecnologias.md`, Delta Lake](../docs/tecnologias.md#delta-lake) e na suíte de estudo do delta-rs
 (`test_compact_packs_files_up_to_the_target_size`).
 
 ## O que a comparação dos probes corrigidos mostrou
@@ -5251,7 +5251,7 @@ A partir das 21:14:56 UTC, o usuário rodou a carga, a auditoria, `history`, `sn
 
 **Consequências**: o `COPY` do `appender` do Redshift passa a ler um manifesto com o arquivo como a
 única entrada obrigatória (decisão do usuário de 2026-09-28, [etapa 5](PLAN-STAGE-5.md),
-[`redshift.md`](redshift.md)), e o substituto lê o caminho sem manifesto como prefixo, com o que o
+[`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift)), e o substituto lê o caminho sem manifesto como prefixo, com o que o
 código anterior reprova como reprovou no alvo (a seção seguinte). Os itens da lista de colunas com
 `FILLRECORD` e da linha do DuckDB do `diagnose_aws.py` saem de
 [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md), com a resposta nesta seção; o custo de ler os rodapés na
@@ -5286,7 +5286,7 @@ local e no substituto de `tests/emulator.py`:
   linha não saiu, a `DIFERENÇA` da soma apontou a segunda partição, e a hora e o fuso se perderam
   sem aviso.
 
-**Consequências**: a [etapa 5](PLAN-STAGE-5.md) e [`redshift.md`](redshift.md) descrevem o `COPY`
+**Consequências**: a [etapa 5](PLAN-STAGE-5.md) e [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift) descrevem o `COPY`
 do `appender` pelo manifesto, e `docs/index.md` e a [etapa 7](PLAN-STAGE-7.md) listam a quarta
 perda da carga inicial e o alcance da linha `conversões`, que fica como está (decisão do usuário de
 2026-09-28).
@@ -5478,7 +5478,7 @@ e 57,061 s]:
   (1,21 vez com 8).
 
 **Consequências**: o `COPY` do `appender` pelo manifesto passou no Redshift do alvo, e a mensagem do
-arquivo obrigatório ausente entra na [etapa 5](PLAN-STAGE-5.md) e em [`redshift.md`](redshift.md);
+arquivo obrigatório ausente entra na [etapa 5](PLAN-STAGE-5.md) e em [`docs/tecnologias.md`, Redshift](../docs/tecnologias.md#redshift);
 o substituto dá a mesma mensagem, com o mesmo SQLSTATE, e `test_appender_copies_the_file_at_close`
 segue registrando a mensagem como leitura, sem conferi-la (decisão do usuário de 2026-09-29). Dois
 escritores na mesma tabela entram nos dois motores, e as docstrings de `append` e de `appender`

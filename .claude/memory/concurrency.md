@@ -35,7 +35,7 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   `RecordBatch.from_pandas` share buffers (0.04 ms, 0.003 ms, 1.4 ms, 0.5 ms). A mid-read query
   error reaches Python as `OSError` with DuckDB's message. Objects with `__arrow_c_stream__` are
   accepted by `from_stream`, DuckDB `register` and `write_deltalake`. `plan/PLAN.md`, `plan/POC.md`,
-  `plan/duckdb.md`, `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
+  `docs/tecnologias.md` (DuckDB), `tests/proof_of_concept/test_duckdb.py`, `test_pyarrow.py`, `test_parallel.py`
 - Both engines keep one session per execution under a `threading.RLock` (user decision of
   2026-09-22, first for Redshift, then for DuckDB the same day, so a temporary table serves every
   later command on both engines); `session()` hands the raw connection to the client with the lock

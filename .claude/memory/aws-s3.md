@@ -17,7 +17,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   `If-None-Match: *`, no extra IAM action; `object_store` defaults `aws_conditional_put` to
   `etag`), `DeleteObject` for vacuum, KMS actions only with SSE-KMS; no lifecycle expiration under
   table prefixes; versioning and Object Lock unnecessary. SSE keys in `storage_options`:
-  `aws_server_side_encryption`, `aws_sse_kms_key_id`, `aws_sse_bucket_key_enabled`. `plan/delta.md`
+  `aws_server_side_encryption`, `aws_sse_kms_key_id`, `aws_sse_bucket_key_enabled`. `docs/tecnologias.md` (Delta Lake)
 - A `CopyObject` of a large object can outlast the AWS C++ SDK's low-speed limit:
   `S3FileSystem.copy_file` (pyarrow 25.0.1) is one `CopyObject`, S3 copies server-side before it
   answers, and the SDK gives up after 3 s without a byte (`AWS Error NETWORK_CONNECTION during
@@ -44,7 +44,7 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   library exports `NO_PROXY` from `no_proxy` when absent or empty; its `storage_options` carries no
   credential (decision of 2026-09-22, `.claude/memory/decisions.md`), and
   `test_delta_rs_storage_options_fallback` keeps measuring the `boto3` fallback's shape.
-  `plan/delta.md`, `plan/estrategia.md`
+  `docs/tecnologias.md` (Delta Lake), `plan/estrategia.md`
 - botocore 1.43.98 reads `AWS_DEFAULT_REGION` or the profile, never `AWS_REGION`, and without a
   region uses the global endpoint `s3.amazonaws.com`, which a regional VPC endpoint does not serve;
   delta-rs reads both variables and without either queries IMDS and falls back to `us-east-1`. The S3

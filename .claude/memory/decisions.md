@@ -76,7 +76,7 @@ rule that `secrets/` is never read, limited to that path; the facts are in `plan
 reports stay outside git (the user decided on 2026-09-23 not to copy them to `plan/readings/`). The same day the user confirmed the reading of `RS-19`: `USE
 datalake_rw_shared` makes two-part names resolve in the datashare while `current_database()` keeps
 answering `dev`, so the switch is confirmed by resolving a name, never by that function
-(`plan/PLAN-STAGE-5.md`, `plan/redshift.md`).
+(`plan/PLAN-STAGE-5.md`, `docs/tecnologias.md`, Redshift).
 
 ## The stage 1 review
 
@@ -395,7 +395,7 @@ and for the initial load, whether the other mode leaves stages 4, 5 and 7. The u
 freezing the generated SQL text path where it served only diffs: `audit_files`,
 `write_audit_files` and `serialize-db audit --write` left the plan, and `audit_sql` with `--sql`
 stay for debugging. `plan/PLAN.md`, `plan/PLAN-STAGE-4.md` to `plan/PLAN-STAGE-8.md`,
-`plan/serialize-db.md`, `plan/redshift.md`, `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+`plan/serialize-db.md`, `docs/tecnologias.md` (Redshift), `plan/POC.md`, `plan/OPEN_QUESTIONS.md`
 
 ## The review of stages 3 and 4 of 2026-09-23
 
@@ -1182,7 +1182,7 @@ failing in `delta_schema`; on a decision card the assistant recommended listing 
 2026-09-25. Two limits of the same rule came from the assistant and were named in the report: the
 precision below 1, which made `check_models` raise PyArrow's `ValueError`, and the scale above
 37, the Redshift documentation's maximum, unread in the target.
-`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/schema.md`, `plan/redshift.md`,
+`plan/PLAN-STAGE-1.md`, `plan/PLAN-STAGE-4.md`, `plan/schema.md`, `docs/tecnologias.md` (Redshift),
 `docs/index.md`, `plan/OPEN_QUESTIONS.md`, `plan/POC.md`
 
 ## The Redshift driver in the runtime dependencies (2026-09-25)
@@ -1231,7 +1231,7 @@ arquivo(s), nenhum commit` when the delta-rs writes and removes no file, with it
 naming the files read rather than "a partition with one file", because the probe of the same day
 found the delta-rs skips any file that fits no other in the target size (`.claude/memory/delta.md`);
 and the `CLAUDE.md` line on `serialize_db.engine.__all__`, which lists `duckdb` and `redshift`.
-`docs/operacao.md`, `plan/PLAN-STAGE-9.md`, `plan/delta.md`, `plan/POC.md`,
+`docs/operacao.md`, `plan/PLAN-STAGE-9.md`, `docs/tecnologias.md` (Delta Lake), `plan/POC.md`,
 `plan/CURRENT_STATE.md`
 
 ## The probe fixes of the review of 2026-09-25 (2026-09-27)
