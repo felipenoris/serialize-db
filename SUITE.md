@@ -1,5 +1,5 @@
 
-# Probes e Testes - Lab
+# Ambiente Lab
 
 ```
 export UV_PYTHON_DOWNLOADS=automatic uv sync
@@ -16,32 +16,38 @@ export SERIALIZE_DB_TEST_REPORT=$HOME/tests-report.json
 uv run pytest
 ```
 
-# Probes e Testes - BN
+# Ambiente Alvo
+
+## Variáveis de Ambiente
 
 ```
-cd ~/work/projects/serialize-db
+mkdir $HOME/serialize-db-local
 
+export SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local
 export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
 export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
 export SERIALIZE_DB_REDSHIFT_DATABASE=dev
 export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
 export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
+export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
 export AWS_DEFAULT_REGION=sa-east-1
+
+# migração
+export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
+export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta
+```
+
+## Probes
+
+```
+cd ~/work/projects/serialize-db
+
 .venv/bin/python probes/redshift.py $SERIALIZE_DB_TEST_S3_ROOT
 .venv/bin/python probes/space.py
 .venv/bin/python probes/bucket.py $SERIALIZE_DB_TEST_S3_ROOT
 .venv/bin/python probes/diagnose_aws.py $SERIALIZE_DB_TEST_S3_ROOT
 .venv/bin/python probes/catalog.py
 
-mkdir $HOME/serialize-db-local
-
-export AWS_DEFAULT_REGION=sa-east-1
-export SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local
-export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
-export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
-export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
-export SERIALIZE_DB_REDSHIFT_DATABASE=dev
-export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
 SERIALIZE_DB_TEST_REPORT=probes/output/suite_s3.json .venv/bin/python -m pytest -m "not redshift"
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_1.json .venv/bin/python -m pytest -m redshift
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift
@@ -53,31 +59,11 @@ SERIALIZE_DB_TEST_REPORT=probes/output/publication_2.json .venv/bin/python -m py
 
 # Migração Parquet -> Delta
 
-Tabelas:
-
-```
-cad_aliquotas
-cad_contas
-cad_contratos
-cad_lancamentos
-cad_operacoes
-dom_hierarquias_contas
-dom_mensuracoes
-dom_negocios
-dom_segmentos
-dom_veiculos
-rel_contas_hierarquias
-rel_contrato_operacao
-```
-
 ```
 cd ~/work/projects/serialize-db
 mkdir probes/output
 
 export PYTHONPATH=tests
-export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
-export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta
-export AWS_DEFAULT_REGION=sa-east-1
 
 .venv/bin/python scripts/migrate_parquet_to_delta.py \
     --metadata client_model:Base.metadata \
@@ -109,12 +95,6 @@ Benchmark threads do duckdb:
 # Publicação Delta -> Redshift
 
 ```
-export AWS_DEFAULT_REGION=sa-east-1
-export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
-export SERIALIZE_DB_REDSHIFT_DATABASE=dev
-export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
-export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
-export TARGET_ROOT_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/delta
 export PYTHONPATH=tests
 
 # 1. Uma vez por esquema: a tabela de controle serialize_db_publications.
@@ -203,14 +183,6 @@ PY
 cd ~/work/projects/serialize-db
 mkdir -p $HOME/serialize-db-local probes/output
 
-export AWS_DEFAULT_REGION=sa-east-1
-export SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/serialize-db-local
-export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
-export SERIALIZE_DB_TEST_REDSHIFT_SCHEMA=sbx_aco_decon
-export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
-export SERIALIZE_DB_REDSHIFT_DATABASE=dev
-export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
-export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
 export PYTHONPATH=tests
 
 # As sete sondas da pasta local gravam sob $SERIALIZE_DB_TEST_LOCAL_ROOT/consistencia/<sonda>/,
@@ -245,14 +217,6 @@ SERIALIZE_DB_TEST_REPORT=probes/output/consistencia_append_redshift.json .venv/b
 
 ```
 cd ~/work/projects/serialize-db
-
-export AWS_DEFAULT_REGION=sa-east-1
-export SOURCE_PATH=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado
-export SERIALIZE_DB_TEST_S3_ROOT=s3://bndes-aco-models-138071776059/dzd-5qqmzj3amjp657/3hpfa7636y4qor/shared/fnoro/serialize-db/serialize-db-tests
-export SERIALIZE_DB_REDSHIFT_WORKGROUP=controladoria-wg
-export SERIALIZE_DB_REDSHIFT_DATABASE=dev
-export SERIALIZE_DB_REDSHIFT_SHARE_DATABASE=datalake_rw_shared
-export SERIALIZE_DB_REDSHIFT_SCHEMA=sbx_aco_decon
 
 # As sondas que recebem $SOURCE_PATH leem cad_lancamentos nele. Cada sonda grava sob
 # $SERIALIZE_DB_TEST_S3_ROOT/serialize-db-operacao/<sonda>-<id>/, que apaga no fim, e imprime o
