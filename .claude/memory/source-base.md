@@ -24,7 +24,8 @@ Read before stage 7 (`serialize_db.parquet_import`), `tests/source_db_projetado.
 
 - The production base (`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`),
   read in the target through `S3FileSystem` at 13:54 UTC with `--sample 5000`, the listing in 0.1 s
-  (the report is in `plan/readings/parquet_source-2026-09-21-1354.txt`, committed by the user): the
+  (the report, committed by the user to `plan/readings/`, is in the project library's
+  `readings/parquet_source-2026-09-21-1354.txt` since 2026-10-04): the
   same structure as the dsv base, section 3 identical column by column (checked by script against
   the transcription in `tests/test_source_db_projetado.py`), the same partitions, layout, seven
   columns without statistics and `schema.json`; 14 tables, 205 files, 3,771,538,655 bytes,

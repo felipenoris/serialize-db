@@ -187,7 +187,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   and 1.5 s; Data API 610 ms and 177 ms; `has_schema_privilege` `false` four times. `plan/POC.md`
 - Fifth and sixth runs (2026-09-21 13:35 and 13:39 UTC, 12 passed each, the two clean runs stage 0
   required; the two JSON reports left `plan/readings/` on 2026-09-23, in git history, and the
-  folder holds the 2026-09-23 runs): with
+  folder then held the 2026-09-23 runs): with
   `max_prepared_statements=0` the same `select count(*)` passes before and after a `TRUNCATE`; with
   the driver's cache the repeat after the `TRUNCATE` and a second repeat both get 34510 (the stale
   entry stays), the repeat after an `ALTER TABLE ... ADD COLUMN` passes, and the same sequence on a
@@ -325,7 +325,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   `ExecutionConflict` carrying the `1023`; a failed `COPY` is a `ProgrammingError` with nothing
   published; two published tables at `AUTO` join with `DS_DIST_ALL_NONE`; the `UNLOAD` file's
   `SUPER` column registered by `export_partition` reads as `VARCHAR` text through `delta_scan`; a
-  10-row `load` took 1.66 s to 2.06 s. `plan/POC.md`, `plan/readings/`
+  10-row `load` took 1.66 s to 2.06 s. `plan/POC.md`, `/mnt/project-files/readings/`
 - The publication of the whole base (2026-09-24, the 16:51 battery, from `main` with #73):
   `publish --init` created `sbx_aco_decon.serialize_db_publications`, `--tables cad_contas`
   published version 1, `--max-workers 4` skipped it ("a versão 1 já está publicada") and

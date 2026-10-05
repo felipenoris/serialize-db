@@ -16,8 +16,9 @@ final "Chamadas que falharam", para um bloco vazio nunca significar "negado". Um
 sistema negada a um usuário comum e o pacote ausente fora de um espaço são leituras do ambiente.
 Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma checagem reprovou.
 
-Um relatório que uma etapa pendente ainda consulta é guardado em `plan/readings/`, indexado por
-[`plan/readings/README.md`](../plan/readings/README.md); `output/` fica fora do git.
+Um relatório que uma etapa pendente ainda consulta é guardado na pasta `readings/` da biblioteca
+do projeto Claude, fora do repositório, indexado pelo `README.md` dela; `output/` fica fora do
+git.
 
 ```
 .venv/bin/python probes/space.py

@@ -649,6 +649,18 @@ file hold what it showed. The same identifiers remained elsewhere in the reposit
 `SUITE.md`, `examples/`, `tests/test_probes.py`) until the user's answer of the same day, in the
 section on the publication flow. `plan/readings/README.md`
 
+On 2026-10-04 the user moved `plan/readings/` out of the repository, to the Claude project's
+library at `/mnt/project-files/readings/`, file by file as it was: the engine and publication suite
+runs of 2026-09-24 at 13:01 and 13:05, the suite runs of 2026-09-24 at 01:43 (S3), 01:46 and 01:49
+(Redshift), the threads probe of 02:02, the probes of 2026-09-24 at 01:41 (`space`, `redshift`)
+and 01:42 (`bucket`) and of 2026-09-23 at 19:18 (`diagnose_aws`, `catalog`), and the production
+base reading of 2026-09-21, kept as they came out with the environment's sensitive identifiers
+masked. The library's `README.md` indexes them; the assistant pointed its links to `plan/` at
+GitHub, kept the leaving rule of 2026-09-23 (a report leaves once `plan/POC.md` and the stage file
+hold what it showed) and wrote that git history keeps the reports that were in `plan/readings/`;
+a report that leaves the library has no such copy. The placeholders the README listed went into
+the masking rule of `CLAUDE.md`. `plan/CURRENT_STATE.md`
+
 ## The Redshift suite runs of 2026-09-23 and the stage 8 transaction
 
 On 2026-09-23 the user ran the three target-only suites from `main` (S3 at 18:48 UTC, Redshift at

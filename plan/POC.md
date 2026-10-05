@@ -466,8 +466,8 @@ partição de `cad_lancamentos` continua em [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS
 Em 2026-09-21, às 13:54 UTC, `probes/parquet_source.py --sample 5000` leu no ambiente alvo a base de
 produção `db_projetado`
 (`s3://bndes-aco-models-<conta>/dzd-<domínio>/<projeto>/shared/bndes_grupos_bases_analise_financeira/databases/prd/db_projetado`,
-`S3FileSystem`, a listagem em 0,1 s, os 205 rodapés lidos; o relatório está em
-[`readings/parquet_source-2026-09-21-1354.txt`](readings/parquet_source-2026-09-21-1354.txt)): 14
+`S3FileSystem`, a listagem em 0,1 s, os 205 rodapés lidos; o relatório é
+`parquet_source-2026-09-21-1354.txt`, na pasta `readings/` da biblioteca do projeto Claude): 14
 pastas de tabela, 205 arquivos, 3.771.538.655 bytes, 187.340.531 linhas, `schema.json` solto na
 raiz, nenhum arquivo ilegível, nenhuma chamada falhada e nenhuma checagem reprovada. A seção 3 é
 idêntica à da base de desenvolvimento, coluna a coluna (as 78 colunas, os tipos, a nulidade, os
@@ -2642,12 +2642,12 @@ perdeu o item da pasta temporária do pytest.
 Em 2026-09-23, no ambiente alvo (Python 3.13.15, deltalake 1.6.4, DuckDB 1.5.5, pyarrow 25.0.1,
 boto3 1.43.98, SQLAlchemy 2.0.54), a partir da `main`, a sessão `-m "not redshift"` rodou com as
 raízes local e S3 às 18:48 UTC, e a suíte `-m redshift` duas vezes, às 18:52 e às 18:55 UTC
-([`readings/`](readings/README.md)). Cada execução da suíte Redshift aprovou 24 casos e reprovou
-`test_stream_by_unload_with_literal_values` no caso da contrabarra. A segunda repetiu a primeira
-leitura a leitura, com outros tempos e ids; o `UNLOAD` paralelo nomeou `0000_part_00.parquet` e
-`0064_part_00.parquet`, e as leituras de 2026-09-21 se repetiram (o `COPY` posicional que reprova,
-o `FILLRECORD` com 100 linhas, o `34510` do cache do driver, o `SUPER` acima de 65.535 bytes só
-por `FORMAT JSON 'auto'`).
+(os relatórios, em `plan/readings/`, estão no histórico do git). Cada execução da suíte Redshift
+aprovou 24 casos e reprovou `test_stream_by_unload_with_literal_values` no caso da contrabarra. A
+segunda repetiu a primeira leitura a leitura, com outros tempos e ids; o `UNLOAD` paralelo nomeou
+`0000_part_00.parquet` e `0064_part_00.parquet`, e as leituras de 2026-09-21 se repetiram (o `COPY`
+posicional que reprova, o `FILLRECORD` com 100 linhas, o `34510` do cache do driver, o `SUPER` acima
+de 65.535 bytes só por `FORMAT JSON 'auto'`).
 
 - **O bucket.** Na sessão das 18:48, os 430 casos além das duas medições de memória (seção "O que
   as suítes mostraram no Linux x86_64") passaram, entre eles os casos `s3` de `test_storage.py` e
@@ -2765,7 +2765,7 @@ ambiente alvo, a partir da `main` com o #67, numa máquina de 4 vCPUs e 15.786 M
 DuckDB 1.5.5 com `threads` 4 e `memory_limit` de 12,3 GiB, deltalake 1.6.4, pyarrow 25.0.1),
 com raízes novas sob a pasta pessoal: os cinco probes, a sessão `-m "not redshift"` com as raízes
 local e S3, a suíte Redshift duas vezes, a migração de cada tabela para uma raiz Delta nova e o
-probe das threads sobre ela ([`readings/`](readings/README.md)).
+probe das threads sobre ela (os relatórios, em `plan/readings/`, estão no histórico do git).
 
 - **Os probes.** `space.py`, `bucket.py`, `diagnose_aws.py` e `catalog.py` repetiram as leituras
   das 19:18; o `SP-9` leu a `.venv` sem o grupo `emulator`, e o `bucket.py` leu a raiz nova, com
@@ -2973,7 +2973,7 @@ ambiente alvo, a partir da `main` com o #69, numa máquina de 16 vCPUs, duas por
 31.159 MB (Python 3.13.15, DuckDB 1.5.5 com o padrão de 16 threads e `memory_limit` de 24,3 GiB,
 deltalake 1.6.4, pyarrow 25.0.1), nas mesmas raízes sob a pasta pessoal; `environment_limits` deu
 16 threads e de 13,1 GiB a 13,6 GiB, a metade dos 27 GB a 28 GB disponíveis a cada abertura
-([`readings/`](readings/README.md)).
+(os relatórios estão na pasta `readings/` da biblioteca do projeto Claude).
 
 - **Os probes.** `space.py`, `diagnose_aws.py` e `catalog.py` repetiram as leituras, com a máquina
   nova. `redshift.py` leu a seção da sessão inteira: `sys_load_error_detail` respondeu 25 erros de
@@ -3048,7 +3048,8 @@ primeira migração. A contagem dos não finitos e a linha do `NaN` viram asser�
 `test_redshift.py`, a linha só no ambiente alvo, porque o DuckDB do substituto lê `NaN > -inf`
 como verdadeiro. Os itens da migração de `cad_lancamentos`, da metade da memória, das `threads`,
 do `Double` não finito e do texto da auditoria saem de [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md);
-os relatórios estão em [`readings/`](readings/README.md), e os da migração ficam fora do git.
+os relatórios estão na pasta `readings/` da biblioteca do projeto Claude, e os da migração ficam
+fora do git.
 
 ## O que a implementação das etapas 5 e 8 mostrou
 
@@ -3098,7 +3099,7 @@ da implementação listou: `tests/test_engine_redshift.py` com `-m redshift` às
 e `tests/test_publication.py` com `-m redshift` às 05:13, duas vezes cada, com
 `SERIALIZE_DB_TEST_REPORT` (Linux 6.12 do Amazon Linux 2023, Python 3.13.15, deltalake 1.6.4,
 duckdb 1.5.5, pyarrow 25.0.1, boto3 1.43.98, sqlalchemy 2.0.54, pandas 3.0.6, pytest 9.1.1,
-`sa-east-1`, sem proxy). Os achados estão aqui e os relatórios ficam fora de `plan/readings/`.
+`sa-east-1`, sem proxy). Os achados estão aqui, e os relatórios não entraram em `plan/readings/`.
 
 - **Cinco dos seis casos do motor passaram nas duas rodadas** (116,5 s e 80,6 s), a primeira vez
   que um comando do motor rodou lá: `test_ingest_stream_loader_export` (o `ingest` de uma partição
@@ -3212,9 +3213,9 @@ alvo, a partir da `main` com o #72, numa máquina de 16 vCPUs e 31.383 MB, com 2
 disponíveis (Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.4, pyarrow 25.0.1, boto3 1.43.98,
 sqlalchemy 2.0.54, pandas 3.0.6, pytest 9.1.1, `sa-east-1`, sem proxy), com a pasta local criada,
 e em seguida a carga pelo pacote, a auditoria e as rotinas da operação sobre a cópia da base de
-produção. Os relatórios das suítes do motor e da publicação estão em
-[`readings/`](readings/README.md); os dos probes e o da carga ficam fora de `plan/`, com os achados
-aqui. O probe das threads e a publicação Delta para Redshift não rodaram.
+produção. Os relatórios das suítes do motor e da publicação estão na pasta `readings/` da biblioteca
+do projeto Claude; os dos probes e o da carga ficam fora de `plan/`, com os achados aqui. O probe
+das threads e a publicação Delta para Redshift não rodaram.
 
 - **Os probes** repetiram as leituras de 2026-09-23 e de 01:41: `space.py` com 16 vCPUs, a `.venv`
   completa (`SP-9`) e sem internet (`SP-7`); `diagnose_aws.py` com os três clientes listando o
