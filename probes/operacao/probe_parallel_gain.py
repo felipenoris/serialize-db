@@ -1,14 +1,13 @@
 """Sonda do ganho das APIs com threads sobre a execução em série, no ambiente alvo.
 
-O ganho foi medido em 2026-10-04 num contêiner de 4 vCPUs, com o motor DuckDB numa pasta local
-(``docs/index.md``, seção "Multithreading"); o que depende do S3, do Redshift e das CPUs da máquina
-espera esta sonda (``.claude/memory/OPEN_QUESTIONS.md``, item "O ganho das APIs com threads no
-ambiente alvo"). A sonda gera quatro tabelas iguais, ``cad_paralelo_a`` a ``cad_paralelo_d``, com
-``--rows`` linhas cada numa partição, publica-as no Delta sob a raiz de trabalho e mede cada
-variante ``--repetitions`` vezes, com a ordem invertida a cada repetição: o tempo e o pico de
-memória residente do processo acima da base, zerado por ``/proc/self/clear_refs`` depois de devolver
-ao sistema a memória que o pool do Arrow e o ``malloc`` guardaram das medidas anteriores. Cada seção
-de ``--only`` compara a forma em série, a primeira, com a forma com threads:
+O ganho foi medido em 2026-10-04 num contêiner de 4 vCPUs, com o motor DuckDB numa pasta local, e
+por esta sonda no ambiente alvo em 2026-10-05, com 8 vCPUs, o S3 e o Redshift (``docs/index.md``,
+seção "Multithreading"). A sonda gera quatro tabelas iguais, ``cad_paralelo_a`` a
+``cad_paralelo_d``, com ``--rows`` linhas cada numa partição, publica-as no Delta sob a raiz de
+trabalho e mede cada variante ``--repetitions`` vezes, com a ordem invertida a cada repetição: o
+tempo e o pico de memória residente do processo acima da base, zerado por ``/proc/self/clear_refs``
+depois de devolver ao sistema a memória que o pool do Arrow e o ``malloc`` guardaram das medidas
+anteriores. Cada seção de ``--only`` compara a forma em série, a primeira, com a forma com threads:
 
 - ``duckdb``: no motor DuckDB da máquina, sobre ``cad_paralelo_a`` materializada no sandbox, o
   ``query`` seguido do laço contra o ``stream``; o trabalho de todos os lotes seguido do

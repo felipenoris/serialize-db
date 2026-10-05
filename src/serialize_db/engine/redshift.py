@@ -111,7 +111,10 @@ _IDENTIFIER_BYTES = 127
 _TABLE_NAME_BYTES = 63
 
 # As linhas até as quais o UNLOAD da exportação grava em série, num arquivo só (PARALLEL OFF): acima
-# delas o UNLOAD fragmenta por slice, em paralelo. O valor não foi medido no ambiente alvo.
+# delas o UNLOAD roda em paralelo, que pode fragmentar por slice. No ambiente alvo, em 2026-10-05,
+# o UNLOAD da partição ordenada pela sort_key, de 1.000.000 a 33.239.719 linhas de cad_lancamentos,
+# levou o mesmo tempo nos dois modos (de 2,0 s a 50,3 s, razão de 0,98 a 0,99) e gravou um arquivo
+# só em ambos (probes/operacao/probe_unload_parallel.py).
 _PARALLEL_OFF_ROWS = 5_000_000
 
 # A cláusula de credenciais que nunca vai a log: o valor de cada chave sai como ***.
@@ -2291,11 +2294,12 @@ class RedshiftEngine:
         (sem ``<coluna>=<valor>/`` numa tabela sem partição), e os arquivos entram no log da
         tabela por ``register_files``, como o Redshift os gravou, com as conferências e a
         releitura. O ``UNLOAD`` corre em série (``PARALLEL OFF``), num arquivo só, até 5.000.000
-        linhas, e em paralelo, um arquivo por slice, acima disso. Com ``columns_without_min_max``,
-        o ``UNLOAD`` vai a ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a
-        partição volta por ``publish_partition``, com um aviso no log
-        ``serialize_db.engine.redshift``, porque o rodapé do ``UNLOAD`` deixa o ``NaN`` fora do
-        máximo e o leitor podaria a linha (issue #59).
+        linhas, e em paralelo acima disso, o que pode dar um arquivo por slice; no ambiente alvo, a
+        partição ordenada pela ``sort_key`` saiu num arquivo só nos dois modos, até 33.239.719
+        linhas (2026-10-05). Com ``columns_without_min_max``, o ``UNLOAD`` vai a
+        ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a partição volta por
+        ``publish_partition``, com um aviso no log ``serialize_db.engine.redshift``, porque o
+        rodapé do ``UNLOAD`` deixa o ``NaN`` fora do máximo e o leitor podaria a linha (issue #59).
 
         Exemplo:
 

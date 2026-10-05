@@ -1,11 +1,10 @@
 """Sonda do ``vacuum --full`` sobre os arquivos fora do log.
 
-``.claude/memory/OPEN_QUESTIONS.md`` ("A operação no ambiente alvo") espera a leitura no alvo do
-``vacuum --full`` de um arquivo que nenhuma versão do log referencia, como o da carga parada de
-2026-09-28. A sonda carrega a primeira partição de ``cad_lancamentos`` na origem e copia o arquivo
-dela para dois órfãos: um na pasta da partição, como o do ``COPY`` da carga, e outro num prefixo
-dentro dela, como o do ``UNLOAD`` da exportação Redshift. Depois roda ``serialize-db vacuum
---full`` com a retenção padrão, com ``--retention-hours 0`` e com ``--apply``.
+A sonda lê no ambiente alvo o ``vacuum --full`` de um arquivo que nenhuma versão do log referencia,
+como o da carga parada de 2026-09-28. Ela carrega a primeira partição de ``cad_lancamentos`` na
+origem e copia o arquivo dela para dois órfãos: um na pasta da partição, como o do ``COPY`` da
+carga, e outro num prefixo dentro dela, como o do ``UNLOAD`` da exportação Redshift. Depois roda
+``serialize-db vacuum --full`` com a retenção padrão, com ``--retention-hours 0`` e com ``--apply``.
 
 Checagens:
 

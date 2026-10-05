@@ -1,11 +1,13 @@
 """Sonda do ``compact`` numa partição de vários arquivos e da memória dele.
 
-``.claude/memory/OPEN_QUESTIONS.md`` ("A memória da compactação" e "A operação no ambiente alvo")
-espera a compactação de uma partição com mais de um arquivo, que a carga não grava, e a memória do
-``optimize.compact`` do delta-rs, que roda fora do ``memory_limit`` do DuckDB. A sonda carrega a
-primeira partição de ``cad_lancamentos`` na origem, reparte o arquivo dela em cerca de 32 arquivos
-pelo ``COPY ... FILE_SIZE_BYTES`` do DuckDB, como o ``UNLOAD`` em paralelo do Redshift fragmenta
-por slice, registra os arquivos no lugar dele e roda ``serialize-db compact`` na partição.
+A sonda mede a compactação de uma partição com mais de um arquivo, que a carga não grava, e a
+memória do ``optimize.compact`` do delta-rs, que roda fora do ``memory_limit`` do DuckDB; a leitura
+do ambiente alvo de 2026-10-05 está em ``docs/operacao.md``, seção "Compactação". Ela carrega a
+primeira partição de ``cad_lancamentos`` na origem, reparte o arquivo dela pelo
+``COPY ... FILE_SIZE_BYTES`` do DuckDB em arquivos de até 1/32 do tamanho dela, como o ``UNLOAD``
+em paralelo do Redshift fragmenta por slice, registra os arquivos no lugar dele e roda
+``serialize-db compact`` na partição. No ambiente alvo, com 8 threads do DuckDB, os 551,5 MB da
+partição saíram em 64 arquivos de 5,3 a 16,7 MB.
 
 Checagens:
 
@@ -17,8 +19,8 @@ Checagens:
 Leituras: o tempo e o pico de RSS que ``compact`` imprime, a memória disponível antes dele, os
 tamanhos dos arquivos antes e depois e a operação do commit em ``history``.
 
-Numa partição acima de cerca de 1,6 GB, cada um dos 32 arquivos passa de 50 MB, a metade do
-tamanho alvo, nenhum par cabe junto nele, e o ``compact`` não grava nada.
+Numa partição acima de cerca de 1,6 GB, os arquivos de 1/32 do tamanho dela passam de 50 MB, a
+metade do tamanho alvo, e não cabem dois a dois nele.
 
 Exemplo:
 

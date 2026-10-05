@@ -211,3 +211,21 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   its orphan did not run, because the root was reloaded. The audit of 2026-01-31 (version 5) read
   the same 989,852 orphans and `valor` total, and `archive` copied the 25 files, `cad_lancamentos`
   in 17.7 s at 349 MB.
+- The load of 2026-10-05 (`started_at` 17:45:01 UTC, 8 vCPUs, 12,592 MB available, 8 threads,
+  6,296 MiB, a reloaded root): the source had changed since 2026-09-29 in two places,
+  `cad_aliquotas` with 23 rows (22 before, `fator` summing 5.098146 against 3.454950) and
+  `cad_lancamentos` 2026-07-31 with 141,933,968 rows (141,933,948 before, `valor` summing
+  184,492,179,549.163441 against 183,461,703,500.714103); every other partition kept its counts and
+  sums, and the same three entries stayed outside the model. 354,048,617 rows in 25 partitions,
+  every table matching, 505.0 s summed; `cad_lancamentos` 34.7 s, 24.9 s, 61.3 s, 35.6 s and 223.9 s
+  (2026-07-31 at 0.63 million rows per second), the process peak at 8,424 MB from the first
+  partition and 9,285 MB at 2026-07-31. The audit of 2026-01-31 (version 5) read the same 989,852
+  orphans and `valor` total, `history` listed versions 0 to 5, and `archive` copied
+  `cad_lancamentos` in 20.0 s at 348 MB.
+- The resume of a stopped load ran in the target on 2026-10-05
+  (`probes/operacao/probe_load_resume.py`, the first three partitions of `cad_lancamentos`): the
+  `SIGKILL` came 13.7 s after the second partition's file appeared, 52.2 s from the start, with
+  2026-01-31 in the log and 2026-02-28 out of it, and left the engine's temporary folder behind
+  (0.0 MB). The same command wrote only 2026-02-28 (22.9 s) and 2026-03-31 (62.9 s), checked the
+  three requested partitions equal and exited 0 in 128.6 s; the only file outside the log was the
+  killed execution's. `tests/test_parquet_import.py` covers the same path in the local folder.
