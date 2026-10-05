@@ -198,7 +198,8 @@ Compartilhamento de dados (datashare), autorização e permissões:
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api-access.html>
 
 Conectividade do ambiente alvo (credencial temporária do workgroup, ciclo da Data API, escrita num
-banco de datashare), consultadas em 2026-09-20 a partir dos exemplos de `examples/`:
+banco de datashare), consultadas em 2026-09-20 a partir dos scripts de `target_env_examples/`, na
+biblioteca do projeto Claude:
 
 - <https://docs.aws.amazon.com/redshift-serverless/latest/APIReference/API_GetCredentials.html>
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html>

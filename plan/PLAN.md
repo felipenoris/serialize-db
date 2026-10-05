@@ -47,14 +47,14 @@ As premissas, declaradas pelo usuário, e o que cada uma fixa:
   seção "A troca de dados com o código cliente" fixa a API, as medições e as regras.
 - **O Redshift do ambiente alvo é serverless, e o esquema do projeto vem de um datashare**
   (decisão do usuário de 2026-09-20). A conexão é a credencial temporária do workgroup
-  ([`../examples/redshift_native.py`](../examples/redshift_native.py), executado lá), e nenhum
-  outro caminho de autenticação entra na biblioteca sem ter rodado no ambiente alvo. A conexão roda
-  `USE datalake_rw_shared` e cita `sbx_aco_decon.<tabela>`, e confirma o `USE` resolvendo um
-  nome em duas partes, porque `current_database()` continua a responder `dev` depois dele
-  (leitura de 2026-09-21, confirmada pelo usuário no mesmo dia); o nome em três partes fica para
-  uma sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita, com o
-  `COPY` sem cláusula `COMPUPDATE` e transação explícita, e o `COPY` e o `UNLOAD` alcançam o S3
-  pelas credenciais de quem chama, porque o namespace não tem papel IAM associado
+  (`target_env_examples/redshift_native.py`, da biblioteca do projeto Claude, executado lá), e
+  nenhum outro caminho de autenticação entra na biblioteca sem ter rodado no ambiente alvo. A
+  conexão roda `USE datalake_rw_shared` e cita `sbx_aco_decon.<tabela>`, e confirma o `USE`
+  resolvendo um nome em duas partes, porque `current_database()` continua a responder `dev` depois
+  dele (leitura de 2026-09-21, confirmada pelo usuário no mesmo dia); o nome em três partes fica
+  para uma sessão aberta em outro banco, como a Data API. A escrita segue o que um datashare aceita,
+  com o `COPY` sem cláusula `COMPUPDATE` e transação explícita, e o `COPY` e o `UNLOAD` alcançam o
+  S3 pelas credenciais de quem chama, porque o namespace não tem papel IAM associado
   ([`redshift.md`](redshift.md)). A Data API fica fora da biblioteca: ela devolve `DECIMAL` e data e
   hora como texto e limita o resultado a 500 MB, o que não serve à troca de lotes Arrow.
 - **Nenhum serviço de catálogo está habilitado.** A camada de tabela não depende de serviço, e o
@@ -606,7 +606,7 @@ leitor Delta da etapa 10 roda em pasta local, e o leitor Redshift exige a conex�
 
 | Etapa | Entrega | Critério de aceite |
 | --- | --- | --- |
-| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados por `examples/`, e a suíte `-m redshift` limpa duas vezes seguidas no ambiente alvo (2026-09-21, 13:35 e 13:39 UTC). | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
+| 0. Prova de conceito na AWS | `tests/proof_of_concept/`: S3 verificado; no Redshift, a conexão, a escrita no datashare e os dois comandos com manifesto provados pelos scripts de `target_env_examples/`, e a suíte `-m redshift` limpa duas vezes seguidas no ambiente alvo (2026-09-21, 13:35 e 13:39 UTC). | Cada item respondido em `delta.md` e `redshift.md`; nenhum bloqueio sem alternativa. |
 | 1. `schema` | O modelo cliente, a cópia corrigida do modelo de referência; esquema Arrow, Delta e DDL; cast; os arquivos `schema/` do modelo cliente. | O DDL de cada tabela executa no DuckDB em memória; o teste de diff falha quando um modelo muda sem regenerar; `cast` recusa perda de precisão, `double` fora da escala, texto longo e nulo em `NOT NULL`. |
 | 2. `sql` | `prefixed`, `render`, `bind`, `write_sql_files`. | O texto de um statement com parâmetro, `%` em literal e prefixo roda no DuckDB com `$nome`; o teste de diff dos arquivos `sql/`. |
 | 3. `storage` e `delta` | Os dois armazenamentos; a camada Delta inteira. | Testes locais de substituição da partição, conflito, reconciliação aditiva e destrutiva, reescrita num commit, `keep_versions`, exportação por partição e realocação; os mesmos no bucket com `-m s3`. |
@@ -727,7 +727,8 @@ substitui a tabela inteira, e `run.previous_partitions` é `ContractError`
    com a leitura `RS-8` ([`POC.md`](POC.md)); a manutenção da suíte S3 se confirmada;
    `tests/proof_of_concept/` e os testes `-m s3` das etapas 3 e 4 no bucket.
 5. O `test_redshift.py` da etapa 0 rodou limpo duas vezes no ambiente alvo em 2026-09-21, pela
-   conexão de `examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa conexão.
+   conexão de `target_env_examples/`; as etapas 5 e 8 vêm depois das etapas 3, 4 e 6, com essa
+   conexão.
 6. Etapa 7, implementada em 2026-09-24 sobre a base fictícia, com o script de migração fino sobre
    o pacote; a carga pelo pacote rodou no ambiente alvo no mesmo dia, às 14:16 e às 16:51
    ([`PLAN-STAGE-7.md`](PLAN-STAGE-7.md)); etapa 9 por último, com o runbook, implementada no mesmo

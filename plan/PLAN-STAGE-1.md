@@ -67,7 +67,8 @@ também ficou decidida antes (2026-09-21).
 Duas colunas do modelo cliente são palavras reservadas: `to`, de `cad_contratos`, no DuckDB
 (`duckdb_keywords()` a classifica `reserved`, e `CREATE TABLE t (to VARCHAR(2))` falha com `Parser
 Error: syntax error at or near "to"`) e no Redshift; e `timestamp`, de `cad_lancamentos`, no
-Redshift (no DuckDB ela é `column_name`, aceita sem aspas). `examples/redshift_manifest.py` já cria
+Redshift (no DuckDB ela é `column_name`, aceita sem aspas).
+`target_env_examples/redshift_manifest.py`, da biblioteca do projeto Claude, já cria
 `cad_contratos` com `"to"` entre aspas. Todo identificador que a biblioteca emite, tabela ou coluna,
 vai entre aspas duplas: no DDL desta etapa, na consulta da migração adiantada, no
 `INSERT ... BY NAME` da [etapa 4](PLAN-STAGE-4.md), nas listas de colunas do `COPY` e nas consultas

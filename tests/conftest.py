@@ -29,10 +29,10 @@ Variáveis de ambiente lidas:
   apagada só nesse caso. A conexão vem de ``SERIALIZE_DB_REDSHIFT_*`` (as variáveis de
   ``probes/redshift.py``) e o banco do datashare que guarda o esquema de
   ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``: com ela, cada conexão roda ``USE <banco>`` e as tabelas
-  são citadas por ``esquema.tabela``, como em ``examples/redshift_copy_unload.py``.
-  ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` nomeia o papel do ``COPY`` e do ``UNLOAD``, ou a palavra
-  ``default``; sem ela, os dois levam as credenciais da sessão ``boto3``, que é o caminho do
-  ambiente alvo, onde o namespace não tem papel associado.
+  são citadas por ``esquema.tabela``, como em ``target_env_examples/redshift_copy_unload.py``, da
+  biblioteca do projeto Claude. ``SERIALIZE_DB_REDSHIFT_IAM_ROLE`` nomeia o papel do ``COPY`` e do
+  ``UNLOAD``, ou a palavra ``default``; sem ela, os dois levam as credenciais da sessão ``boto3``,
+  que é o caminho do ambiente alvo, onde o namespace não tem papel associado.
 - ``SERIALIZE_DB_TEST_EMULATOR``: qualquer valor troca o S3 e o Redshift pelo substituto local de
   ``emulator.py``, o moto e um DuckDB em memória, e autoriza as suítes S3 e Redshift nele: a
   sessão define as raízes delas e aponta as variáveis da AWS para o moto, em ``127.0.0.1``.
@@ -323,8 +323,8 @@ USAGE = {
         "cria no esquema as tabelas serialize_db_poc_<id>_*, o sandbox exec_* dos motores e as "
         "tabelas poc<id>_* da publicação e do leitor, e as apaga no fim; com _WORKGROUP a "
         "credencial é temporária (redshift-serverless:GetWorkgroup e GetCredentials, "
-        "examples/redshift_native.py), e _HOST com _USER e _PASSWORD é o par informado na mesma "
-        "chamada; _SHARE_DATABASE quando o esquema vem de um datashare (USE); "
+        "target_env_examples/redshift_native.py), e _HOST com _USER e _PASSWORD é o par informado "
+        "na mesma chamada; _SHARE_DATABASE quando o esquema vem de um datashare (USE); "
         "SERIALIZE_DB_REDSHIFT_IAM_ROLE para o COPY e o UNLOAD (sem ela, as credenciais de quem "
         "chama); SERIALIZE_DB_TEST_LOCAL_ROOT para os casos da publicação e do leitor que também "
         "são local, pulados sem ela",
@@ -701,9 +701,9 @@ class RedshiftSession:
 
         Sem ``SERIALIZE_DB_REDSHIFT_IAM_ROLE``, o comando leva ``ACCESS_KEY_ID``,
         ``SECRET_ACCESS_KEY`` e ``SESSION_TOKEN`` da sessão ``boto3``
-        (``examples/redshift_copy_unload.py``), porque o namespace do ambiente alvo não tem papel
-        associado e sem papel associado nem um ARN explícito funciona. O texto devolvido carrega
-        segredo: ele nunca é impresso, registrado no relatório nem gravado em arquivo.
+        (``target_env_examples/redshift_copy_unload.py``), porque o namespace do ambiente alvo não
+        tem papel associado e sem papel associado nem um ARN explícito funciona. O texto devolvido
+        carrega segredo: ele nunca é impresso, registrado no relatório nem gravado em arquivo.
         """
         if self.iam_role == "default":
             return "IAM_ROLE default"
@@ -753,7 +753,7 @@ def prepare_redshift_session(
     ``25P02`` (``plan/POC.md``). Cada comando confirmado ao terminar é também o que o ``COPY``
     e o ``UNLOAD`` precisam para não ficarem presos numa transação aberta.
 
-    O ``USE`` é o passo de ``examples/redshift_copy_unload.py``: sem ele, quem não está
+    O ``USE`` é o passo de ``target_env_examples/redshift_copy_unload.py``: sem ele, quem não está
     conectado ao banco compartilhado só cita objetos por nome em três partes, e o ``CREATE`` e
     o ``COPY`` não foram exercitados assim.
     """
@@ -801,12 +801,12 @@ def connect_redshift(
     """Abre a conexão pelas variáveis ``SERIALIZE_DB_REDSHIFT_*`` e devolve o método e a conexão.
 
     Com ``_WORKGROUP``, o endereço vem de ``get_workgroup`` e o par usuário e senha de
-    ``get_credentials``: o caminho de ``examples/redshift_native.py``, executado no ambiente alvo.
-    Com ``_HOST``, ``_USER`` e ``_PASSWORD``, o par informado entra na mesma chamada. O IAM interno
-    do ``redshift_connector`` e o cluster provisionado não são caminhos da suíte: ninguém os
-    executou no ambiente alvo, que não tem cluster. A mesma resolução de ``probes/redshift.py``.
-    Cada chamada pede a sua credencial, que dura no máximo uma hora, e a credencial derivada da
-    identidade IAM cria o usuário do banco quando ele ainda não existe.
+    ``get_credentials``: o caminho de ``target_env_examples/redshift_native.py``, executado no
+    ambiente alvo. Com ``_HOST``, ``_USER`` e ``_PASSWORD``, o par informado entra na mesma chamada.
+    O IAM interno do ``redshift_connector`` e o cluster provisionado não são caminhos da suíte:
+    ninguém os executou no ambiente alvo, que não tem cluster. A mesma resolução de
+    ``probes/redshift.py``. Cada chamada pede a sua credencial, que dura no máximo uma hora, e a
+    credencial derivada da identidade IAM cria o usuário do banco quando ele ainda não existe.
 
     A conexão vai sem ``timeout``: no ``redshift_connector`` ele é o tempo limite do socket, para
     conectar e para ler, e um ``COPY`` ou um ``UNLOAD`` dura mais que qualquer espera razoável

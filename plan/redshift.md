@@ -6,9 +6,9 @@ interessam ao contrato, o DDL, a manipulação de dados com pandas e Arrow, a in
 exportação para Parquet, as recomendações de performance e o suporte a SQLAlchemy. As afirmações vêm
 da documentação oficial, consultada em 2026-09-18 e, na seção de conectividade, em 2026-09-20, e do
 código dos pacotes `redshift_connector` 2.1.16, `sqlalchemy-redshift` 1.0.0 e `awswrangler` 3.17.1.
-Os dois caminhos de conexão rodaram no ambiente alvo em 2026-09-20 e estão em
-[`../examples/`](../examples/); os exemplos de SQLAlchemy foram compilados sem conexão a um cluster,
-e os itens marcados como pendentes dependem da prova de conceito.
+Os dois caminhos de conexão rodaram no ambiente alvo em 2026-09-20 e estão na pasta
+`target_env_examples/` da biblioteca do projeto Claude; os exemplos de SQLAlchemy foram compilados
+sem conexão a um cluster, e os itens marcados como pendentes dependem da prova de conceito.
 
 ## Comandos utilitários para diagnóstico
 
@@ -47,15 +47,14 @@ def load_diagnostics(conn: sa.Connection) -> tuple[int, list[dict]]:
 ## Conectividade no ambiente alvo
 
 O ambiente alvo expõe um workgroup serverless, e o esquema do projeto vem de um datashare. Os dois
-caminhos de conexão estão em [`../examples/`](../examples/), como foram executados lá em 2026-09-20;
+caminhos de conexão estão em `target_env_examples/`, como foram executados lá em 2026-09-20;
 o que eles mostraram está em [`POC.md`](POC.md), e `probes/redshift.py` repete as mesmas chamadas.
 
 ### Credencial temporária do workgroup
 
 `redshift-serverless:GetWorkgroup` devolve o endereço e a porta do endpoint, e
 `redshift-serverless:GetCredentials` devolve o par usuário e senha derivado da identidade IAM de
-quem chama ([`../examples/redshift_native.py`](../examples/redshift_native.py)). Não há senha
-guardada em lugar nenhum.
+quem chama (`target_env_examples/redshift_native.py`). Não há senha guardada em lugar nenhum.
 
 - O usuário sai como `IAMR:<papel>` para uma role e `IAM:<usuário>` para um usuário IAM, é criado no
   banco quando ainda não existe e entra em `PUBLIC`: os `GRANT` do esquema precisam alcançá-lo.
@@ -123,8 +122,8 @@ leitura do código do 2.1.16 em 2026-09-23). O `SUPER` chega como texto.
 A Data API executa SQL por HTTPS, sem a porta 5439, e é assíncrona: `ExecuteStatement` devolve o
 identificador na hora, `DescribeStatement` é consultado até o estado ser `FINISHED`, `FAILED` ou
 `ABORTED`, e `GetStatementResult` devolve o resultado paginado
-([`../examples/redshift_data_api.py`](../examples/redshift_data_api.py)). Ela serve a comandos e a
-diagnóstico; a troca de dados da biblioteca não passa por ela:
+(`target_env_examples/redshift_data_api.py`). Ela serve a comandos e a diagnóstico; a troca de dados
+da biblioteca não passa por ela:
 
 - Cada célula é um dicionário de um item (`stringValue`, `longValue`, `doubleValue`, `booleanValue`,
   `blobValue`) ou `{"isNull": true}`. `DECIMAL` chega como texto, e data e hora também: o tipo do
@@ -143,24 +142,24 @@ diagnóstico; a troca de dados da biblioteca não passa por ela:
 O esquema do projeto está num banco de datashare. Uma sessão conectada ao banco local cita a tabela
 por nome em três partes, `banco.esquema.tabela`; `USE <banco>` troca o banco da sessão, e a partir
 dele `esquema.tabela` basta, que é como o `CREATE TABLE`, o `COPY` e o `UNLOAD` passaram no ambiente
-alvo ([`../examples/redshift_copy_unload.py`](../examples/redshift_copy_unload.py)). A restrição
-documentada, de que só o nome em três partes vale, se aplica a quem não está conectado ao banco
-compartilhado. `current_database()` continua a responder o banco da conexão depois do `USE` (leitura de
-2026-09-21 no ambiente alvo por `probes/redshift.py`, confirmada pelo usuário no mesmo dia): a
-troca é confirmada pela resolução de um nome em duas partes, como o `CREATE TABLE` dos exemplos,
-e não por essa função. `svv_redshift_databases` diz o tipo de
-cada banco (`local` ou `shared`) e o nível de isolamento; `svv_all_schemas` diz em que banco está
-cada esquema. `has_schema_privilege` e `svv_table_info` enxergam o banco da sessão: antes do `USE`,
-o local, e num esquema compartilhado quem concede `USAGE` e `CREATE` é o produtor e a lista de
-tabelas vem de `svv_all_tables`, que cruza bancos. Depois do `USE`,
-`has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false`, sem erro, no esquema em que o
-`CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, seis execuções, [`POC.md`](POC.md)): a
-função não serve de teste do privilégio num esquema de datashare, e a prova é o próprio `CREATE`.
-`information_schema.columns` também enxerga só o banco da conexão: depois do `USE` respondeu vazio
-para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21, cinco execuções); `svv_all_columns` cruza os
-bancos, e o `cursor.description` de um `select ... limit 0` descreve a tabela sem visão de catálogo.
-Depois do `USE`, `svv_table_info` respondeu `permission denied for relation svv_table_info`
-(42501) ao papel do projeto (`probes/redshift.py`, `RS-8`, 2026-09-23).
+alvo (`target_env_examples/redshift_copy_unload.py`). A restrição documentada, de que só o nome em
+três partes vale, se aplica a quem não está conectado ao banco compartilhado. `current_database()`
+continua a responder o banco da conexão depois do `USE` (leitura de 2026-09-21 no ambiente alvo por
+`probes/redshift.py`, confirmada pelo usuário no mesmo dia): a troca é confirmada pela resolução de
+um nome em duas partes, como o `CREATE TABLE` dos exemplos, e não por essa função.
+`svv_redshift_databases` diz o tipo de cada banco (`local` ou `shared`) e o nível de isolamento;
+`svv_all_schemas` diz em que banco está cada esquema. `has_schema_privilege` e `svv_table_info`
+enxergam o banco da sessão: antes do `USE`, o local, e num esquema compartilhado quem concede
+`USAGE` e `CREATE` é o produtor e a lista de tabelas vem de `svv_all_tables`, que cruza bancos.
+Depois do `USE`, `has_schema_privilege('sbx_aco_decon', 'CREATE')` respondeu `false`, sem erro, no
+esquema em que o `CREATE TABLE` passa (suíte de 2026-09-21 no ambiente alvo, seis execuções,
+[`POC.md`](POC.md)): a função não serve de teste do privilégio num esquema de datashare, e a prova é
+o próprio `CREATE`. `information_schema.columns` também enxerga só o banco da conexão: depois do
+`USE` respondeu vazio para uma tabela recém-criada em `sbx_aco_decon` (suíte, 2026-09-21, cinco
+execuções); `svv_all_columns` cruza os bancos, e o `cursor.description` de um `select ... limit 0`
+descreve a tabela sem visão de catálogo. Depois do `USE`, `svv_table_info` respondeu
+`permission denied for relation svv_table_info` (42501) ao papel do projeto (`probes/redshift.py`,
+`RS-8`, 2026-09-23).
 
 Os objetos de um datashare só aceitam escrita quando o produtor concede `INSERT`, `CREATE` e os
 demais privilégios ao datashare, e o consumidor precisa atender três requisitos:
@@ -184,7 +183,7 @@ O que o Redshift aceita escrever num datashare, e o que ele não lista:
 - `UNLOAD` não está na lista dos comandos suportados nem na dos recusados, e passou no ambiente alvo
   a partir de uma tabela do datashare: `FORMAT AS PARQUET` sem `PARTITION BY` em 2026-09-20, e
   `PARTITION BY (<coluna>) MANIFEST VERBOSE` em 2026-09-21, este em 0,8 s sobre 500.000 linhas
-  ([`../examples/redshift_manifest.py`](../examples/redshift_manifest.py)).
+  (`target_env_examples/redshift_manifest.py`).
 - `COPY ... FORMAT AS PARQUET MANIFEST` passou numa tabela do datashare em 2026-09-21, 500.000
   linhas em 4,6 s a partir de um manifesto de uma entrada apontando para um arquivo gravado pelo
   delta-rs: o manifesto se comporta como numa tabela local.
@@ -494,9 +493,9 @@ COMMENT ON TABLE operacoes IS 'Operações do mês';
 ```
 
 `TO` e `TIMESTAMP` estão na lista de palavras reservadas do Redshift, e são colunas do modelo
-cliente: `examples/redshift_manifest.py` cria `cad_contratos` com `"to"` entre aspas, o dialeto do
-SQLAlchemy cita `"to"` e `"timestamp"` sozinho, inclusive em `DISTKEY` e `SORTKEY`, e a biblioteca
-cita todo identificador que emite ([`schema.md`](schema.md)).
+cliente: `target_env_examples/redshift_manifest.py` cria `cad_contratos` com `"to"` entre aspas, o
+dialeto do SQLAlchemy cita `"to"` e `"timestamp"` sozinho, inclusive em `DISTKEY` e `SORTKEY`, e a
+biblioteca cita todo identificador que emite ([`schema.md`](schema.md)).
 
 Sintaxe, segundo a referência:
 
@@ -1124,8 +1123,8 @@ não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo `
 
 A documentação do `UNLOAD` não informa os tipos físicos Parquet, a obrigatoriedade das colunas nem a
 presença de estatísticas, e os três afetam o registro dos arquivos no log do Delta.
-[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) leu o rodapé de um arquivo no
-ambiente alvo em 2026-09-21 e respondeu os três:
+`target_env_examples/redshift_manifest.py` leu o rodapé de um arquivo no ambiente alvo em 2026-09-21
+e respondeu os três:
 
 | Coluna do `UNLOAD` | Tipo físico Parquet | Tipo lógico |
 | --- | --- | --- |
@@ -1241,9 +1240,8 @@ O formato do manifesto é da AWS, descrito na referência do `COPY` e na do `UNL
 participa dele nos dois sentidos: o que o log guarda são ações `add`, e o manifesto que o Delta tem,
 o `GENERATE symlink_format_manifest`, é outro formato, de texto, que serve ao Spectrum e não ao
 `COPY`, e que o delta-rs não implementa ([delta.md](delta.md)). As duas conversões abaixo montam e
-leem o formato da AWS a partir do log e para o log;
-[`../examples/redshift_manifest.py`](../examples/redshift_manifest.py) executou as duas no ambiente
-alvo em 2026-09-21, numa tabela do banco de datashare.
+leem o formato da AWS a partir do log e para o log; `target_env_examples/redshift_manifest.py`
+executou as duas no ambiente alvo em 2026-09-21, numa tabela do banco de datashare.
 
 O manifesto é um objeto com `entries`, uma entrada por arquivo:
 

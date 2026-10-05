@@ -10,14 +10,14 @@ grava o arquivo de um ``UNLOAD`` numa pasta local (os que gravam são ``local``,
 ``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência, e leem dois
 escritores na mesma tabela, com uma amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e
 arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de
-``examples/redshift_native.py``, e no substituto local (``SERIALIZE_DB_TEST_EMULATOR``) pela conexão
-de ``tests/emulator.py``, que os testes dão ao motor no lugar do ``redshift_connector``. O modelo é
-o de ``Lancamento``, particionado por ``data_base_str``, com uma chave estrangeira para ``Conta``,
-uma coluna JSON, uma ``DateTime`` e a coluna ``to``, palavra reservada, e ``Projetado``, a tabela
-que o pipeline grava (``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna
-anulável no meio; ``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de
-lugar depois de uma partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna
-de mesmo nome.
+``target_env_examples/redshift_native.py``, da biblioteca do projeto Claude, e no substituto local
+(``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/emulator.py``, que os testes dão ao motor
+no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``, particionado por
+``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma ``DateTime`` e a
+coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
+(``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna anulável no meio;
+``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de lugar depois de uma
+partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo nome.
 """
 
 from __future__ import annotations

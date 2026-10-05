@@ -1,6 +1,6 @@
 # Redshift
 
-Read before code on `engine.redshift`, the publication of stage 8, the Redshift suite or `probes/redshift.py`; the scripts that fixed the target are in `examples/`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
+Read before code on `engine.redshift`, the publication of stage 8, the Redshift suite or `probes/redshift.py`; the scripts that fixed the target are in the Claude project's library, `/mnt/project-files/target_env_examples/`. Each fact ends with the `plan/` file that details it, and `tests/proof_of_concept/` holds the API details as assertions. A fact found in a session is appended here, under the heading it belongs to.
 
 ## The target
 
@@ -17,7 +17,7 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
   probe uses 30 s over system views, the suite and the library connect without one because a `COPY`
   outlives any read timeout; `ssl=True` is the default. The driver's internal IAM (`iam=True`) and
   `GetClusterCredentials` are out: nobody ran them in the target, which has no cluster.
-  `examples/`, `plan/redshift.md`, `plan/POC.md`
+  `/mnt/project-files/target_env_examples/`, `plan/redshift.md`, `plan/POC.md`
 - The target's Redshift, read on 2026-09-20 (the reports left `plan/readings/` on 2026-09-23 and
   stay in git history): workgroup `controladoria-wg`,
   namespace `controladoria-ns`, account `<conta>`, base capacity 8, no provisioned cluster; the
@@ -36,11 +36,11 @@ Read before code on `engine.redshift`, the publication of stage 8, the Redshift 
 
 - The project schema `sbx_aco_decon` lives in the datashare database `datalake_rw_shared` (user
   decision of 2026-09-20), and writing into it works, proved that day by
-  `examples/redshift_copy_unload.py`. `USE <database>` switches the session's database, after which
-  `schema.table` is enough; the three-part name binds only a session connected elsewhere, such as the
-  Data API. `CREATE TABLE`, `COPY` of a Parquet prefix, `SELECT` and `UNLOAD` all passed, and
-  `COPY`/`UNLOAD` reach S3 through the caller's `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` and
-  `SESSION_TOKEN` instead of `IAM_ROLE`, which unblocks a namespace with no attached role; the
+  `target_env_examples/redshift_copy_unload.py`. `USE <database>` switches the session's database,
+  after which `schema.table` is enough; the three-part name binds only a session connected
+  elsewhere, such as the Data API. `CREATE TABLE`, `COPY` of a Parquet prefix, `SELECT` and `UNLOAD`
+  all passed, and `COPY`/`UNLOAD` reach S3 through the caller's `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`
+  and `SESSION_TOKEN` instead of `IAM_ROLE`, which unblocks a namespace with no attached role; the
   statement carries a secret and never reaches a log, the suite report or a file
   (`tests/conftest.py` masks every credential clause). A datashare write also needs patch 186
   (`1.0.78890` serverless), snapshot isolation on the producer's database and 64 slices; it accepts
