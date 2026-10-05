@@ -482,8 +482,8 @@ class Storage:
         upload multipart de ``UploadPartCopy`` em partes de 8 MiB, em paralelo e com a repetição
         por parte do botocore. O ``copy_file`` do PyArrow é um ``CopyObject`` só, que o SDK da AWS
         abandona depois de 3 segundos sem byte de resposta (``curlCode: 28``), o que interrompeu o
-        arquivo de 32.218.190 linhas de ``cad_lancamentos`` no ambiente alvo em 2026-09-24
-        (``plan/POC.md``). Na pasta local, ``copy_file``, com a pasta do destino criada.
+        arquivo de 32.218.190 linhas de ``cad_lancamentos`` no ambiente alvo em 2026-09-24. Na
+        pasta local, ``copy_file``, com a pasta do destino criada.
 
         Exemplo:
 

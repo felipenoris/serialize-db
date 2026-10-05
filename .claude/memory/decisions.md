@@ -1,6 +1,6 @@
 # What the user stated and decided
 
-Read before planning or implementing any stage, and whenever a "why" question comes up: these are facts stated by the user, not visible in the code, with their dates. The plan (`plan/PLAN.md`, pt-BR) records the decisions it rests on; this file keeps the statements behind them.
+Read before planning or implementing any stage, and whenever a "why" question comes up: these are facts stated by the user, not visible in the code, with their dates. The plan (`plan/PLAN.md`, pt-BR, in the library's `plan/` since 2026-10-05) records the decisions it rested on until then; this file keeps the statements behind them, and every decision since.
 
 ## The pipeline outside this repository
 
@@ -1269,6 +1269,14 @@ execução" on what the third argument is for, and the sentence of `plan/PLAN.md
 pipeline.
 `plan/PLAN.md`, `plan/PLAN-STAGE-6.md`, `plan/POC.md`, `plan/CURRENT_STATE.md`
 
+## The monthly pipeline test (2026-09-27)
+
+`tests/test_pipeline.py`, written on 2026-09-27 at the user's request, runs the monthly pipeline
+end to end on the DuckDB engine over the fixture base loaded into a Delta in a local folder; the
+user keeps its adaptation to S3 and Redshift (message of 2026-09-27), which waits in
+`plan/OPEN_QUESTIONS.md`.
+`plan/POC.md`, `plan/OPEN_QUESTIONS.md`
+
 ## The names of the Delta and Redshift publications (2026-09-27)
 
 Asked on 2026-09-27 how to tell apart by name the publication to the Delta (`run.publish`) from the
@@ -1855,3 +1863,33 @@ the header of `.github/workflows/tests.yml` no longer lists the examples among w
 out, and the `examples/` row of `plan/CURRENT_STATE.md` left with its citation of the notebook the
 user deleted in 429af3b. `SUITE.md` never cited the folder.
 `README.md`, `plan/CURRENT_STATE.md`, `pyproject.toml`, `src/serialize_db/engine/redshift.py`
+
+## The planning documents in the project library (2026-10-05)
+
+On 2026-10-05 the user asked to evaluate moving the files of `plan/` out of the repository, to the
+Claude project's library, all but the five technology documents (`delta.md`, `duckdb.md`,
+`parquet.md`, `redshift.md`, `sqlalchemy.md`, which PR #133 turned into the pdoc page
+`docs/tecnologias.md`), now that every stage is implemented, and stated that only
+`plan/OPEN_QUESTIONS.md` deserves to keep being updated. The assistant answered that the plan and
+`CURRENT_STATE.md` had lost their use, that the library keeps no versions, lets the last write win
+and is read only by the project's cloud sessions, and recommended leaving `main` with the citations
+at a fixed commit and a copy in the library. On the decision cards the user chose "Dividir" (01:06
+UTC) and then "Só na biblioteca" (01:07 UTC), on the card that replaced the first; asked again, the
+user chose "Biblioteca, numa pasta" (01:34 UTC). The 18 files (`PLAN.md`, `PLAN-STAGE-0.md` to
+`PLAN-STAGE-10.md`, `CURRENT_STATE.md`, `POC.md`, `estrategia.md`, `guia.md`, `schema.md`,
+`serialize-db.md`) went to `/mnt/project-files/plan/` as the last commit of `main` that held them
+left them, byte for byte but the links: between the files they stay relative, and to any other path
+they point at that commit on GitHub; the folder's `README.md` indexes them. Before the move the
+assistant checked every decision and live item of the 18 files against what stays: no decision was
+missing, and the live items without another home entered `plan/OPEN_QUESTIONS.md` (the catalog
+trigger, the distribution of the published tables, the production passage with the type of `valor`,
+the pipeline functions that differ between the engines, the pipeline test on S3 and Redshift, the
+flaky GIL study case, and clauses on the per-table DuckDB connections, the compaction waiting on
+issue #85 and the archive folder's lifecycle rule); the rest went to `CLAUDE.md` (no configuration
+file) and to the memory (`redshift.md`, `concurrency.md`, `environments.md`, this file). The
+assistant's choices, named in the report: code comments and test docstrings keep `plan/<file>`,
+which names the library's copy, while the Markdown links to the 18 files became text, two study
+suites name the module in place of the stage, the public `Storage.copy` docstring lost its citation,
+and `catalog.py` points at the item of `plan/OPEN_QUESTIONS.md`; the dated entries of the memory
+keep their `plan/` trailers.
+`plan/OPEN_QUESTIONS.md`, `CLAUDE.md`

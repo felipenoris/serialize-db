@@ -352,3 +352,13 @@ channel and read, in the probe, the engine's secret renewed before each expiry. 
   from the `\` root fails `Storage.relative` and the `RETURN_STATS` registration, which compare
   with `/`. After the fixes: 252 passed and 441 skipped without variables, 568 and 125 with the
   local root. `plan/POC.md`
+
+## The package suites' counts
+
+The counts a session compares its own runs against, until a change moves them. On Linux x86_64
+(deltalake 1.6.6, DuckDB 1.5.5), on 2026-10-04: 256 passed and 437 skipped without variables, 574
+and 119 with the local root, and 691 passed with the local root and `SERIALIZE_DB_TEST_EMULATOR`,
+skipping only the Data API test and the Windows memory test; the container read 256 and 437, and
+574 and 119, again on 2026-10-05 at `f32398f`. The GitHub workflow on 2026-10-01: 362 passed and 76
+skipped on Windows, 363 and 75 on Ubuntu. The Windows counts of the whole suite are in the section
+above, and the target batteries' counts in the sections on them. `plan/CURRENT_STATE.md`

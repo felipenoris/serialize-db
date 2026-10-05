@@ -16,6 +16,11 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   `import pyarrow.dataset` inside the first `pq.read_table` took 15 s against 0.19 s; import at
   startup and keep hot pure-Python loops out of the library's threads. `plan/PLAN.md`, section "A troca de dados com o
   código cliente", records the decisions of 2026-09-20. `tests/proof_of_concept/test_concurrency.py`, `test_parallel.py`
+- Rust already enters through the `deltalake` wheel and DuckDB's `delta` extension; an extension of
+  the project's own (PyO3, `pyo3-arrow`) pays only when a profile shows a hot Python
+  loop that neither SQL nor Polars expresses, contract-by-contract projection rules for example,
+  or when a log store beyond what delta-rs offers is needed (assessment of 2026-09-19).
+  `plan/estrategia.md`, section "Rust e PyO3"
 - The client boundary by batches (2026-09-20, macOS arm64, DuckDB 1.5.5 with `threads = 2`): a
   `to_arrow_reader` on its own `cursor()` delivers its query's snapshot while other cursors insert
   into the same table and change the catalog, and closing that cursor mid-stream did not stop it;
@@ -182,7 +187,10 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   the counter thread's first iteration before timing the action: without the wait, 200 `os.stat`
   finished in 5.4 ms before the thread got the GIL, `beside` came out below `shorter` and
   `test_gil_reacquisition_waits_the_switch_interval` failed once in four sessions on 2026-09-24
-  (usually 0.08 s to 0.75 s beside the loop); five runs passed after the wait. `plan/POC.md`
+  (usually 0.08 s to 0.75 s beside the loop); five runs passed after the wait. It failed again in
+  whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the shorter
+  interval) and on 2026-10-03, and passed alone and in the other sessions; the item is in
+  `plan/OPEN_QUESTIONS.md`. `plan/POC.md`
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,

@@ -200,8 +200,8 @@ SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_1.json .venv/bin/python -m
 SERIALIZE_DB_TEST_REPORT=probes/output/redshift_suite_2.json .venv/bin/python -m pytest -m redshift
 ```
 
-São duas execuções: a [etapa 0](plan/PLAN-STAGE-0.md) só escreve a consequência de uma leitura num
-arquivo de etapa depois que a segunda a repete.
+São duas execuções: a consequência de uma leitura só entra no código ou na documentação depois
+que a segunda a repete.
 
 ## Variáveis de ambiente
 
@@ -325,7 +325,7 @@ lá, e o `README.md` da pasta diz o que cada um fixa.
 para Delta e roda os dois comandos com manifesto, o `COPY ... MANIFEST` e o
 `UNLOAD ... PARTITION BY ... MANIFEST VERBOSE` numa tabela do datashare, que são os pré-requisitos
 do `export_partition` e do `COPY` da publicação. Os dois são aceitos, e o que o rodapé do `UNLOAD`
-respondeu está em [`plan/POC.md`](plan/POC.md).
+respondeu está no `plan/POC.md` da biblioteca do projeto Claude.
 
 # Credenciais do delta-rs e proxy
 
