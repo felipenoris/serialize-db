@@ -1846,8 +1846,12 @@ the folder lives, the links to `plan/` and `probes/` pointed at GitHub, and the 
 the path of the copy. No test, probe or package code used a file of the folder, only cited one: the
 citations in `src/`, `tests/`, `probes/`, `plan/`, `README.md` and `REFERENCES.md` name
 `target_env_examples/` in the library, while the dated entries of this memory and of `lessons.md`
-keep `examples/`. `pyproject.toml` drops `examples` from the Ruff `extend-exclude` of 2026-10-01,
-the header of `.github/workflows/tests.yml` no longer lists the examples among what the tests leave
-out, and the `examples/` row of `plan/CURRENT_STATE.md` left with its citation of the notebook the
-user deleted in 429af3b. `SUITE.md` never cited the folder.
+keep `examples/`. The public module docstring of `serialize_db.engine.redshift`, which pdoc
+publishes for the package's clients, describes the connection without citing the script, which a
+client cannot reach, and the private `_workgroup_login` keeps the citation; that wording is the
+assistant's recommendation on a decision card, awaiting the user's choice between dropping and
+keeping the citation. `pyproject.toml` drops `examples` from the Ruff `extend-exclude` of
+2026-10-01, the header of `.github/workflows/tests.yml` no longer lists the examples among what the
+tests leave out, and the `examples/` row of `plan/CURRENT_STATE.md` left with its citation of the
+notebook the user deleted in 429af3b. `SUITE.md` never cited the folder.
 `README.md`, `plan/CURRENT_STATE.md`, `pyproject.toml`
