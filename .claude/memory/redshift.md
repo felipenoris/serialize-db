@@ -83,7 +83,7 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   50.3 s with `PARALLEL OFF` against 2.1 s, 8.4 s, 16.3 s, 32.6 s and 50.7 s in parallel (0.98 to
   0.99), the footers read in 0.03 s to 0.10 s. The 32 files of 2026-09-21 came from an `UNLOAD ...
   PARTITION BY` without `ORDER BY` of a `DISTSTYLE KEY` table; which of the three differences gives
-  one file is not separated. The `_PARALLEL_OFF_ROWS` comment of `serialize_db.engine.redshift`,
+  one file is not separated. `serialize_db.engine.redshift` (`_PARALLEL_OFF_ROWS`),
   `docs/tecnologias.md` (Redshift)
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
