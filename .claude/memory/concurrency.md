@@ -192,8 +192,9 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
-  2026-09-25), and 79 of 400 (175 conflicts) in the target machine's local folder on 2026-09-26;
-  S3's `IfMatch` is server-side. `.claude/memory/OPEN_QUESTIONS.md`
+  2026-09-25), and in the target machine's local folder 79 of 400 (175 conflicts) on 2026-09-26,
+  88 (204) on 2026-09-27, 65 (84) on 2026-09-29 and 67 (108) on 2026-10-05; S3's `IfMatch` is
+  server-side. `.claude/memory/OPEN_QUESTIONS.md`
 - `Execution.publish_delta` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
@@ -223,6 +224,26 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   a 39% to 46% higher peak; `publish_delta(max_workers=4)` 1.02x. A peak read in-process after
   earlier measures misses the memory the process kept: one query read +418 MB first and +205 MB on
   each repeat, and +365 MB with the Arrow pool's `release_unused()` and glibc's `malloc_trim(0)`
-  before `/proc/self/clear_refs`. `probes/operacao/probe_parallel_gain.py` repeats the measures for
-  the Redshift engine, S3 and `publish_redshift` in the target. `.claude/memory/OPEN_QUESTIONS.md`,
-  `docs/index.md`
+  before `/proc/self/clear_refs`. `probes/operacao/probe_parallel_gain.py` repeated the measures in
+  the target on 2026-10-05 (next entry). `docs/index.md`
+- The threaded APIs against their serial form in the target, 2026-10-05
+  (`probes/operacao/probe_parallel_gain.py`, 8 vCPUs, 13.0 GiB available, DuckDB limits 8 threads
+  and 6,665 MiB, four 5,000,000-row Delta tables on S3 prepared in 26.4 s, the Redshift serverless
+  workgroup, best of three in one process, the peak over the base after `clear_refs`). DuckDB:
+  `stream` 1.26x with no work (0.364 s, +2 MB, against 0.459 s, +313 MB) and 1.83x with pandas
+  (0.389 s against 0.712 s); `appender` 1.00x and 1.07x; both in one `with` 1.03x and 1.40x
+  (2.143 s, +207 MB, against 3.009 s, +628 MB); 200 small Core-statement queries 0.526 s serial,
+  0.541 s from four threads on the main session, 0.348 s with one `new_session()` each (1.51x);
+  `run.ingest` of the four 2.39x (4.005 s, +1,035 MB, against 9.564 s, +916 MB), `materialize` of
+  the four in the Delta reader 2.44x (4.139 s, +991 MB, against 10.097 s, +896 MB) and
+  `publish_delta(max_workers=4)` 2.04x (8.951 s against 18.221 s), where the local folder had read
+  1.02x. Redshift: `run.ingest` of the four 2.59x (12.536 s against 32.509 s); `stream`, `appender`
+  and both 1.01x, 1.07x and 1.04x with no work and 1.00x, 0.96x and 1.00x with pandas, since the
+  `UNLOAD` runs whole before the first batch and the `COPY` after the loop, the threaded `stream`
+  and both at +79 MB to +129 MB against +243 MB to +457 MB serial, the `appender` at +84 MB against
+  +43 MB with no work and +28 MB against +231 MB with pandas; 80 small Core-statement queries
+  6.858 s serial (about 86 ms each), 6.746 s on the main session, 2.181 s with one extra session
+  each, its opening timed (3.14x); `publish_delta(max_workers=4)` 1.39x (19.131 s against 26.681 s);
+  and `publish_redshift` with four workers against one 0.95x (31.521 s against 29.987 s, the
+  unpublishing out of the time). The runbook's base publication uses `--max-workers 4` since
+  2026-09-26 and has no serial reading in the target. `docs/index.md` ("Multithreading")

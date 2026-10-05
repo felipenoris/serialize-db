@@ -131,12 +131,14 @@ serialize-db compact --root s3://bucket/projeto/delta --environment prd \
     --partitions 2026-07-31 2026-08-31
 ```
 
-Antes: o arquivo de controle sem snapshot na versão atual da tabela (o comando confere e recusa);
-a memória da máquina, porque a reescrita roda no escritor do delta-rs, fora do `memory_limit` do
-DuckDB, e a memória dela numa partição de `cad_lancamentos` não foi medida. Depois: `numFilesAdded`
-e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a medida da memória da
-compactação; um commit `OPTIMIZE` com `dataChange` falso, que `serialize_db.delta.version_diff`
-não conta.
+Antes: o arquivo de controle sem snapshot na versão atual da tabela (o comando confere e recusa); a
+memória da máquina, porque a reescrita roda no escritor do delta-rs, fora do `memory_limit` do
+DuckDB. No ambiente alvo, em 2026-10-05, uma partição de `cad_lancamentos` com 33.239.719 linhas em
+64 arquivos de 5,3 a 16,7 MB, 551,5 MB gravados pelo DuckDB, virou 6 arquivos de 43,5 a 67,8 MB,
+370,0 MB, em 6,0 s, com o pico do processo em 1.714 MB e 12,5 GiB disponíveis. Depois:
+`numFilesAdded` e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a medida da
+memória da compactação; um commit `OPTIMIZE` com `dataChange` falso, que
+`serialize_db.delta.version_diff` não conta.
 
 O delta-rs junta numa partição só os arquivos que cabem juntos no tamanho alvo, a propriedade
 `delta.targetFileSize` da tabela ou 100 MB sem ela, e deixa como está o arquivo que não cabe com

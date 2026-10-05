@@ -1,12 +1,12 @@
 """Sonda do limiar de ``PARALLEL OFF`` na exportação do motor Redshift.
 
-``.claude/memory/OPEN_QUESTIONS.md`` ("O ``PARALLEL OFF`` e a reconexão do motor Redshift") registra
-que o limiar de 5.000.000 linhas (``_PARALLEL_OFF_ROWS`` em ``serialize_db.engine.redshift``), até o
-qual a exportação grava a partição em série num arquivo só, não foi medido. A sonda carrega a
-primeira partição de ``cad_lancamentos`` na origem, leva-a ao sandbox pelo ``ingest`` do motor, cria
-tabelas do sandbox com 1, 5, 10 e 20 milhões das linhas dela, e roda o ``UNLOAD`` da exportação de
-cada uma e da partição inteira com ``PARALLEL OFF`` e sem ele, três vezes cada, alternando a ordem.
-O ``select`` é o da exportação: as colunas sem a de partição, na ordem da ``sort_key``.
+A sonda mede o limiar de 5.000.000 linhas (``_PARALLEL_OFF_ROWS`` em
+``serialize_db.engine.redshift``), até o qual a exportação grava a partição em série num arquivo só;
+a leitura do ambiente alvo de 2026-10-05 está no comentário do limiar. Ela carrega a primeira
+partição de ``cad_lancamentos`` na origem, leva-a ao sandbox pelo ``ingest`` do motor, cria tabelas
+do sandbox com 1, 5, 10 e 20 milhões das linhas dela, e roda o ``UNLOAD`` da exportação de cada uma
+e da partição inteira com ``PARALLEL OFF`` e sem ele, três vezes cada, alternando a ordem. O
+``select`` é o da exportação: as colunas sem a de partição, na ordem da ``sort_key``.
 
 Checagens:
 

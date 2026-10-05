@@ -4891,6 +4891,13 @@ Os dois tipos físicos que divergem do resto do projeto:
 O `UNLOAD` fragmenta por slice: 500.000 linhas em seis colunas saíram em 32 arquivos, sem
 `MAXFILESIZE`, que é um teto e não um piso. Quem controla a quantidade é `PARALLEL OFF`, que grava
 em série num arquivo só e respeita o `ORDER BY`, ou uma compactação posterior na camada Delta.
+Os 32 arquivos saíram de um `UNLOAD ... PARTITION BY` sem `ORDER BY`, de uma tabela
+`DISTSTYLE KEY` (2026-09-21). O `UNLOAD` em paralelo do `SELECT` da exportação, sem
+`PARTITION BY` e com `ORDER BY` pela chave de ordenação, gravou um arquivo só de 1.000.000 a
+33.239.719 linhas de `cad_lancamentos` (17,4 MB a 559,0 MB), no tempo do `PARALLEL OFF` (razão de
+0,98 a 0,99, 2026-10-05), sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e cópias dela por
+`CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
+distribuição.
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
 acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o

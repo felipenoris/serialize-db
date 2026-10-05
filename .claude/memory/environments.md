@@ -222,6 +222,29 @@ same versions. Every case and check passed: S3 614 in 274.9 s (the three `Confli
 bytes, and 9,539 delete markers, the listing again at its limit); the `RS-8` listing held the same
 16 tables, no `exec_` table.
 
+The battery of 2026-10-05 from 16:38 UTC (from `main` at `bf8c3f8` or later, most likely `b54b998`,
+inferred from the 693 cases collected and from `SUITE.md` naming `.claude/memory/OPEN_QUESTIONS.md`)
+ran every `SUITE.md` block but `credentials.py`, on 8 vCPUs and 15,505 MB (Python 3.13.15, DuckDB
+1.5.5, deltalake 1.6.6, pyarrow 25.0.1, `redshift_connector` 2.1.17; boto3 1.43.108 and sqlglot
+30.21.0 against 1.43.102 and 30.19.0, and ruff 0.16.10 listed in `SP-9`). Every case and check
+passed: S3 638 and 1 skipped (the Windows memory test of `tests/test_resources.py`, by the platform)
+in 296.2 s, with `engine.stream.close_interrupts` at `0.002 s, erro NoneType` for the first time
+(the first batch came at the end and nothing was left to cancel, an outcome the case accepts;
+`OSError` at 0.013 s to 0.028 s in every earlier battery); Redshift 54 twice (685.0 s, 668.5 s),
+engine 11 twice (139.2 s, 157.8 s) and publication 11 twice (247.2 s, 242.7 s). The probes differed
+from 2026-09-30 in the Redshift version, `RS-8` (the `prd_*` tables and the control table gone,
+`redshift.md`), `RS-12` (56 load errors in 30 days), `BK-14` (10,507 non-current versions,
+249,621,376 bytes, and 9,492 delete markers, the listing at its limit), Lake Formation and S3 Tables
+timing out in 60.3 s and 30.5 s, and 28.7 GiB free on disk. The load from 17:45:01 (12,592 MB
+available, 8 threads and 6,296 MiB) read a source changed since 2026-09-29 (`source-base.md`) in
+505.0 s, peak 9,285 MB; after `publish_redshift --init` created the control table again, the whole
+base was published by `--channel default --max-workers 4` (`cad_lancamentos` 324.9 s at 285 MB), the
+Delta reader opened in 0.607 s, `export` took 18.4 s at 258 MB by copy and 66.9 s at 6,854 MB by
+rewrite, and `compact` refused. The consistency probes ran from 18:26 with every check passing
+(`concurrency.md`), the operation probes from 18:33, their first target run, with every check
+passing (`source-base.md`, `delta.md`, `redshift.md`, `concurrency.md`), and `duckdb_threads.py`
+from 19:22 to 20:09, alone [inferred from the clock] (`duckdb.md`).
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

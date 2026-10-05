@@ -49,13 +49,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   vez por comando fora de transação e perde só a tabela temporária que o pipeline tenha criado na
   sessão, e a carga de cada partição de `ingest` e de `pinned_delta` roda numa transação desde
   2026-10-04, para a queda no meio do `COPY` subir sem repetição (`POC.md`).
-- **O `PARALLEL OFF` e a reconexão do motor Redshift.** As suítes do motor e da publicação rodaram
-  no ambiente alvo em 2026-09-24, duas vezes cada, e leram o que esperavam (`POC.md`):
-  ficam sem medida o `PARALLEL OFF` até 5.000.000 linhas na exportação e a reconexão depois de uma
-  queda do servidor, que nenhum teste provoca lá (etapa 5).
-  `probes/operacao/probe_unload_parallel.py` mede o primeiro, o `UNLOAD` da exportação com
-  `PARALLEL OFF` e em paralelo de 1 a 20 milhões de linhas, e espera a rodada no alvo pelos
-  comandos de `SUITE.md`, seção "Sondas da operação".
+- **A reconexão do motor Redshift.** As suítes do motor e da publicação rodaram no ambiente alvo
+  em 2026-09-24, duas vezes cada, e leram o que esperavam (`POC.md`): fica sem medida a reconexão
+  depois de uma queda do servidor, que nenhum teste provoca lá (etapa 5).
 - **O `COPY` do `ingest` do motor Redshift com uma coluna do Delta que o modelo não tem.** A
   docstring diz que o `COPY` é recusado, porque a lista de colunas do rodapé nomeia a coluna e a
   staging, criada do modelo, não a tem (decisão do usuário de 2026-10-01: documentar, sem projeção
@@ -74,12 +70,6 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   (42501, probe de 2026-09-23). O `EXPLAIN` só rodou sobre as tabelas pequenas das suítes, com
   `DS_DIST_ALL_NONE` (`test_publication.py::test_published_join_redistribution_is_read`,
   2026-09-24), e espera a leitura sobre a base publicada no alvo.
-- **A memória da compactação.** O `optimize.compact` do delta-rs roda fora do `memory_limit` do
-  DuckDB, com as tarefas paralelas do padrão do delta-rs, e a memória dele numa partição de
-  `cad_lancamentos` não foi medida (etapa 9); o `archive` saiu desse risco pela
-  cópia dos arquivos de cada partição e o registro deles (decisão do usuário de 2026-09-24).
-  `probes/operacao/probe_compact_memory.py` a mede na primeira partição da origem repartida em
-  cerca de 32 arquivos, e espera a rodada no alvo.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -119,24 +109,11 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   uma partição de dois arquivos, um sem mínimo e máximo de `valor`, e outra, compactada na mesma
   chamada, que os mantém.
 
-- **A operação no ambiente alvo.** Em 2026-09-24, nas baterias das 16:51 e das 23:25, a carga, a
-  auditoria, `history`, `snapshot`, `vacuum`, `archive`, a publicação da base inteira e `export`
-  rodaram sem erro, com o tempo e o pico de RSS de `archive`, `export` e da publicação lidos às
-  23:25 (`POC.md`). O `compact` rodou só sobre a partição 2026-03-31 de `cad_lancamentos`,
-  que tem um arquivo só e não commita, e em 2026-09-25, em 2026-09-26, em 2026-09-27 e em 2026-09-29
-  saiu com a recusa prevista, porque `SUITE.md` o roda depois de um snapshot na versão atual: a
-  compactação de uma partição de vários arquivos e a memória dela (o item acima) esperam uma
-  partição com mais de um arquivo, que a carga não grava, e um `compact` antes do snapshot; a
-  continuação de uma cópia interrompida do `archive` só o substituto exercitou. Em 2026-09-28, a
-  carga parou em `cad_lancamentos` 2026-07-31 com o `RegistrationRefused` de uma origem que mudava
-  durante a leitura, e em 2026-09-29, com a origem estável, passou inteira numa raiz recarregada
-  (`POC.md`): a continuação de uma carga parada, que `tests/test_parquet_import.py` cobre
-  na pasta local, e o `vacuum --full` de um arquivo fora do log seguem sem leitura no alvo. As
-  sondas de `probes/operacao/` rodam essas leituras sobre as primeiras partições de
-  `cad_lancamentos` da origem, a continuação do `archive` inclusive, e passaram na pasta local e no
-  substituto em 2026-09-30 (`POC.md`); esperam a rodada no alvo, pelos comandos de
-  `SUITE.md`, seção "Sondas da operação". O `COPY` da publicação de uma partição compactada, que o
-  `compact` regrava em ZSTD, também não rodou lá.
+- **A publicação de uma partição compactada.** O `compact` regrava os arquivos que junta pelo
+  escritor do delta-rs, em ZSTD, e o `COPY` da publicação no Redshift de uma partição compactada
+  não rodou no ambiente alvo: `probes/operacao/probe_compact_memory.py` compactou lá, em
+  2026-10-05, uma partição de 64 arquivos sem publicá-la, e o `compact` de `SUITE.md` sai com a
+  recusa prevista, porque roda depois de um snapshot na versão atual.
 
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente
@@ -150,37 +127,35 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `decimal` sem mínimo e máximo, e `publish_partition` grava pelo delta-rs. Depois da carga, os
   leitores passam a abrir o Delta, e as pastas de origem ficam como cópia até a primeira publicação
   no Redshift. Espera o usuário: a troca de `valor`, se vier, antes da carga da produção.
-- **O acesso de leitura no ambiente alvo.** A etapa 10 rodou no alvo nas
-  baterias de 2026-09-25, de 2026-09-26, de 2026-09-27 e de 2026-09-28 às 23:09
-  (`POC.md`): o leitor Delta abriu as 12 views da raiz carregada em 0,645 s, em 0,582 s,
-  em 0,571 s e em 0,556 s; as suítes passaram a publicação por canal e por snapshot, com a volta a
-  um snapshot anterior, e a comparação dos dois leitores, com o `stream` do leitor Redshift pelo
-  `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a volta pelo canal; e
-  em 2026-09-26 a base inteira foi publicada por `--channel default`, `cad_lancamentos` em 295,1 s
-  com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, e em
-  2026-09-29, em 335,2 s com 286 MB. Esperam: a volta a um snapshot anterior ao publicado sobre a
-  base, com o tempo e o pico de RSS por tabela, que pede um commit depois do snapshot, fora do fluxo
-  de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão já estava publicada; e o `UNLOAD`
-  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
-  serve a ele, que precisa de um papel de cliente no alvo.
+- **O acesso de leitura no ambiente alvo.** A etapa 10 rodou no alvo nas baterias de 2026-09-25, de
+  2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09 e de 2026-10-05 (`POC.md`,
+  `.claude/memory/environments.md`): o leitor Delta abriu as 12 views da raiz carregada em 0,645 s,
+  em 0,582 s, em 0,571 s, em 0,556 s e em 0,607 s; as suítes passaram a publicação por canal e por
+  snapshot, com a volta a um snapshot anterior, e a comparação dos dois leitores, com o `stream` do
+  leitor Redshift pelo `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a
+  volta pelo canal; e em 2026-09-26 a base inteira foi publicada por `--channel default`,
+  `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s
+  com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, e em 2026-10-05, em 324,9 s com 285 MB. Esperam:
+  a volta a um snapshot anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela,
+  que pede um commit depois do snapshot, fora do fluxo de `SUITE.md`, cujo passo 6 leu em cada
+  bateria que cada versão já estava publicada; e o `UNLOAD` de um cliente com usuário só de leitura
+  para um bucket próprio, com o caminho de credencial que serve a ele, que precisa de um papel de
+  cliente no alvo.
 
-- **O ganho das APIs com threads no ambiente alvo.** Em 2026-10-04, num contêiner de 4 vCPUs, com o
-  motor DuckDB e as tabelas Delta numa pasta local, o `stream`, o `appender`, as sessões a mais,
-  `run.ingest` e `materialize` de várias tabelas ganharam da execução em série, e
-  `run.publish_delta` com `max_workers=4` não ganhou (`POC.md`); o `run.ingest` das
-  tabelas no S3 tem as leituras do alvo de 2026-09-23 a 2026-09-29. Seguem sem medida: o `stream`, o
-  `appender` e a `new_session()` do motor Redshift, o `publish_delta` e o `materialize` com as
-  tabelas no S3, o `publish_redshift` com `max_workers` maior que 1 e o ganho numa máquina com mais
-  CPUs. `probes/operacao/probe_parallel_gain.py` mede cada um contra a série, passou na pasta local
-  e no substituto e espera a rodada no alvo, pelo comando de `SUITE.md`, seção "Sondas da operação";
-  o que ela ler entra na seção "Multithreading" de `docs/index.md`.
+- **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
+  mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
+  de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"); o ganho
+  com mais CPUs segue sem medida e espera a sonda numa máquina maior.
 - **A compilação do statement Core a cada chamada.** Os dois motores compilam o statement Core a
   cada `query` e `stream`, e o Redshift também a cada `execute`, por `bound_statement` e o
   `compile` com `render_postcompile`, sem cache: em 2026-10-04, no motor DuckDB, 200 consultas
   pequenas levaram cerca de 2 ms a mais cada pelo statement Core que pelo texto SQL, em Python, e o
-  ganho das sessões a mais caiu de 2,28 para 1,25 vez (`POC.md`). A seção
-  "Multithreading" de `docs/index.md` orienta juntar as consultas pequenas numa só. Espera o
-  usuário: um cache da compilação no pacote, ou a orientação como está.
+  ganho das sessões a mais caiu de 2,28 para 1,25 vez (`POC.md`). No ambiente alvo, em 2026-10-05,
+  com 8 vCPUs, as 200 consultas por statement Core ganharam 1,51 vez nas sessões a mais (0,526 s em
+  série, 0,348 s), e no Redshift, onde cada uma levou cerca de 86 ms, as 80 ganharam 3,14 vezes
+  (6,858 s, 2,181 s; `docs/index.md`). A seção "Multithreading" de `docs/index.md` orienta juntar as
+  consultas pequenas numa só. Espera o usuário: um cache da compilação no pacote, ou a orientação
+  como está.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
@@ -254,16 +229,17 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
   `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
   tabela Iceberg no Glue ou um table bucket no S3 Tables: na última leitura, na bateria de
-  2026-09-28 às 23:09, o Glue seguia com um banco e uma tabela Parquet, e o Lake Formation e o S3
-  Tables não responderam ao papel do projeto. Espera um catálogo no ambiente alvo.
+  2026-10-05, o Glue seguia com um banco e uma tabela Parquet, e o Lake Formation e o S3 Tables não
+  responderam ao papel do projeto. Espera um catálogo no ambiente alvo.
 
 ## Achados das sondas de consistência de leitura e escrita
 
-As sondas de 2026-09-25 (`POC.md`, seção "O que as sondas de consistência de leitura e
-escrita mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e
-trabalho paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas no ambiente
-alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem reprovar checagem
-(`POC.md`). Cada item espera o usuário: corrigir, ou aceitar como está.
+As sondas de 2026-09-25 (`POC.md`, seção "O que as sondas de consistência de leitura e escrita
+mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e trabalho
+paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas no ambiente alvo, em
+2026-09-26, em 2026-09-27, em 2026-09-29 e em 2026-10-05, repetiram os achados sem reprovar checagem
+(`POC.md`, `.claude/memory/environments.md`). Cada item espera o usuário: corrigir, ou aceitar como
+está.
 
 - **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
   `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: numa partição com os dois,
@@ -281,12 +257,13 @@ alvo, em 2026-09-26, em 2026-09-27 e em 2026-09-29, repetiram os achados sem rep
   exata, como já é a coluna), ou capturar o estouro e registrar a soma como não lida.
 - **A escrita condicional do arquivo de controle entre threads.** Na pasta local,
   `Storage.write_text(if_match=...)` confere a impressão digital e faz o `os.replace` fora de um
-  lock: oito threads somando 50 cada perderam 293 de 400 atualizações, e 321 na máquina do alvo. A
-  docstring diz que a escrita não é atômica entre processos; entre threads do mesmo processo ela
-  também não é, e `snapshot`, `archive_snapshot` e `set_channel` chamados em paralelo numa raiz
-  local (duas `Execution` com `snapshot` encerrando ao mesmo tempo, por exemplo) podem perder uma
-  entrada. No S3 o `IfMatch` é do servidor. Opções: um `threading.Lock` de `Storage` em volta de
-  `_replace_local` e `_create_local`, ou só a nota na docstring.
+  lock: oito threads somando 50 cada perderam 293 de 400 atualizações, e de 312 a 335 nas rodadas do
+  alvo, de 2026-09-26 a 2026-10-05. A docstring diz que a escrita não é atômica entre processos;
+  entre threads do mesmo processo ela também não é, e `snapshot`, `archive_snapshot` e `set_channel`
+  chamados em paralelo numa raiz local (duas `Execution` com `snapshot` encerrando ao mesmo tempo,
+  por exemplo) podem perder uma entrada. No S3 o `IfMatch` é do servidor. Opções: um
+  `threading.Lock` de `Storage` em volta de `_replace_local` e `_create_local`, ou só a nota na
+  docstring.
 - **O `NaN` que o pandas entrega como nulo.** `pa.Table.from_pandas`, o caminho que a documentação
   dá ao `DataFrame`, transforma o `NaN` de uma coluna `float64` em nulo, e a linha do `Double` na
   tabela de tipos de `docs/index.md` diz que ele entra como chega, com `NaN`; isso vale para o

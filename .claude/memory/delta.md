@@ -257,23 +257,23 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
 
 - The archive copies instead of rewriting (2026-09-24, user decision): `deep_copy` creates the
   destination with `DeltaTable.create` from the version's own schema, name, description and
-  configuration, copies every file the version's log lists with `Storage.copy` to the same
-  relative path, and commits one `overwrite` per partition with `AddAction`s rebuilt from
+  configuration, copies every file the version's log lists with `Storage.copy` to the same relative
+  path, and commits one `overwrite` per partition with `AddAction`s rebuilt from
   `get_add_actions(flatten=False)` (`path`, `size_bytes`, `num_records`, the `null_count`, `min`,
   `max` and `partition` structs), keeping min and max only for the exact types as `register_files`
   does; the read-back is the row count by both readers against the sum of the actions, because an
   archived version may carry a schema older than the current model. `history()` entries carry the
-  commit's custom metadata as top-level keys, newest first. Since 2026-09-24 `deep_copy` resumes
-  an interrupted copy: with a table at the destination it skips the partitions whose files the
+  commit's custom metadata as top-level keys, newest first. Since 2026-09-24 `deep_copy` resumes an
+  interrupted copy: with a table at the destination it skips the partitions whose files the
   destination already registers (no commit), copies the others, and refuses with
-  `RegistrationRefused` a destination registering a file the version does not list; the repeat
-  over a complete copy returns the same version, and `serialize-db archive` calls it for every
-  table instead of skipping an existing destination, which had let a half-copied table pass as
-  archived. In the target on 2026-09-24 at 16:51 the whole `archive` copied the 21 files of the
-  12 tables (one commit per partition, the partitions in the reverse order of the load) and moved
-  the entry; the resume path ran only on the stand-in. Since the user's decision of the same day
-  `deep_copy` logs each partition's copy time, and `serialize-db archive` prints the time and the
-  peak RSS per table.
+  `RegistrationRefused` a destination registering a file the version does not list; the repeat over
+  a complete copy returns the same version, and `serialize-db archive` calls it for every table
+  instead of skipping an existing destination, which had let a half-copied table pass as archived.
+  In the target on 2026-09-24 at 16:51 the whole `archive` copied the 21 files of the 12 tables (one
+  commit per partition, the partitions in the reverse order of the load) and moved the entry; the
+  resume path ran only on the stand-in until the operation probe of 2026-10-05 (below). Since the
+  user's decision of 2026-09-24 `deep_copy` logs each partition's copy time, and `serialize-db
+  archive` prints the time and the peak RSS per table.
 
 - A partition commit by `create_write_transaction(mode="overwrite")` with a changed `schema=`
   writes a `metaData` with the new schema and keeps the destination's id, name, description,
@@ -287,6 +287,24 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `environment_limits()`. A probe running `deep_copy`, `reconcile`, `publish_partition` and
   `deep_copy`, then `to_pyarrow_dataset().to_table()` on the copy, hung at interpreter exit on the
   old and the new code, and exited without that last read.
+
+- The operation probes ran in the target on 2026-10-05, their first run there, over the first
+  partitions of the source's `cad_lancamentos` (8 vCPUs, about 13 GiB available, every check
+  passing). `probes/operacao/probe_archive_resume.py`: the `SIGKILL` came 4.2 s into `archive`,
+  right after 2026-03-31 was copied (1 file in 2.6 s, the partitions in the reverse order of the
+  load); the same command logged that partition `já no destino`, copied 2026-02-28 (2.1 s) and
+  2026-01-31 (2.7 s), took 6.2 s at 316 MB and moved the snapshot to `archived`.
+  `probes/operacao/probe_vacuum_orphans.py`: two copies of the partition's file outside the log, one
+  in the partition folder and one under a sub-prefix like an `UNLOAD`'s; `vacuum --full` with the
+  default 9,600 hours listed nothing, `--retention-hours 0` listed both and only them, and `--apply`
+  deleted both, keeping the logged file and the rows, the table going from version 1 to 3 (the
+  `VACUUM START` and `VACUUM END` commits). `probes/operacao/probe_compact_memory.py`: the partition
+  2026-01-31 (33,239,719 rows, one 551.5 MB file) split by DuckDB's `COPY ... FILE_SIZE_BYTES` of
+  1/32 of its size gave 64 files of 5.3 MB to 16.7 MB with 8 threads; with 12.5 GiB available,
+  `serialize-db compact` wrote 6 files and removed 64 in 6.0 s at a process peak of 1,714 MB, the
+  partition now 370.0 MB in files of 43.5 MB to 67.8 MB (the delta-rs writer in ZSTD against
+  DuckDB's default), with the same rows and `id_lancamento` sum, an `OPTIMIZE` commit at version 3.
+  `docs/operacao.md` ("Compactação")
 
 ## Alternatives assessed
 
@@ -329,8 +347,8 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `Storage.copy` of each partition's files and `register_files` on a table made by `create_table`,
   one commit per partition, no data through the machine, files identical to the source (the
   DuckDB `COPY` path stays for `export --mode rewrite` and compaction). `optimize.compact` runs in
-  delta-rs too, with its default parallel tasks, memory unmeasured.
-  `.claude/memory/OPEN_QUESTIONS.md`
+  delta-rs too, with its default parallel tasks, its memory unmeasured until the operation probe
+  of 2026-10-05 (section "The library's use of Delta").
 
 ## The registration of UNLOAD files (2026-09-24)
 

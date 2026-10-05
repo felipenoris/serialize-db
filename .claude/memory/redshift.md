@@ -74,6 +74,17 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   `DOUBLE PRECISION` leave the `NaN` out, as pyarrow does, and DuckDB's `read_parquet` pruned the
   group (0 rows for `valor > 3`), wherever the `NaN` sat; with the infinities, the footer holds
   `-inf` and `inf`. `docs/tecnologias.md` (Redshift)
+- The export's `UNLOAD` threshold read in the target on 2026-10-05
+  (`probes/operacao/probe_unload_parallel.py`): the partition 2026-01-31 of `cad_lancamentos`
+  (33,239,719 rows) went into the sandbox by the engine's `ingest` in 37.5 s, and tables of 1, 5, 10
+  and 20 million of its rows by `CREATE TABLE AS ... LIMIT`; the export's `SELECT` (no `PARTITION
+  BY`, `ORDER BY` the sort key) wrote one file in both modes in every repetition, 17.4 MB, 86.4 MB,
+  172.1 MB, 338.6 MB to 339.0 MB and 559.0 MB, the best times 2.0 s, 8.3 s, 16.2 s, 31.9 s and
+  50.3 s with `PARALLEL OFF` against 2.1 s, 8.4 s, 16.3 s, 32.6 s and 50.7 s in parallel (0.98 to
+  0.99), the footers read in 0.03 s to 0.10 s. The 32 files of 2026-09-21 came from an `UNLOAD ...
+  PARTITION BY` without `ORDER BY` of a `DISTSTYLE KEY` table; which of the three differences gives
+  one file is not separated. `serialize_db.engine.redshift` (`_PARALLEL_OFF_ROWS`),
+  `docs/tecnologias.md` (Redshift)
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
@@ -465,3 +476,16 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   `DELETE`, `COPY` and `INSERT` in `transaction()`, where the drop rises as `InterfaceError`
   after the `ROLLBACK` and the server discards the transaction; the appender already loaded
   inside one, and the publication's `_Connection` never retries.
+- The battery of 2026-10-05 (16:38 to 20:09 UTC, `environments.md`) read the Redshift version
+  `1.0.434008`, against `1.0.436211` in every battery from 2026-09-20 to 2026-09-30, a lower number
+  the readings do not explain. Between the end of the battery of 2026-09-30 (15:42 UTC, the control
+  table last read present at 15:34) and 16:38 UTC on 2026-10-05, the 12 `prd_*` tables and
+  `serialize_db_publications` left the schema: `RS-8` read 0 of 3 tables (`teste`, `teste3` and
+  `teste_query_editor`), `RS-19` resolved `teste` after the `USE`,
+  `redshift.engine.control_table_present` read `False`, and `publish_redshift --init` created the
+  control table again before the base publication; who dropped them is not known. The `COPY ...
+  SERIALIZETOJSON` of the 80,901-byte string into `SUPER` failed with the `1224` message now ending
+  in `(Hint: set enable_large_strings_opt_in parameter.)`; `RS-12` counted 56 load errors in 30
+  days; the suite's `UNLOAD` named its files `0064_part_00`; the Data API answered in 509 ms and
+  515 ms. The threaded APIs of the engine and the publication were measured against their serial
+  form the same day (`concurrency.md`).

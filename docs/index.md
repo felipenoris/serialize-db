@@ -831,8 +831,38 @@ levaram 0,270 s em série e 0,242 s em quatro threads com uma sessão a mais cad
 
 No ambiente alvo, com as tabelas no S3, o `run.ingest` das quatro tabelas de uma partição da base
 ganhou 1,25 vez com 4 vCPUs (2026-09-23, com o cache de arquivos externos do DuckDB ligado), 1,89
-vez com 16 vCPUs (2026-09-24) e de 1,16 a 1,21 vez com 8 vCPUs, numa partição em que a maior tabela
-tinha 85% das linhas (2026-09-27 e 2026-09-29). O Redshift não tem medida do ganho.
+vez com 16 vCPUs (2026-09-24) e de 1,16 a 1,22 vez com 8 vCPUs, numa partição em que a maior tabela
+tinha 85% das linhas (2026-09-27, 2026-09-29 e 2026-10-05).
+
+Em 2026-10-05, a comparação rodou no ambiente alvo, numa máquina de 8 vCPUs com 13,0 GiB
+disponíveis (Python 3.13.15 e as versões acima), sobre quatro tabelas Delta iguais de 5.000.000 de
+linhas no S3, com o Redshift serverless do projeto e o mesmo trabalho do cliente. Cada tempo é o
+menor de três medidas num processo só, e cada memória é o pico do processo acima da base nessa
+medida:
+
+| O que o pipeline faz | Em série | Com threads | Ganho |
+| --- | --- | --- | --- |
+| Ler e trabalhar em cada lote, no DuckDB | `query` e o laço: 0,712 s, 313 MB | `stream`: 0,389 s, 8 MB | 1,83 vez |
+| Gravar os lotes que o cliente produz, no DuckDB | o trabalho de todos e o `append`: 2,437 s, 266 MB | `appender.write` em cada lote: 2,279 s, 223 MB | 1,07 vez |
+| Ler, trabalhar e gravar, no DuckDB | `query`, o trabalho e o `append`: 3,009 s, 628 MB | `stream` e `appender` no mesmo `with`: 2,143 s, 207 MB | 1,40 vez |
+| 200 consultas pequenas por statement Core, em quatro threads, no DuckDB | 0,526 s em série e 0,541 s nas threads, na sessão principal | uma sessão a mais por thread: 0,348 s | 1,51 vez |
+| Quatro tabelas para o sandbox DuckDB | `run.ingest` de cada uma, `materialize=True`: 9,564 s, 916 MB | `run.ingest` das quatro: 4,005 s, 1.035 MB | 2,39 vezes |
+| As mesmas quatro no leitor Delta | `materialize` de cada uma: 10,097 s, 896 MB | `materialize` das quatro: 4,139 s, 991 MB | 2,44 vezes |
+| As mesmas quatro do DuckDB para o Delta | `publish_delta` com `max_workers=1`: 18,221 s | `max_workers=4`: 8,951 s | 2,04 vezes |
+| Quatro tabelas para o sandbox Redshift | `run.ingest` de cada uma: 32,509 s | `run.ingest` das quatro: 12,536 s | 2,59 vezes |
+| Ler, trabalhar e gravar, no Redshift | o `stream` lido inteiro, o trabalho e o `append`: 12,454 s, 457 MB | `stream` e `appender` no mesmo `with`: 12,424 s, 122 MB | 1,00 vez |
+| 80 consultas pequenas por statement Core, em quatro threads, no Redshift | 6,858 s em série e 6,746 s nas threads, na sessão principal | uma sessão a mais por thread, aberta na medida: 2,181 s | 3,14 vezes |
+| As mesmas quatro do Redshift para o Delta | `publish_delta` com `max_workers=1`: 26,681 s | `max_workers=4`: 19,131 s | 1,39 vez |
+| As quatro do Delta para o Redshift | `publish_redshift` com `max_workers=1`: 29,987 s | `max_workers=4`: 31,521 s | 0,95 vez |
+
+Sem trabalho do cliente, o `stream` do DuckDB ganhou 1,26 vez, o `appender` 1,00 e os dois juntos
+1,03. No Redshift, o `stream`, o `appender` e os dois juntos ficaram entre 0,96 e 1,07 vez, com e
+sem o pandas: o `UNLOAD` do `stream` roda inteiro antes do primeiro lote, o `COPY` do `close` roda
+depois do laço, e o trabalho do cliente só se sobrepõe à leitura e à gravação dos arquivos. O
+`stream` e os dois juntos ficaram de 79 MB a 129 MB acima da base, contra 243 MB a 457 MB da série.
+O `run.ingest`, o `materialize` e o `publish_delta` das quatro tabelas ganharam mais que na pasta
+local, porque o S3 e o Redshift fazem esperar a rede, e o pico do `run.ingest` e do `materialize`
+ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms.
 
 ### Como usar as threads
 
@@ -847,7 +877,8 @@ tinha 85% das linhas (2026-09-27 e 2026-09-29). O Redshift não tem medida do ga
 - **O ganho é o trabalho que se sobrepõe**, no máximo o menor de dois tempos: o do cliente e o da
   thread da biblioteca, que roda a consulta no `stream` e grava o arquivo no `appender`. Ele cresce
   com o trabalho do cliente até igualar o da thread. O comando do `close` do `appender` roda depois
-  do laço e não se sobrepõe a nada.
+  do laço e não se sobrepõe a nada. No Redshift, onde o `UNLOAD` e o `COPY` são quase todo o tempo,
+  o `stream` e o `appender` não encurtam o laço, e o `stream` poupa memória.
 - **Não abra o `stream` dentro de `session()` na mesma thread.** No bloco, a consulta roda inteira
   na thread do cliente antes do primeiro lote, e passa pelo arquivo intermediário: 1,995 s contra
   1,378 s do `query`, com o primeiro lote em 1,2 s. O leitor da conexão crua no bloco,
@@ -856,11 +887,13 @@ tinha 85% das linhas (2026-09-27 e 2026-09-29). O Redshift não tem medida do ga
 - **Passe todas as tabelas numa chamada**: `run.ingest(*tables)`, `reader.materialize(*tables)` e
   `run.publish_delta(*tables, max_workers=n)`. Um laço com uma chamada por tabela as leva uma por
   vez. O ganho para na maior tabela, e o pico de memória soma o das tabelas em curso: 39% a 46%
-  acima da série nas medidas.
+  acima da série na pasta local, e 11% a 13% com as tabelas no S3.
 - **Dê a cada thread do cliente a sua `new_session()`** para as consultas independentes. Na sessão
   principal as threads esperam o lock, e o tempo é o da série. A sessão a mais ganha mais nas
   consultas pequenas; a consulta grande já usa todas as `threads` do DuckDB, as CPUs do processo,
-  num pool que as sessões dividem. Ela não vê as tabelas temporárias da sessão principal.
+  num pool que as sessões dividem. Ela não vê as tabelas temporárias da sessão principal. No
+  Redshift, cada sessão a mais é outra conexão, e as consultas pequenas, que esperam a rede, ganham
+  com ela mais que no DuckDB.
 - **Junte as consultas pequenas numa só**, com `GROUP BY` ou uma junção, antes de levá-las a
   threads: cada chamada com um statement Core o compila em Python, cerca de 2 ms sob o GIL, e esse
   tempo não se divide entre as threads.
@@ -870,9 +903,12 @@ tinha 85% das linhas (2026-09-27 e 2026-09-29). O Redshift não tem medida do ga
 - **Um pool do cliente ganha com trabalho nativo e com espera de rede.** O trabalho em Python puro
   de várias threads roda uma de cada vez, sob o GIL; ao lado das threads da biblioteca, que rodam no
   código nativo, ele ainda se sobrepõe.
-- **`max_workers` da publicação no Delta não ganhou na pasta local**, porque o arquivo de cada
-  partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada tabela em curso soma a
-  memória da sua escrita.
+- **`max_workers` da publicação no Delta ganha com as tabelas no S3**, onde o registro no log, as
+  conferências, o commit e a releitura de cada tabela esperam a rede. Na pasta local ele não ganhou,
+  porque o arquivo de cada partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada
+  tabela em curso soma a memória da sua escrita.
+- **`max_workers` de `publish_redshift` não ganhou no ambiente alvo**: quatro tabelas iguais levaram
+  31,521 s em quatro conexões e 29,987 s uma por vez.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
