@@ -6,20 +6,20 @@ o ``restore``, as ações do log e o registro de um arquivo gravado por outro pr
 com ``keep_versions``, a leitura por dataset Arrow e o conteúdo do log. Os testes seguintes cobrem
 as primitivas de ``serialize_db.delta``, do motor DuckDB e da carga inicial sobre o DuckDB: a view
 presa a uma versão e o leitor Arrow que alimenta o ``write_deltalake``, a diferença de versões de
-``delta.version_diff`` pelas ações ``add`` e ``remove`` com ``dataChange`` do log, a compactação e
-o checkpoint, a exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e ainda
+``delta.version_diff`` pelas ações ``add`` e ``remove`` com ``dataChange`` do log, a compactação e o
+checkpoint, a exportação por cópia dos arquivos e a carga inicial de pastas Parquet; e ainda
 ``is_deltatable`` e ``drop_column_not_null``, o que ``create_write_transaction`` não confere
 (caminho, estatística, esquema do arquivo), o ``overwrite`` com ``partition_filters`` e a
-compactação que normaliza arquivos de outro escritor, a descrição e os comentários que atravessam o
-``overwrite`` e mudam por ``alter``, o mínimo e o máximo que o próprio delta-rs grava por tipo, o
-``NaN`` e o infinito nas estatísticas registradas e nas do delta-rs, o ``Double`` sem estatística
-no rodapé e no log, também por partição, o filtro do dataset do delta-rs sobre a coluna sem mínimo
-e máximo no log, dois registros concorrentes da mesma partição, a poda do ``delta_scan`` por forma
-de predicado, e o valor de partição codificado na pasta e no log, com a aspa que quebra o
-predicado. Os comportamentos estão descritos na seção Delta Lake de ``docs/tecnologias.md``; aqui
-eles viram asserções. A reescrita pelo ``COPY`` particionado e o registro com as estatísticas do
-``RETURN_STATS`` são os
-de ``serialize_db.delta``, testados em ``tests/test_delta.py``.
+compactação que normaliza arquivos de outro escritor, o codec de cada chamada do escritor, a
+descrição e os comentários que atravessam o ``overwrite`` e mudam por ``alter``, o mínimo e o máximo
+que o próprio delta-rs grava por tipo, o ``NaN`` e o infinito nas estatísticas registradas e nas do
+delta-rs, o ``Double`` sem estatística no rodapé e no log, também por partição, o filtro do dataset
+do delta-rs sobre a coluna sem mínimo e máximo no log, dois registros concorrentes da mesma
+partição, a poda do ``delta_scan`` por forma de predicado, e o valor de partição codificado na pasta
+e no log, com a aspa que quebra o predicado. Os comportamentos estão descritos na seção Delta Lake
+de ``docs/tecnologias.md``; aqui eles viram asserções. A reescrita pelo ``COPY`` particionado e o
+registro com as estatísticas do ``RETURN_STATS`` são os de ``serialize_db.delta``, testados em
+``tests/test_delta.py``.
 """
 
 from __future__ import annotations
@@ -970,6 +970,51 @@ def test_compact_rewrites_files_from_another_writer(
     assert all(statistics.values()), statistics
     assert compacted.column("max.data_ref").to_pylist()[0] is not None
     assert DeltaTable(uri).to_pyarrow_table().num_rows == 510
+
+
+def file_codecs(
+    uri: str,
+) -> set[str]:
+    """Os codecs das colunas de todos os arquivos da versão atual, lidos do rodapé."""
+    codecs = set()
+    added = pa.table(DeltaTable(uri).get_add_actions(flatten=True))
+    for path in added.column("path").to_pylist():
+        metadata = pq.ParquetFile(Path(uri) / path).metadata
+        for index in range(metadata.num_columns):
+            codecs.add(metadata.row_group(0).column(index).compression)
+    return codecs
+
+
+def test_writer_codec_depends_on_the_call(
+    folder: Callable[[str], str],
+) -> None:
+    """O ``write_deltalake`` sem propriedades grava em Snappy; com um ``WriterProperties`` sem
+    ``compression``, mesmo um que só tire a estatística de uma coluna, grava sem compressão, e
+    ``compression="SNAPPY"`` nas mesmas propriedades volta ao Snappy; o ``optimize.compact``
+    regrava em ZSTD."""
+    ids = pa.array(range(100), pa.int64())
+    rows = pa.table({"id": ids, "valor": pa.array(range(100), pa.float64())})
+    no_statistics = {"valor": ColumnProperties(statistics_enabled="NONE")}
+
+    # Sem propriedades.
+    uri = folder("codec_padrao")
+    write_deltalake(uri, rows)
+    assert file_codecs(uri) == {"SNAPPY"}
+
+    # Propriedades só com a estatística da coluna.
+    uri = folder("codec_ausente")
+    write_deltalake(uri, rows, writer_properties=WriterProperties(column_properties=no_statistics))
+    assert file_codecs(uri) == {"UNCOMPRESSED"}
+
+    # O codec nas mesmas propriedades, e a compactação dos dois arquivos num só.
+    uri = folder("codec_snappy")
+    properties = WriterProperties(compression="SNAPPY", column_properties=no_statistics)
+    write_deltalake(uri, rows, writer_properties=properties)
+    write_deltalake(uri, rows, mode="append", writer_properties=properties)
+    assert file_codecs(uri) == {"SNAPPY"}
+    metrics = DeltaTable(uri).optimize.compact()
+    assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (1, 2)
+    assert file_codecs(uri) == {"ZSTD"}
 
 
 def test_description_and_comments_survive_overwrite(

@@ -214,6 +214,18 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `serialize-db compact` prints `nada a juntar em <n> arquivo(s), nenhum commit` from them.
   `tests/proof_of_concept/test_deltalake.py::test_compact_packs_files_up_to_the_target_size`,
   `docs/tecnologias.md` (Delta Lake)
+- The writer's codec depends on the call (2026-10-05, deltalake 1.6.6, local): `write_deltalake`
+  without `writer_properties` writes Snappy, `optimize.compact` rewrites in ZSTD, and a
+  `WriterProperties` without `compression` writes `UNCOMPRESSED`. 200,000 rows of four columns gave
+  2,230,231 bytes in Snappy, 3,681,503 uncompressed, and 2,229,915 with `compression="SNAPPY"`
+  beside the same `column_properties`, which keep the column without footer statistics.
+  `delta._writer_properties` passes `compression="SNAPPY"` with the `columns_without_min_max`. A
+  compacted partition reaches the Redshift `COPY` only in a first publication or a republication of
+  every partition, because `compact` commits `dataChange` false.
+  `tests/proof_of_concept/test_deltalake.py::test_writer_codec_depends_on_the_call`,
+  `tests/test_delta.py::test_nonfinite_double_columns_leave_min_max_out`,
+  `tests/test_publication.py::test_publication_loads_a_compacted_partition`,
+  `.claude/memory/decisions.md`, `.claude/memory/OPEN_QUESTIONS.md`
 
 ## Performance measured
 

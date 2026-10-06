@@ -20,7 +20,8 @@ Redshift e no leitor Delta. No substituto local
 publicação simultânea vem do conflito entre duas transações do DuckDB. O modelo é o de
 ``tests/lancamentos_model.py``, e ``cad_colunas``, só de texto, recebe uma coluna nova no meio ou
 troca duas de lugar depois de uma partição gravada, e a publicação põe cada valor na coluna de
-mesmo nome.
+mesmo nome. A partição que ``delta.compact`` regrava em ZSTD entra na primeira publicação ao lado
+da que o motor DuckDB exportou em Snappy.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import redshift_connector
 import sqlalchemy as sa
@@ -810,6 +812,20 @@ def delta_ids(
         return reader.query(statement).column("id_lancamento").to_pylist()
 
 
+def codecs_by_partition(
+    db: Database,
+    uri: str,
+) -> dict[str, set[str]]:
+    """Os codecs do rodapé dos arquivos da versão atual de ``Projetado``, por partição."""
+    codecs: dict[str, set[str]] = {}
+    for file_uri in delta.open_table(uri, db.storage).file_uris():
+        value = re.search(r"data_base_str=([^/]+)/", file_uri).group(1)
+        with db.storage.open_input_file(db.storage.relative(file_uri)) as source:
+            codec = pq.ParquetFile(source).metadata.row_group(0).column(0).compression
+        codecs.setdefault(value, set()).add(codec)
+    return codecs
+
+
 @pytest.mark.redshift
 @pytest.mark.s3
 @pytest.mark.local
@@ -1229,6 +1245,49 @@ def test_publication_loads_reordered_columns(
     }
     select = f'SELECT "id", "a", "b" FROM {target.published(reordered)} ORDER BY "id"'
     assert rows_of(target.config, select) == [(1, "a1", "b1"), (2, "a2", "b2")]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+@pytest.mark.local
+def test_publication_loads_a_compacted_partition(
+    target: Target,
+) -> None:
+    """A partição que ``delta.compact`` regrava pelo escritor do delta-rs, em ZSTD, entra na
+    primeira publicação com os valores que os arquivos pequenos levavam, ao lado da partição que o
+    motor DuckDB exportou em Snappy."""
+    db = target.db
+    storage = db.storage
+    uri = db.uri(PROJECTED)
+    export_with_duckdb(target, PROJECTED, MONTHS[:1])
+
+    # Três arquivos pequenos numa partição, juntados num só pela compactação.
+    appended = []
+    for start in (100, 200, 300):
+        small_file = entry_rows(MONTHS[1], start, 5, PROJECTED)
+        write_deltalake(delta.open_table(uri, storage), small_file, mode="append")
+        appended.append(small_file)
+    metrics = delta.compact(uri, PROJECTED, [MONTHS[1]], storage)
+    assert (metrics["numFilesAdded"], metrics["numFilesRemoved"]) == (1, 3)
+    assert codecs_by_partition(db, uri) == {MONTHS[0]: {"SNAPPY"}, MONTHS[1]: {"ZSTD"}}
+
+    version = delta.open_table(uri, storage).version()
+    assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-1") == {
+        PROJECTED.name: version
+    }
+    rows = published_rows(target, PROJECTED)
+    assert [row[0] for row in rows[MONTHS[0]]] == list(range(1, 41))
+    compacted = rows[MONTHS[1]]
+    expected = pa.concat_tables(appended)
+    assert [row[0] for row in compacted] == expected.column("id_lancamento").to_pylist()
+    assert [row[1] for row in compacted] == expected.column("preco").to_pylist()
+    assert [row[2] for row in compacted] == expected.column("carimbo").to_pylist()
+    documents = [json.loads(row[3]) for row in compacted]
+    assert documents == [json.loads(text) for text in expected.column("meta").to_pylist()]
+    record(
+        "redshift.publication.compacted_partition",
+        f"{len(compacted)} linhas da partição compactada em ZSTD",
+    )
 
 
 @pytest.mark.redshift

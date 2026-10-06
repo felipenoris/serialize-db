@@ -430,14 +430,16 @@ def _writer_properties(
     columns_without_min_max: Collection[str],
 ) -> WriterProperties | None:
     """As propriedades do escritor que tiram o mínimo e o máximo das colunas, no rodapé e no log,
-    que o delta-rs copia do rodapé; ``None`` mantém o padrão."""
+    que o delta-rs copia do rodapé, com o Snappy da escrita sem propriedades; ``None`` mantém o
+    padrão."""
     if not columns_without_min_max:
         return None
     no_statistics = ColumnProperties(statistics_enabled="NONE")
     properties = {}
     for name in columns_without_min_max:
         properties[name] = no_statistics
-    return WriterProperties(column_properties=properties)
+    # Sem compression, o delta-rs 1.6.6 grava o Parquet sem compressão.
+    return WriterProperties(compression="SNAPPY", column_properties=properties)
 
 
 def _partition_predicate(
