@@ -165,7 +165,9 @@ def side_text(
 def print_report(
     report: ImportReport,
 ) -> None:
-    """As linhas do relatório de uma tabela, depois das partições gravadas."""
+    """As linhas do relatório de uma tabela, depois das partições gravadas: cada diferença, o
+    veredito, as conversões de tipo da maior parte das partições, uma linha por partição com outras
+    conversões, e o que ficou fora do padrão."""
     for partition in report.partitions:
         if not partition.matches:
             where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
@@ -180,6 +182,12 @@ def print_report(
     print(f"  relatório: {len(report.partitions)} partições conferidas, {verdict}")
     if report.conversions:
         print(f"  conversões: {', '.join(report.conversions)}")
+    # Cada partição da origem com outras conversões que as da maior parte, numa linha própria.
+    for partition in report.partitions:
+        if partition.source_rows is None or partition.conversions == report.conversions:
+            continue
+        phrases = ", ".join(partition.conversions) or "nenhuma"
+        print(f"  conversões em {partition.value}: {phrases}")
     for entry in report.skipped:
         print(f"  ignorado fora do padrão: {entry}")
 

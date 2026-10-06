@@ -132,3 +132,16 @@ Read before `cast`, the schema mapping of `serialize_db.schema`, a Parquet foote
   without it, 1 / 2. `delta_scan` gives `VARCHAR` for `JSON` (the DDL tables say `JSON`), and
   DuckDB's Arrow output labels `TIMESTAMPTZ` with the session `TimeZone`. DuckDB and delta-rs write
   decimals as `INT32` up to 9 digits, `INT64` up to 18, `FIXED_LEN_BYTE_ARRAY` above.
+
+## A `float` source in a `Double` column (2026-10-06)
+
+- The production partition 2025-09-30 has `float` in eight `Double` columns (`source-base.md`).
+  The load's `CAST` widens them without refusal, and the Delta keeps the `float` value: `1.2`
+  becomes `1.2000000476837158`, `0.8` `0.800000011920929` and `0.1` `0.10000000149011612` (local
+  probe over the fixture's `cad_operacoes`, 2026-10-06). A `fator_rateio` of 1/3 in `float` times
+  1,000,000.00 gives 333,333.34 against 333,333.33 in `double`.
+- `import_report`'s `DECIMAL(38, 6)` sums diverged only in `taxa_total`, one of the six `Double`
+  columns, with the `float` partition first (160.480000 in the source against 160.479998 in the
+  Delta) and last (179.650000 against 179.649999), after the commit: the divergence depends on the
+  values. The report lists each partition's conversions since the user's decision of the same day
+  (`decisions.md`). `tests/test_parquet_import.py`

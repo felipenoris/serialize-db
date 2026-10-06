@@ -970,7 +970,8 @@ def _print_import_report(
     imported: list[str | None],
 ) -> None:
     """As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o veredito,
-    as conversões de tipo e o que ficou fora do padrão."""
+    as conversões de tipo da maior parte das partições, uma linha por partição com outras
+    conversões, e o que ficou fora do padrão."""
     written = f"{report.table}: {len(imported)} partição(ões) gravada(s)"
     if imported:
         # A tabela sem partição é gravada de uma vez, com o valor None.
@@ -991,6 +992,12 @@ def _print_import_report(
     print(f"  {len(report.partitions)} partição(ões) conferida(s), {verdict}")
     if report.conversions:
         print(f"  conversões: {', '.join(report.conversions)}")
+    # Cada partição da origem com outras conversões que as da maior parte, numa linha própria.
+    for partition in report.partitions:
+        if partition.source_rows is None or partition.conversions == report.conversions:
+            continue
+        phrases = ", ".join(partition.conversions) or "nenhuma"
+        print(f"  conversões em {partition.value}: {phrases}")
     for entry in report.skipped:
         print(f"  fora do padrão: {entry}")
 

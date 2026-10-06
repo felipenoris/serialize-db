@@ -148,6 +148,8 @@ def test_main_migrates_the_whole_base(
     loaded_values = [partition["value"] for partition in entries["loaded"]]
     assert loaded_values == list(source.PARTITION_VALUES)
     assert "timestamp: INT96 -> timestamp[us]" in entries["conversions"]
+    for partition in entries["partitions"]:
+        assert partition["conversions"] == entries["conversions"], partition["value"]
 
     # A segunda execução não grava nada.
     assert migrate.main(arguments) == 0
@@ -457,3 +459,28 @@ def test_print_report_names_the_missing_side(
     assert "DIFERENÇA em 2026-01-31: origem ausente, Delta 3 linhas" in printed
     assert "DIFERENÇA em 2026-02-28: origem 4 linhas {} não finitos {}, Delta ausente" in printed
     assert "None" not in printed
+
+
+def test_print_report_names_the_partitions_with_other_conversions(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """A linha ``conversões`` traz as da maior parte das partições, e cada partição da origem com
+    outras conversões sai numa linha própria, ``nenhuma`` quando não tem conversão; a partição que
+    falta na origem não sai."""
+    keys = ("id_operacao: int32 -> int64",)
+    usual = PartitionReport("2026-01-31", 2, 2, {}, {}, {}, {}, conversions=keys)
+    in_float = PartitionReport(
+        "2026-02-28", 2, 2, {}, {}, {}, {}, conversions=(*keys, "taxa_total: float -> double")
+    )
+    without = PartitionReport("2026-03-31", 2, 2, {}, {}, {}, {}, conversions=())
+    only_in_delta = PartitionReport("2026-06-30", None, 2, {}, {}, {}, {})
+    partitions = (usual, in_float, without, only_in_delta)
+    migrate.print_report(ImportReport("cad_operacoes", partitions, (), keys))
+    printed = capsys.readouterr().out
+    assert "  conversões: id_operacao: int32 -> int64\n" in printed
+    assert (
+        "  conversões em 2026-02-28: id_operacao: int32 -> int64, taxa_total: float -> double\n"
+    ) in printed
+    assert "  conversões em 2026-03-31: nenhuma\n" in printed
+    assert "conversões em 2026-01-31" not in printed
+    assert "conversões em 2026-06-30" not in printed

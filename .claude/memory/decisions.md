@@ -1934,3 +1934,22 @@ both callers split the partitions through the protected `parquet_import.split_ig
 argument has no effect, and
 `tests/test_parquet_import.py::test_cli_import_ignores_the_listed_partitions` covers the
 subcommand.
+
+## The type conversions of each partition in the load report (2026-10-06)
+
+Asked at 17:09 UTC whether the target readings called for another library decision, the user heard
+that the source's partition 2025-09-30 has `float` in eight `Double` columns, which the load's
+`CAST` widens without refusal, and that the `conversões` line read only the table's first file.
+Asked on a card whether the load refuses a partition with `float` in a `Double` column ("Recusar",
+recommended, "Avisar" or "Deixar"), the user chose "Avisar" (17:27 UTC): the load writes the
+partition, and the report lists the conversions of each partition. `import_report` reads them in
+the footer of the first file of each partition (`PartitionReport.conversions`) and keeps in
+`ImportReport.conversions` those of most partitions, the first's in a tie; the migration script
+and `serialize-db import` print that line and a `conversões em <valor>` line per source partition
+with other conversions, `nenhuma` when it has none. The decision of 2026-09-28 ("Só a doc", the
+line read in the first file of the first partition) widens to every partition; the line still
+does not mark the lossy conversions nor read the other files of a partition.
+`tests/test_parquet_import.py::test_import_report_lists_the_conversions_of_each_partition` (the
+`float` partition first and last), `tests/test_operation.py` and
+`tests/test_migrate_parquet_to_delta.py` (the printers) failed on the previous code; the readings
+of the local probe are in `parquet-arrow-types.md`. `docs/index.md`

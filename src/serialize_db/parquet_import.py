@@ -31,10 +31,11 @@ fora da carga e entram no relatório.
 ``import_report`` compara contagem e somas por partição entre a origem, lida pasta a pasta como a
 carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e as ``Double`` da
 mesma forma só nos valores finitos, com os não finitos contados à parte, porque a soma em ponto
-flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um infinito para ``DECIMAL`` falha. A
-carga só termina quando ``matches`` é verdadeiro; ``serialize-db import`` roda as duas, com as
-mesmas partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição pedida que
-a origem não tem, recusada em toda tabela antes de qualquer gravação.
+flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um infinito para ``DECIMAL`` falha. O
+relatório traz também as conversões de tipo de cada partição, lidas no rodapé do primeiro arquivo da
+pasta. A carga só termina quando ``matches`` é verdadeiro; ``serialize-db import`` roda as duas, com
+as mesmas partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição pedida
+que a origem não tem, recusada em toda tabela antes de qualquer gravação.
 
 Exemplo:
 
@@ -52,6 +53,7 @@ Exemplo:
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import logging
 import re
@@ -101,14 +103,15 @@ _PARTITION_FOLDER = re.compile(rf"(?P<column>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>{
 
 @dataclasses.dataclass(frozen=True)
 class PartitionReport:
-    """Contagem, somas e não finitos de uma partição, na origem e no Delta; ``None`` nas linhas
-    do lado em que a partição falta.
+    """Contagem, somas e não finitos de uma partição, na origem e no Delta, e as conversões de tipo
+    da origem; ``None`` nas linhas do lado em que a partição falta.
 
     Exemplo:
 
     .. code-block:: python
 
-        report.partitions[0].matches   # True quando contagem, somas e não finitos coincidem
+        report.partitions[0].matches       # True quando contagem, somas e não finitos coincidem
+        report.partitions[0].conversions   # ("id_operacao: int32 -> int64",)
     """
 
     value: str | None
@@ -128,6 +131,10 @@ class PartitionReport:
     lado em que a partição falta."""
     delta_nonfinite: Mapping[str, int]
     """Os não finitos no Delta, na forma de ``source_nonfinite``."""
+    conversions: tuple[str, ...] = ()
+    """Uma frase por coluna cujo tipo no rodapé do primeiro arquivo da partição na origem difere
+    do contrato, como ``"carimbo: INT96 -> timestamp[us]"``; vazio quando a partição falta na
+    origem."""
 
     @property
     def matches(self) -> bool:
@@ -161,8 +168,9 @@ class ImportReport:
     """As entradas da pasta da tabela na origem que não são pasta de partição, fora das contas;
     vazio numa tabela sem partição."""
     conversions: tuple[str, ...]
-    """Uma frase por coluna cujo tipo no rodapé do primeiro arquivo que a carga lê na origem
-    difere do contrato, como ``"carimbo: INT96 -> timestamp[us]"``."""
+    """As conversões de tipo da maior parte das partições da origem, na forma de
+    ``PartitionReport.conversions``, as da primeira em ordem de valor no empate; a partição com
+    outras conversões tem as dela no seu relatório."""
 
     @property
     def matches(self) -> bool:
@@ -795,9 +803,10 @@ def _delta_totals(
 def _partition_reports(
     in_source: Mapping[str | None, _Totals],
     in_delta: Mapping[str | None, _Totals],
+    conversions: Mapping[str | None, tuple[str, ...]],
 ) -> tuple[PartitionReport, ...]:
-    """Uma conferência por partição presente num dos lados, em ordem de texto do valor; o lado
-    em que a partição falta fica com ``None`` nas linhas."""
+    """Uma conferência por partição presente num dos lados, em ordem de texto do valor, com as
+    conversões de tipo dela; o lado em que a partição falta fica com ``None`` nas linhas."""
     absent = _Totals(rows=None, sums={}, nonfinite={})
     reports = []
     for value in sorted(set(in_source) | set(in_delta), key=str):
@@ -812,6 +821,7 @@ def _partition_reports(
                 delta_sums=delta_totals.sums,
                 source_nonfinite=source_totals.nonfinite,
                 delta_nonfinite=delta_totals.nonfinite,
+                conversions=conversions.get(value, ()),
             )
         )
     return tuple(reports)
@@ -830,44 +840,56 @@ def _direct_parquet_files(
     return files
 
 
-def _first_source_file(
+def _file_conversions(
     storage: Storage,
-    found: Mapping[str | None, str],
-) -> str | None:
-    """O primeiro arquivo que a carga lê, na primeira pasta de ``found`` que tem algum; ``None``
-    quando nenhuma tem."""
-    for folder in found.values():
-        files = _direct_parquet_files(storage, storage.relative(folder))
-        if files:
-            return files[0]
-    return None
-
-
-def _conversions(
-    source: str,
-    found: Mapping[str | None, str],
+    file: str,
     table: sa.Table,
 ) -> tuple[str, ...]:
-    """As conversões de tipo da origem para o contrato, lidas no rodapé do primeiro arquivo que a
-    carga lê: ``"id_contrato: int32 -> int64"``, ``"carimbo: INT96 -> timestamp[us]"``."""
-    storage = Storage.for_uri(source)
-    first = _first_source_file(storage, found)
-    if first is None:
-        return ()
-    footer = pq.ParquetFile(storage.open_input_file(first))
+    """As conversões de tipo de um arquivo da origem para o contrato, lidas no rodapé dele:
+    ``"id_contrato: int32 -> int64"``, ``"carimbo: INT96 -> timestamp[us]"``."""
+    footer = pq.ParquetFile(storage.open_input_file(file))
     # O tipo físico de cada coluna, que nomeia o timestamp INT96 na frase da conversão.
     physical = {}
     for index in range(len(footer.schema)):
         physical[footer.schema.column(index).name] = footer.schema.column(index).physical_type
     # As colunas do contrato cujo tipo no arquivo difere do tipo do contrato.
     contract = arrow_schema(table)
-    found = []
+    phrases = []
     for field in footer.schema_arrow:
         if field.name not in contract.names or contract.field(field.name).type == field.type:
             continue
         origin = "INT96" if physical[field.name] == "INT96" else str(field.type)
-        found.append(f"{field.name}: {origin} -> {contract.field(field.name).type}")
-    return tuple(found)
+        phrases.append(f"{field.name}: {origin} -> {contract.field(field.name).type}")
+    return tuple(phrases)
+
+
+def _partition_conversions(
+    source: str,
+    found: Mapping[str | None, str],
+    table: sa.Table,
+) -> dict[str | None, tuple[str, ...]]:
+    """As conversões de tipo de cada pasta de ``found``, lidas no rodapé do primeiro arquivo dela,
+    o que dá ao DuckDB o esquema da leitura: ``{valor: conversões}``; a pasta sem arquivo fica de
+    fora."""
+    storage = Storage.for_uri(source)
+    conversions = {}
+    for value, folder in found.items():
+        files = _direct_parquet_files(storage, storage.relative(folder))
+        if files:
+            conversions[value] = _file_conversions(storage, files[0], table)
+    return conversions
+
+
+def _common_conversions(
+    conversions: Mapping[str | None, tuple[str, ...]],
+) -> tuple[str, ...]:
+    """As conversões da maior parte das partições, as da primeira em ordem de valor no empate;
+    vazio sem partição."""
+    if not conversions:
+        return ()
+    # O Counter devolve, entre contagens iguais, a primeira que contou.
+    in_order = [conversions[value] for value in sorted(conversions, key=str)]
+    return collections.Counter(in_order).most_common(1)[0][0]
 
 
 def import_report(
@@ -883,7 +905,8 @@ def import_report(
     a uma, pelos arquivos ``.parquet`` diretos de cada uma e sem ``hive_partitioning``. O Delta é
     lido por ``delta_scan``, num motor DuckDB próprio da chamada. As colunas ``Numeric`` somam
     como ``DECIMAL(38, 6)``; as ``Double`` da mesma forma só nos valores finitos, com os não
-    finitos contados à parte.
+    finitos contados à parte. As conversões de tipo de cada partição vêm do rodapé do primeiro
+    arquivo da pasta dela na origem.
 
     Exemplo:
 
@@ -934,5 +957,6 @@ def import_report(
             whole_delta = _delta_totals(connection, delta_db, table, sums, doubles)
     # Do Delta, só as partições pedidas, filtradas depois da agregação da tabela inteira.
     in_delta = {value: whole_delta[value] for value in _wanted_values(whole_delta, partitions)}
-    reports = _partition_reports(in_source, in_delta)
-    return ImportReport(table.name, reports, skipped, _conversions(source, wanted, table))
+    conversions = _partition_conversions(source, wanted, table)
+    reports = _partition_reports(in_source, in_delta, conversions)
+    return ImportReport(table.name, reports, skipped, _common_conversions(conversions))

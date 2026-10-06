@@ -41,7 +41,7 @@ from serialize_db import cli, delta, parquet_import
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import ContractError, ExecutionConflict
 from serialize_db.execution import Database
-from serialize_db.schema import arrow_schema, table_options
+from serialize_db.schema import arrow_schema, double_columns, table_options
 
 pytestmark = pytest.mark.local
 
@@ -758,6 +758,63 @@ def test_import_report_matches_and_detects_a_difference(
     differing = [partition for partition in report.partitions if not partition.matches]
     assert [partition.value for partition in differing] == ["2026-03-31"]
     assert differing[0].delta_rows == differing[0].source_rows - 1
+
+
+def source_with_float_partition(
+    folder: Path,
+    base: source.SourceBase,
+    value: str,
+) -> str:
+    """Uma origem nova com ``cad_operacoes`` inteira e os arquivos da partição ``value``
+    regravados com as colunas ``double`` em ``float``, como a partição 2025-09-30 da base de
+    produção lida em 2026-10-06."""
+    origin = folder / "origem"
+    shutil.copytree(base.root / "cad_operacoes", origin / "cad_operacoes")
+    for path in sorted((origin / "cad_operacoes" / f"data_str={value}").glob("*.parquet")):
+        rows = pq.read_table(path)
+        fields = []
+        for field in rows.schema:
+            if field.type == pa.float64():
+                fields.append(field.with_type(pa.float32()))
+            else:
+                fields.append(field)
+        rewrite_chunk(path, rows.cast(pa.schema(fields)))
+    return str(origin)
+
+
+@pytest.mark.parametrize("value", ["2026-01-31", "2026-06-30"])
+def test_import_report_lists_the_conversions_of_each_partition(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+    value: str,
+) -> None:
+    """A partição com ``float`` nas colunas ``Double``, a primeira ou a última, tem as conversões
+    dela no seu relatório, e as da tabela são as da maior parte das partições; a carga grava a
+    partição, e o valor chega ao Delta com a precisão do ``float``."""
+    origin = source_with_float_partition(folder, base, value)
+    table = TABLES["cad_operacoes"]
+    assert parquet_import.import_table(db, table, origin, config=config) == PARTITION_VALUES
+    report = parquet_import.import_report(db, table, origin, config=config)
+
+    # As conversões da tabela são as das outras partições; as da partição em float, as dela.
+    keys = ("id_operacao: int32 -> int64",)
+    floats = tuple(f"{name}: float -> double" for name in double_columns(table))
+    assert report.conversions == keys
+    for partition in report.partitions:
+        expected = keys + floats if partition.value == value else keys
+        assert partition.conversions == expected, partition.value
+
+    # O float lido da origem como double é o valor do Delta: 1.2 em float chega 1.2000000476837158.
+    partition_folder = Path(origin) / "cad_operacoes" / f"data_str={value}"
+    in_source = pq.read_table(partition_folder).sort_by("id_operacao")
+    with db.storage.duckdb_connect() as connection:
+        in_delta = connection.execute(
+            f"SELECT spread_basico FROM delta_scan('{db.uri(table)}') "
+            f"WHERE data_str = '{value}' ORDER BY id_operacao"
+        ).fetchall()
+    assert [row[0] for row in in_delta] == in_source.column("spread_basico").to_pylist()
 
 
 def test_import_report_confers_only_the_requested_partitions(
