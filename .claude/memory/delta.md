@@ -221,11 +221,12 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   beside the same `column_properties`, which keep the column without footer statistics.
   `delta._writer_properties` passes `compression="SNAPPY"` with the `columns_without_min_max`. A
   compacted partition reaches the Redshift `COPY` only in a first publication or a republication of
-  every partition, because `compact` commits `dataChange` false.
+  every partition, because `compact` commits `dataChange` false; the target loaded a ZSTD
+  partition that way in the four runs of 2026-10-06 (`redshift.md`).
   `tests/proof_of_concept/test_deltalake.py::test_writer_codec_depends_on_the_call`,
   `tests/test_delta.py::test_nonfinite_double_columns_leave_min_max_out`,
   `tests/test_publication.py::test_publication_loads_a_compacted_partition`,
-  `.claude/memory/decisions.md`, `.claude/memory/OPEN_QUESTIONS.md`
+  `.claude/memory/decisions.md`
 
 ## Performance measured
 

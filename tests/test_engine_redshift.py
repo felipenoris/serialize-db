@@ -1677,7 +1677,10 @@ def test_appender_refuses_a_batch_without_a_not_null_column(
 ) -> None:
     """Um lote sem uma coluna ``NOT NULL`` da tabela faz a carga falhar sem deixar linha, pelo
     ``COPY`` direto e pela staging da tabela com JSON; o comando recusado, o SQLSTATE e a mensagem
-    do servidor são leituras."""
+    do servidor são leituras. No ambiente alvo, nas quatro rodadas de 2026-10-06: o ``COPY``
+    direto recusado com ``42601 NOT NULL column without DEFAULT must be included in column
+    list``, e o ``INSERT`` da staging com ``XX000 Cannot insert a NULL value into column
+    codigo``."""
     engine = target.engine
     engine.create_table(MEASURES)
     heights = pa.table(
@@ -1778,7 +1781,8 @@ def test_ingest_refuses_a_delta_column_outside_the_model(
     """Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado: o ``COPY`` da
     partição, cuja lista de colunas do rodapé a nomeia, é recusado, porque a staging criada do
     modelo não a tem, e a tabela do sandbox fica criada e vazia; o SQLSTATE e a mensagem do
-    servidor são leituras."""
+    servidor são leituras. No ambiente alvo, nas quatro rodadas de 2026-10-06:
+    ``42703 column "extra" of relation ... does not exist``, com o nome interno da staging."""
     storage = target.storage
     wider = text_columns_table("a", "extra")
     model = text_columns_table("a")

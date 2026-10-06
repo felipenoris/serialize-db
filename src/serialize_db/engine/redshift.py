@@ -988,11 +988,11 @@ class RedshiftAppender:
     manifesto com ele como a única entrada, obrigatória, e roda, sob o lock e numa transação, o
     ``COPY ... MANIFEST`` na tabela (por uma staging temporária e ``JSON_PARSE`` quando a tabela
     tem coluna JSON), com a lista das colunas do arquivo: a coluna anulável que o lote não trouxe
-    fica nula, a ``NOT NULL`` ausente faz a carga falhar (documentação da AWS, não lida no alvo),
-    e o arquivo ausente faz o ``COPY`` falhar. A tabela não muda antes dele, e um erro não deixa
-    linha. Uma exceção dentro do
-    ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo sem
-    inserir nada, e a segunda chamada de ``close`` não faz nada.
+    fica nula, a ``NOT NULL`` ausente faz a carga falhar (no ambiente alvo em 2026-10-06, o
+    ``COPY`` direto com ``42601`` e o ``INSERT`` da staging com ``XX000``), e o arquivo ausente
+    faz o ``COPY`` falhar. A tabela não muda antes dele, e um erro não deixa linha. Uma exceção
+    dentro do ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo
+    sem inserir nada, e a segunda chamada de ``close`` não faz nada.
     """
 
     def __init__(
@@ -1094,7 +1094,7 @@ class RedshiftAppender:
         target = engine.qualified(self._name)
         # O COPY de Parquet é posicional: a lista leva cada coluna do arquivo, as do primeiro
         # lote, à de mesmo nome; a coluna anulável que o lote não trouxe fica nula, e a NOT NULL
-        # ausente faz a carga falhar (documentação da AWS, não lida no alvo).
+        # ausente faz a carga falhar.
         columns = self._schema.names
         if not _json_columns(self._table):
             engine.execute(copy_text(target, manifest, credentials, manifest=True, columns=columns))

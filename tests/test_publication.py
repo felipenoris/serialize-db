@@ -1255,7 +1255,8 @@ def test_publication_loads_a_compacted_partition(
 ) -> None:
     """A partição que ``delta.compact`` regrava pelo escritor do delta-rs, em ZSTD, entra na
     primeira publicação com os valores que os arquivos pequenos levavam, ao lado da partição que o
-    motor DuckDB exportou em Snappy."""
+    motor DuckDB exportou em Snappy. No ambiente alvo, nas quatro rodadas de 2026-10-06, as 15
+    linhas da partição compactada entraram."""
     db = target.db
     storage = db.storage
     uri = db.uri(PROJECTED)
