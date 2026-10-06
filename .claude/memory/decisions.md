@@ -1917,3 +1917,16 @@ compares the names ignoring case, because DuckDB 1.5.5 binds `"id_operacao"` to 
 a file before the check; `test_first_file_with_a_contract_column_in_another_case_is_loaded` fails
 with an exact comparison.
 `.claude/memory/OPEN_QUESTIONS.md`
+
+## The `--ignore-partitions` of the migration script (2026-10-06)
+
+The user asked at 16:34 UTC for an optional `--ignore-partitions` in the migration script, the way
+to load the base without the source's partition 2025-09-30. `scripts/migrate_parquet_to_delta.py`
+leaves the listed partitions out of the load and the report in every partitioned table that has
+them, prints a line per ignored partition and loads the unpartitioned tables whole, which
+`--partitions` leaves out; the two arguments exclude each other (a usage error, code 2), and a
+value the source does not have is not refused. The JSON report records the list under
+`arguments.ignore_partitions`. Whether `serialize-db import` gets the same argument was asked on a
+card ("Só no script", recommended, or "Script e CLI").
+`tests/test_migrate_parquet_to_delta.py::test_main_ignores_the_listed_partitions` fails when the
+argument has no effect.
