@@ -977,7 +977,8 @@ class Execution:
             que é substituída inteira.
         :param audit: ``audit=False`` dispensa a exigência da auditoria aprovada, com um aviso no
             log ``serialize_db.execution``.
-        :param max_workers: quantas tabelas correm ao mesmo tempo.
+        :param max_workers: quantas tabelas correm ao mesmo tempo; o padrão 1 publica uma por vez,
+            e o valor recomendado é 4.
         :return: ``{tabela: versão}``, com a versão do último commit de cada tabela.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição, a lista
             vazia, ``partitions`` numa tabela sem partição, ou ``None`` numa tabela particionada.

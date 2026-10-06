@@ -1845,3 +1845,36 @@ comment of `SUITE.md`, the user's file, takes the new path; `README.md` and the 
 and the SQLAlchemy item of `OPEN_QUESTIONS.md` lists `docs/tecnologias.md` in place of `plan/` among
 the prose that names the DuckDB dialect.
 `.claude/memory/OPEN_QUESTIONS.md`, `CLAUDE.md`
+
+## The `max_workers` default of `publish_delta` (2026-10-05)
+
+The target reading of `probes/operacao/probe_parallel_gain.py` on 2026-10-05 timed
+`run.publish_delta` with four 5,000,000-row tables on S3: `max_workers=4` gained 2.04x on the
+DuckDB engine (8.951 s against 18.221 s, the peak at +104 MB against +82 MB) and 1.39x on the
+Redshift engine (19.131 s against 26.681 s), where the local folder had read 1.02x
+(`.claude/memory/concurrency.md`). The assistant offered on a decision card a default of 4
+(recommended) or keeping 1. The user decided (2026-10-05, 23:06 UTC) that a call without
+`max_workers` keeps the default 1, and that the docstring of `max_workers` states 4 as the
+recommended value. The assistant's choices, named in the report: `publish_redshift` keeps its
+docstring without a recommendation, since four connections read 0.95x there (31.521 s against
+29.987 s), and the rule of `docs/index.md` ("Multithreading") stays, since it already says the
+default is 1 and the gain comes with the tables on S3.
+`src/serialize_db/execution.py`
+
+## The Core statement compiled at each call, without a cache (2026-10-05)
+
+Both engines compile the Core statement at each `query` and `stream`, and the Redshift engine also
+at each `execute`, through `bound_statement` and the `compile` with `render_postcompile`, without a
+cache. On 2026-10-04, in the DuckDB engine in the local folder, 200 small queries took about 2 ms
+more each in Python by Core statement than by SQL text, and the gain of the extra sessions fell
+from 2.28x to 1.25x (`POC.md`); in the target on 2026-10-05, with 8 vCPUs, the 200 Core-statement
+queries gained 1.51x in the extra sessions (0.526 s serial, 0.348 s), and in the Redshift engine,
+where each took about 86 ms, the 80 gained 3.14x (6.858 s, 2.181 s;
+`.claude/memory/concurrency.md`). The assistant offered on a decision card a cache of the compiled
+text in both engines, or the guidance as it is (recommended: the about 2 ms measured locally are
+about 2% of a small Redshift query, and the 200 DuckDB queries add up to about 0.4 s of compile,
+which only a pipeline with thousands of small queries would feel). The user chose "Sem cache"
+(2026-10-05, 23:46 UTC): the engines keep compiling at each call, the "Multithreading" section of
+`docs/index.md` keeps the guidance to join the small queries into one, and the item left
+`.claude/memory/OPEN_QUESTIONS.md`.
+`.claude/memory/OPEN_QUESTIONS.md`

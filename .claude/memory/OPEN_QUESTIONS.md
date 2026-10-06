@@ -146,16 +146,6 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
   de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"); o ganho
   com mais CPUs segue sem medida e espera a sonda numa máquina maior.
-- **A compilação do statement Core a cada chamada.** Os dois motores compilam o statement Core a
-  cada `query` e `stream`, e o Redshift também a cada `execute`, por `bound_statement` e o
-  `compile` com `render_postcompile`, sem cache: em 2026-10-04, no motor DuckDB, 200 consultas
-  pequenas levaram cerca de 2 ms a mais cada pelo statement Core que pelo texto SQL, em Python, e o
-  ganho das sessões a mais caiu de 2,28 para 1,25 vez (`POC.md`). No ambiente alvo, em 2026-10-05,
-  com 8 vCPUs, as 200 consultas por statement Core ganharam 1,51 vez nas sessões a mais (0,526 s em
-  série, 0,348 s), e no Redshift, onde cada uma levou cerca de 86 ms, as 80 ganharam 3,14 vezes
-  (6,858 s, 2,181 s; `docs/index.md`). A seção "Multithreading" de `docs/index.md` orienta juntar as
-  consultas pequenas numa só. Espera o usuário: um cache da compilação no pacote, ou a orientação
-  como está.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
