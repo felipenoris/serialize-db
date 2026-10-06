@@ -8,22 +8,25 @@ origem, e a raiz Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambi
 
 ``import_table`` cria a tabela Delta do contrato, descobre as partições da pasta da tabela na
 origem, pula as que já estão no log da tabela Delta e, para cada uma das outras, num motor
-DuckDB próprio da chamada, aberto com os limites lidos do ambiente e fechado no fim: lê a pasta
-inteira por ``read_parquet`` sem ``hive_partitioning`` (que converteria ``data_str`` a
-``DATE``), leva cada coluna ao tipo do contrato por ``CAST`` (as chaves de ``int32`` a
-``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos) e põe o valor do caminho na
-coluna de partição; confere numa consulta que a coluna de origem da partição (``data``,
-``data_base``) é igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem
-nulo e que nenhum texto passa do limite da coluna em bytes, o de ``cast`` e da auditoria, e conta
-os valores não finitos de cada coluna ``Double``; grava a partição na ordem da ``sort_key`` por
-``COPY ... RETURN_STATS`` num arquivo novo da pasta dela na tabela Delta e o registra por
-``serialize_db.delta.register_files``, com as conferências do rodapé, a releitura e as colunas
-não finitas sem mínimo e máximo (issue #59). Uma partição fora do contrato é ``ContractError``
-antes de qualquer gravação, com a tabela, a partição e a coluna; a chamada seguinte recomeça
-dela. Um valor que não converte para o tipo do contrato, ou uma coluna do contrato ausente dos
-arquivos, falha no ``COPY`` com o erro do DuckDB, também sem commit. As entradas da pasta da
-tabela fora do padrão, e as da raiz de origem fora do modelo (``alembic_version``,
-``meta_update_status``, ``schema.json``), ficam fora da carga e entram no relatório.
+DuckDB próprio da chamada, aberto com os limites lidos do ambiente e fechado no fim: confere no
+rodapé do primeiro arquivo da pasta, o que dá ao DuckDB o esquema da leitura, que ele tem as
+colunas do contrato; lê a pasta inteira por ``read_parquet`` sem ``hive_partitioning`` (que
+converteria ``data_str`` a ``DATE``), leva cada coluna ao tipo do contrato por ``CAST`` (as chaves
+de ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos) e põe o valor
+do caminho na coluna de partição; confere numa consulta que a coluna de origem da partição
+(``data``, ``data_base``) é igual ao valor do caminho em toda linha, que nenhuma coluna
+``NOT NULL`` tem nulo e que nenhum texto passa do limite da coluna em bytes, o de ``cast`` e da
+auditoria, e conta os valores não finitos de cada coluna ``Double``; grava a partição na ordem da
+``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo da pasta dela na tabela Delta e o
+registra por ``serialize_db.delta.register_files``, com as conferências do rodapé, a releitura e
+as colunas não finitas sem mínimo e máximo (issue #59). Uma partição fora do contrato é
+``ContractError`` antes de qualquer gravação, com a tabela, a partição e a coluna, e o arquivo
+quando é o primeiro que não tem uma coluna do contrato; a chamada seguinte recomeça dela. Uma
+coluna do contrato ausente de um arquivo depois do primeiro, ou um valor que não converte para o
+tipo do contrato, falha na conferência ou no ``COPY`` com o erro do DuckDB, também sem commit; o
+da coluna ausente nomeia o arquivo. As entradas da pasta da tabela fora do padrão, e as da raiz
+de origem fora do modelo (``alembic_version``, ``meta_update_status``, ``schema.json``), ficam
+fora da carga e entram no relatório.
 
 ``import_report`` compara contagem e somas por partição entre a origem, lida pasta a pasta como a
 carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e as ``Double`` da
@@ -375,6 +378,39 @@ def _text_limit(
     return None
 
 
+def _check_first_file(
+    source_storage: Storage,
+    folder: str,
+    table: sa.Table,
+    label: str,
+) -> None:
+    """Recusa com ``ContractError`` a partição cujo primeiro arquivo não tem alguma coluna do
+    contrato, com o arquivo e as colunas na mensagem.
+
+    O primeiro arquivo em ordem de nome dá ao DuckDB o esquema da leitura, e sem a coluna o binder
+    acusa a coluna do ``SELECT`` sem nomear a partição nem o arquivo; um arquivo seguinte sem a
+    coluna o DuckDB recusa com o nome dele. Os nomes são comparados sem distinguir maiúsculas de
+    minúsculas, como o binder do DuckDB liga a coluna do ``SELECT`` à do arquivo.
+    """
+    files = _direct_parquet_files(source_storage, source_storage.relative(folder))
+    if not files:
+        return
+    first = files[0]
+    with source_storage.open_input_file(first) as handle:
+        file_names = pq.read_schema(handle).names
+    names = {name.lower() for name in file_names}
+    partition_by = table_options(table).partition_by
+    missing = []
+    for column in table.columns:
+        if column.name != partition_by and column.name.lower() not in names:
+            missing.append(column.name)
+    if missing:
+        raise ContractError(
+            f"{table.name} {label}: coluna(s) do contrato ausente(s) de {first}: "
+            f"{', '.join(missing)}"
+        )
+
+
 def _check_partition(
     connection: duckdb.DuckDBPyConnection,
     query: str,
@@ -530,17 +566,19 @@ def check_requested_partitions(
 def _import_partition(
     engine: DuckDBEngine,
     storage: Storage,
+    source_storage: Storage,
     table: sa.Table,
     uri: str,
     value: str | None,
     folder: str,
     metadata: Mapping[str, str],
 ) -> None:
-    """Grava uma partição no Delta: a conferência da consulta, o ``COPY`` para um arquivo novo e
-    o registro dele, com o tempo no log. Uma partição fora do contrato é ``ContractError`` antes
-    de qualquer gravação."""
+    """Grava uma partição no Delta: a conferência do primeiro arquivo e a da consulta, o ``COPY``
+    para um arquivo novo e o registro dele, com o tempo no log. Uma partição fora do contrato é
+    ``ContractError`` antes de qualquer gravação."""
     started = time.perf_counter()
     label = delta.partition_label(value)
+    _check_first_file(source_storage, folder, table, label)
     query = partition_query(folder, table, value)
     with engine.session() as connection:
         check = _check_partition(connection, query, table, value)
@@ -600,10 +638,10 @@ def import_table(
         sistema e os limites lidos do ambiente.
     :return: os valores gravados, na ordem da gravação; ``None`` é a tabela sem partição.
     :raises ContractError: um valor de ``partitions`` que a origem não tem, antes de criar a
-        tabela; ou uma partição fora do contrato nas conferências da consulta, sem commit, e a
-        chamada seguinte recomeça dela.
-    :raises duckdb.Error: um valor que não converte para o tipo do contrato, ou uma coluna do
-        contrato ausente dos arquivos, no ``COPY``, sem commit.
+        tabela; ou uma partição fora do contrato, sem commit, pelo primeiro arquivo sem uma coluna
+        do contrato ou nas conferências da consulta, e a chamada seguinte recomeça dela.
+    :raises duckdb.Error: uma coluna do contrato ausente de um arquivo depois do primeiro, ou um
+        valor que não converte para o tipo do contrato, na conferência ou no ``COPY``, sem commit.
     :raises RegistrationRefused: uma conferência de ``register_files`` reprovou o arquivo gravado,
         sem commit, ou a releitura reprovou e ``restore`` voltou a tabela à versão anterior.
     :raises ExecutionConflict: outro registro da mesma partição a partir da mesma versão.
@@ -634,11 +672,14 @@ def import_table(
     execution_id = f"carga-{uuid.uuid4().hex[:8]}"
     metadata = delta.commit_metadata(execution_id, {})
     # O motor da chamada, com o secret da origem no S3, grava as partições em série, um commit cada.
+    source_storage = Storage.for_uri(source)
     with DuckDBEngine(config or DuckDBConfig(), execution_id, storage) as engine:
         with engine.session() as connection:
             _source_setup(connection, delta_db, source)
         for value in missing:
-            _import_partition(engine, storage, table, uri, value, found[value], metadata)
+            _import_partition(
+                engine, storage, source_storage, table, uri, value, found[value], metadata
+            )
     return missing
 
 

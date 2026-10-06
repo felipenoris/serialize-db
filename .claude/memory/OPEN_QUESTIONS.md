@@ -100,12 +100,14 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   chamada, que os mantém.
 
 - **A partição 2025-09-30 da origem.** A carga do ambiente alvo de 2026-10-06 parou na primeira
-  partição de `cad_operacoes`, 2025-09-30, nova na origem nas quatro tabelas particionadas e gravada
-  noutro esquema: sem a coluna de id (`id_operacao`, `id_contrato`, `id_rel_contrato_operacao`,
-  `id_lancamento`), com `float` no lugar de `double` e, em `cad_lancamentos`, sem `meta` e com uma
-  coluna `id` (`.claude/memory/source-base.md`). Espera o usuário: se a partição entra no Delta,
-  regravada por quem grava a base no esquema dos outros meses, ou se a carga segue sem ela, pelo
-  `--partitions` do script de migração.
+  partição de `cad_operacoes`, 2025-09-30, nova na origem nas quatro tabelas particionadas e
+  gravada noutro esquema: sem a coluna de id (`id_operacao`, `id_contrato`,
+  `id_rel_contrato_operacao`, `id_lancamento`), com `float` no lugar de `double` e, em
+  `cad_lancamentos`, sem `meta` e com uma coluna `id` (`.claude/memory/source-base.md`). Desde a
+  decisão do usuário de 2026-10-06, a carga recusa essa partição com `ContractError`, que nomeia o
+  arquivo e as colunas (`.claude/memory/decisions.md`). Espera o usuário: se a partição entra no
+  Delta, regravada por quem grava a base no esquema dos outros meses, ou se a carga segue sem ela,
+  pelo `--partitions` do script de migração.
 
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente

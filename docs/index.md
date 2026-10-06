@@ -417,9 +417,10 @@ for table in parquet_import.import_order(db.tables()):
 ```
 
 Uma partição fora do contrato é `serialize_db.errors.ContractError` antes de qualquer gravação, com
-a tabela, a partição e a coluna, e a chamada seguinte recomeça dela; um valor que não converte para
-o tipo do contrato, ou uma coluna do contrato ausente dos arquivos, falha no `COPY` com o erro do
-DuckDB, também sem commit.
+a tabela, a partição e a coluna, e o arquivo quando é o primeiro da pasta que não tem uma coluna do
+contrato; a chamada seguinte recomeça dela. Uma coluna do contrato ausente de um arquivo depois do
+primeiro, ou um valor que não converte para o tipo do contrato, falha na conferência ou no `COPY`
+com o erro do DuckDB, também sem commit.
 
 A carga converte cada coluna para o tipo do contrato pelo `CAST` do DuckDB, que aceita quatro
 perdas que `cast` recusa: um `double` com mais casas que a escala de um `Numeric` entra

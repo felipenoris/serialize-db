@@ -7,13 +7,14 @@ que fica fora do padrão e fora do modelo; a consulta que leva a partição ao c
 entre aspas; a carga de cada partição uma vez só, a retomada depois de uma interrupção e o filtro
 de partições; os tipos do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem
 commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``, um nulo em cada
-uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, e o texto
-acima dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado); a coluna
-``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o relatório que soma só
-os finitos; o relatório que acusa uma linha apagada, que confere só as partições pedidas e que lê
-na origem só as pastas da carga; a auditoria de chave estrangeira que registra o órfão sem barrar
-a carga; ``serialize-db import`` sobre a base inteira, duas vezes, e sobre uma partição só; e a
-tabela sem partição impressa como tabela inteira.
+uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, o texto
+acima dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado, e a coluna do
+contrato ausente do primeiro arquivo da partição, com o arquivo na mensagem, ou de outro, no erro do
+DuckDB); a coluna ``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o
+relatório que soma só os finitos; o relatório que acusa uma linha apagada, que confere só as
+partições pedidas e que lê na origem só as pastas da carga; a auditoria de chave estrangeira que
+registra o órfão sem barrar a carga; ``serialize-db import`` sobre a base inteira, duas vezes, e
+sobre uma partição só; e a tabela sem partição impressa como tabela inteira.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -468,6 +470,98 @@ def test_null_in_not_null_column_is_refused(
     assert_refused_without_commit(
         db, config, origin, "cad_contratos", f"1 nulos na coluna NOT NULL {column}"
     )
+
+
+def copy_operacoes_partition(
+    folder: Path,
+    base: source.SourceBase,
+) -> Path:
+    """Copia para uma origem nova, ``folder / "origem"``, só a partição 2026-02-28 de
+    ``cad_operacoes``, e devolve a pasta da partição."""
+    folder_name = "data_str=2026-02-28"
+    destination = folder / "origem" / "cad_operacoes" / folder_name
+    shutil.copytree(base.root / "cad_operacoes" / folder_name, destination)
+    return destination
+
+
+def rewrite_chunk(
+    path: Path,
+    rows: pa.Table,
+) -> None:
+    """Regrava ``path`` com ``rows`` no layout dos arquivos da origem."""
+    pq.write_table(
+        rows, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
+    )
+
+
+def source_without_column(
+    folder: Path,
+    base: source.SourceBase,
+    chunk: str,
+) -> str:
+    """Uma origem nova só com a partição 2026-02-28 de ``cad_operacoes``, com ``chunk`` regravado
+    sem ``id_operacao``."""
+    path = copy_operacoes_partition(folder, base) / chunk
+    rewrite_chunk(path, pq.read_table(path).drop_columns(["id_operacao"]))
+    return str(folder / "origem")
+
+
+def test_first_file_without_a_contract_column_is_refused(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+) -> None:
+    """O primeiro arquivo da partição sem ``id_operacao``, o caso da partição 2025-09-30 da base de
+    produção em 2026-10-06, é recusado com o arquivo e a coluna, sem commit; sem a conferência do
+    rodapé, o binder do DuckDB acusava a coluna sem nomear a partição nem o arquivo."""
+    origin = source_without_column(folder, base, "chunk_0.parquet")
+    fragment = (
+        "coluna(s) do contrato ausente(s) de cad_operacoes/data_str=2026-02-28/chunk_0.parquet: "
+        "id_operacao"
+    )
+    assert_refused_without_commit(db, config, origin, "cad_operacoes", fragment)
+
+
+def test_later_file_without_a_contract_column_fails_in_duckdb(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+) -> None:
+    """Um arquivo depois do primeiro sem ``id_operacao`` falha na conferência com o erro do
+    DuckDB, que nomeia o arquivo e a coluna, sem commit."""
+    origin = source_without_column(folder, base, "chunk_1.parquet")
+    with pytest.raises(duckdb.Error, match=re.escape("chunk_1.parquet")) as refusal:
+        parquet_import.import_table(db, TABLES["cad_operacoes"], origin, config=config)
+    assert '"id_operacao"' in str(refusal.value)
+    uri = db.uri(TABLES["cad_operacoes"])
+    assert delta.open_table(uri, db.storage).version() == 0
+    assert list(Path(uri).rglob("*.parquet")) == []
+
+
+def test_first_file_with_a_contract_column_in_another_case_is_loaded(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+) -> None:
+    """O primeiro arquivo com ``ID_OPERACAO`` no lugar de ``id_operacao`` entra: o binder do
+    DuckDB 1.5.5 liga a coluna sem distinguir maiúsculas de minúsculas (lido em 2026-10-06), e a
+    conferência do rodapé compara os nomes da mesma forma."""
+    partition = copy_operacoes_partition(folder, base)
+    expected = []
+    for chunk in sorted(partition.glob("*.parquet")):
+        expected.extend(pq.read_table(chunk).column("id_operacao").to_pylist())
+    path = partition / "chunk_0.parquet"
+    rewrite_chunk(path, pq.read_table(path).rename_columns({"id_operacao": "ID_OPERACAO"}))
+
+    table = TABLES["cad_operacoes"]
+    origin = str(folder / "origem")
+    assert parquet_import.import_table(db, table, origin, config=config) == ["2026-02-28"]
+    (written,) = delta.open_table(db.uri(table), db.storage).file_uris()
+    loaded = pq.read_table(written).column("id_operacao").to_pylist()
+    assert sorted(loaded) == sorted(expected)
 
 
 def write_chunks(

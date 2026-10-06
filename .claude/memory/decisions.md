@@ -1894,3 +1894,26 @@ alternative was keeping the item in `.claude/memory/OPEN_QUESTIONS.md`.
 `tests/proof_of_concept/test_deltalake.py::test_writer_codec_depends_on_the_call` the delta-rs
 behavior.
 `.claude/memory/delta.md`
+
+## The source file without a contract column (2026-10-06)
+
+The load of 2026-10-06 in the target stopped at `cad_operacoes` with DuckDB's `Binder Error:
+Column "id_operacao" referenced that exists in the SELECT clause - but this column cannot be
+referenced before it is defined`, which names neither the partition nor the file: the source's new
+partition 2025-09-30 has no `id_operacao` in its only file, and DuckDB 1.5.5 says that when the
+first file of the glob lacks a column the `SELECT` casts under the same alias
+(`.claude/memory/source-base.md`). Asked on a card between qualifying the columns of the partition
+query, a footer check with `ContractError` and a docstring fix only, the user chose
+"ContractError" (16:07 UTC), after the assistant's reply narrowed the check to the first file of
+each partition, one footer read per partition: `import_table` reads the first file's schema before
+the partition check and refuses with the table, the partition, the file and the missing columns, as
+the migration script's docstring promised for a partition outside the contract. A later file
+without the column still fails in DuckDB, whose `schema mismatch in glob` names both files.
+`tests/test_parquet_import.py::test_first_file_without_a_contract_column_is_refused` failed on the
+previous code with the target's `BinderException`, and
+`test_later_file_without_a_contract_column_fails_in_duckdb` keeps DuckDB's message. The check
+compares the names ignoring case, because DuckDB 1.5.5 binds `"id_operacao"` to a file column
+`ID_OPERACAO`, in the first file and in a later one (read on 2026-10-06), and the load took such
+a file before the check; `test_first_file_with_a_contract_column_in_another_case_is_loaded` fails
+with an exact comparison.
+`.claude/memory/OPEN_QUESTIONS.md`
