@@ -298,6 +298,7 @@ recebem só `--metadata`.
 | `--source` | obrigatória | A raiz da base Parquet de origem, pasta local ou `s3://bucket/prefixo`, com uma pasta por tabela, `<origem>/<tabela>/`, e as partições em `<coluna>=<valor>/`; a carga só a lê e grava em `<raiz>/<ambiente>/<tabela>`. |
 | `--tables` | todas do modelo | As tabelas carregadas, na ordem da carga: as sem partição antes das particionadas. |
 | `--partitions` | todas | As partições carregadas e conferidas no relatório, que toda tabela particionada da carga precisa ter na origem: uma que falta é recusada antes de qualquer gravação, com a saída 1; com ela, a tabela sem partição fica inteira de fora, sem carga nem relatório, numa linha da saída. |
+| `--ignore-partitions` | nenhuma | As partições deixadas fora da carga e do relatório em toda tabela particionada que as tem, cada uma numa linha da saída; a tabela sem partição entra inteira, e um valor que a origem não tem não é recusado. Não combina com `--partitions`: as duas juntas são erro de uso, com a saída 2. |
 
 ### `publish_redshift`
 

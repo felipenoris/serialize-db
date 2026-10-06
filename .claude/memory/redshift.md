@@ -490,3 +490,17 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   days; the suite's `UNLOAD` named its files `0064_part_00`; the Data API answered in 509 ms and
   515 ms. The threaded APIs of the engine and the publication were measured against their serial
   form the same day (`concurrency.md`).
+- The battery of 2026-10-06 (14:24 to 15:40 UTC, `environments.md`) read the same version
+  `1.0.434008` and ran the three cases of PR #139 four times each (the engine and publication
+  suites twice, the whole Redshift suite twice), with the same reading every time. A `COPY` whose
+  column list leaves out a `NOT NULL` column without `DEFAULT` is refused with `42601 NOT NULL
+  column without DEFAULT must be included in column list`, and the appender's staging route for a
+  table with JSON, whose staging accepts null, fails in the `INSERT` with `XX000 Cannot insert a
+  NULL value into column codigo`, no row in either table
+  (`test_appender_refuses_a_batch_without_a_not_null_column`). A `COPY` list naming a column the
+  staging does not have is refused with `42703 column "extra" of relation "t_rslocal_..." does not
+  exist`, the relation named by an internal identifier that carries the producer account
+  [inferred], masked here (`test_ingest_refuses_a_delta_column_outside_the_model`). The `COPY ...
+  MANIFEST FILLRECORD` of a partition `compact` rewrote in ZSTD loaded its 15 rows beside a
+  Snappy partition (`test_publication_loads_a_compacted_partition`). `RS-12` counted 48 load
+  errors in 30 days.

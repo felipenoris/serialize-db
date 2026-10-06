@@ -4,16 +4,18 @@ Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a 
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
 teste, com o motor DuckDB da carga na pasta do teste. Eles conferem a descoberta das partições e do
 que fica fora do padrão e fora do modelo; a consulta que leva a partição ao contrato, com ``to``
-entre aspas; a carga de cada partição uma vez só, a retomada depois de uma interrupção e o filtro
-de partições; os tipos do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem
-commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``, um nulo em cada
-uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, e o texto
-acima dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado); a coluna
-``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o relatório que soma só
-os finitos; o relatório que acusa uma linha apagada, que confere só as partições pedidas e que lê
-na origem só as pastas da carga; a auditoria de chave estrangeira que registra o órfão sem barrar
-a carga; ``serialize-db import`` sobre a base inteira, duas vezes, e sobre uma partição só; e a
-tabela sem partição impressa como tabela inteira.
+entre aspas; a carga de cada partição uma vez só, a retomada depois de uma interrupção e o filtro de
+partições; os tipos do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem
+commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``, um nulo em cada uma
+das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, o texto acima
+dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado, e a coluna do
+contrato ausente do primeiro arquivo da partição, com o arquivo na mensagem, ou de outro, no erro do
+DuckDB); a coluna ``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o
+relatório que soma só os finitos; o relatório que acusa uma linha apagada, que confere só as
+partições pedidas e que lê na origem só as pastas da carga; a auditoria de chave estrangeira que
+registra o órfão sem barrar a carga; ``serialize-db import`` sobre a base inteira, duas vezes, sobre
+uma partição só e sem a partição de ``--ignore-partitions``; e a tabela sem partição impressa como
+tabela inteira.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -38,7 +41,7 @@ from serialize_db import cli, delta, parquet_import
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import ContractError, ExecutionConflict
 from serialize_db.execution import Database
-from serialize_db.schema import arrow_schema, table_options
+from serialize_db.schema import arrow_schema, double_columns, table_options
 
 pytestmark = pytest.mark.local
 
@@ -470,6 +473,98 @@ def test_null_in_not_null_column_is_refused(
     )
 
 
+def copy_operacoes_partition(
+    folder: Path,
+    base: source.SourceBase,
+) -> Path:
+    """Copia para uma origem nova, ``folder / "origem"``, só a partição 2026-02-28 de
+    ``cad_operacoes``, e devolve a pasta da partição."""
+    folder_name = "data_str=2026-02-28"
+    destination = folder / "origem" / "cad_operacoes" / folder_name
+    shutil.copytree(base.root / "cad_operacoes" / folder_name, destination)
+    return destination
+
+
+def rewrite_chunk(
+    path: Path,
+    rows: pa.Table,
+) -> None:
+    """Regrava ``path`` com ``rows`` no layout dos arquivos da origem."""
+    pq.write_table(
+        rows, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
+    )
+
+
+def source_without_column(
+    folder: Path,
+    base: source.SourceBase,
+    chunk: str,
+) -> str:
+    """Uma origem nova só com a partição 2026-02-28 de ``cad_operacoes``, com ``chunk`` regravado
+    sem ``id_operacao``."""
+    path = copy_operacoes_partition(folder, base) / chunk
+    rewrite_chunk(path, pq.read_table(path).drop_columns(["id_operacao"]))
+    return str(folder / "origem")
+
+
+def test_first_file_without_a_contract_column_is_refused(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+) -> None:
+    """O primeiro arquivo da partição sem ``id_operacao``, o caso da partição 2025-09-30 da base de
+    produção em 2026-10-06, é recusado com o arquivo e a coluna, sem commit; sem a conferência do
+    rodapé, o binder do DuckDB acusava a coluna sem nomear a partição nem o arquivo."""
+    origin = source_without_column(folder, base, "chunk_0.parquet")
+    fragment = (
+        "coluna(s) do contrato ausente(s) de cad_operacoes/data_str=2026-02-28/chunk_0.parquet: "
+        "id_operacao"
+    )
+    assert_refused_without_commit(db, config, origin, "cad_operacoes", fragment)
+
+
+def test_later_file_without_a_contract_column_fails_in_duckdb(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+) -> None:
+    """Um arquivo depois do primeiro sem ``id_operacao`` falha na conferência com o erro do
+    DuckDB, que nomeia o arquivo e a coluna, sem commit."""
+    origin = source_without_column(folder, base, "chunk_1.parquet")
+    with pytest.raises(duckdb.Error, match=re.escape("chunk_1.parquet")) as refusal:
+        parquet_import.import_table(db, TABLES["cad_operacoes"], origin, config=config)
+    assert '"id_operacao"' in str(refusal.value)
+    uri = db.uri(TABLES["cad_operacoes"])
+    assert delta.open_table(uri, db.storage).version() == 0
+    assert list(Path(uri).rglob("*.parquet")) == []
+
+
+def test_first_file_with_a_contract_column_in_another_case_is_loaded(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+) -> None:
+    """O primeiro arquivo com ``ID_OPERACAO`` no lugar de ``id_operacao`` entra: o binder do
+    DuckDB 1.5.5 liga a coluna sem distinguir maiúsculas de minúsculas (lido em 2026-10-06), e a
+    conferência do rodapé compara os nomes da mesma forma."""
+    partition = copy_operacoes_partition(folder, base)
+    expected = []
+    for chunk in sorted(partition.glob("*.parquet")):
+        expected.extend(pq.read_table(chunk).column("id_operacao").to_pylist())
+    path = partition / "chunk_0.parquet"
+    rewrite_chunk(path, pq.read_table(path).rename_columns({"id_operacao": "ID_OPERACAO"}))
+
+    table = TABLES["cad_operacoes"]
+    origin = str(folder / "origem")
+    assert parquet_import.import_table(db, table, origin, config=config) == ["2026-02-28"]
+    (written,) = delta.open_table(db.uri(table), db.storage).file_uris()
+    loaded = pq.read_table(written).column("id_operacao").to_pylist()
+    assert sorted(loaded) == sorted(expected)
+
+
 def write_chunks(
     origin: Path,
     chunks: dict[str, pa.Table],
@@ -663,6 +758,63 @@ def test_import_report_matches_and_detects_a_difference(
     differing = [partition for partition in report.partitions if not partition.matches]
     assert [partition.value for partition in differing] == ["2026-03-31"]
     assert differing[0].delta_rows == differing[0].source_rows - 1
+
+
+def source_with_float_partition(
+    folder: Path,
+    base: source.SourceBase,
+    value: str,
+) -> str:
+    """Uma origem nova com ``cad_operacoes`` inteira e os arquivos da partição ``value``
+    regravados com as colunas ``double`` em ``float``, como a partição 2025-09-30 da base de
+    produção lida em 2026-10-06."""
+    origin = folder / "origem"
+    shutil.copytree(base.root / "cad_operacoes", origin / "cad_operacoes")
+    for path in sorted((origin / "cad_operacoes" / f"data_str={value}").glob("*.parquet")):
+        rows = pq.read_table(path)
+        fields = []
+        for field in rows.schema:
+            if field.type == pa.float64():
+                fields.append(field.with_type(pa.float32()))
+            else:
+                fields.append(field)
+        rewrite_chunk(path, rows.cast(pa.schema(fields)))
+    return str(origin)
+
+
+@pytest.mark.parametrize("value", ["2026-01-31", "2026-06-30"])
+def test_import_report_lists_the_conversions_of_each_partition(
+    base: source.SourceBase,
+    db: Database,
+    config: DuckDBConfig,
+    folder: Path,
+    value: str,
+) -> None:
+    """A partição com ``float`` nas colunas ``Double``, a primeira ou a última, tem as conversões
+    dela no seu relatório, e as da tabela são as da maior parte das partições; a carga grava a
+    partição, e o valor chega ao Delta com a precisão do ``float``."""
+    origin = source_with_float_partition(folder, base, value)
+    table = TABLES["cad_operacoes"]
+    assert parquet_import.import_table(db, table, origin, config=config) == PARTITION_VALUES
+    report = parquet_import.import_report(db, table, origin, config=config)
+
+    # As conversões da tabela são as das outras partições; as da partição em float, as dela.
+    keys = ("id_operacao: int32 -> int64",)
+    floats = tuple(f"{name}: float -> double" for name in double_columns(table))
+    assert report.conversions == keys
+    for partition in report.partitions:
+        expected = keys + floats if partition.value == value else keys
+        assert partition.conversions == expected, partition.value
+
+    # O float lido da origem como double é o valor do Delta: 1.2 em float chega 1.2000000476837158.
+    partition_folder = Path(origin) / "cad_operacoes" / f"data_str={value}"
+    in_source = pq.read_table(partition_folder).sort_by("id_operacao")
+    with db.storage.duckdb_connect() as connection:
+        in_delta = connection.execute(
+            f"SELECT spread_basico FROM delta_scan('{db.uri(table)}') "
+            f"WHERE data_str = '{value}' ORDER BY id_operacao"
+        ).fetchall()
+    assert [row[0] for row in in_delta] == in_source.column("spread_basico").to_pylist()
 
 
 def test_import_report_confers_only_the_requested_partitions(
@@ -1059,6 +1211,56 @@ def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
     assert "Traceback" not in captured.err
     assert "gravada(s)" not in captured.out
     assert list(root.glob("**/_delta_log")) == []
+
+
+def test_cli_import_ignores_the_listed_partitions(
+    base: source.SourceBase,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """``serialize-db import --ignore-partitions`` deixa a partição listada fora da carga e do
+    relatório, aqui a 2026-03-31 de ``cad_operacoes`` com o primeiro arquivo sem ``id_operacao``,
+    como a 2025-09-30 da base de produção em 2026-10-06: a tabela sem partição entra inteira, o
+    valor que a origem não tem não é recusado, e a saída é 0; com ``--partitions``, é erro de
+    uso."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+    # Uma cópia de cad_contas e de cad_operacoes, com a partição 2026-03-31 sem id_operacao.
+    origin = folder / "origem"
+    for name in ("cad_contas", "cad_operacoes"):
+        shutil.copytree(base.root / name, origin / name)
+    chunk = origin / "cad_operacoes" / "data_str=2026-03-31" / "chunk_0.parquet"
+    rewrite_chunk(chunk, pq.read_table(chunk).drop_columns(["id_operacao"]))
+    common = [
+        "import",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        str(origin),
+        "--root",
+        str(folder / "delta"),
+        "--environment",
+        "prd",
+        "--tables",
+        "cad_contas",
+        "cad_operacoes",
+    ]
+    assert cli.main([*common, "--ignore-partitions", "2026-03-31", "9999-12-31"]) == 0
+    printed = capsys.readouterr().out
+    assert "cad_operacoes: partição 2026-03-31 ignorada, em --ignore-partitions" in printed
+    assert "9999-12-31" not in printed
+    assert "cad_contas: 1 partição(ões) gravada(s): tabela inteira" in printed
+    written = "cad_operacoes: 3 partição(ões) gravada(s): 2026-01-31, 2026-02-28, 2026-06-30"
+    assert written in printed
+    assert "3 partição(ões) conferida(s), contagens e somas iguais" in printed
+    assert "2 tabela(s) conferida(s), contagens e somas iguais" in printed
+
+    # As duas opções de partição juntas são erro de uso do argparse.
+    with pytest.raises(SystemExit) as refusal:
+        cli.main([*common, "--partitions", "2026-02-28", "--ignore-partitions", "2026-03-31"])
+    assert refusal.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
 
 
 def test_cli_import_names_the_unpartitioned_table(

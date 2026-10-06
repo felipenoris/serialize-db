@@ -245,6 +245,25 @@ rewrite, and `compact` refused. The consistency probes ran from 18:26 with every
 passing (`source-base.md`, `delta.md`, `redshift.md`, `concurrency.md`), and `duckdb_threads.py`
 from 19:22 to 20:09, alone [inferred from the clock] (`duckdb.md`).
 
+The battery of 2026-10-06 from 14:24 UTC (from `main` at `e210089`, inferred from the three cases of
+PR #139 in the reports) ran `redshift.py`, `space.py`, `bucket.py`, `diagnose_aws.py` and
+`catalog.py`, the suites, the load and the publication of `SUITE.md`, on 4 vCPUs and 15,786 MB
+(8 vCPUs in every battery before) with the versions of 2026-10-05. Every case passed: S3 639 and
+1 skipped in 428.5 s; Redshift 57 twice (723.8 s, 698.7 s), engine 13 twice (163.7 s, 163.9 s) and
+publication 12 twice (291.4 s, 281.5 s), the three new cases' readings in `redshift.md`. The
+probes differed from 2026-10-05 in the CPUs (DuckDB with 4 threads), `RS-12` (48 load errors in
+30 days) and `BK-14` (10,408 non-current versions, 26,705,708,023 bytes, and 9,590 delete
+markers, the listing at its limit), the bytes grown since the operation probes of 2026-10-05
+deleted their copies of the source partitions under the suite root [inferred]. The load from
+15:33:32 (12,914 MB available, 4 threads and 6,456 MiB) imported the eight unpartitioned tables
+and stopped at the first partition of `cad_operacoes` (`source-base.md`); `audit` and `history`
+then found no `cad_lancamentos`, `snapshot carga-2026-09-24` took 9 tables with `cad_operacoes` at
+version 0 and `archive` moved it; `publish_redshift --init` created the control table,
+`carga-2026-09-25` took the same 9 tables under the channel `default`, `cad_contas` was published,
+and the whole-base publication by `--channel default` and by `--channel current` refused with
+`cad_contratos`, `rel_contrato_operacao` and `cad_lancamentos` outside the snapshot or the
+current version, publishing nothing.
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

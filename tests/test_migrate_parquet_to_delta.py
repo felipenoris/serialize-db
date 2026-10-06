@@ -5,12 +5,13 @@ Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a 
 teste, com a pasta temporária do processo apontada para a pasta do teste, onde o motor DuckDB de
 cada chamada de ``import_table`` abre o banco. Eles conferem a linha de comando sobre a base
 inteira, duas vezes, com o ambiente, cada tabela e o que ficou fora do modelo no relatório JSON; a
-carga e o relatório só nas partições de ``--partitions``; o relatório parcial de uma carga
-interrompida numa partição fora do contrato; a recusa de um modelo que viola o contrato, sem ler a
-origem, e de um ``--metadata`` que não importa; o ambiente ``dsv`` com ``SERIALIZE_DB_ENVIRONMENT``
-vazia; a diferença na tabela sem partição, impressa como tabela inteira; e o lado em que a partição
-falta, impresso como ausente. A carga em si e o relatório de contagens e somas são de
-``serialize_db.parquet_import``, cobertos por ``tests/test_parquet_import.py``.
+carga e o relatório só nas partições de ``--partitions``, e sem as de ``--ignore-partitions``, com a
+tabela sem partição inteira; o relatório parcial de uma carga interrompida numa partição fora do
+contrato; a recusa de um modelo que viola o contrato, sem ler a origem, e de um ``--metadata`` que
+não importa; o ambiente ``dsv`` com ``SERIALIZE_DB_ENVIRONMENT`` vazia; a diferença na tabela sem
+partição, impressa como tabela inteira; e o lado em que a partição falta, impresso como ausente. A
+carga em si e o relatório de contagens e somas são de ``serialize_db.parquet_import``, cobertos por
+``tests/test_parquet_import.py``.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ import migrate_parquet_to_delta as migrate
 import source_db_projetado as source
 from client_model import Base
 from conftest import LocalLocation
+from serialize_db.execution import Database
 from serialize_db.parquet_import import ImportReport, PartitionReport
 
 pytestmark = pytest.mark.local
@@ -146,6 +148,8 @@ def test_main_migrates_the_whole_base(
     loaded_values = [partition["value"] for partition in entries["loaded"]]
     assert loaded_values == list(source.PARTITION_VALUES)
     assert "timestamp: INT96 -> timestamp[us]" in entries["conversions"]
+    for partition in entries["partitions"]:
+        assert partition["conversions"] == entries["conversions"], partition["value"]
 
     # A segunda execução não grava nada.
     assert migrate.main(arguments) == 0
@@ -222,6 +226,65 @@ def test_main_refuses_a_requested_partition_absent_from_the_source(
     assert list(root.glob("**/_delta_log")) == []
 
 
+def test_main_ignores_the_listed_partitions(
+    base: source.SourceBase,
+    folder: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """Com ``--ignore-partitions``, a carga e o relatório deixam de fora a partição listada, aqui
+    a 2026-03-31 de ``cad_operacoes`` com o primeiro arquivo sem ``id_operacao``, como a
+    2025-09-30 da base de produção em 2026-10-06; a tabela sem partição entra inteira, o valor que
+    a origem não tem não é recusado, e a saída é 0."""
+    # Uma cópia de cad_contas e de cad_operacoes, com a partição 2026-03-31 sem id_operacao.
+    source_root = folder / "origem"
+    for name in ("cad_contas", "cad_operacoes"):
+        shutil.copytree(base.root / name, source_root / name)
+    chunk = source_root / "cad_operacoes" / "data_str=2026-03-31" / "chunk_0.parquet"
+    narrowed = pq.read_table(chunk).drop_columns(["id_operacao"])
+    pq.write_table(
+        narrowed, chunk, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
+    )
+    root = folder / "delta"
+    report_path = folder / "relatorio.json"
+    arguments = [
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        str(source_root),
+        "--root",
+        str(root),
+        "--environment",
+        "prd",
+        "--tables",
+        "cad_contas",
+        "cad_operacoes",
+        "--ignore-partitions",
+        "2026-03-31",
+        "9999-12-31",
+        "--report",
+        str(report_path),
+    ]
+    assert migrate.main(arguments) == 0
+    printed = capsys.readouterr().out
+    assert "  2026-03-31: ignorada, em --ignore-partitions" in printed
+    assert "9999-12-31" not in printed
+    assert re.search(r"^cad_contas:\n  tabela inteira: \d+ linhas em ", printed, re.MULTILINE)
+    expected = [value for value in source.PARTITION_VALUES if value != "2026-03-31"]
+    assert "relatório: 3 partições conferidas, contagens e somas iguais" in printed
+
+    # O relatório e o Delta sem a partição ignorada.
+    document = json.loads(report_path.read_text())
+    tables_by_name = {table["table"]: table for table in document["tables"]}
+    assert list(tables_by_name) == ["cad_contas", "cad_operacoes"]
+    operations = tables_by_name["cad_operacoes"]
+    assert [partition["value"] for partition in operations["partitions"]] == expected
+    assert [load["value"] for load in operations["loaded"]] == expected
+    ignored = document["environment"]["arguments"]["ignore_partitions"]
+    assert ignored == ["2026-03-31", "9999-12-31"]
+    db = Database(str(root), "prd", Base.metadata)
+    assert migrate.partition_rows(db, TABLES["cad_operacoes"], "2026-03-31") == 0
+
+
 def test_report_keeps_the_progress_of_an_interrupted_load(
     base: source.SourceBase,
     folder: Path,
@@ -266,8 +329,8 @@ def test_main_refuses_a_model_with_violations(
     capsys: pytest.CaptureFixture,
 ) -> None:
     """O modelo de referência viola o contrato: saída 2 com a lista, sem ler a origem; uma
-    tabela fora do modelo, um ``--metadata`` que não importa e um valor de ``--partitions`` fora
-    da regra da partição são erros de uso."""
+    tabela fora do modelo, um ``--metadata`` que não importa, um valor de ``--partitions`` fora
+    da regra da partição e ``--partitions`` com ``--ignore-partitions`` são erros de uso."""
     never_written = folder / "nunca-gravada"
     arguments = [
         "--metadata",
@@ -332,6 +395,26 @@ def test_main_refuses_a_model_with_violations(
     assert "2026 Q1" in capsys.readouterr().err
     assert not never_written.exists()
 
+    # --partitions e --ignore-partitions juntos saem como erro de uso.
+    with pytest.raises(SystemExit) as refusal:
+        migrate.main(
+            [
+                "--metadata",
+                "client_model:Base.metadata",
+                "--source",
+                str(base.root),
+                "--root",
+                str(never_written),
+                "--partitions",
+                "2026-02-28",
+                "--ignore-partitions",
+                "2026-03-31",
+            ]
+        )
+    assert refusal.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+    assert not never_written.exists()
+
 
 def test_empty_environment_variable_counts_as_absent(
     base: source.SourceBase,
@@ -376,3 +459,28 @@ def test_print_report_names_the_missing_side(
     assert "DIFERENÇA em 2026-01-31: origem ausente, Delta 3 linhas" in printed
     assert "DIFERENÇA em 2026-02-28: origem 4 linhas {} não finitos {}, Delta ausente" in printed
     assert "None" not in printed
+
+
+def test_print_report_names_the_partitions_with_other_conversions(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """A linha ``conversões`` traz as da maior parte das partições, e cada partição da origem com
+    outras conversões sai numa linha própria, ``nenhuma`` quando não tem conversão; a partição que
+    falta na origem não sai."""
+    keys = ("id_operacao: int32 -> int64",)
+    usual = PartitionReport("2026-01-31", 2, 2, {}, {}, {}, {}, conversions=keys)
+    in_float = PartitionReport(
+        "2026-02-28", 2, 2, {}, {}, {}, {}, conversions=(*keys, "taxa_total: float -> double")
+    )
+    without = PartitionReport("2026-03-31", 2, 2, {}, {}, {}, {}, conversions=())
+    only_in_delta = PartitionReport("2026-06-30", None, 2, {}, {}, {}, {})
+    partitions = (usual, in_float, without, only_in_delta)
+    migrate.print_report(ImportReport("cad_operacoes", partitions, (), keys))
+    printed = capsys.readouterr().out
+    assert "  conversões: id_operacao: int32 -> int64\n" in printed
+    assert (
+        "  conversões em 2026-02-28: id_operacao: int32 -> int64, taxa_total: float -> double\n"
+    ) in printed
+    assert "  conversões em 2026-03-31: nenhuma\n" in printed
+    assert "conversões em 2026-01-31" not in printed
+    assert "conversões em 2026-06-30" not in printed

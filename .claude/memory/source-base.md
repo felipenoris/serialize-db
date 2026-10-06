@@ -44,6 +44,31 @@ Read before `serialize_db.parquet_import`, `tests/source_db_projetado.py`, `test
   column of the model has a null, and the composite foreign-key orphans repeat (`data_base`
   2026-01-31 without `cad_contratos`, `desemb-999`).
 
+## The production base, read on 2026-10-06
+
+- `probes/parquet_source.py` over the production base at 15:56 UTC, after the load of 2026-10-06
+  stopped (the report was pasted in the thread and stays out of git): 14 tables, 2,031 files,
+  7,992,137,981 bytes, `schema.json` the only entry that is not Parquet. The four partitioned
+  tables gained the partition 2025-09-30, before 2026-02-28 in name order, written in another
+  schema (section 4; `PQ-3` failed on the four):
+  - `cad_operacoes` `data_str=2025-09-30/chunk_0.parquet` (965,001 rows): no `id_operacao`, `area`
+    not null, and `spread_basico`, `spread_risco`, `spread_total`, `taxa_total`, `taxa_bndes` and
+    `custo_adicional` as `float` (`FLOAT`) for `double`;
+  - `cad_contratos` `data_str=2025-09-30/chunk_0.parquet` (974,580 rows): no `id_contrato`, and
+    `taxa_juros_fixos` as `float`;
+  - `rel_contrato_operacao` `data_str=2025-09-30/chunk_0.parquet` (980,298 rows): no
+    `id_rel_contrato_operacao`, `sistema` nullable, and `fator_rateio` as `float`;
+  - `cad_lancamentos` `data_base_str=2025-09-30/` (53 files, 47,513,583 rows): no `id_lancamento`
+    nor `meta`, and an extra `id` (`int32`, 0 to 47,513,582).
+
+  The new files are the only ones with the `pandas` footer key (1/116, 1/70, 1/290 and 53/1545).
+  The months of 2026 keep the counts the load of 2026-10-05 read (`cad_operacoes` 16,563,970,
+  `cad_contratos` 10,528,855, `rel_contrato_operacao` 43,119,795), except `cad_lancamentos`, with
+  283,835,693 rows against 283,835,763, 70 fewer in a partition the footers do not single out. The
+  2026-02-28 files listed for `cad_operacoes`, `cad_contratos` and `rel_contrato_operacao` hold
+  100,000 rows each (1,000,000 in the dsv reading of 2026-09-20); every file is Snappy, written by
+  `parquet-cpp-arrow` in format 1.0, and `meta_update_status` has 25 rows, ids up to 177.
+
 ## The fixture
 
 On 2026-09-21 the user grouped the production `rel_contrato_operacao` by the contract key
@@ -229,3 +254,19 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   (0.0 MB). The same command wrote only 2026-02-28 (22.9 s) and 2026-03-31 (62.9 s), checked the
   three requested partitions equal and exited 0 in 128.6 s; the only file outside the log was the
   killed execution's. `tests/test_parquet_import.py` covers the same path in the local folder.
+- The load of 2026-10-06 (`started_at` 15:33:32 UTC, from `main` at `e210089`, whose import path is
+  the one of 2026-10-05, on 4 vCPUs, 12,914 MB available, 4 threads and 6,456 MiB): the eight
+  unpartitioned tables matched with the counts of 2026-10-05, and the first partition of
+  `cad_operacoes` stopped the script before any write with `_duckdb.BinderException: Binder Error:
+  Column "id_operacao" referenced that exists in the SELECT clause - but this column cannot be
+  referenced before it is defined`, raised by the partition check (`_check_partition`). DuckDB 1.5.5
+  raises that message when the first file of the glob, in name order, lacks a column the `SELECT`
+  casts under an alias of the same name; a later file without the column raises `schema mismatch in
+  glob`, naming both files and the candidate names (reproduced locally on 2026-10-06). The partition
+  was 2025-09-30, new in the source, whose only file has no `id_operacao` ("The production base,
+  read on 2026-10-06"); on 2026-10-05 the first partition was 2026-02-28. No earlier reading or load
+  has 2025-09-30: the reading of 2026-09-21 lists 2026-02-28, 2026-03-31 and 2026-06-30 in
+  `cad_operacoes`, the loads of 2026-09-26, 2026-09-27, 2026-09-29 and 2026-10-05 read the same 25
+  partitions, and the one of 2026-09-28 got past `cad_operacoes`; the partition entered the source
+  between 17:45 UTC of 2026-10-05 and 15:33 UTC of 2026-10-06. What enters the Delta waits on the
+  user (`OPEN_QUESTIONS.md`).

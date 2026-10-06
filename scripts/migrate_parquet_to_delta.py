@@ -15,7 +15,10 @@ versões, os limites do DuckDB lidos do ambiente e os argumentos, cada tabela co
 Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``, e a origem fica
 intocada. Com ``--partitions``, a carga e o relatório ficam nas partições pedidas, que toda tabela
 particionada precisa ter na origem: uma que falta recusa a execução antes de qualquer gravação, e a
-tabela sem partição fica inteira de fora, sem carga, relatório nem entrada no JSON.
+tabela sem partição fica inteira de fora, sem carga, relatório nem entrada no JSON. Com
+``--ignore-partitions``, que não combina com ``--partitions``, a carga e o relatório deixam de fora
+as partições listadas em toda tabela particionada que as tem, com uma linha impressa por partição
+ignorada, e a tabela sem partição entra inteira; um valor que a origem não tem não é recusado.
 
 Uma partição fora do contrato interrompe a execução sem commit, com a tabela, a partição e a
 coluna na mensagem, e a execução seguinte recomeça dela; o script sai com 1 nesse caso, na
@@ -162,7 +165,9 @@ def side_text(
 def print_report(
     report: ImportReport,
 ) -> None:
-    """As linhas do relatório de uma tabela, depois das partições gravadas."""
+    """As linhas do relatório de uma tabela, depois das partições gravadas: cada diferença, o
+    veredito, as conversões de tipo da maior parte das partições, uma linha por partição com outras
+    conversões, e o que ficou fora do padrão."""
     for partition in report.partitions:
         if not partition.matches:
             where = "na tabela inteira" if partition.value is None else f"em {partition.value}"
@@ -177,6 +182,12 @@ def print_report(
     print(f"  relatório: {len(report.partitions)} partições conferidas, {verdict}")
     if report.conversions:
         print(f"  conversões: {', '.join(report.conversions)}")
+    # Cada partição da origem com outras conversões que as da maior parte, numa linha própria.
+    for partition in report.partitions:
+        if partition.source_rows is None or partition.conversions == report.conversions:
+            continue
+        phrases = ", ".join(partition.conversions) or "nenhuma"
+        print(f"  conversões em {partition.value}: {phrases}")
     for entry in report.skipped:
         print(f"  ignorado fora do padrão: {entry}")
 
@@ -206,6 +217,7 @@ def describe_environment(
             "environment": arguments.environment,
             "tables": arguments.tables,
             "partitions": arguments.partitions,
+            "ignore_partitions": arguments.ignore_partitions,
         },
     }
 
@@ -270,8 +282,8 @@ def resolve_metadata(
 def partition_argument(
     text: str,
 ) -> str:
-    """Um valor de ``--partitions`` pela regra da partição, como o ``--partitions`` de
-    ``serialize-db import``; o valor fora dela é erro de uso, com o código 2."""
+    """Um valor de ``--partitions`` ou de ``--ignore-partitions`` pela regra da partição, como o
+    ``--partitions`` de ``serialize-db import``; o valor fora dela é erro de uso, com o código 2."""
     try:
         return schema.check_partition_value(text)
     except ContractError as error:
@@ -306,7 +318,8 @@ def build_parser() -> argparse.ArgumentParser:
         "ausente)",
     )
     parser.add_argument("--tables", nargs="+", metavar="TABELA", help="só estas tabelas do modelo")
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--partitions",
         nargs="+",
         metavar="AAAA-MM-DD",
@@ -314,6 +327,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="só estas partições, gravadas e conferidas, que toda tabela particionada precisa ter "
         "na origem; as tabelas sem partição ficam de fora",
+    )
+    selection.add_argument(
+        "--ignore-partitions",
+        nargs="+",
+        metavar="AAAA-MM-DD",
+        type=partition_argument,
+        default=None,
+        help="deixa estas partições fora da carga e do relatório em toda tabela particionada que "
+        "as tem; as tabelas sem partição entram inteiras",
     )
     parser.add_argument(
         "--report", metavar="ARQUIVO.json", help="grava o relatório da execução em JSON"
@@ -364,14 +386,22 @@ def main(
                 print(f"{table.name}: tabela sem partição, fora de --partitions")
                 continue
             print(f"{table.name}:")
+            # As partições da tabela: as pedidas, ou as da origem fora das ignoradas.
+            partitions = arguments.partitions
+            if arguments.ignore_partitions is not None and not unpartitioned:
+                partitions, ignored = parquet_import.split_ignored_partitions(
+                    arguments.source, table, arguments.ignore_partitions
+                )
+                for value in ignored:
+                    print(f"  {value}: ignorada, em --ignore-partitions")
             progress = None
             if arguments.report:
                 progress = functools.partial(
                     write_progress, arguments.report, reports, environment, table.name
                 )
                 progress([])
-            loaded = load_table(db, table, arguments.source, arguments.partitions, progress)
-            report = parquet_import.import_report(db, table, arguments.source, arguments.partitions)
+            loaded = load_table(db, table, arguments.source, partitions, progress)
+            report = parquet_import.import_report(db, table, arguments.source, partitions)
             print_report(report)
             reports.append(TableReport(report, tuple(loaded)))
     except ContractError as error:

@@ -566,3 +566,28 @@ def test_status_and_load_lines_print_no_none(
         "{'valor': Decimal('2.5')} não finitos {'valor': 0}\n"
     ) in printed
     assert "None" not in printed
+
+
+def test_load_lines_name_the_partitions_with_other_conversions(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """A linha ``conversões`` da carga traz as da maior parte das partições, e cada partição da
+    origem com outras conversões sai numa linha própria, ``nenhuma`` quando não tem conversão; a
+    partição que falta na origem não sai."""
+    keys = ("id_lancamento: int32 -> int64",)
+    usual = PartitionReport(MONTHS[0], 2, 2, {}, {}, {}, {}, conversions=keys)
+    in_float = PartitionReport(
+        MONTHS[1], 2, 2, {}, {}, {}, {}, conversions=(*keys, "valor: float -> double")
+    )
+    without = PartitionReport("2026-09-30", 2, 2, {}, {}, {}, {}, conversions=())
+    only_in_delta = PartitionReport("2026-10-31", None, 2, {}, {}, {}, {})
+    partitions = (usual, in_float, without, only_in_delta)
+    cli._print_import_report(ImportReport("cad_lancamentos", partitions, (), keys), [])
+    printed = capsys.readouterr().out
+    assert "  conversões: id_lancamento: int32 -> int64\n" in printed
+    assert (
+        f"  conversões em {MONTHS[1]}: id_lancamento: int32 -> int64, valor: float -> double\n"
+    ) in printed
+    assert "  conversões em 2026-09-30: nenhuma\n" in printed
+    assert f"conversões em {MONTHS[0]}" not in printed
+    assert "conversões em 2026-10-31" not in printed

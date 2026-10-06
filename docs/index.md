@@ -417,9 +417,10 @@ for table in parquet_import.import_order(db.tables()):
 ```
 
 Uma partição fora do contrato é `serialize_db.errors.ContractError` antes de qualquer gravação, com
-a tabela, a partição e a coluna, e a chamada seguinte recomeça dela; um valor que não converte para
-o tipo do contrato, ou uma coluna do contrato ausente dos arquivos, falha no `COPY` com o erro do
-DuckDB, também sem commit.
+a tabela, a partição e a coluna, e o arquivo quando é o primeiro da pasta que não tem uma coluna do
+contrato; a chamada seguinte recomeça dela. Uma coluna do contrato ausente de um arquivo depois do
+primeiro, ou um valor que não converte para o tipo do contrato, falha na conferência ou no `COPY`
+com o erro do DuckDB, também sem commit.
 
 A carga converte cada coluna para o tipo do contrato pelo `CAST` do DuckDB, que aceita quatro
 perdas que `cast` recusa: um `double` com mais casas que a escala de um `Numeric` entra
@@ -428,9 +429,12 @@ coluna `DateTime` sem fuso entra na hora do `TimeZone` da conexão, o fuso da m�
 `timestamp` `INT96` com nanossegundos numa coluna `DateTime` entra truncado a microssegundos.
 `import_report` mostra o arredondamento quando ele muda a soma da coluna, e não vê a hora, o fuso
 nem os nanossegundos. A linha `conversões` do relatório lista cada coluna cujo tipo no arquivo
-difere do contrato, como `carimbo: INT96 -> timestamp[us]`, lida no rodapé do primeiro arquivo da
-primeira partição conferida: ela não diz quais conversões perdem dado nem se algum valor perdeu, e
-não vê o tipo de outro arquivo. Na linha de comando:
+difere do contrato, como `carimbo: INT96 -> timestamp[us]`, lida no rodapé do primeiro arquivo de
+cada partição conferida: a linha traz as conversões da maior parte das partições, e cada partição
+com outras sai numa linha `conversões em <valor>`, como a de colunas `Double` gravadas em `float`,
+cujo valor chega ao Delta com a precisão do `float` (1.2 vira 1.2000000476837158). As linhas não
+dizem quais conversões perdem dado nem se algum valor perdeu, e não veem o tipo dos outros
+arquivos da partição. Na linha de comando:
 
 ```shell
 serialize-db import --root s3://bucket/projeto/delta --environment prd \
