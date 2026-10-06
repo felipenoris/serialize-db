@@ -77,17 +77,17 @@ O código de saída:
   pelo valor fora do contrato que o ``ingest`` da auditoria recusa, impresso com o erro do banco;
   e quando a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem,
   ou uma diferença de contagem ou soma.
-- 2 no erro de uso: o motor fora de ``duckdb`` e ``redshift`` e ``--partitions`` na auditoria de
-  uma tabela sem partição; a configuração do Redshift sem conexão ou com a porta que não é número;
-  a tabela fora do modelo ou sem Delta; a partição acima do ``String(n)`` da coluna de partição; o
-  ``execution_id`` longo demais para o prefixo do sandbox do Redshift; o ``ContractError`` do
-  pipeline; o conflito da execução, da carga e do ``archive``, na tabela ou no arquivo de
-  controle; a publicação sem a tabela de controle, sem ``--snapshot`` nem ``--channel``, do
-  snapshot ou do canal ausente, do snapshot arquivado ou da tabela fora do snapshot; o modelo fora
-  do contrato e a origem ausente ou fora dos armazenamentos da carga; o snapshot repetido ou
-  ausente; o canal sem ``--name`` e ``--snapshot`` juntos, e o canal ``current``; a compactação
-  depois de um snapshot na versão atual; o arquivo do snapshot de um canal; e o destino da
-  exportação não vazio ou fora da raiz.
+- 2 no erro de uso: o motor fora de ``duckdb`` e ``redshift`` e ``--partitions`` na auditoria de uma
+  tabela sem partição; ``--partitions`` com ``--ignore-partitions`` na carga; a configuração do
+  Redshift sem conexão ou com a porta que não é número; a tabela fora do modelo ou sem Delta; a
+  partição acima do ``String(n)`` da coluna de partição; o ``execution_id`` longo demais para o
+  prefixo do sandbox do Redshift; o ``ContractError`` do pipeline; o conflito da execução, da carga
+  e do ``archive``, na tabela ou no arquivo de controle; a publicação sem a tabela de controle, sem
+  ``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do snapshot arquivado ou da
+  tabela fora do snapshot; o modelo fora do contrato e a origem ausente ou fora dos armazenamentos
+  da carga; o snapshot repetido ou ausente; o canal sem ``--name`` e ``--snapshot`` juntos, e o
+  canal ``current``; a compactação depois de um snapshot na versão atual; o arquivo do snapshot de
+  um canal; e o destino da exportação não vazio ou fora da raiz.
 
 .. include:: ../../docs/operacao.md
 """
@@ -377,13 +377,22 @@ def _add_import_parser(
         default=None,
         help="só estas tabelas do modelo; sem elas, todas, as sem partição antes das particionadas",
     )
-    import_command.add_argument(
+    selection = import_command.add_mutually_exclusive_group()
+    selection.add_argument(
         "--partitions",
         nargs="+",
         type=_name_argument,
         default=None,
         help="só estas partições, gravadas e conferidas, que toda tabela particionada precisa ter "
         "na origem; as tabelas sem partição ficam de fora",
+    )
+    selection.add_argument(
+        "--ignore-partitions",
+        nargs="+",
+        type=_name_argument,
+        default=None,
+        help="deixa estas partições fora da carga e do relatório em toda tabela particionada que "
+        "as tem; as tabelas sem partição entram inteiras",
     )
     import_command.set_defaults(handler=_import)
 
@@ -994,7 +1003,9 @@ def _import(
     contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato, na tabela fora do
     modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito. Com
     ``--partitions``, a tabela sem partição sai numa linha como fora do pedido, sem carga nem
-    relatório."""
+    relatório; com ``--ignore-partitions``, as partições listadas ficam fora da carga e do
+    relatório em toda tabela particionada que as tem, cada uma numa linha, e a tabela sem
+    partição entra inteira."""
     problems = schema.check_models(args.metadata)
     if problems:
         print(
@@ -1021,8 +1032,16 @@ def _import(
             if args.partitions is not None and unpartitioned:
                 print(f"{table.name}: tabela sem partição, fora de --partitions")
                 continue
-            imported = parquet_import.import_table(db, table, args.source, args.partitions)
-            report = parquet_import.import_report(db, table, args.source, args.partitions)
+            # As partições da tabela: as pedidas, ou as da origem fora das ignoradas.
+            partitions = args.partitions
+            if args.ignore_partitions is not None and not unpartitioned:
+                partitions, ignored = parquet_import.split_ignored_partitions(
+                    args.source, table, args.ignore_partitions
+                )
+                for value in ignored:
+                    print(f"{table.name}: partição {value} ignorada, em --ignore-partitions")
+            imported = parquet_import.import_table(db, table, args.source, partitions)
+            report = parquet_import.import_report(db, table, args.source, partitions)
             _print_import_report(report, imported)
             matches = matches and report.matches
             conferred += 1

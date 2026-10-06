@@ -563,6 +563,25 @@ def check_requested_partitions(
     _check_requested(table, found, partitions)
 
 
+def split_ignored_partitions(
+    source: str,
+    table: sa.Table,
+    ignored: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    """As partições da tabela particionada na origem fora de ``ignored``, e as de ``ignored`` que
+    a origem tem, ambas em ordem de nome; protegida, para o ``--ignore-partitions`` da linha de
+    comando e do script de migração."""
+    found, _ = discover_partitions(source, table)
+    kept = []
+    skipped = []
+    for value in found:
+        if value in ignored:
+            skipped.append(value)
+        else:
+            kept.append(value)
+    return kept, skipped
+
+
 def _import_partition(
     engine: DuckDBEngine,
     storage: Storage,

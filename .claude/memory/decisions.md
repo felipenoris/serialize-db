@@ -1918,7 +1918,7 @@ a file before the check; `test_first_file_with_a_contract_column_in_another_case
 with an exact comparison.
 `.claude/memory/OPEN_QUESTIONS.md`
 
-## The `--ignore-partitions` of the migration script (2026-10-06)
+## The `--ignore-partitions` of the load (2026-10-06)
 
 The user asked at 16:34 UTC for an optional `--ignore-partitions` in the migration script, the way
 to load the base without the source's partition 2025-09-30. `scripts/migrate_parquet_to_delta.py`
@@ -1926,7 +1926,11 @@ leaves the listed partitions out of the load and the report in every partitioned
 them, prints a line per ignored partition and loads the unpartitioned tables whole, which
 `--partitions` leaves out; the two arguments exclude each other (a usage error, code 2), and a
 value the source does not have is not refused. The JSON report records the list under
-`arguments.ignore_partitions`. Whether `serialize-db import` gets the same argument was asked on a
-card ("Só no script", recommended, or "Script e CLI").
+`arguments.ignore_partitions`. Asked on a card whether `serialize-db import` gets the same
+argument ("Só no script", recommended, or "Script e CLI"), the user chose "Script e CLI" (16:49
+UTC): the subcommand prints `<tabela>: partição <valor> ignorada, em --ignore-partitions`, and
+both callers split the partitions through the protected `parquet_import.split_ignored_partitions`.
 `tests/test_migrate_parquet_to_delta.py::test_main_ignores_the_listed_partitions` fails when the
-argument has no effect.
+argument has no effect, and
+`tests/test_parquet_import.py::test_cli_import_ignores_the_listed_partitions` covers the
+subcommand.

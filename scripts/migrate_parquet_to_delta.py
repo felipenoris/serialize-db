@@ -149,23 +149,6 @@ def load_table(
     return loaded
 
 
-def remaining_partitions(
-    source: str,
-    table: sa.Table,
-    ignored: Sequence[str],
-) -> list[str]:
-    """As partições da tabela particionada na origem fora de ``ignored``, com uma linha impressa
-    por partição ignorada."""
-    found, _ = parquet_import.discover_partitions(source, table)
-    remaining = []
-    for value in found:
-        if value in ignored:
-            print(f"  {value}: ignorada, em --ignore-partitions")
-        else:
-            remaining.append(value)
-    return remaining
-
-
 def side_text(
     side: str,
     rows: int | None,
@@ -398,9 +381,11 @@ def main(
             # As partições da tabela: as pedidas, ou as da origem fora das ignoradas.
             partitions = arguments.partitions
             if arguments.ignore_partitions is not None and not unpartitioned:
-                partitions = remaining_partitions(
+                partitions, ignored = parquet_import.split_ignored_partitions(
                     arguments.source, table, arguments.ignore_partitions
                 )
+                for value in ignored:
+                    print(f"  {value}: ignorada, em --ignore-partitions")
             progress = None
             if arguments.report:
                 progress = functools.partial(

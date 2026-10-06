@@ -4,17 +4,18 @@ Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a 
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
 teste, com o motor DuckDB da carga na pasta do teste. Eles conferem a descoberta das partições e do
 que fica fora do padrão e fora do modelo; a consulta que leva a partição ao contrato, com ``to``
-entre aspas; a carga de cada partição uma vez só, a retomada depois de uma interrupção e o filtro
-de partições; os tipos do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem
-commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``, um nulo em cada
-uma das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, o texto
-acima dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado, e a coluna do
+entre aspas; a carga de cada partição uma vez só, a retomada depois de uma interrupção e o filtro de
+partições; os tipos do contrato nos arquivos gravados; a ordem da ``sort_key``; as recusas sem
+commit (valor da coluna de origem fora do caminho, texto acima de ``String(n)``, um nulo em cada uma
+das sete colunas ``NOT NULL`` de ``cad_contratos`` declaradas anuláveis nos arquivos, o texto acima
+dos limites de ``Uuid``, JSON e ``Text``, com o ``n`` de ``Text(n)`` ignorado, e a coluna do
 contrato ausente do primeiro arquivo da partição, com o arquivo na mensagem, ou de outro, no erro do
 DuckDB); a coluna ``Double`` com ``NaN`` ou infinito sem mínimo e máximo na partição dela, com o
 relatório que soma só os finitos; o relatório que acusa uma linha apagada, que confere só as
 partições pedidas e que lê na origem só as pastas da carga; a auditoria de chave estrangeira que
-registra o órfão sem barrar a carga; ``serialize-db import`` sobre a base inteira, duas vezes, e
-sobre uma partição só; e a tabela sem partição impressa como tabela inteira.
+registra o órfão sem barrar a carga; ``serialize-db import`` sobre a base inteira, duas vezes, sobre
+uma partição só e sem a partição de ``--ignore-partitions``; e a tabela sem partição impressa como
+tabela inteira.
 """
 
 from __future__ import annotations
@@ -1153,6 +1154,56 @@ def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
     assert "Traceback" not in captured.err
     assert "gravada(s)" not in captured.out
     assert list(root.glob("**/_delta_log")) == []
+
+
+def test_cli_import_ignores_the_listed_partitions(
+    base: source.SourceBase,
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """``serialize-db import --ignore-partitions`` deixa a partição listada fora da carga e do
+    relatório, aqui a 2026-03-31 de ``cad_operacoes`` com o primeiro arquivo sem ``id_operacao``,
+    como a 2025-09-30 da base de produção em 2026-10-06: a tabela sem partição entra inteira, o
+    valor que a origem não tem não é recusado, e a saída é 0; com ``--partitions``, é erro de
+    uso."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+    # Uma cópia de cad_contas e de cad_operacoes, com a partição 2026-03-31 sem id_operacao.
+    origin = folder / "origem"
+    for name in ("cad_contas", "cad_operacoes"):
+        shutil.copytree(base.root / name, origin / name)
+    chunk = origin / "cad_operacoes" / "data_str=2026-03-31" / "chunk_0.parquet"
+    rewrite_chunk(chunk, pq.read_table(chunk).drop_columns(["id_operacao"]))
+    common = [
+        "import",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--source",
+        str(origin),
+        "--root",
+        str(folder / "delta"),
+        "--environment",
+        "prd",
+        "--tables",
+        "cad_contas",
+        "cad_operacoes",
+    ]
+    assert cli.main([*common, "--ignore-partitions", "2026-03-31", "9999-12-31"]) == 0
+    printed = capsys.readouterr().out
+    assert "cad_operacoes: partição 2026-03-31 ignorada, em --ignore-partitions" in printed
+    assert "9999-12-31" not in printed
+    assert "cad_contas: 1 partição(ões) gravada(s): tabela inteira" in printed
+    written = "cad_operacoes: 3 partição(ões) gravada(s): 2026-01-31, 2026-02-28, 2026-06-30"
+    assert written in printed
+    assert "3 partição(ões) conferida(s), contagens e somas iguais" in printed
+    assert "2 tabela(s) conferida(s), contagens e somas iguais" in printed
+
+    # As duas opções de partição juntas são erro de uso do argparse.
+    with pytest.raises(SystemExit) as refusal:
+        cli.main([*common, "--partitions", "2026-02-28", "--ignore-partitions", "2026-03-31"])
+    assert refusal.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
 
 
 def test_cli_import_names_the_unpartitioned_table(
