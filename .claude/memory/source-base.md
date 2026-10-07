@@ -300,8 +300,8 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   has 2025-09-30: the reading of 2026-09-21 lists 2026-02-28, 2026-03-31 and 2026-06-30 in
   `cad_operacoes`, the loads of 2026-09-26, 2026-09-27, 2026-09-29 and 2026-10-05 read the same 25
   partitions, and the one of 2026-09-28 got past `cad_operacoes`; the partition entered the source
-  between 17:45 UTC of 2026-10-05 and 15:33 UTC of 2026-10-06. What enters the Delta waits on the
-  user (`OPEN_QUESTIONS.md`).
+  between 17:45 UTC of 2026-10-05 and 15:33 UTC of 2026-10-06. The user kept the partition out of
+  the load on 2026-10-07 (`decisions.md`).
 - The load of 2026-10-07 (`started_at` 04:34:29 UTC, from `main` at `5457f58`, on 2 vCPUs,
   5,801 MB available, 2 threads and 2,900 MiB, a fresh root, the first load with
   `--ignore-partitions 2025-09-30`): the script printed `2025-09-30: ignorada, em
@@ -331,7 +331,7 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   files carried `id_lancamento` and `meta`, with `id_lancamento` null in all 47,513,583 rows,
   where the reading of 2026-10-06 at 15:56 UTC found neither column; the reading of 18:25 UTC
   confirmed it ("The production base, read on 2026-10-07"). The count equals the partition's rows.
-  `OPEN_QUESTIONS.md`
+  `decisions.md`
 - The resume of a stopped load ran again in the target on 2026-10-07 from 18:15 UTC
   (`probe_load_resume.py --ignore-partitions 2025-09-30`, from `main` at `b6acfa8`, 2 vCPUs,
   `environments.md`), over 2026-01-31, 2026-02-28 and 2026-03-31 after the line

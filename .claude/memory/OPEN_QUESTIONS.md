@@ -99,27 +99,6 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   uma partição de dois arquivos, um sem mínimo e máximo de `valor`, e outra, compactada na mesma
   chamada, que os mantém.
 
-- **A partição 2025-09-30 da origem.** A carga do ambiente alvo de 2026-10-06 parou na primeira
-  partição de `cad_operacoes`, 2025-09-30, nova na origem nas quatro tabelas particionadas e gravada
-  noutro esquema: sem a coluna de id (`id_operacao`, `id_contrato`, `id_rel_contrato_operacao`,
-  `id_lancamento`), com `float` no lugar de `double` e, em `cad_lancamentos`, sem `meta` e com uma
-  coluna `id`. Desde a decisão do usuário de 2026-10-06, a carga recusa com `ContractError` a
-  partição cujo primeiro arquivo não tem uma coluna do contrato, e o script e o `serialize-db
-  import` deixam fora as partições do `--ignore-partitions` (`.claude/memory/decisions.md`). Em
-  2026-10-07 a leitura de `probes/parquet_source.py` às 18:25 UTC achou a partição regravada na
-  origem, com os mesmos arquivos e linhas (53 arquivos e 47.513.583 linhas em `cad_lancamentos`),
-  todas as colunas do esquema dos outros meses, `double` onde havia `float`, sem a coluna `id` e
-  sem metadado no rodapé; a coluna de id das quatro tabelas é nula em toda linha, `sistema` de
-  `rel_contrato_operacao` tem 207 nulos, e o `timestamp` de `cad_lancamentos` está em `INT64` de
-  nanossegundos no lugar do `INT96` (`.claude/memory/source-base.md`). A carga a recusa agora pela
-  conferência da consulta, `47513583 nulos na coluna NOT NULL id_lancamento`, como as sondas de
-  `probes/operacao/` leram às 15:46 UTC, e o `--ignore-partitions 2025-09-30` a deixa fora: a
-  carga de 2026-10-07 e as cinco sondas que leem a origem, rodadas de novo às 18:15 UTC com a
-  opção que `SUITE.md` passa, passaram todas as checagens (`.claude/memory/source-base.md`,
-  `delta.md`, `redshift.md`). Espera o usuário: se a partição entra no Delta, com os ids
-  preenchidos por quem grava a base, ou se a carga segue sem ela; ao entrar, o relatório da carga
-  lista nela a conversão `timestamp: timestamp[ns] -> timestamp[us]`.
-
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente
   ficam fechados antes da carga da produção, porque mudá-los depois é reescrever o Delta: `valor`
