@@ -55,6 +55,15 @@ SERIALIZE_DB_TEST_REPORT=probes/output/publication_2.json .venv/bin/python -m py
 
 # Migração Parquet -> Delta
 
+Avalia estrutura dos arquivos parquet de origem.
+
+```
+cd ~/work/projects/serialize-db
+.venv/bin/python probes/parquet_source.py $SOURCE_PATH
+```
+
+Efetua migração.
+
 ```
 cd ~/work/projects/serialize-db
 mkdir probes/output
