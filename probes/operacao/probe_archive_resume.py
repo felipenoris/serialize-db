@@ -4,7 +4,8 @@ A sonda lê no ambiente alvo a continuação de uma cópia interrompida, que ant
 exercitou. Ela carrega as três primeiras partições de ``cad_lancamentos`` na origem, grava um
 snapshot delas, roda ``serialize-db archive`` e o encerra por ``SIGKILL`` logo depois da linha do
 log que dá a primeira partição copiada, na ordem do log da tabela, com a seguinte em cópia; depois
-repete o comando.
+repete o comando. ``--ignore-partitions`` deixa partições da origem fora das primeiras que a sonda
+toma, como o do ``serialize-db import``.
 
 Checagens:
 
@@ -28,15 +29,12 @@ Exemplo:
 
 from __future__ import annotations
 
-import sys
 import uuid
 
 import operation_lib as lib
 
 from serialize_db import delta
 from serialize_db.execution import Database
-
-USAGE = "uso: .venv/bin/python probes/operacao/probe_archive_resume.py <origem>"
 
 
 def check_killed(
@@ -106,13 +104,11 @@ def check_copy(
 def main() -> None:
     """O ``archive`` interrompido e continuado, com o relatório no terminal e em
     ``probes/output/``."""
-    if len(sys.argv) != 2:
-        print(USAGE, file=sys.stderr)
-        sys.exit(2)
-    source = sys.argv[1]
+    options = lib.parse_arguments(__doc__.splitlines()[0])
+    source = options.source
     db = lib.work_database("archive")
     storage = db.storage
-    values = lib.source_partitions(source, 3)
+    values = lib.source_partitions(source, 3, options.ignore_partitions)
     lib.load_partitions(db, source, values)
 
     # O snapshot que o archive copia; o nome segue a regra de um nome do banco.

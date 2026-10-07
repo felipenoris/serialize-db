@@ -13,7 +13,8 @@ contra um IAM fabricado, e os endpoints que o ``RS-14`` julga, no
 totais do log, a tabela das medições e as checagens delas, o ``--metadata`` que não importa e a
 seção interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos
 dos clientes segurados e das chaves, a linha do tempo, as checagens e a sonda inteira sobre uma
-tabela Delta local. Um ``Report`` grava em ``probes/output/``;
+tabela Delta local e, no ``operation_lib.py`` das sondas da operação, a linha de comando e as
+primeiras partições da origem fora das ignoradas. Um ``Report`` grava em ``probes/output/``;
 ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
 que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
@@ -52,6 +53,7 @@ import catalog
 import credentials
 import diagnose_aws
 import duckdb_threads
+import operation_lib
 import parquet_source
 import probelib
 import redshift
@@ -2264,3 +2266,54 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
     assert "Nenhuma leitura falhou." in text
     assert "4 cliente(s) novo(s) leram" in text
     assert list(folder.glob("serialize_db_*")) == []
+
+
+def test_parse_arguments_reads_the_source_and_the_ignored_partitions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``parse_arguments`` das sondas da operação: a origem obrigatória, ``ignore_partitions``
+    vazio sem a opção e com os valores de ``--ignore-partitions``; sem a origem, o código 2."""
+    monkeypatch.setattr(sys, "argv", ["sonda.py", "/dados/db_projetado"])
+    arguments = operation_lib.parse_arguments("a sonda")
+    assert arguments.source == "/dados/db_projetado"
+    assert list(arguments.ignore_partitions) == []
+
+    monkeypatch.setattr(
+        sys, "argv", ["sonda.py", "s3://bucket/origem", "--ignore-partitions", "2025-09-30"]
+    )
+    arguments = operation_lib.parse_arguments("a sonda")
+    assert arguments.source == "s3://bucket/origem"
+    assert arguments.ignore_partitions == ["2025-09-30"]
+
+    monkeypatch.setattr(sys, "argv", ["sonda.py"])
+    with pytest.raises(SystemExit) as usage:
+        operation_lib.parse_arguments("a sonda")
+    assert usage.value.code == 2
+
+
+@pytest.mark.local
+def test_source_partitions_skips_the_ignored_partitions(
+    local_location: LocalLocation,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``source_partitions`` toma as primeiras partições de ``cad_lancamentos`` em ordem de nome
+    fora das ignoradas, imprime cada ignorada que a origem tem, e para com o código 2 quando sobram
+    menos do que a sonda pede."""
+    source = Path(local_location.child(f"origem-{uuid.uuid4().hex[:8]}"))
+    for value in ("2025-09-30", "2026-01-31", "2026-02-28", "2026-03-31"):
+        (source / "cad_lancamentos" / f"data_base_str={value}").mkdir(parents=True)
+
+    first_three = ["2025-09-30", "2026-01-31", "2026-02-28"]
+    assert operation_lib.source_partitions(str(source), 3) == first_three
+    assert capsys.readouterr().out == ""
+
+    ignored = ["2025-09-30", "2030-01-31"]
+    after_ignored = ["2026-01-31", "2026-02-28", "2026-03-31"]
+    assert operation_lib.source_partitions(str(source), 3, ignored) == after_ignored
+    ignored_line = "cad_lancamentos: partição 2025-09-30 ignorada, em --ignore-partitions\n"
+    assert capsys.readouterr().out == ignored_line
+
+    with pytest.raises(SystemExit) as stop:
+        operation_lib.source_partitions(str(source), 4, ignored)
+    assert stop.value.code == 2
+    assert "tem 3 partição(ões) fora das ignoradas, a sonda pede 4" in capsys.readouterr().err

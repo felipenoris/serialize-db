@@ -1953,3 +1953,24 @@ does not mark the lossy conversions nor read the other files of a partition.
 `float` partition first and last), `tests/test_operation.py` and
 `tests/test_migrate_parquet_to_delta.py` (the printers) failed on the previous code; the readings
 of the local probe are in `parquet-arrow-types.md`. `docs/index.md`
+
+## The `--ignore-partitions` of the operation probes (2026-10-07)
+
+The battery of 2026-10-07 stopped five of the six operation probes on the source's partition
+2025-09-30, the first of `cad_lancamentos` by name, which the load refuses with `ContractError`
+(`source-base.md`). Asked on a card whether the probes get an `--ignore-partitions` ("Ignorar",
+recommended) or wait for the partition to be rewritten upstream ("Esperar"), the user chose
+"Ignorar" (17:35 UTC) and asked at 17:36 UTC for the `SUITE.md` adjustments in a separate commit.
+`operation_lib.parse_arguments` reads the source and the option for the five probes that take
+`$SOURCE_PATH` (`probe_parallel_gain.py`, which generates its own tables, is unchanged), and
+`source_partitions` takes the first partitions outside the ignored ones through the protected
+`parquet_import.split_ignored_partitions`, printing the line of `serialize-db import` per ignored
+partition the source has; a value the source lacks is not refused, and fewer partitions than the
+probe asks exit with 2, as before.
+`tests/test_probes.py::test_parse_arguments_reads_the_source_and_the_ignored_partitions` and
+`test_source_partitions_skips_the_ignored_partitions` fail without it. On the fixture base with the
+first partition ignored (2026-10-07, 4 CPUs), `probe_archive_resume.py` and
+`probe_vacuum_orphans.py` passed every check over 2026-02-28 onward, and `probe_load_resume.py` and
+`probe_compact_memory.py` failed the same checks with and without the option, from the fixture's
+partitions of 60 rows (the kill after the three commits, the split in one file). `SUITE.md` passes
+`--ignore-partitions 2025-09-30` to the five lines.

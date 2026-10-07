@@ -115,9 +115,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   da consulta, 47.513.583 nulos em `id_lancamento`, e não da do primeiro arquivo: em 2026-10-07 os
   53 arquivos traziam `id_lancamento` e `meta`, com `id_lancamento` nulo em toda linha, onde a
   leitura de 2026-10-06 não achou as duas colunas [inferido]; uma leitura de
-  `probes/parquet_source.py` sobre a origem confirma. Espera o usuário também: dar às sondas um
-  `--ignore-partitions`, como o do script e do `serialize-db import`, ou esperar a regravação da
-  partição na origem.
+  `probes/parquet_source.py` sobre a origem confirma. As cinco sondas ganharam em 2026-10-07 o
+  `--ignore-partitions`, que `SUITE.md` passa com 2025-09-30 (`.claude/memory/decisions.md`); as
+  cinco leituras esperam a próxima bateria.
 
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente

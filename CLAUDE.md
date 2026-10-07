@@ -345,9 +345,10 @@ A new lesson adds its story there and its rule here, in the same commit.
   (2026-09-19, 2026-09-23).
 - **The pytest layout has no `__init__.py`**: `tests/conftest.py` is imported as `conftest` and its folder
   lands on `sys.path`, so `from conftest import ...` and `from poc_delta import ...` work inside
-  `tests/proof_of_concept/`; `pythonpath = ["scripts", "probes"]` in `pyproject.toml` puts the migration
-  script and the probes on `sys.path` too, so module basenames stay unique across `tests/`,
-  `tests/proof_of_concept/`, `scripts/` and `probes/`.
+  `tests/proof_of_concept/`; `pythonpath = ["scripts", "probes", "probes/operacao"]` in
+  `pyproject.toml` puts the migration script, the probes and the operation probes' library on
+  `sys.path` too, so module basenames stay unique across `tests/`, `tests/proof_of_concept/`,
+  `scripts/`, `probes/` and `probes/operacao/`.
 - **Before a commit**: `uv run pytest` with no variables and again with `SERIALIZE_DB_TEST_LOCAL_ROOT` set
   to the scratchpad, both green and both with the `AWS_*` variables removed (`env -u AWS_ACCESS_KEY_ID
   -u AWS_SECRET_ACCESS_KEY AWS_EC2_METADATA_DISABLED=true`), because this container exports a

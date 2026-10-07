@@ -3,7 +3,8 @@
 A sonda lê no ambiente alvo o que ``tests/test_parquet_import.py`` cobre na pasta local. Ela roda
 ``serialize-db import`` das três primeiras partições de ``cad_lancamentos`` na origem e o encerra
 por ``SIGKILL``, como o kernel sem memória, quando o arquivo da segunda partição aparece na pasta
-dela, entre o ``COPY`` e o commit; depois repete o comando.
+dela, entre o ``COPY`` e o commit; depois repete o comando. ``--ignore-partitions`` deixa partições
+da origem fora das primeiras que a sonda toma, como o do ``serialize-db import``.
 
 Checagens:
 
@@ -29,15 +30,12 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 import operation_lib as lib
 
 from serialize_db import delta
-
-USAGE = "uso: .venv/bin/python probes/operacao/probe_load_resume.py <origem>"
 
 
 def execution_of(
@@ -128,13 +126,11 @@ def check_rerun(
 
 def main() -> None:
     """A carga parada e retomada, com o relatório no terminal e em ``probes/output/``."""
-    if len(sys.argv) != 2:
-        print(USAGE, file=sys.stderr)
-        sys.exit(2)
-    source = sys.argv[1]
+    options = lib.parse_arguments(__doc__.splitlines()[0])
+    source = options.source
     db = lib.work_database("carga")
     storage = db.storage
-    values = lib.source_partitions(source, 3)
+    values = lib.source_partitions(source, 3, options.ignore_partitions)
     uri = lib.table_uri(db, lib.TABLE.name)
     arguments = lib.cli_arguments(
         db, "import", "--source", source, "--tables", lib.TABLE.name, "--partitions", *values

@@ -578,7 +578,7 @@ def split_ignored_partitions(
 ) -> tuple[list[str], list[str]]:
     """As partições da tabela particionada na origem fora de ``ignored``, e as de ``ignored`` que
     a origem tem, ambas em ordem de nome; protegida, para o ``--ignore-partitions`` da linha de
-    comando e do script de migração."""
+    comando, do script de migração e das sondas da operação."""
     found, _ = discover_partitions(source, table)
     kept = []
     skipped = []
