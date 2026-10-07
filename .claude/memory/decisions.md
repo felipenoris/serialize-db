@@ -1974,3 +1974,12 @@ first partition ignored (2026-10-07, 4 CPUs), `probe_archive_resume.py` and
 `probe_compact_memory.py` failed the same checks with and without the option, from the fixture's
 partitions of 60 rows (the kill after the three commits, the split in one file). `SUITE.md` passes
 `--ignore-partitions 2025-09-30` to the five lines.
+
+## The source's partition 2025-09-30 stays out of the load (2026-10-07)
+
+Told at 19:56 UTC that the reading of 18:25 UTC found the partition rewritten at the source with
+the id column null in every row (`source-base.md`, "The production base, read on 2026-10-07"), the
+user decided to keep the load as it is, with `--ignore-partitions 2025-09-30`: the defects are
+being fixed at the source, and they are not this project's concern. `SUITE.md` passes the option
+to the migration script and to the five operation probes, and the item "A partição 2025-09-30 da
+origem" leaves `OPEN_QUESTIONS.md`, its readings kept in `source-base.md`.

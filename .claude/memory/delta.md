@@ -319,8 +319,22 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   DuckDB's default), with the same rows and `id_lancamento` sum, an `OPTIMIZE` commit at version 3.
   `docs/operacao.md` ("Compactação")
 - On 2026-10-07 the operation probes of `archive`, `vacuum --full`, `compact` and the `UNLOAD`
-  stopped in their load, on the source's partition 2025-09-30 (`source-base.md`), and read
-  nothing; the readings of 2026-10-05 stand.
+  stopped in their load at 15:46 UTC, on the source's partition 2025-09-30 (`source-base.md`),
+  and ran again from 18:27 UTC with `--ignore-partitions 2025-09-30` (`main` at `b6acfa8`,
+  2 vCPUs, 5.6 GiB to 5.9 GiB available, `environments.md`), every check passing.
+  `probe_archive_resume.py`: the load of 2026-01-31, 2026-02-28 and 2026-03-31 took 447.0 s,
+  `snapshot` 3.2 s (version 3), the `SIGKILL` came 5.4 s into `archive`, after 2026-03-31 (one
+  file, 3.4 s), and the same command skipped it (`já no destino`), copied 2026-02-28 and
+  2026-01-31 in 2.3 s and 2.8 s, finished in 7.2 s at a process peak of 304 MB and moved the
+  snapshot to `archived`. `probe_vacuum_orphans.py`: `vacuum --full` listed 0 files with the
+  default retention (2.7 s), the two orphans with `--retention-hours 0` (2.4 s) and deleted them
+  with `--apply` (2.8 s, version 3 after), the log's file kept with the same rows and sum.
+  `probe_compact_memory.py`: with 2 threads the split gave 40 files of 11.6 MB to 16.7 MB (64
+  with 8), and `serialize-db compact` wrote 6 files of 51.4 MB to 65.1 MB, 367.1 MB, and removed
+  the 40 in 23.6 s at a process peak of 481 MB, 5.6 GiB available (6.0 s at 1,714 MB with 8
+  threads and 12.5 GiB on 2026-10-05: the compaction's time and peak follow the CPUs
+  [inferred]), the same rows and sum, `OPTIMIZE` at version 3. The `UNLOAD` reading is in
+  `redshift.md`. `docs/operacao.md` ("Compactação")
 
 ## Alternatives assessed
 

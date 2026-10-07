@@ -135,7 +135,9 @@ Antes: o arquivo de controle sem snapshot na versão atual da tabela (o comando 
 memória da máquina, porque a reescrita roda no escritor do delta-rs, fora do `memory_limit` do
 DuckDB. No ambiente alvo, em 2026-10-05, uma partição de `cad_lancamentos` com 33.239.719 linhas em
 64 arquivos de 5,3 a 16,7 MB, 551,5 MB gravados pelo DuckDB, virou 6 arquivos de 43,5 a 67,8 MB,
-370,0 MB, em 6,0 s, com o pico do processo em 1.714 MB e 12,5 GiB disponíveis. Depois:
+370,0 MB, em 6,0 s, com o pico do processo em 1.714 MB e 12,5 GiB disponíveis; em 2026-10-07, com
+2 vCPUs e 5,6 GiB disponíveis, a mesma partição em 40 arquivos de 11,6 a 16,7 MB virou 6 arquivos
+de 51,4 a 65,1 MB, 367,1 MB, em 23,6 s, com o pico em 481 MB. Depois:
 `numFilesAdded` e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a medida da
 memória da compactação; um commit `OPTIMIZE` com `dataChange` falso, que
 `serialize_db.delta.version_diff` não conta.

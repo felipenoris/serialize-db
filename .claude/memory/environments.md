@@ -285,7 +285,11 @@ table again, the whole base was published by `--channel default --max-workers 4`
 the DuckDB limit), and `compact` refused. The consistency probes ran from 14:45 with every check
 passing (`concurrency.md`). Of the operation probes, from 15:46, only `probe_parallel_gain.py`
 measured (`concurrency.md`): the five that read `$SOURCE_PATH` take the source's first partitions
-by name, the first is now 2025-09-30, and the load refused it (`source-base.md`).
+by name, the first is now 2025-09-30, and the load refused it (`source-base.md`). From 18:15 UTC,
+with `main` at `b6acfa8` (the squash of PR #141), the five ran again with `--ignore-partitions
+2025-09-30` and passed every check (`source-base.md`, `delta.md`, `redshift.md`),
+`probes/parquet_source.py` read the source at 18:25 UTC (`source-base.md`) and
+`probe_parallel_gain.py` measured again from 18:55 UTC (`concurrency.md`).
 
 ## The prepared folder and the venv
 

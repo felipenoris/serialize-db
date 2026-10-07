@@ -135,7 +135,8 @@ Read before `cast`, the schema mapping of `serialize_db.schema`, a Parquet foote
 
 ## A `float` source in a `Double` column (2026-10-06)
 
-- The production partition 2025-09-30 has `float` in eight `Double` columns (`source-base.md`).
+- The production partition 2025-09-30 had `float` in eight `Double` columns on 2026-10-06, and
+  was rewritten with `double` by 2026-10-07 (`source-base.md`).
   The load's `CAST` widens them without refusal, and the Delta keeps the `float` value: `1.2`
   becomes `1.2000000476837158`, `0.8` `0.800000011920929` and `0.1` `0.10000000149011612` (local
   probe over the fixture's `cad_operacoes`, 2026-10-06). A `fator_rateio` of 1/3 in `float` times

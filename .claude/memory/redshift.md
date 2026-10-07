@@ -102,6 +102,12 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   PARTITION BY` without `ORDER BY` of a `DISTSTYLE KEY` table; which of the three differences gives
   one file is not separated. `serialize_db.engine.redshift` (`_PARALLEL_OFF_ROWS`),
   `docs/tecnologias.md` (Redshift)
+- The same probe on 2026-10-07 from 18:41 UTC (`--ignore-partitions 2025-09-30`, 2 vCPUs,
+  `environments.md`): the partition went into the sandbox in 37.9 s, both modes wrote one file in
+  every repetition, 17.3 MB, 86.3 MB, 172.1 MB, 339.1 MB and 559.1 MB, the best times 2.1 s,
+  8.5 s, 16.4 s, 32.2 s and 50.4 s with `PARALLEL OFF` against 2.1 s, 8.4 s, 16.4 s, 32.8 s and
+  51.0 s in parallel (0.98 to 1.01), the footers read in 0.03 s to 0.08 s: within 0.5 s of
+  2026-10-05 with 8 vCPUs, the `UNLOAD` time is the server's.
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
