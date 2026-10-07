@@ -108,6 +108,16 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   (`.claude/memory/decisions.md`). Espera o usuário: se a partição entra no Delta, regravada por
   quem grava a base no esquema dos outros meses, ou se a carga segue sem ela, pelo
   `--ignore-partitions 2025-09-30` do script de migração.
+  As sondas de `probes/operacao/` que leem a origem tomam as primeiras partições de
+  `cad_lancamentos` em ordem de nome, e em 2026-10-07 a primeira foi a 2025-09-30: `serialize-db
+  import` e `import_table` a recusaram com `ContractError` antes de qualquer gravação, e cinco das
+  seis sondas pararam sem leitura (`.claude/memory/source-base.md`). A recusa veio da conferência
+  da consulta, 47.513.583 nulos em `id_lancamento`, e não da do primeiro arquivo: em 2026-10-07 os
+  53 arquivos traziam `id_lancamento` e `meta`, com `id_lancamento` nulo em toda linha, onde a
+  leitura de 2026-10-06 não achou as duas colunas [inferido]; uma leitura de
+  `probes/parquet_source.py` sobre a origem confirma. Espera o usuário também: dar às sondas um
+  `--ignore-partitions`, como o do script e do `serialize-db import`, ou esperar a regravação da
+  partição na origem.
 
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente
@@ -122,24 +132,26 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   leitores passam a abrir o Delta, e as pastas de origem ficam como cópia até a primeira publicação
   no Redshift. Espera o usuário: a troca de `valor`, se vier, antes da carga da produção.
 - **O acesso de leitura no ambiente alvo.** A etapa 10 rodou no alvo nas baterias de 2026-09-25, de
-  2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09 e de 2026-10-05 (`POC.md`,
+  2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05 e de 2026-10-07 (`POC.md`,
   `.claude/memory/environments.md`): o leitor Delta abriu as 12 views da raiz carregada em 0,645 s,
-  em 0,582 s, em 0,571 s, em 0,556 s e em 0,607 s; as suítes passaram a publicação por canal e por
-  snapshot, com a volta a um snapshot anterior, e a comparação dos dois leitores, com o `stream` do
-  leitor Redshift pelo `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a
-  volta pelo canal; e em 2026-09-26 a base inteira foi publicada por `--channel default`,
-  `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s
-  com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, e em 2026-10-05, em 324,9 s com 285 MB. Esperam:
-  a volta a um snapshot anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela,
-  que pede um commit depois do snapshot, fora do fluxo de `SUITE.md`, cujo passo 6 leu em cada
-  bateria que cada versão já estava publicada; e o `UNLOAD` de um cliente com usuário só de leitura
-  para um bucket próprio, com o caminho de credencial que serve a ele, que precisa de um papel de
-  cliente no alvo.
+  em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s e, com 2 vCPUs, em 1,440 s; as suítes passaram a
+  publicação por canal e por snapshot, com a volta a um snapshot anterior, e a comparação dos dois
+  leitores, com o `stream` do leitor Redshift pelo `UNLOAD`, e na bateria de 2026-09-30 o runbook de
+  refazer um snapshot, com a volta pelo canal; e em 2026-09-26 a base inteira foi publicada por
+  `--channel default`, `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em
+  2026-09-27, em 328,5 s com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s
+  com 285 MB, e em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB. Esperam: a volta a um snapshot
+  anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela, que pede um commit
+  depois do snapshot, fora do fluxo de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão
+  já estava publicada; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio,
+  com o caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
-  de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"); o ganho
-  com mais CPUs segue sem medida e espera a sonda numa máquina maior.
+  de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"), e em
+  2026-10-07 numa de 2 vCPUs (`.claude/memory/concurrency.md`): no DuckDB os pools ganharam a
+  metade do que em 8 vCPUs, e no Redshift o ganho não dependeu da máquina; o ganho com mais CPUs
+  segue sem medida e espera a sonda numa máquina maior.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);

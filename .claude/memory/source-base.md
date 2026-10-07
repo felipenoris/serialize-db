@@ -270,3 +270,32 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   partitions, and the one of 2026-09-28 got past `cad_operacoes`; the partition entered the source
   between 17:45 UTC of 2026-10-05 and 15:33 UTC of 2026-10-06. What enters the Delta waits on the
   user (`OPEN_QUESTIONS.md`).
+- The load of 2026-10-07 (`started_at` 04:34:29 UTC, from `main` at `5457f58`, on 2 vCPUs,
+  5,801 MB available, 2 threads and 2,900 MiB, a fresh root, the first load with
+  `--ignore-partitions 2025-09-30`): the script printed `2025-09-30: ignorada, em
+  --ignore-partitions` in the four partitioned tables and loaded the 25 partitions of 2026,
+  354,048,547 rows, every table matching, 1,225.3 s summed, the process peak at 1,904 MB after
+  `cad_operacoes`, 2,638 MB after `rel_contrato_operacao` and 4,138 MB at `cad_lancamentos`
+  2026-07-31; `cad_lancamentos` took 119.9 s, 74.1 s, 219.1 s, 116.4 s and 411.0 s (2026-07-31 at
+  0.35 million rows per second, 0.63 with 8 vCPUs on 2026-10-05). The source had changed since
+  2026-10-05 in one partition, `cad_lancamentos` 2026-07-31 with 141,933,898 rows (141,933,968
+  before, the 70 fewer rows the footer reading of 2026-10-06 counted without naming the
+  partition) and `valor` summing 184,492,179,549.160073 against 184,492,179,549.163441; every
+  other partition kept its counts and sums (`cad_aliquotas` 23 rows, `fator` 5.098146), and the
+  same three entries stayed outside the model. The report lists the conversions of every
+  partition (`int32 -> int64` in the id columns, `INT96 -> timestamp[us]` in `cad_lancamentos`),
+  the same in every partition of a table. The audit of 2026-01-31 (version 5) read the same
+  989,852 orphans and `valor` total, `history` listed versions 0 to 5 (04:40:36 to 04:55:02 UTC),
+  and `archive` copied `cad_lancamentos` in 21.1 s at 330 MB.
+- The operation probes of 2026-10-07 (from 15:46 UTC, 2 vCPUs, `environments.md`) met the
+  partition 2025-09-30 of `cad_lancamentos`: `operation_lib.source_partitions` takes the source's
+  first partitions by name, and `serialize-db import --partitions 2025-09-30 2026-01-31
+  2026-02-28` in `probe_load_resume.py`, then `import_table` in the other four probes, refused it
+  with `ContractError: cad_lancamentos partição 2025-09-30: 47513583 nulos na coluna NOT NULL
+  id_lancamento` after 18.0 s and 17.7 s, before any write, the probe root deleted. The refusal
+  came from the partition query check, not from the first-file check of PR #140: DuckDB 1.5.5
+  raises the `Binder Error` of 2026-10-06 whenever every file lacks the column, in any position
+  of the `SELECT`, with one file or many (probed locally on 2026-10-07), so on 2026-10-07 the 53
+  files carried `id_lancamento` and `meta`, with `id_lancamento` null in all 47,513,583 rows,
+  where the reading of 2026-10-06 at 15:56 UTC found neither column [inferred; a
+  `parquet_source.py` reading pending]. The count equals the partition's rows. `OPEN_QUESTIONS.md`

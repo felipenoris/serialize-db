@@ -264,6 +264,29 @@ and the whole-base publication by `--channel default` and by `--channel current`
 `cad_contratos`, `rel_contrato_operacao` and `cad_lancamentos` outside the snapshot or the
 current version, publishing nothing.
 
+The battery of 2026-10-07 from 03:03 UTC (from `main` at `5457f58`, the squash of PR #140, stated
+by the user) ran every `SUITE.md` block but `credentials.py` and `duckdb_threads.py`, on 2 vCPUs
+and 7,819 MB (27.1 GiB free on disk) with the versions of 2026-10-05. Every case passed: S3 648 and
+1 skipped in 616.4 s, with `engine.stream.close_interrupts` again at `0.003 s, erro NoneType`;
+Redshift 57 twice (747.3 s, 763.2 s), engine 13 twice (197.5 s, 205.5 s) and publication 12 twice
+(343.7 s, 371.5 s). The probes differed from 2026-10-06 in the CPUs (DuckDB with 2 threads and a
+6.1 GiB `memory_limit` at the default), `RS-8` (0 of 3 tables again: the control table and
+`prd_cad_contas` of 2026-10-06 gone before the battery, `redshift.md`), `RS-12` (the count of
+`sys_load_error_detail` returned no row) and `BK-14` (10,419 non-current versions, 26,705,558,141
+bytes, and 9,580 delete markers, the listing at its limit); the Data API answered in 461 ms and
+167 ms, and Lake Formation and S3 Tables timed out in 60.7 s and 30.4 s. The load from 04:34:29
+(5,801 MB available, 2 threads and 2,900 MiB), the first with `--ignore-partitions 2025-09-30`,
+read the 25 partitions of 2026 in 1,225.3 s, peak 4,138 MB (`source-base.md`); the audit,
+`history`, `snapshot carga-2026-09-24`, `vacuum` (0 files) and `archive` (25 files,
+`cad_lancamentos` 21.1 s at 330 MB) followed. After `publish_redshift --init` created the control
+table again, the whole base was published by `--channel default --max-workers 4`
+(`cad_lancamentos` 300.2 s at 274 MB, `redshift.md`), the Delta reader opened the 12 views in
+1.440 s, `export` took 22.2 s at 253 MB by copy and 278.0 s at 3,507 MB by rewrite (2,900 MiB
+the DuckDB limit), and `compact` refused. The consistency probes ran from 14:45 with every check
+passing (`concurrency.md`). Of the operation probes, from 15:46, only `probe_parallel_gain.py`
+measured (`concurrency.md`): the five that read `$SOURCE_PATH` take the source's first partitions
+by name, the first is now 2025-09-30, and the load refused it (`source-base.md`).
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

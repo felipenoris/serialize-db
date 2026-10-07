@@ -868,6 +868,17 @@ O `run.ingest`, o `materialize` e o `publish_delta` das quatro tabelas ganharam 
 local, porque o S3 e o Redshift fazem esperar a rede, e o pico do `run.ingest` e do `materialize`
 ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms.
 
+Em 2026-10-07 a mesma sonda rodou numa máquina de 2 vCPUs com 5,8 GiB disponíveis, sobre as mesmas
+quatro tabelas no S3 e o mesmo Redshift. No DuckDB, o trabalho em série levou de 1,5 a 2 vezes o
+tempo da máquina de 8 vCPUs e os pools ganharam a metade: `run.ingest` das quatro 1,15 vez
+(14,727 s contra 16,987 s), `materialize` das quatro 1,15 vez, `publish_delta` com `max_workers=4`
+1,71 vez (15,695 s contra 26,902 s), o `stream` 1,29 vez sem trabalho e 1,44 vez com o pandas, e
+as 200 consultas pequenas 1,28 vez na sessão a mais. No Redshift, que espera a rede e o servidor,
+o ganho não dependeu da máquina: `run.ingest` das quatro 2,75 vezes (11,500 s contra 31,608 s), as
+80 consultas pequenas 2,82 vezes na sessão a mais (1,967 s contra 5,541 s), `publish_delta` com
+`max_workers=4` 1,48 vez (19,951 s contra 29,608 s) e `publish_redshift` com `max_workers=4` 2,35
+vezes (11,819 s contra 27,757 s).
+
 ### Como usar as threads
 
 - **Leia o resultado grande por `stream`, com o trabalho dentro do laço.** A consulta segue enquanto
@@ -911,8 +922,10 @@ ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerc
   conferências, o commit e a releitura de cada tabela esperam a rede. Na pasta local ele não ganhou,
   porque o arquivo de cada partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada
   tabela em curso soma a memória da sua escrita.
-- **`max_workers` de `publish_redshift` não ganhou no ambiente alvo**: quatro tabelas iguais levaram
-  31,521 s em quatro conexões e 29,987 s uma por vez.
+- **`max_workers` de `publish_redshift` ganhou numa das duas medidas no ambiente alvo**: quatro
+  tabelas iguais levaram 31,521 s em quatro conexões e 29,987 s uma por vez em 2026-10-05, e
+  11,819 s contra 27,757 s em 2026-10-07; a causa da medida de 2026-10-05 não foi lida, e o
+  runbook publica a base com `--max-workers 4`.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
