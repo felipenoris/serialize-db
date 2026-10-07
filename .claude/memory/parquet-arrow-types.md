@@ -39,6 +39,11 @@ Read before `cast`, the schema mapping of `serialize_db.schema`, a Parquet foote
   when an Arrow schema carries it), `JSON` logical type in Parquet written by PyArrow or
   DuckDB and `String` when written by delta-rs; DuckDB reads `delta_scan` JSON as `VARCHAR` and
   validates only on `::JSON`; Arrow and Delta never validate. `docs/tecnologias.md` (Delta Lake)
+- A `partition_by` column outside `String(n)`, as `Text`, breaks the contract, and `check_models`
+  refuses it; a client that skips `check_models` meets a `TypeError` instead, when `Execution`
+  compares the partition value's bytes with the column's `length`, `None` on `Text`. Only
+  `serialize-db import` calls `check_models`, so `serialize-db run` over such a model ends in a
+  traceback (code review of 2026-10-01, no decision asked). `src/serialize_db/execution.py`
 
 ## PyArrow casts and pandas conversions
 

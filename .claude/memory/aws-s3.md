@@ -30,6 +30,10 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   copies a 9 MiB object in both roots. The rerun of 2026-09-24 at 16:51, on the root loaded anew,
   copied the 21 files of the 12 tables through the managed transfer, the four `cad_lancamentos`
   files included, with no error and no duration printed.
+- `Storage.for_uri` builds the S3 storage from `s3://` and the local one from a path or `file://`,
+  and refuses any other `://` scheme; `file:relativo`, a `file:` URI without `//`, falls to the
+  path branch and becomes the folder `file:relativo` under the working directory (code review of
+  2026-10-01, no decision asked; read again on 2026-10-07). `src/serialize_db/storage.py`
 
 ## Credentials, region and proxy in the clients
 
