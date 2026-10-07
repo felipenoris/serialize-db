@@ -103,21 +103,22 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   partição de `cad_operacoes`, 2025-09-30, nova na origem nas quatro tabelas particionadas e gravada
   noutro esquema: sem a coluna de id (`id_operacao`, `id_contrato`, `id_rel_contrato_operacao`,
   `id_lancamento`), com `float` no lugar de `double` e, em `cad_lancamentos`, sem `meta` e com uma
-  coluna `id` (`.claude/memory/source-base.md`). Desde a decisão do usuário de 2026-10-06, a carga
-  recusa essa partição com `ContractError`, que nomeia o arquivo e as colunas
-  (`.claude/memory/decisions.md`). Espera o usuário: se a partição entra no Delta, regravada por
-  quem grava a base no esquema dos outros meses, ou se a carga segue sem ela, pelo
-  `--ignore-partitions 2025-09-30` do script de migração.
-  As sondas de `probes/operacao/` que leem a origem tomam as primeiras partições de
-  `cad_lancamentos` em ordem de nome, e em 2026-10-07 a primeira foi a 2025-09-30: `serialize-db
-  import` e `import_table` a recusaram com `ContractError` antes de qualquer gravação, e cinco das
-  seis sondas pararam sem leitura (`.claude/memory/source-base.md`). A recusa veio da conferência
-  da consulta, 47.513.583 nulos em `id_lancamento`, e não da do primeiro arquivo: em 2026-10-07 os
-  53 arquivos traziam `id_lancamento` e `meta`, com `id_lancamento` nulo em toda linha, onde a
-  leitura de 2026-10-06 não achou as duas colunas [inferido]; uma leitura de
-  `probes/parquet_source.py` sobre a origem confirma. As cinco sondas ganharam em 2026-10-07 o
-  `--ignore-partitions`, que `SUITE.md` passa com 2025-09-30 (`.claude/memory/decisions.md`); as
-  cinco leituras esperam a próxima bateria.
+  coluna `id`. Desde a decisão do usuário de 2026-10-06, a carga recusa com `ContractError` a
+  partição cujo primeiro arquivo não tem uma coluna do contrato, e o script e o `serialize-db
+  import` deixam fora as partições do `--ignore-partitions` (`.claude/memory/decisions.md`). Em
+  2026-10-07 a leitura de `probes/parquet_source.py` às 18:25 UTC achou a partição regravada na
+  origem, com os mesmos arquivos e linhas (53 arquivos e 47.513.583 linhas em `cad_lancamentos`),
+  todas as colunas do esquema dos outros meses, `double` onde havia `float`, sem a coluna `id` e
+  sem metadado no rodapé; a coluna de id das quatro tabelas é nula em toda linha, `sistema` de
+  `rel_contrato_operacao` tem 207 nulos, e o `timestamp` de `cad_lancamentos` está em `INT64` de
+  nanossegundos no lugar do `INT96` (`.claude/memory/source-base.md`). A carga a recusa agora pela
+  conferência da consulta, `47513583 nulos na coluna NOT NULL id_lancamento`, como as sondas de
+  `probes/operacao/` leram às 15:46 UTC, e o `--ignore-partitions 2025-09-30` a deixa fora: a
+  carga de 2026-10-07 e as cinco sondas que leem a origem, rodadas de novo às 18:15 UTC com a
+  opção que `SUITE.md` passa, passaram todas as checagens (`.claude/memory/source-base.md`,
+  `delta.md`, `redshift.md`). Espera o usuário: se a partição entra no Delta, com os ids
+  preenchidos por quem grava a base, ou se a carga segue sem ela; ao entrar, o relatório da carga
+  lista nela a conversão `timestamp: timestamp[ns] -> timestamp[us]`.
 
 - **A passagem da produção para o Delta.** A carga e a publicação rodaram no alvo sobre uma cópia da
   base de produção, num sandbox (declaração do usuário de 2026-09-23). Os tipos do modelo cliente
@@ -149,9 +150,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
   de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"), e em
-  2026-10-07 numa de 2 vCPUs (`.claude/memory/concurrency.md`): no DuckDB os pools ganharam a
-  metade do que em 8 vCPUs, e no Redshift o ganho não dependeu da máquina; o ganho com mais CPUs
-  segue sem medida e espera a sonda numa máquina maior.
+  2026-10-07, duas vezes, numa de 2 vCPUs (`.claude/memory/concurrency.md`): no DuckDB os pools
+  ganharam a metade do que em 8 vCPUs, e no Redshift o ganho não dependeu da máquina; o ganho com
+  mais CPUs segue sem medida e espera a sonda numa máquina maior.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
@@ -196,12 +197,13 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   variáveis `SERIALIZE_DB_`, ou manter a leitura enquanto o Windows é só a máquina de quem
   desenvolve.
 - **O caso de estudo do GIL.** `test_gil_reacquisition_waits_the_switch_interval`, em
-  `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões da suíte inteira em 2026-09-25 e
-  em 2026-10-03 e passou isolado e nas demais: a asserção pede que os 200 `os.stat` ao lado do laço
-  Python levem mais que o dobro do tempo que levam com o intervalo de troca dez vezes menor, e numa
-  sessão reprovada levaram 0,011 s contra 0,018 s. A esteira não roda `tests/proof_of_concept/`, e o
-  caso só atrapalha a sessão local antes do commit. Espera o usuário: tornar a medida robusta ou
-  aceitar a reprovação ocasional.
+  `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões da suíte inteira em 2026-09-25,
+  em 2026-10-03 e em 2026-10-07 e passou isolado e nas demais: a asserção pede que os 200 `os.stat`
+  ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de troca dez
+  vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra 0,006 s
+  (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). A esteira não roda
+  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o
+  usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   (`POC.md`), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma

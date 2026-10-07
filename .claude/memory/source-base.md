@@ -69,6 +69,38 @@ Read before `serialize_db.parquet_import`, `tests/source_db_projetado.py`, `test
   100,000 rows each (1,000,000 in the dsv reading of 2026-09-20); every file is Snappy, written by
   `parquet-cpp-arrow` in format 1.0, and `meta_update_status` has 25 rows, ids up to 177.
 
+## The production base, read on 2026-10-07
+
+- `probes/parquet_source.py` over the production base at 18:25 UTC, after the load of the
+  operation probes had refused the partition 2025-09-30 at 15:46 UTC (the report was pasted in the
+  thread and stays out of git): 14 tables, 2,031 files, 7,687,811,472 bytes (7,992,137,981 on
+  2026-10-06), `schema.json` the only entry that is not Parquet, every footer read. The partition
+  2025-09-30 was rewritten since 15:56 UTC of 2026-10-06, with the same files and row counts, now
+  with every column of the majority schema, no footer metadata (the `pandas` key of 2026-10-06 is
+  gone) and, in the four tables, the formats `1.0` and `2.6` where 2026-10-06 read `1.0` alone
+  [inferred: the layout table names no file]:
+  - `cad_lancamentos` `data_base_str=2025-09-30/` (53 files, 47,513,583 rows): `id_lancamento`
+    present, nullable and null in every row (47,513,583 nulls, the 53 files without min and max),
+    `meta` present and null, as in every file of the table (331,349,276 nulls), no `id` column,
+    and `timestamp` as `INT64` `Timestamp(ns, utc=false)` for the `INT96` of the other 1,492
+    files, with 2025-12-10 15:32:36.256628 as min and max in the 53 files (the `INT96` files
+    carry no statistic);
+  - `cad_operacoes` `data_str=2025-09-30/chunk_0.parquet` (965,001 rows): `id_operacao` nullable
+    and null in every row; `area` and the six `float` columns of 2026-10-06 now as the majority;
+  - `cad_contratos` `data_str=2025-09-30/chunk_0.parquet` (974,580 rows): `id_contrato` nullable
+    and null in every row; `taxa_juros_fixos` now `double`;
+  - `rel_contrato_operacao` `data_str=2025-09-30/chunk_0.parquet` (980,298 rows):
+    `id_rel_contrato_operacao` nullable and null in every row, `sistema` nullable with the
+    table's 207 nulls, which only this file can hold (the other 289 declare it not null), and
+    `fator_rateio` now `double`.
+
+  `PQ-3` fails on the four tables, for the nullability and the `timestamp` type (exit code 2),
+  and the load refuses the partition by the partition query check (`47513583 nulos na coluna NOT
+  NULL id_lancamento`), not by the first-file check of PR #140; loaded, it would list the
+  conversion `timestamp: timestamp[ns] -> timestamp[us]` (`_file_conversions`). The 2026
+  partitions keep the counts of the load of 2026-10-07 (`cad_lancamentos` 283,835,693 rows), every
+  file is Snappy, and `meta_update_status` keeps 25 rows, ids up to 177.
+
 ## The fixture
 
 On 2026-09-21 the user grouped the production `rel_contrato_operacao` by the contract key
@@ -297,5 +329,16 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   raises the `Binder Error` of 2026-10-06 whenever every file lacks the column, in any position
   of the `SELECT`, with one file or many (probed locally on 2026-10-07), so on 2026-10-07 the 53
   files carried `id_lancamento` and `meta`, with `id_lancamento` null in all 47,513,583 rows,
-  where the reading of 2026-10-06 at 15:56 UTC found neither column [inferred; a
-  `parquet_source.py` reading pending]. The count equals the partition's rows. `OPEN_QUESTIONS.md`
+  where the reading of 2026-10-06 at 15:56 UTC found neither column; the reading of 18:25 UTC
+  confirmed it ("The production base, read on 2026-10-07"). The count equals the partition's rows.
+  `OPEN_QUESTIONS.md`
+- The resume of a stopped load ran again in the target on 2026-10-07 from 18:15 UTC
+  (`probe_load_resume.py --ignore-partitions 2025-09-30`, from `main` at `b6acfa8`, 2 vCPUs,
+  `environments.md`), over 2026-01-31, 2026-02-28 and 2026-03-31 after the line
+  `cad_lancamentos: partição 2025-09-30 ignorada, em --ignore-partitions`: the `SIGKILL` came
+  71.9 s after the second partition's file appeared, 222.3 s from the start (2026-01-31,
+  33,239,719 rows, in 147.7 s), with 2026-01-31 in the log and 2026-02-28 out of it, and left the
+  engine's temporary folder behind (22.9 MB, deleted by the probe). The same command found one
+  partition in the Delta, wrote 2026-02-28 (23,789,279 rows, 81.6 s) and 2026-03-31 (52,654,607
+  rows, 251.4 s), checked the three equal and exited 0 in 492.2 s (128.6 s with 8 vCPUs on
+  2026-10-05); the only file outside the log was the killed execution's. Every check passed.

@@ -4900,7 +4900,8 @@ Os 32 arquivos saíram de um `UNLOAD ... PARTITION BY` sem `ORDER BY`, de uma ta
 `DISTSTYLE KEY` (2026-09-21). O `UNLOAD` em paralelo do `SELECT` da exportação, sem
 `PARTITION BY` e com `ORDER BY` pela chave de ordenação, gravou um arquivo só de 1.000.000 a
 33.239.719 linhas de `cad_lancamentos` (17,4 MB a 559,0 MB), no tempo do `PARALLEL OFF` (razão de
-0,98 a 0,99, 2026-10-05), sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e cópias dela por
+0,98 a 0,99 em 2026-10-05 e de 0,98 a 1,01 em 2026-10-07), sobre a tabela do sandbox, em
+`DISTSTYLE AUTO`, e cópias dela por
 `CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
 distribuição.
 

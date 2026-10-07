@@ -111,10 +111,10 @@ _IDENTIFIER_BYTES = 127
 _TABLE_NAME_BYTES = 63
 
 # As linhas até as quais o UNLOAD da exportação grava em série, num arquivo só (PARALLEL OFF): acima
-# delas o UNLOAD roda em paralelo, que pode fragmentar por slice. No ambiente alvo, em 2026-10-05,
-# o UNLOAD da partição ordenada pela sort_key, de 1.000.000 a 33.239.719 linhas de cad_lancamentos,
-# levou o mesmo tempo nos dois modos (de 2,0 s a 50,3 s, razão de 0,98 a 0,99) e gravou um arquivo
-# só em ambos (probes/operacao/probe_unload_parallel.py).
+# delas o UNLOAD roda em paralelo, que pode fragmentar por slice. No ambiente alvo, em 2026-10-05 e
+# em 2026-10-07, o UNLOAD da partição ordenada pela sort_key, de 1.000.000 a 33.239.719 linhas de
+# cad_lancamentos, levou o mesmo tempo nos dois modos (de 2,0 s a 50,4 s, razão de 0,98 a 1,01) e
+# gravou um arquivo só em ambos (probes/operacao/probe_unload_parallel.py).
 _PARALLEL_OFF_ROWS = 5_000_000
 
 # A cláusula de credenciais que nunca vai a log: o valor de cada chave sai como ***.

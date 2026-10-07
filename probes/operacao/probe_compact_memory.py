@@ -6,9 +6,10 @@ do ambiente alvo de 2026-10-05 está em ``docs/operacao.md``, seção "Compacta�
 primeira partição de ``cad_lancamentos`` na origem, reparte o arquivo dela pelo
 ``COPY ... FILE_SIZE_BYTES`` do DuckDB em arquivos de até 1/32 do tamanho dela, como o ``UNLOAD``
 em paralelo do Redshift fragmenta por slice, registra os arquivos no lugar dele e roda
-``serialize-db compact`` na partição. No ambiente alvo, com 8 threads do DuckDB, os 551,5 MB da
-partição saíram em 64 arquivos de 5,3 a 16,7 MB. ``--ignore-partitions`` deixa partições da origem
-fora das primeiras que a sonda toma, como o do ``serialize-db import``.
+``serialize-db compact`` na partição. No ambiente alvo, os 551,5 MB da partição saíram em 64
+arquivos de 5,3 a 16,7 MB com 8 threads do DuckDB (2026-10-05) e em 40 de 11,6 a 16,7 MB com 2
+(2026-10-07). ``--ignore-partitions`` deixa partições da origem fora das primeiras que a sonda
+toma, como o do ``serialize-db import``.
 
 Checagens:
 

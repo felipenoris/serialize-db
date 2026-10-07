@@ -187,8 +187,9 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   `test_gil_reacquisition_waits_the_switch_interval` failed once in four sessions on 2026-09-24
   (usually 0.08 s to 0.75 s beside the loop); five runs passed after the wait. It failed again in
   whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the shorter
-  interval) and on 2026-10-03, and passed alone and in the other sessions; the item is in
-  `.claude/memory/OPEN_QUESTIONS.md`.
+  interval), on 2026-10-03 and on 2026-10-07 (0.005 s against 0.006 s; alone, three runs at
+  0.278 s to 0.444 s against 0.006 s to 0.024 s), and passed alone and in the other sessions; the
+  item is in `.claude/memory/OPEN_QUESTIONS.md`.
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
@@ -265,3 +266,16 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   against 29.608 s); and `publish_redshift` with four workers against one 2.35x (11.819 s against
   27.757 s), where 2026-10-05 had read 0.95x with the serial form at 29.987 s: the 31.521 s of
   that day's parallel form has no cause measured. `docs/index.md` ("Multithreading")
+- The same probe again on 2026-10-07 from 18:55 UTC (2 vCPUs, 5.9 GiB available, DuckDB limits
+  2 threads and 3,013 MiB, the tables prepared in 49.4 s, `main` at `b6acfa8`). DuckDB: `stream`
+  1.25x with no work and 1.42x with pandas, `appender` 1.02x and 1.07x, both 1.07x and 1.12x,
+  200 small queries 1.38x with one `new_session()` each, `run.ingest` 1.21x (14.517 s against
+  17.616 s), `materialize` 1.16x and `publish_delta(max_workers=4)` 1.61x (16.860 s against
+  27.073 s). Redshift: `run.ingest` 2.68x (12.232 s against 32.831 s), `stream` 1.03x,
+  `appender` 1.04x and 1.11x, both 1.11x and 1.07x, 80 small queries 3.824 s serial (about 48 ms
+  each, 69 ms at 15:48), 3.774 s on the main session and 1.855 s with one extra session each
+  (2.06x), `publish_delta(max_workers=4)` 1.43x (19.712 s against 28.188 s) and
+  `publish_redshift` with four workers 2.40x (11.133 s against 26.750 s), its third repetition at
+  33.135 s, above every serial repetition (26.750 s, 27.448 s and 29.068 s): the four-connection
+  publication varied three times between repetitions of one run, like the 31.521 s of
+  2026-10-05, with no server reading to name the cause. `docs/index.md` ("Multithreading")
