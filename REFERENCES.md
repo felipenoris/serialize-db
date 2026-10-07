@@ -326,6 +326,19 @@ página que descreva o prefixo vazio, e pelas páginas da documentação:
 - <https://oneuptime.com/blog/post/2026-02-12-load-data-redshift-copy-command/view>
 - <https://repost.aws/questions/QUwQYm3TWMR0ulsGD7iG2BuA/failed-to-copy-parquet-files-from-s3-to-redshift>
 
+O preço e a cobrança do Redshift Serverless, consultados em 2026-10-07 para a estimativa do custo de
+uma execução do `SUITE.md`, pela busca na web por `Redshift Serverless 60-second minimum charge how
+applied consecutive queries idle workgroup billing example`, que não achou página da AWS que diga
+como o mínimo de 60 s cobre comandos seguidos, pela Price List API da AWS e pelas páginas da
+documentação:
+
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing.html>
+- <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing-on-demand.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/SYS_SERVERLESS_USAGE.html>
+- <https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRedshift/current/region_index.json>
+- <https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRedshift/20260911124505/sa-east-1/index.json>
+- <https://www.repost.aws/knowledge-center/query-billing-redshift-serverless> (respondeu 403 em 2026-10-07)
+
 ## DuckDB
 
 Documentação:
