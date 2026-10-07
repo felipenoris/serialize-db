@@ -216,28 +216,29 @@ SERIALIZE_DB_TEST_REPORT=probes/output/consistencia_append_redshift.json .venv/b
 ```
 cd ~/work/projects/serialize-db
 
-# As sondas que recebem $SOURCE_PATH leem cad_lancamentos nele. Cada sonda grava sob
+# As sondas que recebem $SOURCE_PATH leem cad_lancamentos nele, fora da partição 2025-09-30, que a
+# carga recusa (--ignore-partitions, como na carga). Cada sonda grava sob
 # $SERIALIZE_DB_TEST_S3_ROOT/serialize-db-operacao/<sonda>-<id>/, que apaga no fim, e imprime o
 # relatório no terminal e em probes/output/operacao_<sonda>_<data-hora>.txt; código de saída 1
 # quando alguma checagem reprova.
 
 # A carga das três primeiras partições, encerrada por SIGKILL quando o arquivo da segunda aparece,
 # e o mesmo comando de novo.
-.venv/bin/python probes/operacao/probe_load_resume.py $SOURCE_PATH
+.venv/bin/python probes/operacao/probe_load_resume.py $SOURCE_PATH --ignore-partitions 2025-09-30
 
 # O archive de um snapshot das três partições, encerrado por SIGKILL depois da primeira partição
 # copiada, e o mesmo comando de novo.
-.venv/bin/python probes/operacao/probe_archive_resume.py $SOURCE_PATH
+.venv/bin/python probes/operacao/probe_archive_resume.py $SOURCE_PATH --ignore-partitions 2025-09-30
 
 # O vacuum --full de dois órfãos com a retenção padrão, com --retention-hours 0 e com --apply.
-.venv/bin/python probes/operacao/probe_vacuum_orphans.py $SOURCE_PATH
+.venv/bin/python probes/operacao/probe_vacuum_orphans.py $SOURCE_PATH --ignore-partitions 2025-09-30
 
 # O compact da primeira partição repartida em cerca de 32 arquivos, com o tempo e o pico de RSS.
-.venv/bin/python probes/operacao/probe_compact_memory.py $SOURCE_PATH
+.venv/bin/python probes/operacao/probe_compact_memory.py $SOURCE_PATH --ignore-partitions 2025-09-30
 
 # O UNLOAD da exportação com PARALLEL OFF e em paralelo, de 1, 5, 10 e 20 milhões de linhas e da
 # primeira partição inteira, três vezes cada; as tabelas exec_operacao_<id>_* saem no fim.
-.venv/bin/python probes/operacao/probe_unload_parallel.py $SOURCE_PATH
+.venv/bin/python probes/operacao/probe_unload_parallel.py $SOURCE_PATH --ignore-partitions 2025-09-30
 
 # O ganho das APIs com threads sobre a execução em série no motor DuckDB, nos pools de tabelas, no
 # motor Redshift e na publicação no Redshift, três medidas de cada forma, sobre quatro tabelas de
