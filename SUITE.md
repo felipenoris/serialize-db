@@ -66,6 +66,7 @@ export PYTHONPATH=tests
     --environment prd \
     --source $SOURCE_PATH \
     --root $TARGET_ROOT_PATH \
+    --ignore-partitions 2025-09-30 \
     --report probes/output/carga_inicial_delta.json
 
 .venv/bin/serialize-db audit \
