@@ -7,7 +7,8 @@ primeira partição de ``cad_lancamentos`` na origem, reparte o arquivo dela pel
 ``COPY ... FILE_SIZE_BYTES`` do DuckDB em arquivos de até 1/32 do tamanho dela, como o ``UNLOAD``
 em paralelo do Redshift fragmenta por slice, registra os arquivos no lugar dele e roda
 ``serialize-db compact`` na partição. No ambiente alvo, com 8 threads do DuckDB, os 551,5 MB da
-partição saíram em 64 arquivos de 5,3 a 16,7 MB.
+partição saíram em 64 arquivos de 5,3 a 16,7 MB. ``--ignore-partitions`` deixa partições da origem
+fora das primeiras que a sonda toma, como o do ``serialize-db import``.
 
 Checagens:
 
@@ -33,7 +34,6 @@ Exemplo:
 from __future__ import annotations
 
 import re
-import sys
 import uuid
 
 import operation_lib as lib
@@ -43,8 +43,6 @@ from serialize_db import delta
 from serialize_db.execution import Database
 from serialize_db.resources import available_memory, environment_limits
 from serialize_db.schema import literal, quoted
-
-USAGE = "uso: .venv/bin/python probes/operacao/probe_compact_memory.py <origem>"
 
 # Os arquivos da partição repartida, a fragmentação por slice de um UNLOAD em paralelo (32
 # arquivos para 500.000 linhas no ambiente alvo em 2026-09-21), e o tamanho alvo do delta-rs sem
@@ -140,13 +138,11 @@ def check_compact(
 def main() -> None:
     """O ``compact`` da partição repartida, com o relatório no terminal e em
     ``probes/output/``."""
-    if len(sys.argv) != 2:
-        print(USAGE, file=sys.stderr)
-        sys.exit(2)
-    source = sys.argv[1]
+    options = lib.parse_arguments(__doc__.splitlines()[0])
+    source = options.source
     db = lib.work_database("compact")
     storage = db.storage
-    value = lib.source_partitions(source, 1)[0]
+    value = lib.source_partitions(source, 1, options.ignore_partitions)[0]
     lib.load_partitions(db, source, [value])
     uri = lib.table_uri(db, lib.TABLE.name)
     totals = lib.delta_totals(storage, uri)

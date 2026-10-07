@@ -204,7 +204,8 @@ comparação valor a valor (`compare`, com `NaN` igual a `NaN` e o zero com o se
 
 As sondas de `operacao/` rodam no ambiente alvo as rotinas de `serialize-db` que
 [`.claude/memory/OPEN_QUESTIONS.md`](../.claude/memory/OPEN_QUESTIONS.md) ainda espera ler lá, sobre
-as primeiras partições de `cad_lancamentos` da base de origem, que elas só leem;
+as primeiras partições de `cad_lancamentos` da base de origem, que elas só leem, fora das que
+`--ignore-partitions` lista, como o do script de migração e do `serialize-db import`;
 `probe_parallel_gain.py` gera as próprias tabelas. Cada uma grava sob
 `<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-operacao/<sonda>-<id>/` ou, sem a variável, sob
 `<SERIALIZE_DB_TEST_LOCAL_ROOT>/serialize-db-operacao/<sonda>-<id>/`, e apaga a pasta no fim, também
@@ -226,10 +227,11 @@ ambiente alvo estão em `SUITE.md`, seção "Sondas da operação".
 | `probe_unload_parallel.py` | O `UNLOAD` da exportação do motor Redshift com `PARALLEL OFF` e em paralelo, de 1, 5, 10 e 20 milhões de linhas e da partição inteira, três vezes cada: o menor tempo, os arquivos e o tempo dos rodapés por tamanho e modo, contra o limiar de 5.000.000 linhas de `_PARALLEL_OFF_ROWS`; pede a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, e o sandbox `exec_operacao_<id>_*` sai no `cleanup`. |
 | `probe_parallel_gain.py` | O ganho das APIs com threads sobre a execução em série, em quatro tabelas iguais de `--rows` linhas (5.000.000 por padrão) que a sonda gera e publica no Delta, cada variante `--repetitions` vezes (3 por padrão): no motor DuckDB, o `stream`, o `appender`, os dois no mesmo `with`, sem trabalho do cliente e com o pandas por lote, e 200 consultas pequenas em série, em quatro threads na sessão principal e em quatro sessões a mais (`duckdb`); `run.ingest`, `run.publish_delta` e o `materialize` do leitor Delta com as quatro tabelas numa chamada contra uma por tabela (`pools`); no motor Redshift, `run.ingest` das quatro, o `stream`, o `appender`, os dois juntos, 80 consultas pequenas e `run.publish_delta` (`redshift`); e `publish_redshift` com `max_workers=4` contra 1 (`publicacao`). Imprime cada medida e o resumo com o menor tempo de cada variante, o pico e a razão sobre a série, e confere as linhas contadas; `redshift` e `publicacao` pedem a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, o sandbox `exec_*` sai no `cleanup`, e a sonda apaga as tabelas `poc<id>_*` que publicou e as linhas de controle delas. |
 
-`operation_lib.py` é a biblioteca comum: a raiz de trabalho (`work_database`), as partições da
-origem, a carga pela biblioteca, `serialize-db` num processo filho até o fim (`run_cli`) ou
-encerrado num ponto marcado (`run_cli_killed`), os arquivos do log e da pasta de uma tabela, os
-órfãos, as linhas e a soma pelo `delta_scan`, `check`, `finish` e `run`.
+`operation_lib.py` é a biblioteca comum: a raiz de trabalho (`work_database`), a linha de comando
+(`parse_arguments`), as partições da origem fora das ignoradas, a carga pela biblioteca,
+`serialize-db` num processo filho até o fim (`run_cli`) ou encerrado num ponto marcado
+(`run_cli_killed`), os arquivos do log e da pasta de uma tabela, os órfãos, as linhas e a soma pelo
+`delta_scan`, `check`, `finish` e `run`.
 
 ## Acrescentar um probe
 

@@ -193,8 +193,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
   2026-09-25), and in the target machine's local folder 79 of 400 (175 conflicts) on 2026-09-26,
-  88 (204) on 2026-09-27, 65 (84) on 2026-09-29 and 67 (108) on 2026-10-05; S3's `IfMatch` is
-  server-side. `.claude/memory/OPEN_QUESTIONS.md`
+  88 (204) on 2026-09-27, 65 (84) on 2026-09-29, 67 (108) on 2026-10-05 and 87 (165) on
+  2026-10-07; S3's `IfMatch` is server-side. `.claude/memory/OPEN_QUESTIONS.md`
 - `Execution.publish_delta` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
@@ -247,3 +247,21 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   and `publish_redshift` with four workers against one 0.95x (31.521 s against 29.987 s, the
   unpublishing out of the time). The runbook's base publication uses `--max-workers 4` since
   2026-09-26 and has no serial reading in the target. `docs/index.md` ("Multithreading")
+- The threaded APIs against their serial form in the target again, 2026-10-07
+  (`probes/operacao/probe_parallel_gain.py`, 2 vCPUs, 5.8 GiB available, DuckDB limits 2 threads
+  and 2,913 MiB, the four tables prepared in 48.0 s, the same method). DuckDB: `stream` 1.29x with
+  no work (0.696 s, +4 MB, against 0.899 s, +340 MB) and 1.44x with pandas (0.886 s against
+  1.276 s); `appender` 1.01x and 1.03x; both in one `with` 1.08x (4.582 s, +196 MB, against
+  4.952 s, +636 MB) and 1.13x (4.788 s, +342 MB, against 5.430 s, +743 MB); 200 small queries
+  0.830 s serial, 0.829 s on the main session, 0.650 s with one `new_session()` each (1.28x);
+  `run.ingest` of the four 1.15x (14.727 s, +717 MB, against 16.987 s, +601 MB), `materialize`
+  1.15x (14.772 s, +714 MB, against 16.942 s, +604 MB) and `publish_delta(max_workers=4)` 1.71x
+  (15.695 s against 26.902 s): with 2 CPUs the serial DuckDB work takes 1.5 to 2 times the 8-vCPU
+  time and the pools gain half as much. Redshift: `run.ingest` of the four 2.75x (11.500 s
+  against 31.608 s); `stream`, `appender` and both 1.04x, 1.02x and 1.04x with no work and 1.02x,
+  1.17x and 1.05x with pandas, the threaded forms at +24 MB to +106 MB against +44 MB to +504 MB
+  serial; 80 small queries 5.541 s serial (about 69 ms each), 5.298 s on the main session,
+  1.967 s with one extra session each (2.82x); `publish_delta(max_workers=4)` 1.48x (19.951 s
+  against 29.608 s); and `publish_redshift` with four workers against one 2.35x (11.819 s against
+  27.757 s), where 2026-10-05 had read 0.95x with the serial form at 29.987 s: the 31.521 s of
+  that day's parallel form has no cause measured. `docs/index.md` ("Multithreading")

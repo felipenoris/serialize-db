@@ -3,17 +3,19 @@ num processo filho, encerrado por ``SIGKILL`` num ponto marcado, os arquivos de 
 e a limpeza.
 
 Uma sonda da operação roda uma rotina de ``serialize-db`` que o ambiente alvo ainda não leu
-(``.claude/memory/OPEN_QUESTIONS.md``) sobre partições de ``cad_lancamentos`` da base de origem, que
-ela só lê. Ela grava só sob ``<raiz>/serialize-db-operacao/<sonda>-<id>/``, com a raiz de
-``SERIALIZE_DB_TEST_S3_ROOT`` ou, sem ela, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, e apaga a pasta no
-fim, também quando para numa exceção (``SERIALIZE_DB_TEST_KEEP`` a mantém). A saída e os erros
-vão ao terminal e a ``probes/output/operacao_<sonda>_<data-hora>.txt``. Código de saída: 0 quando
-toda checagem passou, 1 quando alguma reprovou ou a sonda parou numa exceção, 2 sem raiz de
-trabalho ou com a origem sem as partições.
+(``.claude/memory/OPEN_QUESTIONS.md``) sobre as primeiras partições de ``cad_lancamentos`` da base
+de origem, em ordem de nome e fora das de ``--ignore-partitions``, que ela só lê. Ela grava só sob
+``<raiz>/serialize-db-operacao/<sonda>-<id>/``, com a raiz de ``SERIALIZE_DB_TEST_S3_ROOT`` ou, sem
+ela, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, e apaga a pasta no fim, também quando para numa exceção
+(``SERIALIZE_DB_TEST_KEEP`` a mantém). A saída e os erros vão ao terminal e a
+``probes/output/operacao_<sonda>_<data-hora>.txt``. Código de saída: 0 quando toda checagem passou,
+1 quando alguma reprovou ou a sonda parou numa exceção, 2 no uso errado da linha de comando, sem
+raiz de trabalho ou com a origem sem as partições.
 """
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import importlib.metadata
 import logging
@@ -25,7 +27,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TextIO
 
@@ -149,17 +151,41 @@ def work_database(
     return db
 
 
+def parse_arguments(
+    description: str,
+) -> argparse.Namespace:
+    """A linha de comando das sondas que leem a origem: ``source``, a raiz da base Parquet de
+    origem, local ou ``s3://``, e ``ignore_partitions``, os valores de partição que a sonda não
+    toma, vazio sem ``--ignore-partitions``, como o do ``serialize-db import``; o uso errado sai
+    com o código 2."""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("source", metavar="origem", help="a raiz da base Parquet de origem")
+    parser.add_argument(
+        "--ignore-partitions",
+        nargs="+",
+        metavar="AAAA-MM-DD",
+        default=(),
+        help="deixa estas partições fora das primeiras que a sonda toma de cad_lancamentos",
+    )
+    return parser.parse_args()
+
+
 def source_partitions(
     source: str,
     count: int,
+    ignored: Sequence[str] = (),
 ) -> list[str]:
     """Os ``count`` primeiros valores de partição de ``cad_lancamentos`` na origem, em ordem de
-    nome; com menos, a sonda para com o código 2."""
-    found, _ = parquet_import.discover_partitions(source, TABLE)
-    values = list(found)[:count]
+    nome e fora de ``ignored``, com uma linha impressa por partição ignorada que a origem tem;
+    com menos, a sonda para com o código 2."""
+    kept, skipped = parquet_import.split_ignored_partitions(source, TABLE, ignored)
+    for value in skipped:
+        print(f"{TABLE.name}: partição {value} ignorada, em --ignore-partitions")
+    values = kept[:count]
     if len(values) < count:
         print(
-            f"{source}: {TABLE.name} tem {len(found)} partição(ões), a sonda pede {count}",
+            f"{source}: {TABLE.name} tem {len(kept)} partição(ões) fora das ignoradas, a sonda "
+            f"pede {count}",
             file=sys.stderr,
         )
         sys.exit(2)

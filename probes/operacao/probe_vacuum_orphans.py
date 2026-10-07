@@ -5,6 +5,8 @@ como o da carga parada de 2026-09-28. Ela carrega a primeira partição de ``cad
 origem e copia o arquivo dela para dois órfãos: um na pasta da partição, como o do ``COPY`` da
 carga, e outro num prefixo dentro dela, como o do ``UNLOAD`` da exportação Redshift. Depois roda
 ``serialize-db vacuum --full`` com a retenção padrão, com ``--retention-hours 0`` e com ``--apply``.
+``--ignore-partitions`` deixa partições da origem fora das primeiras que a sonda toma, como o do
+``serialize-db import``.
 
 Checagens:
 
@@ -25,15 +27,12 @@ Exemplo:
 
 from __future__ import annotations
 
-import sys
 import uuid
 
 import operation_lib as lib
 
 from serialize_db import delta
 from serialize_db.execution import Database
-
-USAGE = "uso: .venv/bin/python probes/operacao/probe_vacuum_orphans.py <origem>"
 
 
 def listed_paths(
@@ -84,13 +83,11 @@ def check_listed(
 
 def main() -> None:
     """O ``vacuum --full`` dos órfãos, com o relatório no terminal e em ``probes/output/``."""
-    if len(sys.argv) != 2:
-        print(USAGE, file=sys.stderr)
-        sys.exit(2)
-    source = sys.argv[1]
+    options = lib.parse_arguments(__doc__.splitlines()[0])
+    source = options.source
     db = lib.work_database("vacuum")
     storage = db.storage
-    value = lib.source_partitions(source, 1)[0]
+    value = lib.source_partitions(source, 1, options.ignore_partitions)[0]
     lib.load_partitions(db, source, [value])
     uri = lib.table_uri(db, lib.TABLE.name)
     table_path = storage.relative(uri)

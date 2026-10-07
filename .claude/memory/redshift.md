@@ -504,3 +504,15 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   MANIFEST FILLRECORD` of a partition `compact` rewrote in ZSTD loaded its 15 rows beside a
   Snappy partition (`test_publication_loads_a_compacted_partition`). `RS-12` counted 48 load
   errors in 30 days.
+- The battery of 2026-10-07 (03:03 UTC on, `environments.md`) read the same version `1.0.434008`;
+  `RS-8` read 0 of 3 tables again, the control table and `prd_cad_contas` of 2026-10-06 gone
+  before the battery, and `RS-12`'s count of `sys_load_error_detail` returned no row (the quirk of
+  2026-09-24, `lessons.md`). The three cases of PR #139 read the same four times. The whole base
+  was published again by channel, on 2 vCPUs, after `--init` created the control table:
+  `cad_contas` 3.8 s at 243 MB, the unpartitioned tables 2.9 s to 4.4 s, `cad_contratos` 38.9 s,
+  `cad_operacoes` 52.3 s, `rel_contrato_operacao` 65.9 s and `cad_lancamentos` (5 partitions,
+  283,835,693 rows) 300.2 s at 274 MB, 0.95 million rows per second, against 324.9 s at 285 MB
+  with 8 vCPUs on 2026-10-05: the publication's time is the server's `COPY`, not the machine's.
+  `--status` read the 12 `prd_<table>` with published equal to current, and `--channel current`
+  and `--snapshot carga-2026-09-25 --tables cad_contas` answered `já está publicada` for every
+  table. The Data API answered in 461 ms and 167 ms.

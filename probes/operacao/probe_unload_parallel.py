@@ -7,6 +7,8 @@ partição de ``cad_lancamentos`` na origem, leva-a ao sandbox pelo ``ingest`` d
 do sandbox com 1, 5, 10 e 20 milhões das linhas dela, e roda o ``UNLOAD`` da exportação de cada uma
 e da partição inteira com ``PARALLEL OFF`` e sem ele, três vezes cada, alternando a ordem. O
 ``select`` é o da exportação: as colunas sem a de partição, na ordem da ``sort_key``.
+``--ignore-partitions`` deixa partições da origem fora das primeiras que a sonda toma, como o do
+``serialize-db import``.
 
 Checagens:
 
@@ -50,7 +52,6 @@ from serialize_db.engine.redshift import (
 from serialize_db.execution import Database
 from serialize_db.schema import quoted, table_options
 
-USAGE = "uso: .venv/bin/python probes/operacao/probe_unload_parallel.py <origem>"
 SIZES = (1_000_000, 5_000_000, 10_000_000, 20_000_000)
 REPETITIONS = 3
 
@@ -179,16 +180,14 @@ def print_summary(
 def main() -> None:
     """Os ``UNLOAD`` de cada tamanho nos dois modos, com o relatório no terminal e em
     ``probes/output/``."""
-    if len(sys.argv) != 2:
-        print(USAGE, file=sys.stderr)
-        sys.exit(2)
-    source = sys.argv[1]
+    options = lib.parse_arguments(__doc__.splitlines()[0])
+    source = options.source
     db = lib.work_database("unload")
     storage = db.storage
     if not storage.is_s3:
         print("o UNLOAD grava no S3: a sonda pede SERIALIZE_DB_TEST_S3_ROOT", file=sys.stderr)
         sys.exit(2)
-    value = lib.source_partitions(source, 1)[0]
+    value = lib.source_partitions(source, 1, options.ignore_partitions)[0]
     lib.load_partitions(db, source, [value])
     uri = lib.table_uri(db, lib.TABLE.name)
     version = delta.open_table(uri, storage).version()

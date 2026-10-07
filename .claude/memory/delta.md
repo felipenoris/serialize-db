@@ -318,6 +318,9 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   partition now 370.0 MB in files of 43.5 MB to 67.8 MB (the delta-rs writer in ZSTD against
   DuckDB's default), with the same rows and `id_lancamento` sum, an `OPTIMIZE` commit at version 3.
   `docs/operacao.md` ("Compactação")
+- On 2026-10-07 the operation probes of `archive`, `vacuum --full`, `compact` and the `UNLOAD`
+  stopped in their load, on the source's partition 2025-09-30 (`source-base.md`), and read
+  nothing; the readings of 2026-10-05 stand.
 
 ## Alternatives assessed
 
