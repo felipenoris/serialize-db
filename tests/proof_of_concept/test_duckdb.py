@@ -9,12 +9,13 @@ que segue puxando o gerador depois da falha, os lotes que o leitor não confere 
 expõe ``__arrow_c_stream__``), o tipo ``DECIMAL`` inferido de uma amostra do pandas contra o fixado
 pelo esquema Arrow, JSON, o custo do ``executemany`` contra a carga por Arrow, as consultas da
 auditoria, a soma de controle que o ``NaN`` derruba e a que o ``DECIMAL(38, 6)`` torna independente
-das threads, o ``interrupt()`` chamado de outra thread e o ``cursor()`` aberto com uma consulta em
-curso. Sob a raiz local (marcador ``local``): ``COPY ... TO`` com ``RETURN_STATS`` e o esquema
-físico do Parquet gravado, o ``RETURN_STATS`` com ``NaN``, infinito e texto longo, o ``has_nan``
-que só vê o último grupo de linhas, a poda do leitor Parquet pelo rodapé do pyarrow num grupo com
-``NaN``, o stream transbordado num arquivo Arrow IPC, o ``COPY`` particionado por mês e um banco em
-arquivo com pasta de transbordo. O ``delta_scan`` está em ``poc_delta.py``.
+das threads, o ``interrupt()`` chamado de outra thread, o ``cursor()`` aberto com uma consulta em
+curso e a barra de progresso que o ``python -c`` liga. Sob a raiz local (marcador ``local``):
+``COPY ... TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``RETURN_STATS`` com
+``NaN``, infinito e texto longo, o ``has_nan`` que só vê o último grupo de linhas, a poda do leitor
+Parquet pelo rodapé do pyarrow num grupo com ``NaN``, o stream transbordado num arquivo Arrow IPC, o
+``COPY`` particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_scan`` está
+em ``poc_delta.py``.
 """
 
 from __future__ import annotations
@@ -229,7 +230,9 @@ def peak_mb() -> float:
 
 # Roda num subprocesso, um cenário por chamada: a memória máxima do processo depende só do cenário.
 # A base é o pico depois das importações e da conexão, com o pyarrow importado antes dela, como no
-# SPOOL_PROBE; o cenário se mede pelo que acrescenta a ela.
+# SPOOL_PROBE; o cenário se mede pelo que acrescenta a ela. A barra de progresso, que o DuckDB liga
+# no python -c e imprime no stdout antes do JSON numa consulta acima de 2 s, fica desligada, como
+# num script (test_progress_bar_is_on_without_a_main_file).
 MEMORY_PROBE = (
     PEAK_MB
     + r"""
@@ -238,6 +241,7 @@ import duckdb, pyarrow
 scenario = sys.argv[1]
 sql = sys.argv[2]
 con = duckdb.connect(config={"threads": 2})
+con.execute("SET enable_progress_bar = false")
 base = peak_mb()
 started = time.perf_counter()
 if scenario == "table":
@@ -272,6 +276,56 @@ def increment_mb(
     """O que o cenário acrescentou à memória do processo: o pico menos a base depois das importações
     e da conexão, que muda com a plataforma."""
     return reading["peak_mb"] - reading["base_mb"]
+
+
+# Lê num Python novo o ajuste da barra de progresso e a barra no stdout. Com "com_arquivo", o
+# __main__ ganha um __file__ antes da importação do DuckDB, como num script; progress_bar_time = 0
+# mostra a barra em qualquer comando, até o SET que a desliga.
+PROGRESS_BAR_PROBE = r"""
+import sys
+if sys.argv[1] == "com_arquivo":
+    import __main__
+    __main__.__file__ = "sonda.py"
+import duckdb
+con = duckdb.connect()
+print(con.execute("SELECT current_setting('enable_progress_bar')").fetchone()[0], flush=True)
+con.execute("SET progress_bar_time = 0")
+con.execute("SELECT 1").fetchall()
+con.execute("SET enable_progress_bar = false")
+print("desligada", flush=True)
+con.execute("SELECT sum(range) FROM range(10000000)").fetchall()
+"""
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="não lido no Windows, onde as sondas de memória que ele explica não rodam",
+)
+def test_progress_bar_is_on_without_a_main_file() -> None:
+    """O DuckDB liga a barra de progresso num processo cujo ``__main__`` não tem ``__file__``, como
+    o ``python -c`` de ``run_probe``, e a deixa desligada num script; ligada, ela vai ao stdout, num
+    pipe também, no comando mais longo que ``progress_bar_time``, 2000 ms por padrão.
+
+    ``SET progress_bar_time`` também a liga, e ``SET enable_progress_bar = false`` a desliga na
+    conexão. Ligada, ela pôs ``100% ▕██…▏ (00:00:02.01 elapsed)`` antes do JSON de ``SPOOL_PROBE``
+    numa consulta de 2,029 s, o ``JSONDecodeError`` de ``test_spooled_stream_bounds_memory`` em
+    2026-10-08; as sondas de memória a desligam.
+    """
+    readings = {}
+    for variant in ("sem_arquivo", "com_arquivo"):
+        completed = subprocess.run(
+            [sys.executable, "-c", PROGRESS_BAR_PROBE, variant],
+            capture_output=True,
+            encoding="utf-8",
+            check=True,
+        )
+        setting, rest = completed.stdout.split("\n", 1)
+        on, off = rest.split("desligada\n")
+        readings[variant] = setting
+        assert "100%" in on
+        assert off == ""
+    record("duckdb.progress_bar_without_main_file", readings)
+    assert readings == {"sem_arquivo": "True", "com_arquivo": "False"}
 
 
 def test_streaming_query_starts_before_the_end() -> None:
@@ -344,7 +398,8 @@ def test_streaming_query_bounds_memory() -> None:
 
 
 # O stream da sessão única: o leitor inteiro gravado num arquivo Arrow IPC com LZ4, e o arquivo lido
-# lote a lote. Roda num subprocesso, como MEMORY_PROBE, para a memória máxima ser só dele.
+# lote a lote. Roda num subprocesso, como MEMORY_PROBE, para a memória máxima ser só dele, e desliga
+# a barra de progresso como ele.
 SPOOL_PROBE = (
     PEAK_MB
     + r"""
@@ -353,6 +408,7 @@ import duckdb, pyarrow as pa
 folder = sys.argv[1]
 sql = sys.argv[2]
 con = duckdb.connect(config={"threads": 2})
+con.execute("SET enable_progress_bar = false")
 base = peak_mb()
 path = os.path.join(folder, "transbordo.arrow")
 options = pa.ipc.IpcWriteOptions(compression="lz4")
