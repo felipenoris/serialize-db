@@ -677,6 +677,9 @@ Documentação da versão 2.1, lida em 2026-09-25 para a troca da versão fixada
 - <https://docs.sqlalchemy.org/en/21/changelog/migration_21.html>
 - <https://docs.sqlalchemy.org/en/21/changelog/changelog_21.html>
 
+O changelog da 2.1, lido de novo em 2026-10-07 para as entradas da 2.1.4:
+<https://docs.sqlalchemy.org/en/21/changelog/changelog_21.html>.
+
 ## pandas
 
 - <https://pandas.pydata.org/docs/reference/api/pandas.read_sql.html>
@@ -1115,6 +1118,15 @@ API JSON do PyPI, consultada em 2026-10-04 para os wheels das extensões do Duck
 instalam: <https://pypi.org/pypi/duckdb-extension-delta/json>,
 <https://pypi.org/pypi/duckdb-extension-httpfs/json> e
 <https://pypi.org/pypi/duckdb-extension-aws/json>.
+
+API JSON do PyPI, consultada em 2026-10-07 para os itens de `.claude/memory/OPEN_QUESTIONS.md` que
+esperam uma versão nova: <https://pypi.org/pypi/sqlalchemy/json>,
+<https://pypi.org/pypi/sqlalchemy/2.1.4/json>, <https://pypi.org/pypi/duckdb-engine/json>,
+<https://pypi.org/pypi/duckdb-sqlalchemy/json>,
+<https://pypi.org/pypi/duckdb-sqlalchemy/1.5.6/json>,
+<https://pypi.org/pypi/duckdb-sqlalchemy/0.18.0/json> (404), <https://pypi.org/pypi/duckdb/json>,
+<https://pypi.org/pypi/duckdb-extension-delta/json>,
+<https://pypi.org/pypi/duckdb-extension-httpfs/json> e <https://pypi.org/pypi/deltalake/json>.
 
 Issue do botocore que pede a expiração da credencial na interface pública, consultada em
 2026-09-27 para `credential_expiry` de `probes/probelib.py`:

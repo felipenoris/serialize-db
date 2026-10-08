@@ -21,7 +21,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   versões, 270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões,
   307.133.320 bytes, com 9.504 marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes,
   com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
-  20.000 entradas, `POC.md`), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
+  20.000 entradas, `POC.md`; e, com a listagem no mesmo limite, ao menos 10.419 versões,
+  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:03,
+  `.claude/memory/environments.md`), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
   com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
   `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
   removidos", traz a regra de exemplo e como mudar a retenção. A mesma pergunta vale para a regra
@@ -52,6 +54,14 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
 - **A reconexão do motor Redshift.** As suítes do motor e da publicação rodaram no ambiente alvo
   em 2026-09-24, duas vezes cada, e leram o que esperavam (`POC.md`): fica sem medida a reconexão
   depois de uma queda do servidor, que nenhum teste provoca lá (etapa 5).
+- **A transação do motor Redshift dentro de um `BEGIN` do cliente.** `transaction()` do motor
+  Redshift, que o appender e, desde 2026-10-04, a carga de cada partição de `ingest` e de
+  `pinned_delta` usam, não é reentrante: um `append` dentro de um `BEGIN` que o cliente abriu em
+  `session()` leva no `COMMIT` dele o trabalho do cliente (leitura do código na revisão de
+  2026-10-01; o Redshift não foi lido com um `BEGIN` dentro de outro). A docstring de `session()`
+  do motor DuckDB descreve o caso dele, e as de `session()` e `transaction()` do motor Redshift não
+  falam do caso. Espera uma leitura no alvo e a frase nas docstrings que a revisão de 2026-10-01
+  propôs.
 - **A distribuição das tabelas publicadas.** As tabelas publicadas ficam em `DISTSTYLE AUTO`
   (decisão do usuário de 2026-09-21), e uma chave de distribuição só entra, por
   `ALTER TABLE ... ALTER DISTKEY`, quando o `EXPLAIN` de um join típico entre elas,
@@ -71,14 +81,15 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   também não traz o `nullCount` da coluna: o primeiro perde os nulos, e o segundo os traz. Ficam
   sem os dois no log os tipos que o registro omite (etapa 3), entre eles as
   colunas `DateTime` e `Boolean` do modelo cliente; o texto dos arquivos do `UNLOAD`; e as
-  `Double` com valor não finito da issue #59, em todo caminho de escrita, e sem o `nullCount` na
-  troca do motor Redshift e no `compact` da etapa 9. O `delta_scan` dos
+  `Double` com valor não finito da issue #59, em todo caminho de escrita menos o `compact`, que
+  grava mínimo, máximo e `nullCount` de toda coluna (docstring de `delta.compact`), e sem o
+  `nullCount` na troca do motor Redshift. O `delta_scan` dos
   motores e do leitor Delta e o `COPY` do Redshift leem certo, e o pacote filtra o dataset do
   delta-rs só pela coluna da partição (`read_back`), fora da perda. O texto de um arquivo gravado
-  pelo DuckDB, pelo export do motor ou pelo import, também fica sem mínimo e máximo quando o corte
-  de 256 bytes parte um caractere multibyte ou o incremento do máximo não dá UTF-8 válido, e o
-  filtro do dataset por essa coluna perde o arquivo inteiro (leitura de 2026-10-04,
-  `POC.md`). Com
+  pelo DuckDB, pelo export do motor ou pelo import, também fica sem mínimo e máximo quando o
+  prefixo de 256 bytes do mínimo ou do máximo não tem byte ASCII (docstring de
+  `delta._stat_converter`), e o filtro do dataset por essa coluna perde o arquivo inteiro (leitura
+  de 2026-10-04, `POC.md`). Com
   `delta.dataSkippingStatsColumns` sem as três colunas, a mesma sonda leu 2, 2 e 1, e o `delta_scan`
   seguiu podando pelas estatísticas que o log já guarda; a propriedade faz o `write_deltalake`
   gravar só as estatísticas das colunas dela e o `get_add_actions` esconder as outras. A issue #3032
@@ -146,20 +157,21 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   pacote na 2.1.3 e na 2.0.54 é `construct_expanded_state()` nos dois motores, `sa.Float` ao lado
   de `sa.Numeric` nas somas do `import_report` e `_backslash_escapes` verdadeiro e explícito nos
   dialetos do Redshift; os do DuckDB já o fixam em falso. O usuário decidiu manter a 2.0.54 em
-  2026-10-03 (`.claude/memory/decisions.md`); a leitura se repete com uma 2.1.x nova ou com a troca
-  do dialeto do DuckDB.
+  2026-10-03 (`.claude/memory/decisions.md`); a leitura se repete com uma 2.1.x nova, como a 2.1.4,
+  de 2026-10-07, que ainda não passou pela sessão de testes, ou com a troca do dialeto do DuckDB.
 - **O dialeto do DuckDB.** O `duckdb-engine` 0.17.0, o compilador do `render` e do motor DuckDB
   fixado em `pyproject.toml`, é de 2025-03-29, sem lançamento desde então, com 55 issues e 43 PRs
   abertos e a correção da reflexão da `pg_collation` parada num PR de 2026-03-28; o
   `duckdb-sqlalchemy` 1.5.5.9, a bifurcação de 2025-12-24 mantida por um autor, com 17 estrelas e
   8.973 downloads no mês contra 1.841.220, compila os mesmos statements byte a byte, passa todos
   os testes do pacote no lugar dele com a SQLAlchemy 2.0.54 e livra a reflexão da `pg_collation`
-  na 2.1.0 (`POC.md`). Espera o usuário: trocar a dependência (a fixação em
-  `pyproject.toml`, `import duckdb_sqlalchemy` em `serialize_db.sql`, `serialize_db.engine.duckdb`
-  e `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
-  passa a refleti-la, a lista de `probes/space.py` e a prosa que nomeia o dialeto em `README.md`,
-  `docs/index.md`, `docs/tecnologias.md` e `CLAUDE.md`) ou manter o `duckdb-engine` enquanto a
-  2.0.54 o serve.
+  na 2.1.0 (`POC.md`); a versão atual do `duckdb-sqlalchemy` é a 1.5.6, de 2026-10-05, sem
+  leitura. Espera o usuário: trocar a dependência (a fixação e o comentário em `pyproject.toml`,
+  `import duckdb_sqlalchemy` em `serialize_db.sql`, `serialize_db.engine.duckdb` e
+  `tests/proof_of_concept/test_sqlalchemy.py`, cuja asserção da chave primária não refletida
+  passa a refleti-la, a lista de `probes/space.py`, a prosa que nomeia o dialeto em `README.md`,
+  `docs/index.md` e `docs/tecnologias.md` e as docstrings de `tests/test_schema.py` e
+  `tests/test_sql.py`) ou manter o `duckdb-engine` enquanto a 2.0.54 o serve.
 - **O DuckDB 1.5.6.** Os clientes instalam as extensões do DuckDB pelos wheels
   `duckdb-extension-delta` e `duckdb-extension-httpfs` do PyPI, que exigem o `duckdb` da mesma
   versão e paravam na 1.5.5 em 2026-10-04 (`POC.md`); o pino fica em 1.5.5. A troca
@@ -205,22 +217,24 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   não reescreve os dados: um Iceberg registra os Parquet do Delta por `add_files`, e o Apache XTable
   converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
   `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
-  tabela Iceberg no Glue ou um table bucket no S3 Tables: na última leitura, na bateria de
-  2026-10-05, o Glue seguia com um banco e uma tabela Parquet, e o Lake Formation e o S3 Tables não
-  responderam ao papel do projeto. Espera um catálogo no ambiente alvo.
+  tabela Iceberg no Glue ou um table bucket no S3 Tables: nas leituras das baterias de 2026-10-05
+  a 2026-10-07, a última às 03:03 de 2026-10-07, o Glue seguia com um banco e uma tabela Parquet, e
+  o Lake Formation e o S3 Tables não responderam ao papel do projeto
+  (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
 
 ## Achados das sondas de consistência de leitura e escrita
 
 As sondas de 2026-09-25 (`POC.md`, seção "O que as sondas de consistência de leitura e escrita
 mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e trabalho
 paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas no ambiente alvo, em
-2026-09-26, em 2026-09-27, em 2026-09-29 e em 2026-10-05, repetiram os achados sem reprovar checagem
-(`POC.md`, `.claude/memory/environments.md`). Cada item espera o usuário: corrigir, ou aceitar como
-está.
+2026-09-26, em 2026-09-27, em 2026-09-29, em 2026-10-05 e em 2026-10-07, repetiram os achados sem
+reprovar checagem (`POC.md`, `.claude/memory/environments.md`). Cada item espera o usuário:
+corrigir, ou aceitar como está.
 
 - **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
-  `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: numa partição com os dois,
-  todos saem com o sinal do primeiro que apareceu. Atinge o `export_partition` do motor DuckDB,
+  `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: num grupo de linhas com os
+  dois, todos saem com o sinal do primeiro que apareceu, e um grupo de 4 linhas, gravado em `PLAIN`,
+  guarda o sinal (`.claude/memory/duckdb.md`). Atinge o `export_partition` do motor DuckDB,
   `import_table`, `rewrite` e `export_parquet(mode="rewrite")`; `publish_partition` e `compact`,
   pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift não foi lido. A diferença
   aparece em `1 / x`, em `math.copysign` e no texto do valor, nunca numa comparação ou numa soma.
@@ -229,13 +243,15 @@ está.
 - **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
   `DECIMAL(38, 6)` (`_totals` de `serialize_db.audit`): um valor finito de magnitude 1e32 ou mais
   falha no `CAST` (`ConversionException`), e uma soma acima disso estoura (`OutOfRangeException`),
-  o que derruba `audit` e impede `publish_delta` (`audit=False` dispensa, com aviso). A base de
-  produção fica em 1e18. Opções: somar o `Double` como `DOUBLE` (a soma de controle deixa de ser
-  exata, como já é a coluna), ou capturar o estouro e registrar a soma como não lida.
+  o que derruba `audit` e impede `publish_delta` (`audit=False` dispensa, com aviso). O
+  `import_report` soma as mesmas colunas como `DECIMAL(38, 6)` (`_total_measures` de
+  `serialize_db.parquet_import`) e tem o mesmo teto. A base de produção fica em 1e18. Opções:
+  somar o `Double` como `DOUBLE` (a soma de controle deixa de ser exata, como já é a coluna), ou
+  capturar o estouro e registrar a soma como não lida.
 - **A escrita condicional do arquivo de controle entre threads.** Na pasta local,
   `Storage.write_text(if_match=...)` confere a impressão digital e faz o `os.replace` fora de um
   lock: oito threads somando 50 cada perderam 293 de 400 atualizações, e de 312 a 335 nas rodadas do
-  alvo, de 2026-09-26 a 2026-10-05. A docstring diz que a escrita não é atômica entre processos;
+  alvo, de 2026-09-26 a 2026-10-07. A docstring diz que a escrita não é atômica entre processos;
   entre threads do mesmo processo ela também não é, e `snapshot`, `archive_snapshot` e `set_channel`
   chamados em paralelo numa raiz local (duas `Execution` com `snapshot` encerrando ao mesmo tempo,
   por exemplo) podem perder uma entrada. No S3 o `IfMatch` é do servidor. Opções: um
@@ -245,16 +261,18 @@ está.
   dá ao `DataFrame`, transforma o `NaN` de uma coluna `float64` em nulo, e a linha do `Double` na
   tabela de tipos de `docs/index.md` diz que ele entra como chega, com `NaN`; isso vale para o
   Arrow, e pelo pandas o `NaN` vira nulo antes de `cast`, que numa coluna `NOT NULL` o recusa.
-  Opção: uma frase na seção do `DataFrame` de `docs/index.md`.
+  Opção: uma frase em `docs/index.md`, seção "Rodar o pipeline no sandbox DuckDB", no parágrafo
+  que dá a conversão do `DataFrame`.
 - **A janela entre a conferência da versão fixada e o commit de `publish_delta`.**
   `_check_no_data_change` confere por `version_diff` que nenhuma alteração de dados entrou na tabela
   desde a versão fixada, e `register_files` abre a tabela de novo, na versão atual, logo antes do
   `create_write_transaction` (`publish_partition` abre do mesmo jeito): um commit de dados de outra
   execução na mesma partição entre a conferência e essa abertura, durante o `reconcile` e o `COPY`
   de `export_partition`, passa sem `ExecutionConflict`, e o commit seguinte substitui a partição da
-  outra execução sem aviso, quando a docstring de `publish_delta` e a etapa 6
-  prometem `ExecutionConflict`. A sonda da execução reproduz a janela na seção D (`exec-e` parada em
-  `export_partition` enquanto `exec-f` publica) e a viu na disputa da seção C sob carga. No delta-rs
+  outra execução sem aviso, quando a docstring de `publish_delta`, `docs/index.md` (seção "Rodar
+  uma execução") e a etapa 6 prometem `ExecutionConflict`. A sonda da execução reproduz a janela
+  na seção D (`exec-e` parada em `export_partition` enquanto `exec-f` publica) e a viu na disputa
+  da seção C sob carga. No delta-rs
   1.6.6, `create_write_transaction(mode="overwrite", partition_filters=...)` sobre um `DeltaTable`
   aberto na versão fixada falha com `CommitFailedError` quando um `overwrite` da mesma partição
   entrou depois dela (`a concurrent transaction deleted data this operation read`) e quando o
@@ -262,25 +280,8 @@ está.
   uma compactação da mesma partição e um commit só de metadados no meio. Opções: `register_files` e
   `publish_partition` abrirem a tabela na versão fixada pela execução, atualizada depois do
   `reconcile`, que commita a mudança de esquema, o que entrega o `ExecutionConflict` prometido pelo
-  próprio delta-rs; ou a docstring de `publish_delta` dizer que a conferência não cobre a janela,
-  com uma execução por ambiente de cada vez.
-
-## Achados da revisão das alterações de 2026-09-28 a 2026-10-01
-
-A revisão dos PRs #103 a #119, em 2026-10-01, leu os diffs contra as decisões e os planos, rodou as
-suítes e sondas por módulo e corrigiu no mesmo PR o que não pedia decisão; os seis itens que
-pediam decisão foram decididos pelo usuário no mesmo dia: cinco estão na etapa que descreve cada
-um e em `.claude/memory/decisions.md`, e o terceiro, a variável das sondas da operação, no
-`SUITE.md` do usuário.
-
-Notas anteriores à janela, sem decisão pedida: a coluna de partição `Text` dá `TypeError` em
-`Execution`, que `check_models` acusa antes; `max_workers=0` sobe o `ValueError` do
-`ThreadPoolExecutor`; `transaction()` do motor Redshift não é reentrante, e a composição de
-`append` com um `BEGIN` do cliente em `session()` não está escrita;
-`Storage.for_uri("file:relativo")` vira uma pasta literal, e `relative` compara texto, o que
-recusaria um destino com `\` no Windows, não lido lá. As três notas que valiam correção, a lista
-vazia em `publish_delta` e `audit`, o `run.snapshot` repetido e a partição repetida no `ingest` do
-Redshift, saíram com a decisão do usuário de 2026-10-02.
+  próprio delta-rs; ou a docstring de `publish_delta` e `docs/index.md` dizerem que a conferência
+  não cobre a janela, com uma execução por ambiente de cada vez.
 
 ## Achados da revisão de bugs de 2026-10-04
 
@@ -298,8 +299,8 @@ itens que pedem decisão:
   constante não finita, antes de o motor recusar o texto.
 - **A ordem do `Execution.__exit__`.** O `__exit__` roda `sandbox.cleanup()` antes de
   `_write_snapshot()`: um descarte que falha, por uma conexão derrubada ou um `DROP` recusado,
-  sobe ao cliente e deixa a execução sem a entrada do snapshot que `Execution(snapshot=...)`
-  pediu, com as partições já publicadas no Delta e as versões no log da execução. Opções: gravar
+  sobe ao cliente e deixa a execução sem a entrada do snapshot que `run.snapshot(...)` pediu,
+  com as partições já publicadas no Delta e as versões no log da execução. Opções: gravar
   a entrada antes do descarte, com o descarte em `finally`, para a falha do sandbox não apagar o
   registro do que já está publicado; ou a docstring de `Execution` dizer que o snapshot só entra
   com o descarte concluído, e o operador o cria por `serialize-db snapshot`.

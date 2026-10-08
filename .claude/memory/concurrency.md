@@ -171,6 +171,11 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   end of the query (4.531 s in a three-process reproducer, with the second batch already in memory),
   so a test that closes a stream "mid-query" asserts the thread ended and the session is free, with
   the error null or the interrupt's.
+- `max_workers=0` reaches `ThreadPoolExecutor` in `serialize_db._pool.run_in_pool`, whose
+  `ValueError: max_workers must be greater than 0` goes up from `run.publish_delta` and
+  `publish_redshift`, and `serialize-db publish_redshift --max-workers 0`, a plain `int` option,
+  ends in a traceback (code review of 2026-10-01, no decision asked; the `ValueError` read again
+  on 2026-10-07). `src/serialize_db/cli.py`
 - The memory probes of `tests/proof_of_concept/test_duckdb.py` on Linux x86_64 (2026-09-23, 4 vCPUs,
   Python 3.13.12, DuckDB 1.5.5, PyArrow 25.0.1): a new process's `ru_maxrss` starts at its parent's
   peak on Linux, so the probes read `VmHWM` from `/proc/self/status` there and `ru_maxrss` on macOS,
