@@ -131,24 +131,10 @@ Teste credencial expirando (leva 1h):
 
 ```
 # O leitor Delta sobre o snapshot do canal default e o leitor Redshift sobre as tabelas
-# publicadas, com o mesmo statement; o tempo de abertura das 12 views é a leitura pendente.
-PYTHONPATH=tests .venv/bin/python - <<'PY'
-import os
-import time
-import sqlalchemy as sa
-from client_model import Base
-from serialize_db import Database
-
-db = Database(os.environ["TARGET_ROOT_PATH"], "prd", Base.metadata)
-contas = Base.metadata.tables["cad_contas"]
-statement = sa.select(sa.func.count()).select_from(contas)
-started = time.perf_counter()
-with db.open_delta() as reader:
-    print(f"leitor Delta aberto em {time.perf_counter() - started:.3f} s: {reader.versions}")
-    print("delta:", reader.query(statement).to_pylist())
-with db.open_redshift() as reader:
-    print("redshift:", reader.query(statement).to_pylist())
-PY
+# publicadas, com o mesmo statement: o tempo de abertura das 12 views, as versões e a contagem de
+# cad_contas por cada leitor, que a sonda confere iguais. O relatório vai ao terminal e a
+# probes/output/operacao_leitores_<data-hora>.txt; código de saída 1 quando as contagens diferem.
+.venv/bin/python probes/operacao/probe_readers.py $TARGET_ROOT_PATH
 ```
 
 # Exportação e Compact

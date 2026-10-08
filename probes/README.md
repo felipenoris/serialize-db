@@ -42,6 +42,7 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_parallel_gain.py
 .venv/bin/python probes/operacao/probe_published_base.py s3://bucket/prefixo
+.venv/bin/python probes/operacao/probe_readers.py s3://bucket/prefixo
 ```
 
 ## Os scripts
@@ -211,18 +212,20 @@ partições de `cad_lancamentos` da base de origem, que elas só leem, fora das 
 `<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-operacao/<sonda>-<id>/` ou, sem a variável, sob
 `<SERIALIZE_DB_TEST_LOCAL_ROOT>/serialize-db-operacao/<sonda>-<id>/`, e apaga a pasta no fim, também
 quando para numa exceção (`SERIALIZE_DB_TEST_KEEP` a mantém); sem nenhuma das duas raízes, ou com a
-origem sem as partições, para com o código 2. `probe_published_base.py` é a exceção: ela roda sobre
-a base publicada, que recebe, e grava nela, sem pasta de trabalho, como diz a linha dela na tabela
-abaixo. As rotinas rodam como o operador as roda, pelo `serialize-db` do ambiente virtual num
-processo filho, e as interrompidas levam `SIGKILL`, como o kernel sem memória, que não deixa rodar
-nenhum `finally`; `probe_parallel_gain.py` chama a biblioteca no próprio processo. Cada leitura sai
-no terminal e em `output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime
-`OK` ou `PROBLEMAS` com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as
-variáveis do ambiente alvo estão em `SUITE_ALVO.md`, seção "Sondas da operação", e o de
-`probe_published_base.py` na seção "Sonda da base publicada", depois da publicação e da exportação.
-As leituras do ambiente alvo, desde a primeira rodada de 2026-10-05, estão nos arquivos de tema de
-`.claude/memory/`: `source-base.md` (a retomada da carga), `delta.md` (o `archive`, o `vacuum` e o
-`compact`), `redshift.md` (o `UNLOAD`) e `concurrency.md` (o ganho das threads).
+origem sem as partições, para com o código 2. `probe_published_base.py` e `probe_readers.py` são a
+exceção: rodam sobre a base publicada, que recebem, sem pasta de trabalho, e só a primeira grava
+nela, como dizem as linhas delas na tabela abaixo. As rotinas rodam como o operador as roda, pelo
+`serialize-db` do ambiente virtual num processo filho, e as interrompidas levam `SIGKILL`, como o
+kernel sem memória, que não deixa rodar nenhum `finally`; `probe_parallel_gain.py` chama a
+biblioteca no próprio processo. Cada leitura sai no terminal e em
+`output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime `OK` ou `PROBLEMAS`
+com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as variáveis do
+ambiente alvo estão em `SUITE_ALVO.md`, seção "Sondas da operação", e o de `probe_published_base.py`
+na seção "Sonda da base publicada", depois da publicação e da exportação, e o de `probe_readers.py`
+na seção "Acesso de leitura". As leituras do ambiente alvo, desde a primeira rodada de 2026-10-05,
+estão nos arquivos de tema de `.claude/memory/`: `source-base.md` (a retomada da carga), `delta.md`
+(o `archive`, o `vacuum` e o `compact`), `redshift.md` (o `UNLOAD`) e `concurrency.md` (o ganho das
+threads).
 
 | Sonda | O que roda |
 | --- | --- |
@@ -233,12 +236,13 @@ As leituras do ambiente alvo, desde a primeira rodada de 2026-10-05, estão nos 
 | `probe_unload_parallel.py` | O `UNLOAD` da exportação do motor Redshift com `PARALLEL OFF` e em paralelo, de 1, 5, 10 e 20 milhões de linhas e da partição inteira, três vezes cada: o menor tempo, os arquivos e o tempo dos rodapés por tamanho e modo, contra o limiar de 5.000.000 linhas de `_PARALLEL_OFF_ROWS`; pede a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, e o sandbox `exec_operacao_<id>_*` sai no `cleanup`. |
 | `probe_parallel_gain.py` | O ganho das APIs com threads sobre a execução em série, em quatro tabelas iguais de `--rows` linhas (5.000.000 por padrão) que a sonda gera e publica no Delta, cada variante `--repetitions` vezes (3 por padrão): no motor DuckDB, o `stream`, o `appender`, os dois no mesmo `with`, sem trabalho do cliente e com o pandas por lote, e 200 consultas pequenas em série, em quatro threads na sessão principal e em quatro sessões a mais (`duckdb`); `run.ingest`, `run.publish_delta` e o `materialize` do leitor Delta com as quatro tabelas numa chamada contra uma por tabela (`pools`); no motor Redshift, `run.ingest` das quatro, o `stream`, o `appender`, os dois juntos, 80 consultas pequenas e `run.publish_delta` (`redshift`); e `publish_redshift` com `max_workers=4` contra 1 (`publicacao`). Imprime cada medida e o resumo com o menor tempo de cada variante, o pico e a razão sobre a série, e confere as linhas contadas; `redshift` e `publicacao` pedem a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, o sandbox `exec_*` sai no `cleanup`, e a sonda apaga as tabelas `poc<id>_*` que publicou e as linhas de controle delas. |
 | `probe_published_base.py` | Depois da publicação da base inteira pelo canal `default`, sobre a raiz que recebe: o `EXPLAIN` do join de `prd_cad_lancamentos` com `prd_cad_contas` por `id_conta`, com os rótulos `DS_*`, dos quais `DS_BCAST_INNER` e `DS_DIST_BOTH` pedem a chave de distribuição; a primeira partição de `cad_lancamentos` refeita com as mesmas linhas numa execução do motor DuckDB marcada com o snapshot `refeito-<execution_id>`; e `serialize-db channel` e `serialize-db publish_redshift --channel default --max-workers 4` para o snapshot novo, a ida, e de volta ao de antes, a volta, que roda também quando a ida falha. Confere o plano com algum rótulo `DS_*`, cuja checagem a recusa do `EXPLAIN` reprova sem parar a sonda, as versões publicadas e a partição trocada em cada publicação, as linhas e a soma de `id_lancamento` de `prd_cad_lancamentos` e o canal no fim, e imprime o tempo e o pico de RSS de cada tabela trocada. Grava na própria base: a versão nova de `cad_lancamentos`, o snapshot `refeito-<execution_id>` e os manifestos do `COPY` ficam, e o canal `default` e as tabelas `prd_*` voltam ao estado de antes; para com o código 2 antes de gravar com a raiz fora do S3, sem o canal ou com uma tabela, publicada ou atual, fora da versão do snapshot dele, porque a execução da partição refeita levaria ao snapshot novo a versão atual de cada tabela. |
+| `probe_readers.py` | Depois da publicação da base inteira pelo canal `default`, sobre a raiz que recebe: o leitor Delta do snapshot do canal, com o tempo da abertura das views e as versões lidas, e a contagem de `cad_contas` por ele e pelo leitor Redshift das tabelas publicadas, com o mesmo statement. Confere a contagem igual nos dois leitores; pede as variáveis `SERIALIZE_DB_REDSHIFT_*` e só lê a base e as tabelas publicadas. |
 
 `operation_lib.py` é a biblioteca comum: a raiz de trabalho (`work_database`), o arquivo de saída
 (`open_report`), a linha de comando (`parse_arguments`), as partições da origem fora das ignoradas,
 a carga pela biblioteca, `serialize-db` num processo filho até o fim (`run_cli`) ou encerrado num
 ponto marcado (`run_cli_killed`), os arquivos do log e da pasta de uma tabela, os órfãos, as linhas
-e a soma pelo `delta_scan`, `check`, `finish`, `finish_on_base`, o fim da sonda que grava na própria
+e a soma pelo `delta_scan`, `check`, `finish`, `finish_on_base`, o fim das sondas sobre a própria
 base, e `run`.
 
 ## Acrescentar um probe
