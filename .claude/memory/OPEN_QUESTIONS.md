@@ -64,8 +64,11 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `session()` leva no `COMMIT` dele o trabalho do cliente (leitura do código na revisão de
   2026-10-01; o Redshift não foi lido com um `BEGIN` dentro de outro). A docstring de `session()`
   do motor DuckDB descreve o caso dele, e as de `session()` e `transaction()` do motor Redshift não
-  falam do caso. Espera uma leitura no alvo e a frase nas docstrings que a revisão de 2026-10-01
-  propôs.
+  falam do caso. Espera a leitura no alvo de
+  `test_engine_redshift.py::test_append_inside_a_client_transaction_is_read`
+  (`redshift.engine.append_inside_client_transaction`: o desfecho do `append` e do `ROLLBACK` do
+  cliente, os avisos do servidor e os ids que ficam; no substituto local, o `BEGIN` aninhado é
+  recusado) e a frase nas docstrings que a revisão de 2026-10-01 propôs.
 - **A distribuição das tabelas publicadas.** As tabelas publicadas ficam em `DISTSTYLE AUTO`
   (decisão do usuário de 2026-09-21), e uma chave de distribuição só entra, por
   `ALTER TABLE ... ALTER DISTKEY`, quando o `EXPLAIN` de um join típico entre elas,
@@ -73,7 +76,8 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   (decisão do usuário de 2026-09-23); o papel do projeto não lê `svv_table_info` depois do `USE`
   (42501, probe de 2026-09-23). O `EXPLAIN` só rodou sobre as tabelas pequenas das suítes, com
   `DS_DIST_ALL_NONE` (`test_publication.py::test_published_join_redistribution_is_read`,
-  2026-09-24), e espera a leitura sobre a base publicada no alvo.
+  2026-09-24), e espera a leitura sobre a base publicada no alvo, que
+  `probes/operacao/probe_published_base.py` faz depois da publicação pelo canal `default`.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -138,8 +142,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   com 285 MB, e em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB. Esperam: a volta a um snapshot
   anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela, que pede um commit
   depois do snapshot, fora do fluxo de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão
-  já estava publicada; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio,
-  com o caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
+  já estava publicada, e que `probes/operacao/probe_published_base.py` faz com a primeira partição
+  de `cad_lancamentos` refeita; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket
+  próprio, com o caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
@@ -244,8 +249,11 @@ corrigir, ou aceitar como está.
   dois, todos saem com o sinal do primeiro que apareceu, e um grupo de 4 linhas, gravado em `PLAIN`,
   guarda o sinal (`.claude/memory/duckdb.md`). Atinge o `export_partition` do motor DuckDB,
   `import_table`, `rewrite` e `export_parquet(mode="rewrite")`; `publish_partition` e `compact`,
-  pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift não foi lido. A diferença
-  aparece em `1 / x`, em `math.copysign` e no texto do valor, nunca numa comparação ou numa soma.
+  pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift espera a leitura no alvo de
+  `test_engine_redshift.py::test_zero_sign_through_copy_query_and_unload_is_read`
+  (`redshift.engine.zero_sign`: o `COPY`, o cursor e o `UNLOAD`, com o que o servidor guarda lido
+  no texto do valor e por `atan2`). A diferença aparece em `1 / x`, em `math.copysign` e no texto
+  do valor, nunca numa comparação ou numa soma.
   Opções: `DICTIONARY_SIZE_LIMIT 0` no `COPY` (sem dicionário em coluna alguma, arquivo maior), ou
   registrar a perda na linha do `Double` da tabela de tipos de `docs/index.md`.
 - **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
@@ -300,11 +308,13 @@ itens que pedem decisão:
 
 - **O `Double` não finito nas constantes do `render`.** `render` escreve `nan`, `inf` e `-inf`
   para um `Double` não finito embutido como constante, e o DuckDB recusa o texto com
-  `BinderException` (`Referenced column "nan" was not found`); o Redshift não foi lido, e o
-  `literal_text` do `stream` do Redshift compila os parâmetros do cliente com o mesmo
-  `literal_binds`, sem leitura. Opções: um `literal_processor` do `Double` nos dois dialetos,
-  que escreva `CAST('NaN' AS DOUBLE)` e `CAST('Infinity' AS DOUBLE)`; ou um `SqlError` na
-  constante não finita, antes de o motor recusar o texto.
+  `BinderException` (`Referenced column "nan" was not found`), e o `literal_text` do `stream` do
+  Redshift compila os parâmetros do cliente com o mesmo `literal_binds`. O Redshift espera a
+  leitura no alvo de `test_engine_redshift.py::test_nonfinite_double_constant_is_read`
+  (`redshift.engine.nonfinite_double_constant`: a constante do `render` pelo `query`, o valor do
+  cliente pelo `stream` e pelo parâmetro do driver). Opções: um `literal_processor` do `Double`
+  nos dois dialetos, que escreva `CAST('NaN' AS DOUBLE)` e `CAST('Infinity' AS DOUBLE)`; ou um
+  `SqlError` na constante não finita, antes de o motor recusar o texto.
 - **A ordem do `Execution.__exit__`.** O `__exit__` roda `sandbox.cleanup()` antes de
   `_write_snapshot()`: um descarte que falha, por uma conexão derrubada ou um `DROP` recusado,
   sobe ao cliente e deixa a execução sem a entrada do snapshot que `run.snapshot(...)` pediu,

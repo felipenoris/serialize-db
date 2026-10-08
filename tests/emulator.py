@@ -478,6 +478,8 @@ class Connection:
         self.pid = database.register(self)
         self.autocommit = False
         self.in_transaction = False
+        # Os avisos do servidor, que o driver guarda em notices; o substituto não manda nenhum.
+        self.notices: collections.deque = collections.deque(maxlen=100)
         # As linhas do último UNLOAD que passou, o que pg_last_unload_count() devolve.
         self.last_unload_count = 0
         # O esquema em que um CREATE TABLE sem esquema cai: o de SET search_path.

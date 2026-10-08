@@ -13,8 +13,9 @@ contra um IAM fabricado, e os endpoints que o ``RS-14`` julga, no
 totais do log, a tabela das medições e as checagens delas, o ``--metadata`` que não importa e a
 seção interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos
 dos clientes segurados e das chaves, a linha do tempo, as checagens e a sonda inteira sobre uma
-tabela Delta local e, no ``operation_lib.py`` das sondas da operação, a linha de comando e as
-primeiras partições da origem fora das ignoradas. Um ``Report`` grava em ``probes/output/``;
+tabela Delta local, no ``operation_lib.py`` das sondas da operação, a linha de comando e as
+primeiras partições da origem fora das ignoradas e, no ``probe_published_base.py``, as tabelas
+trocadas pela saída do ``serialize-db publish_redshift``. Um ``Report`` grava em ``probes/output/``;
 ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
 que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
@@ -55,6 +56,7 @@ import diagnose_aws
 import duckdb_threads
 import operation_lib
 import parquet_source
+import probe_published_base
 import probelib
 import redshift
 import space
@@ -2317,3 +2319,25 @@ def test_source_partitions_skips_the_ignored_partitions(
         operation_lib.source_partitions(str(source), 4, ignored)
     assert stop.value.code == 2
     assert "tem 3 partição(ões) fora das ignoradas, a sonda pede 4" in capsys.readouterr().err
+
+
+def test_published_tables_reads_the_swapped_tables() -> None:
+    """``published_tables`` da sonda da base publicada lê a versão, as partições, o tempo e o pico
+    de RSS de cada tabela trocada nas linhas do ``serialize-db publish_redshift``, e deixa de fora a
+    tabela já publicada e o resumo de versões."""
+    lines = [
+        "INFO serialize_db.publication: cad_contas: a versão 3 já está publicada",
+        "INFO serialize_db.publication: cad_lancamentos publicada na versão 8: partições "
+        "['2026-01-31'], em 85.3 s; RSS máximo do processo 270 MB",
+        "cad_lancamentos: versão 8",
+    ]
+    finished = operation_lib.Finished(0, lines, 90.0)
+    assert probe_published_base.published_tables(finished) == {
+        "cad_lancamentos": {
+            "table": "cad_lancamentos",
+            "version": "8",
+            "partitions": "['2026-01-31']",
+            "seconds": "85.3",
+            "rss": "270",
+        }
+    }

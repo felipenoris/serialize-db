@@ -8,19 +8,21 @@ colunas do ``COPY`` do appender e o segundo ``close``, e a troca da partição c
 finito, sobre uma conexão de mentira que registra os comandos, responde ao que o motor pergunta e
 grava o arquivo de um ``UNLOAD`` numa pasta local (os que gravam são ``local``, sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência, e leem dois
-escritores na mesma tabela, com uma amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e
-arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de
+escritores na mesma tabela, o ``append`` dentro de um ``BEGIN`` do cliente, o ``Double`` não finito
+como constante e como parâmetro, e o sinal do zero pelo ``COPY``, pelo cursor e pelo ``UNLOAD``,
+com uma amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e arquivos sob
+``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de
 ``target_env_examples/redshift_native.py``, da biblioteca do projeto Claude, e no substituto local
 (``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/emulator.py``, que os testes dão ao motor
 no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``, particionado por
 ``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma ``DateTime`` e a
 coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
-(``tests/lancamentos_model.py``), e ``cad_medidas``, sem JSON, com uma coluna anulável no meio;
-``cad_colunas``, só de texto, recebe uma coluna nova no meio ou troca duas de lugar depois de uma
-partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada valor na coluna de mesmo nome. A
-coluna da versão que o modelo não tem faz o ``COPY`` do ``ingest`` falhar, e o lote sem uma coluna
-``NOT NULL`` faz a carga do appender falhar, com o comando recusado, o SQLSTATE e a mensagem do
-servidor como leituras.
+(``tests/lancamentos_model.py``), ``cad_medidas``, sem JSON, com uma coluna anulável no meio, e
+``cad_sinais``, com um ``Double``; ``cad_colunas``, só de texto, recebe uma coluna nova no meio ou
+troca duas de lugar depois de uma partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada
+valor na coluna de mesmo nome. A coluna da versão que o modelo não tem faz o ``COPY`` do ``ingest``
+falhar, e o lote sem uma coluna ``NOT NULL`` faz a carga do appender falhar, com o comando
+recusado, o SQLSTATE e a mensagem do servidor como leituras.
 """
 
 from __future__ import annotations
@@ -32,11 +34,12 @@ import io
 import itertools
 import json
 import logging
+import math
 import re
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
@@ -49,7 +52,7 @@ from deltalake import write_deltalake
 
 from conftest import LocalLocation, S3Location, record, redshift_config
 from lancamentos_model import ACCOUNTS, ENTRIES, MONTHS, PROJECTED, account_rows, entry_rows
-from serialize_db import delta, schema
+from serialize_db import delta, schema, sql
 from serialize_db.engine import Engine, redshift
 from serialize_db.engine.redshift import (
     RedshiftConfig,
@@ -86,6 +89,14 @@ MEASURES = sa.Table(
     sa.Column("id_medida", sa.BigInteger, primary_key=True, autoincrement=False),
     sa.Column("altura", sa.BigInteger),
     sa.Column("largura", sa.BigInteger),
+)
+
+# Uma tabela com uma coluna Double, para o sinal do zero.
+SIGNS = sa.Table(
+    "cad_sinais",
+    sa.MetaData(),
+    sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=False),
+    sa.Column("valor", sa.Double),
 )
 
 
@@ -1703,6 +1714,57 @@ def test_appender_refuses_a_batch_without_a_not_null_column(
     assert count_of(engine, f"{engine.prefix}cad_lancamentos_projetados") == 0
 
 
+def notice_reading(
+    notices: Iterable[dict],
+) -> list[dict]:
+    """Os avisos do servidor que o driver guardou, com a severidade, o SQLSTATE e a mensagem; o
+    driver guarda a chave e o valor de cada campo em bytes."""
+    readings = []
+    for notice in notices:
+        reading = {}
+        for field in (b"S", b"C", b"M"):
+            reading[field.decode()] = notice.get(field, b"").decode("utf-8", "replace")
+        readings.append(reading)
+    return readings
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_append_inside_a_client_transaction_is_read(
+    target: Target,
+) -> None:
+    """Um ``append`` dentro de um ``BEGIN`` que o cliente abriu em ``session()``, depois de uma
+    linha do cliente, seguido do ``ROLLBACK`` do cliente: o desfecho do ``append`` e o do
+    ``ROLLBACK``, os avisos do servidor e os ids que ficam na tabela são leituras, porque o
+    ``COMMIT`` de ``transaction()`` pode levar junto a linha do cliente. Depois do bloco, um
+    ``append`` entra pela transação do motor."""
+    engine = target.engine
+    name = f"{engine.prefix}cad_medidas"
+    engine.create_table(MEASURES)
+    reading = {}
+    with engine.session() as connection:
+        connection.notices.clear()
+        engine.execute("BEGIN")
+        engine.execute(f'INSERT INTO {engine.qualified(name)} ("id_medida") VALUES (1)')
+        try:
+            reading["append"] = engine.append(MEASURES, pa.table({"id_medida": [2, 3]}))
+        except redshift_connector.Error as error:
+            reading["append"] = refusal_reading(error)
+        try:
+            engine.execute("ROLLBACK")
+            reading["rollback"] = "aceito"
+        except redshift_connector.Error as error:
+            reading["rollback"] = refusal_reading(error)
+        reading["notices"] = notice_reading(connection.notices)
+    kept = engine.query(f'SELECT "id_medida" FROM {engine.qualified(name)} ORDER BY 1')
+    reading["ids"] = kept.column(0).to_pylist()
+    record("redshift.engine.append_inside_client_transaction", reading)
+
+    # Fora do bloco do cliente, o append entra pela transação do motor.
+    assert engine.append(MEASURES, pa.table({"id_medida": [4]})) == 1
+    assert count_of(engine, name) == len(reading["ids"]) + 1
+
+
 @pytest.mark.redshift
 @pytest.mark.s3
 def test_ingest_and_pinned_delta_load_files_before_a_middle_column(
@@ -2009,6 +2071,125 @@ def test_stream_and_query_agree_on_a_colon_inside_a_literal(
         by_stream = stream.read_all()
     assert by_query.column("id_lancamento").to_pylist() == [2]
     assert by_stream.equals(by_query)
+
+
+def double_texts(
+    result: pa.Table,
+) -> list[str]:
+    """Os valores da coluna ``valor`` como texto, que guarda o ``nan`` no relatório."""
+    return [str(value) for value in result.column("valor").to_pylist()]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_nonfinite_double_constant_is_read(
+    target: Target,
+) -> None:
+    """``nan``, ``inf`` e ``-inf`` de um ``Double`` pelos caminhos do texto: a constante que
+    ``sql.render`` escreve, como no texto de uma verificação da auditoria, lida pelo ``query``; o
+    valor do cliente que ``literal_text`` põe no ``UNLOAD`` do ``stream``; e o mesmo valor como
+    parâmetro do driver no ``query``. O texto do ``render`` e o valor lido, ou a recusa do
+    servidor, são leituras."""
+    engine = target.engine
+    parameter = sa.select(sa.bindparam("x", type_=sa.Double).label("valor"))
+    readings = {}
+    for value in (float("nan"), float("inf"), float("-inf")):
+        constant = sa.select(sa.literal(value, sa.Double).label("valor"))
+        text = sql.render(constant, "redshift", MEASURES.metadata, prefix=engine.prefix)
+        reading = {"render": text}
+        try:
+            reading["query_render"] = double_texts(engine.query(text))
+        except redshift_connector.Error as error:
+            reading["query_render"] = refusal_reading(error)
+        try:
+            with engine.stream(parameter, {"x": value}) as stream:
+                reading["stream"] = double_texts(stream.read_all())
+        except redshift_connector.Error as error:
+            reading["stream"] = refusal_reading(error)
+        try:
+            reading["query"] = double_texts(engine.query(parameter, {"x": value}))
+        except redshift_connector.Error as error:
+            reading["query"] = refusal_reading(error)
+        readings[str(value)] = reading
+    record("redshift.engine.nonfinite_double_constant", readings)
+
+
+def negatives_by_origin(
+    ids: list[int],
+    negative: list[bool],
+) -> dict[str, int]:
+    """Quantas linhas marcadas em ``negative`` vieram do ``COPY``, os ids até 1000, e quantas do
+    ``INSERT``."""
+    counts = {"copy": 0, "insert": 0}
+    for row_id, is_negative in zip(ids, negative):
+        if not is_negative:
+            continue
+        origin = "copy" if row_id <= 1000 else "insert"
+        counts[origin] += 1
+    return counts
+
+
+def negative_zeros(
+    values: list[float],
+) -> list[bool]:
+    """Quais valores têm o sinal negativo, que separa ``-0.0`` de ``0.0``."""
+    return [math.copysign(1.0, value) < 0 for value in values]
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_zero_sign_through_copy_query_and_unload_is_read(
+    target: Target,
+) -> None:
+    """``-0.0`` e ``0.0`` de um ``Double`` no mesmo arquivo, pelo ``COPY`` do appender, e pelo
+    ``INSERT`` de uma constante: os zeros negativos que o servidor guarda, lidos no texto do
+    valor e por ``atan2``, os que o ``query`` traz pelo cursor e os que o ``stream`` lê do arquivo
+    do ``UNLOAD`` são leituras. Cada caminho traz as 1002 linhas, todas com o valor zero."""
+    engine = target.engine
+    name = engine.qualified(f"{engine.prefix}cad_sinais")
+    engine.create_table(SIGNS)
+    # Os zeros alternados num arquivo só, a começar pelo positivo: o escritor que guarda o zero
+    # num dicionário dá a todos o sinal do primeiro, como o do DuckDB.
+    ids = list(range(1, 1001))
+    values = []
+    for row_id in ids:
+        values.append(0.0 if row_id % 2 == 1 else -0.0)
+    engine.append(SIGNS, pa.table({"id": ids, "valor": values}))
+    engine.execute(
+        f'INSERT INTO {name} ("id", "valor") VALUES '
+        "(1001, CAST('0' AS DOUBLE PRECISION)), (1002, CAST('-0' AS DOUBLE PRECISION))"
+    )
+
+    # O texto do valor e o atan2(valor, -1), -pi no zero negativo e pi no positivo, leem o que o
+    # servidor guarda; o valor vem pelo cursor.
+    by_query = engine.query(
+        f'SELECT "id", "valor", CAST("valor" AS VARCHAR) AS texto, '
+        f'atan2("valor", -1) AS angulo FROM {name}'
+    )
+    with engine.stream(sa.select(SIGNS)) as stream:
+        by_stream = stream.read_all()
+    query_ids = by_query.column("id").to_pylist()
+    texts = by_query.column("texto").to_pylist()
+    text_negative = [text.startswith("-") for text in texts]
+    angle_negative = [angle < 0 for angle in by_query.column("angulo").to_pylist()]
+    query_negative = negative_zeros(by_query.column("valor").to_pylist())
+    stream_ids = by_stream.column("id").to_pylist()
+    stream_negative = negative_zeros(by_stream.column("valor").to_pylist())
+    record(
+        "redshift.engine.zero_sign",
+        {
+            "expected": {"copy": 500, "insert": 1},
+            "texts": sorted(set(texts)),
+            "server_text": negatives_by_origin(query_ids, text_negative),
+            "server_atan2": negatives_by_origin(query_ids, angle_negative),
+            "query": negatives_by_origin(query_ids, query_negative),
+            "stream": negatives_by_origin(stream_ids, stream_negative),
+        },
+    )
+    assert by_query.num_rows == 1002
+    assert by_stream.num_rows == 1002
+    assert set(by_query.column("valor").to_pylist()) == {0.0}
+    assert set(by_stream.column("valor").to_pylist()) == {0.0}
 
 
 @pytest.mark.redshift

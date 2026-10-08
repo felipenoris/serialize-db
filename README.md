@@ -226,7 +226,8 @@ biblioteca, e as sondas que gravam sob as raízes das suítes: as de consistênc
 `probes/consistencia/`, sob `SERIALIZE_DB_TEST_LOCAL_ROOT` e, as do pytest com `-m redshift`, sob a
 raiz S3 e no esquema da suíte; e as da operação, em `probes/operacao/`, que rodam `serialize-db`
 sobre as primeiras partições de `cad_lancamentos` da base de origem, sob `SERIALIZE_DB_TEST_S3_ROOT`
-ou, sem ela, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`. O que cada um lê está no cabeçalho do próprio
+ou, sem ela, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`, salvo `probe_published_base.py`, que roda depois
+da publicação sobre a base publicada e grava nela. O que cada um lê está no cabeçalho do próprio
 script e em `probes/README.md`. Cada um imprime o relatório e o grava em `probes/output/`, pasta
 fora do git, para ser colado na conversa com o assistente.
 
@@ -249,6 +250,7 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_vacuum_orphans.py s3://bucket/origem
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_compact_memory.py s3://bucket/origem
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem
+.venv/bin/python probes/operacao/probe_published_base.py s3://bucket/prefixo
 ```
 
 `duckdb_threads.py` lê as tabelas Delta que a migração gravou, na pasta `<root>/<ambiente>` dela, e
