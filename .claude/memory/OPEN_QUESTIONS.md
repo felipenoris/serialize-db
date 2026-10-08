@@ -141,10 +141,11 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-09-27, em 328,5 s com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s
   com 285 MB, e em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB. Esperam: a volta a um snapshot
   anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela, que pede um commit
-  depois do snapshot, fora do fluxo de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão
-  já estava publicada, e que `probes/operacao/probe_published_base.py` faz com a primeira partição
-  de `cad_lancamentos` refeita; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket
-  próprio, com o caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
+  depois do snapshot e que a seção "Sonda da base publicada" do `SUITE.md` faz com
+  `probes/operacao/probe_published_base.py`, refazendo a primeira partição de `cad_lancamentos` (o
+  passo 6 da publicação leu em cada bateria que cada versão já estava publicada); e o `UNLOAD` de um
+  cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que serve a
+  ele, que precisa de um papel de cliente no alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina

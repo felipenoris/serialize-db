@@ -219,8 +219,8 @@ nenhum `finally`; `probe_parallel_gain.py` chama a biblioteca no próprio proces
 no terminal e em `output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime
 `OK` ou `PROBLEMAS` com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as
 variáveis do ambiente alvo estão em `SUITE.md`, seção "Sondas da operação", e o de
-`probe_published_base.py`, que roda depois da publicação, no bloco do começo deste arquivo. As
-leituras do ambiente alvo, desde a primeira rodada de 2026-10-05, estão nos arquivos de tema de
+`probe_published_base.py` na seção "Sonda da base publicada", depois da publicação e da exportação.
+As leituras do ambiente alvo, desde a primeira rodada de 2026-10-05, estão nos arquivos de tema de
 `.claude/memory/`: `source-base.md` (a retomada da carga), `delta.md` (o `archive`, o `vacuum` e o
 `compact`), `redshift.md` (o `UNLOAD`) e `concurrency.md` (o ganho das threads).
 

@@ -183,6 +183,24 @@ PY
 .venv/bin/serialize-db compact --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --partitions 2026-03-31
 ```
 
+# Sonda da base publicada
+
+```
+cd ~/work/projects/serialize-db
+
+# O EXPLAIN do join de prd_cad_lancamentos com prd_cad_contas por id_conta, a primeira partição
+# de cad_lancamentos refeita num snapshot novo e a ida e a volta pelo canal default, com o tempo e
+# o pico de RSS de cada tabela trocada. A sonda grava na própria base: a versão nova de
+# cad_lancamentos, o snapshot refeito-<execution_id> e os manifestos ficam, e o canal default e as
+# tabelas prd_* voltam ao snapshot de antes. Ela roda depois da exportação, que lê a versão atual
+# e assim exporta a da carga, não a da partição refeita. Ela pede cada tabela, publicada e atual,
+# na versão do snapshot do canal default, como a publicação acima deixa; fora disso, como numa
+# segunda rodada sobre a mesma base, para com o código 2 antes de gravar. O relatório vai ao
+# terminal e a probes/output/operacao_base_publicada_<data-hora>.txt; código de saída 1 quando
+# alguma checagem reprova.
+.venv/bin/python probes/operacao/probe_published_base.py $TARGET_ROOT_PATH
+```
+
 # Sondas de consistência
 
 ```
