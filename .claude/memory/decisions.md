@@ -1510,7 +1510,8 @@ the model's columns, or documenting, the user chose "Só documentar" (15:40 UTC)
 the `ingest` docstrings of both engines, the `Engine` protocol and `DeltaReader.materialize` name
 the case (the model has to keep up with the table),
 `test_materialized_ingest_refuses_a_delta_column_outside_the_model` asserts the DuckDB behavior,
-and the Redshift sentence stays unread in the target (`.claude/memory/OPEN_QUESTIONS.md`).
+and the Redshift sentence stayed unread in the target until 2026-10-06, when the `COPY` was refused
+with `42703` (`test_ingest_refuses_a_delta_column_outside_the_model`, `.claude/memory/redshift.md`).
 `src/serialize_db/engine/__init__.py`, `src/serialize_db/engine/duckdb.py`,
 `src/serialize_db/engine/redshift.py`, `src/serialize_db/reader.py`
 

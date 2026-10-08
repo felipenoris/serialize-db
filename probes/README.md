@@ -202,9 +202,8 @@ comparação valor a valor (`compare`, com `NaN` igual a `NaN` e o zero com o se
 
 ## As sondas da operação (`operacao/`)
 
-As sondas de `operacao/` rodam no ambiente alvo as rotinas de `serialize-db` que
-[`.claude/memory/OPEN_QUESTIONS.md`](../.claude/memory/OPEN_QUESTIONS.md) ainda espera ler lá, sobre
-as primeiras partições de `cad_lancamentos` da base de origem, que elas só leem, fora das que
+As sondas de `operacao/` rodam no ambiente alvo rotinas de `serialize-db` sobre as primeiras
+partições de `cad_lancamentos` da base de origem, que elas só leem, fora das que
 `--ignore-partitions` lista, como o do script de migração e do `serialize-db import`;
 `probe_parallel_gain.py` gera as próprias tabelas. Cada uma grava sob
 `<SERIALIZE_DB_TEST_S3_ROOT>/serialize-db-operacao/<sonda>-<id>/` ou, sem a variável, sob
@@ -216,7 +215,10 @@ kernel sem memória, que não deixa rodar nenhum `finally`; `probe_parallel_gain
 biblioteca no próprio processo. Cada leitura sai no terminal e em
 `output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime `OK` ou `PROBLEMAS`
 com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as variáveis do
-ambiente alvo estão em `SUITE.md`, seção "Sondas da operação".
+ambiente alvo estão em `SUITE.md`, seção "Sondas da operação". As leituras do ambiente alvo, desde
+a primeira rodada de 2026-10-05, estão nos arquivos de tema de `.claude/memory/`: `source-base.md`
+(a retomada da carga), `delta.md` (o `archive`, o `vacuum` e o `compact`), `redshift.md` (o
+`UNLOAD`) e `concurrency.md` (o ganho das threads).
 
 | Sonda | O que roda |
 | --- | --- |

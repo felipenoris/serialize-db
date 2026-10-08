@@ -22,13 +22,17 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   307.133.320 bytes, com 9.504 marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes,
   com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
   20.000 entradas, `POC.md`; e, com a listagem no mesmo limite, ao menos 10.419 versões,
-  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:03,
+  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:04,
   `.claude/memory/environments.md`), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
   com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
   `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
   removidos", traz a regra de exemplo e como mudar a retenção. A mesma pergunta vale para a regra
   de ciclo de vida que `docs/operacao.md`, seção "Arquivo", espera na pasta `arquivo/`: a passagem
-  dos arquivos dela à classe de armazenamento mais barata.
+  dos arquivos dela à classe de armazenamento mais barata. As sondas da operação também apagam a
+  pasta delas sob a raiz da suíte no fim de cada rodada: 19.293 MB em 2026-10-05 e 19.284 MB na
+  segunda rodada de 2026-10-07, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos relatórios.
+  Cada rodada deixa ao menos isso em versões não correntes, cerca de três quartos do salto de
+  `BK-14` de 249.621.376 bytes em 2026-10-05 para 26.705.708.023 em 2026-10-06 [inferido].
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
   2026-09-27 e em 2026-09-29 (`POC.md`), o delta-rs, o `S3FileSystem` e o `boto3`
   renovando a credencial do contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão
@@ -188,13 +192,17 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   variáveis `SERIALIZE_DB_`, ou manter a leitura enquanto o Windows é só a máquina de quem
   desenvolve.
 - **O caso de estudo do GIL.** `test_gil_reacquisition_waits_the_switch_interval`, em
-  `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões da suíte inteira em 2026-09-25,
-  em 2026-10-03 e em 2026-10-07 e passou isolado e nas demais: a asserção pede que os 200 `os.stat`
-  ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de troca dez
-  vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra 0,006 s
-  (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). A esteira não roda
-  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o
-  usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
+  `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões locais da suíte inteira em
+  2026-09-25, em 2026-10-03 e em 2026-10-07 e passou isolado e nas demais: a asserção pede que os
+  200 `os.stat` ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de
+  troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra
+  0,006 s (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão
+  `-m "not redshift"` do `SUITE.md` roda o caso, e ele passou nas 13 sessões com relatório, de
+  2026-09-24 a 2026-10-07, com 0,381 s a 0,893 s ao lado do laço contra 0,012 s a 0,074 s com o
+  intervalo menor (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s
+  contra 0,012 s. A esteira não roda `tests/proof_of_concept/`, e o caso só atrapalha a sessão
+  local antes do commit. Espera o usuário: tornar a medida robusta ou aceitar a reprovação
+  ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   (`POC.md`), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
@@ -218,7 +226,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
   `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
   tabela Iceberg no Glue ou um table bucket no S3 Tables: nas leituras das baterias de 2026-10-05
-  a 2026-10-07, a última às 03:03 de 2026-10-07, o Glue seguia com um banco e uma tabela Parquet, e
+  a 2026-10-07, a última às 03:04 de 2026-10-07, o Glue seguia com um banco e uma tabela Parquet, e
   o Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
 

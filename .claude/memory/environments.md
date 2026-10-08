@@ -289,7 +289,11 @@ by name, the first is now 2025-09-30, and the load refused it (`source-base.md`)
 with `main` at `b6acfa8` (the squash of PR #141), the five ran again with `--ignore-partitions
 2025-09-30` and passed every check (`source-base.md`, `delta.md`, `redshift.md`),
 `probes/parquet_source.py` read the source at 18:25 UTC (`source-base.md`) and
-`probe_parallel_gain.py` measured again from 18:55 UTC (`concurrency.md`).
+`probe_parallel_gain.py` measured again from 18:55 UTC (`concurrency.md`). The six reports of that
+run deleted 19,284 MB under the suite root at their end (19,293 MB on 2026-10-05, about three
+quarters of the growth of `BK-14` on 2026-10-06), and the 15:46 run's `probe_parallel_gain.py`
+3,731 MB (the `raiz apagada` lines, in MB of 2^20 bytes), each object left as a non-current version
+(`.claude/memory/OPEN_QUESTIONS.md`).
 
 ## The prepared folder and the venv
 

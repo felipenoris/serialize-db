@@ -2,9 +2,9 @@
 num processo filho, encerrado por ``SIGKILL`` num ponto marcado, os arquivos de uma tabela Delta
 e a limpeza.
 
-Uma sonda da operação roda uma rotina de ``serialize-db`` que o ambiente alvo ainda não leu
-(``.claude/memory/OPEN_QUESTIONS.md``) sobre as primeiras partições de ``cad_lancamentos`` da base
-de origem, em ordem de nome e fora das de ``--ignore-partitions``, que ela só lê. Ela grava só sob
+Uma sonda da operação roda uma rotina de ``serialize-db`` no ambiente alvo sobre as primeiras
+partições de ``cad_lancamentos`` da base de origem, em ordem de nome e fora das de
+``--ignore-partitions``, que ela só lê. Ela grava só sob
 ``<raiz>/serialize-db-operacao/<sonda>-<id>/``, com a raiz de ``SERIALIZE_DB_TEST_S3_ROOT`` ou, sem
 ela, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, e apaga a pasta no fim, também quando para numa exceção
 (``SERIALIZE_DB_TEST_KEEP`` a mantém). A saída e os erros vão ao terminal e a
