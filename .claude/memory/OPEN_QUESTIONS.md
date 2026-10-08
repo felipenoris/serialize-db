@@ -22,13 +22,17 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   307.133.320 bytes, com 9.504 marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes,
   com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
   20.000 entradas, `POC.md`; e, com a listagem no mesmo limite, ao menos 10.419 versões,
-  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:03,
+  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:04,
   `.claude/memory/environments.md`), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
   com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
   `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
   removidos", traz a regra de exemplo e como mudar a retenção. A mesma pergunta vale para a regra
   de ciclo de vida que `docs/operacao.md`, seção "Arquivo", espera na pasta `arquivo/`: a passagem
-  dos arquivos dela à classe de armazenamento mais barata.
+  dos arquivos dela à classe de armazenamento mais barata. As sondas da operação também apagam a
+  pasta delas sob a raiz da suíte no fim de cada rodada: 19.293 MB em 2026-10-05 e 19.284 MB na
+  segunda rodada de 2026-10-07, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos relatórios.
+  Cada rodada deixa ao menos isso em versões não correntes, cerca de três quartos do salto de
+  `BK-14` de 249.621.376 bytes em 2026-10-05 para 26.705.708.023 em 2026-10-06 [inferido].
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
   2026-09-27 e em 2026-09-29 (`POC.md`), o delta-rs, o `S3FileSystem` e o `boto3`
   renovando a credencial do contêiner, que troca de chave a cada cerca de 30 minutos, e a conexão
@@ -60,8 +64,11 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `session()` leva no `COMMIT` dele o trabalho do cliente (leitura do código na revisão de
   2026-10-01; o Redshift não foi lido com um `BEGIN` dentro de outro). A docstring de `session()`
   do motor DuckDB descreve o caso dele, e as de `session()` e `transaction()` do motor Redshift não
-  falam do caso. Espera uma leitura no alvo e a frase nas docstrings que a revisão de 2026-10-01
-  propôs.
+  falam do caso. Espera a leitura no alvo de
+  `test_engine_redshift.py::test_append_inside_a_client_transaction_is_read`
+  (`redshift.engine.append_inside_client_transaction`: o desfecho do `append` e do `ROLLBACK` do
+  cliente, os avisos do servidor e os ids que ficam; no substituto local, o `BEGIN` aninhado é
+  recusado) e a frase nas docstrings que a revisão de 2026-10-01 propôs.
 - **A distribuição das tabelas publicadas.** As tabelas publicadas ficam em `DISTSTYLE AUTO`
   (decisão do usuário de 2026-09-21), e uma chave de distribuição só entra, por
   `ALTER TABLE ... ALTER DISTKEY`, quando o `EXPLAIN` de um join típico entre elas,
@@ -69,7 +76,8 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   (decisão do usuário de 2026-09-23); o papel do projeto não lê `svv_table_info` depois do `USE`
   (42501, probe de 2026-09-23). O `EXPLAIN` só rodou sobre as tabelas pequenas das suítes, com
   `DS_DIST_ALL_NONE` (`test_publication.py::test_published_join_redistribution_is_read`,
-  2026-09-24), e espera a leitura sobre a base publicada no alvo.
+  2026-09-24), e espera a leitura sobre a base publicada no alvo, que
+  `probes/operacao/probe_published_base.py` faz depois da publicação pelo canal `default`.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -133,9 +141,11 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-09-27, em 328,5 s com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s
   com 285 MB, e em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB. Esperam: a volta a um snapshot
   anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela, que pede um commit
-  depois do snapshot, fora do fluxo de `SUITE.md`, cujo passo 6 leu em cada bateria que cada versão
-  já estava publicada; e o `UNLOAD` de um cliente com usuário só de leitura para um bucket próprio,
-  com o caminho de credencial que serve a ele, que precisa de um papel de cliente no alvo.
+  depois do snapshot e que a seção "Sonda da base publicada" do `SUITE_ALVO.md` faz com
+  `probes/operacao/probe_published_base.py`, refazendo a primeira partição de `cad_lancamentos` (o
+  passo 6 da publicação leu em cada bateria que cada versão já estava publicada); e o `UNLOAD` de um
+  cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que serve a
+  ele, que precisa de um papel de cliente no alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
@@ -188,13 +198,17 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   variáveis `SERIALIZE_DB_`, ou manter a leitura enquanto o Windows é só a máquina de quem
   desenvolve.
 - **O caso de estudo do GIL.** `test_gil_reacquisition_waits_the_switch_interval`, em
-  `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões da suíte inteira em 2026-09-25,
-  em 2026-10-03 e em 2026-10-07 e passou isolado e nas demais: a asserção pede que os 200 `os.stat`
-  ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de troca dez
-  vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra 0,006 s
-  (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). A esteira não roda
-  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o
-  usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
+  `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões locais da suíte inteira em
+  2026-09-25, em 2026-10-03 e em 2026-10-07 e passou isolado e nas demais: a asserção pede que os
+  200 `os.stat` ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de
+  troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra
+  0,006 s (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão
+  `-m "not redshift"` do `SUITE_ALVO.md` roda o caso, e ele passou nas 13 sessões com relatório, de
+  2026-09-24 a 2026-10-07, com 0,381 s a 0,893 s ao lado do laço contra 0,012 s a 0,074 s com o
+  intervalo menor (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s
+  contra 0,012 s. A esteira não roda `tests/proof_of_concept/`, e o caso só atrapalha a sessão
+  local antes do commit. Espera o usuário: tornar a medida robusta ou aceitar a reprovação
+  ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   (`POC.md`), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
@@ -218,7 +232,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
   `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
   tabela Iceberg no Glue ou um table bucket no S3 Tables: nas leituras das baterias de 2026-10-05
-  a 2026-10-07, a última às 03:03 de 2026-10-07, o Glue seguia com um banco e uma tabela Parquet, e
+  a 2026-10-07, a última às 03:04 de 2026-10-07, o Glue seguia com um banco e uma tabela Parquet, e
   o Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
 
@@ -236,8 +250,11 @@ corrigir, ou aceitar como está.
   dois, todos saem com o sinal do primeiro que apareceu, e um grupo de 4 linhas, gravado em `PLAIN`,
   guarda o sinal (`.claude/memory/duckdb.md`). Atinge o `export_partition` do motor DuckDB,
   `import_table`, `rewrite` e `export_parquet(mode="rewrite")`; `publish_partition` e `compact`,
-  pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift não foi lido. A diferença
-  aparece em `1 / x`, em `math.copysign` e no texto do valor, nunca numa comparação ou numa soma.
+  pelo escritor do delta-rs, guardam o sinal, e o `UNLOAD` do Redshift espera a leitura no alvo de
+  `test_engine_redshift.py::test_zero_sign_through_copy_query_and_unload_is_read`
+  (`redshift.engine.zero_sign`: o `COPY`, o cursor e o `UNLOAD`, com o que o servidor guarda lido
+  no texto do valor e por `atan2`). A diferença aparece em `1 / x`, em `math.copysign` e no texto
+  do valor, nunca numa comparação ou numa soma.
   Opções: `DICTIONARY_SIZE_LIMIT 0` no `COPY` (sem dicionário em coluna alguma, arquivo maior), ou
   registrar a perda na linha do `Double` da tabela de tipos de `docs/index.md`.
 - **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
@@ -292,11 +309,13 @@ itens que pedem decisão:
 
 - **O `Double` não finito nas constantes do `render`.** `render` escreve `nan`, `inf` e `-inf`
   para um `Double` não finito embutido como constante, e o DuckDB recusa o texto com
-  `BinderException` (`Referenced column "nan" was not found`); o Redshift não foi lido, e o
-  `literal_text` do `stream` do Redshift compila os parâmetros do cliente com o mesmo
-  `literal_binds`, sem leitura. Opções: um `literal_processor` do `Double` nos dois dialetos,
-  que escreva `CAST('NaN' AS DOUBLE)` e `CAST('Infinity' AS DOUBLE)`; ou um `SqlError` na
-  constante não finita, antes de o motor recusar o texto.
+  `BinderException` (`Referenced column "nan" was not found`), e o `literal_text` do `stream` do
+  Redshift compila os parâmetros do cliente com o mesmo `literal_binds`. O Redshift espera a
+  leitura no alvo de `test_engine_redshift.py::test_nonfinite_double_constant_is_read`
+  (`redshift.engine.nonfinite_double_constant`: a constante do `render` pelo `query`, o valor do
+  cliente pelo `stream` e pelo parâmetro do driver). Opções: um `literal_processor` do `Double`
+  nos dois dialetos, que escreva `CAST('NaN' AS DOUBLE)` e `CAST('Infinity' AS DOUBLE)`; ou um
+  `SqlError` na constante não finita, antes de o motor recusar o texto.
 - **A ordem do `Execution.__exit__`.** O `__exit__` roda `sandbox.cleanup()` antes de
   `_write_snapshot()`: um descarte que falha, por uma conexão derrubada ou um `DROP` recusado,
   sobe ao cliente e deixa a execução sem a entrada do snapshot que `run.snapshot(...)` pediu,

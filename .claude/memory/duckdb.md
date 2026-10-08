@@ -167,6 +167,18 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   shares one secret lock among the sessions of a database. For a secret with an explicit key
   (`provider=config`), `duckdb_secrets()` shows `key_id` unredacted and `secret` and
   `session_token` redacted (DuckDB 1.5.5, 2026-09-25).
+- The progress bar is on in a process whose `__main__` has no `__file__`, as under `python -c`,
+  and off in a script, one read from stdin included: `current_setting('enable_progress_bar')`
+  read `True` under `python -c` and `False` once `__main__.__file__` was set before the import
+  (DuckDB 1.5.5, 2026-10-08). On, it goes to stdout, a pipe included, for every command longer
+  than `progress_bar_time` (2000 ms): a 2.029 s query put `100% ▕██…▏ (00:00:02.01 elapsed)`
+  before the JSON of `SPOOL_PROBE` and failed `test_spooled_stream_bounds_memory` with
+  `JSONDecodeError`, and 30,000,000 rows of `STREAM_SQL` failed both memory probes so.
+  `SET progress_bar_time` turns the bar on too; `SET enable_progress_bar = false` turns it off on
+  the connection, and a `cursor()` opened after it reads it off. A connection opened with
+  `duckdb.connect(config={"enable_progress_bar": False})` is refused with
+  `InvalidInputException: Could not set option "enable_progress_bar" as a global option`. The
+  memory probes run the `SET`. `tests/proof_of_concept/test_duckdb.py`
 
 ## Catalog names and limits
 

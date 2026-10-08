@@ -2,12 +2,14 @@
 num processo filho, encerrado por ``SIGKILL`` num ponto marcado, os arquivos de uma tabela Delta
 e a limpeza.
 
-Uma sonda da operação roda uma rotina de ``serialize-db`` que o ambiente alvo ainda não leu
-(``.claude/memory/OPEN_QUESTIONS.md``) sobre as primeiras partições de ``cad_lancamentos`` da base
-de origem, em ordem de nome e fora das de ``--ignore-partitions``, que ela só lê. Ela grava só sob
+Uma sonda da operação roda uma rotina de ``serialize-db`` no ambiente alvo sobre as primeiras
+partições de ``cad_lancamentos`` da base de origem, em ordem de nome e fora das de
+``--ignore-partitions``, que ela só lê. Ela grava só sob
 ``<raiz>/serialize-db-operacao/<sonda>-<id>/``, com a raiz de ``SERIALIZE_DB_TEST_S3_ROOT`` ou, sem
 ela, de ``SERIALIZE_DB_TEST_LOCAL_ROOT``, e apaga a pasta no fim, também quando para numa exceção
-(``SERIALIZE_DB_TEST_KEEP`` a mantém). A saída e os erros vão ao terminal e a
+(``SERIALIZE_DB_TEST_KEEP`` a mantém). ``probe_published_base.py`` e ``probe_readers.py`` são a
+exceção: rodam sobre a própria base publicada, sem raiz de trabalho, com ``open_report`` e
+``finish_on_base``, e só a primeira grava nela. A saída e os erros vão ao terminal e a
 ``probes/output/operacao_<sonda>_<data-hora>.txt``. Código de saída: 0 quando toda checagem passou,
 1 quando alguma reprovou ou a sonda parou numa exceção, 2 no uso errado da linha de comando, sem
 raiz de trabalho ou com a origem sem as partições.
@@ -121,9 +123,21 @@ def work_database(
     name: str,
 ) -> Database:
     """O banco da sonda ``name`` numa pasta nova, ``<raiz>/serialize-db-operacao/<name>-<id>``,
-    no ambiente ``prd`` dela; abre o arquivo de saída, que recebe também os erros, e imprime o
-    cabeçalho com a máquina e as versões."""
+    no ambiente ``prd`` dela, com o arquivo de saída aberto por ``open_report``."""
     root = f"{_suite_root().rstrip('/')}/serialize-db-operacao/{name}-{uuid.uuid4().hex[:8]}"
+    output = open_report(name)
+    print(f"raiz de trabalho: {root}; ambiente {ENVIRONMENT}; saída: {output}")
+    db = Database(root, ENVIRONMENT, Base.metadata)
+    DATABASES.append(db)
+    return db
+
+
+def open_report(
+    name: str,
+) -> Path:
+    """Abre o arquivo de saída da sonda ``name``, que recebe também os erros e o log da
+    biblioteca, e imprime o cabeçalho com a máquina e as versões; devolve o caminho do
+    arquivo."""
     OUTPUT_DIR.mkdir(exist_ok=True)
     output = OUTPUT_DIR / f"operacao_{name}_{time.strftime('%Y%m%d-%H%M%S')}.txt"
     report = output.open("w", encoding="utf-8")
@@ -145,10 +159,7 @@ def work_database(
         f"python {platform.python_version()}; {', '.join(versions)}"
     )
     print(f"máquina: {available_cpus()} CPUs, {available_memory() / 2**30:.1f} GiB disponíveis")
-    print(f"raiz de trabalho: {root}; ambiente {ENVIRONMENT}; saída: {output}")
-    db = Database(root, ENVIRONMENT, Base.metadata)
-    DATABASES.append(db)
-    return db
+    return output
 
 
 def parse_arguments(
@@ -242,15 +253,28 @@ def delete_root(
     print(f"raiz apagada: {len(files)} objeto(s), {megabytes:.0f} MB")
 
 
+def _print_checks() -> None:
+    """Imprime o resumo das checagens, com as reprovadas."""
+    print(f"checagens: {len(PASSED) + len(FAILED)}, reprovadas: {len(FAILED)}")
+    for title in FAILED:
+        print("   reprovada:", title)
+
+
 def finish(
     db: Database,
 ) -> None:
     """Imprime o resumo das checagens, apaga a raiz de trabalho e encerra com o código 1 quando
     alguma checagem reprovou."""
-    print(f"checagens: {len(PASSED) + len(FAILED)}, reprovadas: {len(FAILED)}")
-    for title in FAILED:
-        print("   reprovada:", title)
+    _print_checks()
     delete_root(db)
+    sys.stdout.flush()
+    sys.exit(1 if FAILED else 0)
+
+
+def finish_on_base() -> None:
+    """Imprime o resumo das checagens e encerra com o código 1 quando alguma reprovou, sem raiz de
+    trabalho a apagar: o fim das sondas sobre a própria base."""
+    _print_checks()
     sys.stdout.flush()
     sys.exit(1 if FAILED else 0)
 

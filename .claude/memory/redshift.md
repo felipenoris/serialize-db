@@ -33,7 +33,7 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   to a regular user (42501) while `sys_load_error_detail` answers; `pg_settings` on serverless lists
   neither `timezone` nor `enable_case_sensitive_identifier`, which `SHOW` returns.
   `.claude/memory/OPEN_QUESTIONS.md`
-- The cost of one full `SUITE.md` run, estimated on 2026-10-07: only the workgroup's compute
+- The cost of one full `SUITE_ALVO.md` run, estimated on 2026-10-07: only the workgroup's compute
   counts, at the public on-demand price of US$ 0.5976 per RPU-hour in `sa-east-1` (Price List API,
   publication 2026-09-11; the one-year reservation without upfront is US$ 0.466), so US$ 4.78 per
   active hour at the base 8 RPU, billed per second with a 60 s minimum. The blocks that reach
@@ -43,7 +43,10 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   on 2026-10-07; 12.3 min on 8 vCPUs on 2026-10-05), the publication block about 6 min, the
   consistency probes 2.3 min, and one minimum each for `probes/redshift.py` and the reader: about
   11.7 RPU-hours, US$ 6.98; `credentials.py`, absent from both batteries, adds about 15 isolated
-  `select 1` minimums, US$ 1.20. The estimate counts each block's wall time as active, because the
+  `select 1` minimums, US$ 1.20. The section "Sonda da base publicada", which `SUITE_ALVO.md` gained
+  on 2026-10-08, is outside the estimate and unread until its first run: `probe_published_base.py`
+  keeps Redshift active for the `EXPLAIN` and two publications by the channel, each swapping one
+  partition of `cad_lancamentos`. The estimate counts each block's wall time as active, because the
   AWS pages do not say how the minimum covers consecutive commands, and assumes no scaling above
   8 RPU, which is billed at the same rate; the probe never read the workgroup's max capacity.
   `SYS_SERVERLESS_USAGE` (`charged_seconds` per minute, 7 days) is visible only to superusers,

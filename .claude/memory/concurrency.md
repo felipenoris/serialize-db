@@ -191,10 +191,14 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   finished in 5.4 ms before the thread got the GIL, `beside` came out below `shorter` and
   `test_gil_reacquisition_waits_the_switch_interval` failed once in four sessions on 2026-09-24
   (usually 0.08 s to 0.75 s beside the loop); five runs passed after the wait. It failed again in
-  whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the shorter
-  interval), on 2026-10-03 and on 2026-10-07 (0.005 s against 0.006 s; alone, three runs at
-  0.278 s to 0.444 s against 0.006 s to 0.024 s), and passed alone and in the other sessions; the
-  item is in `.claude/memory/OPEN_QUESTIONS.md`.
+  local whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the
+  shorter interval), on 2026-10-03 and on 2026-10-07 (0.005 s against 0.006 s; alone, three runs
+  at 0.278 s to 0.444 s against 0.006 s to 0.024 s), and passed alone and in the other sessions.
+  In the target the `-m "not redshift"` session of `SUITE_ALVO.md` runs it, and it passed in the 13
+  sessions with a report from 2026-09-24 to 2026-10-07, at 0.381 s to 0.893 s beside the loop
+  against 0.012 s to 0.074 s with the shorter interval (`concurrency.gil.os_stat_200` of
+  `suite_s3.json`), 0.381 s against 0.012 s on 2 vCPUs on 2026-10-07; the item is in
+  `.claude/memory/OPEN_QUESTIONS.md`.
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,

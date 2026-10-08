@@ -1,21 +1,3 @@
-
-# Ambiente Lab
-
-```
-export UV_PYTHON_DOWNLOADS=automatic uv sync
-export S3_TMP_PATH=s3://awsds-sandbox-smus-projects/dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/shared/serialize-db-tests
-.venv/bin/python probes/space.py
-.venv/bin/python probes/bucket.py $S3_TMP_PATH
-.venv/bin/python probes/diagnose_aws.py $S3_TMP_PATH
-.venv/bin/python probes/catalog.py
-
-export AWS_REGION=us-west-2
-export SERIALIZE_DB_TEST_LOCAL_ROOT=$HOME/local-serialize-db-tests
-export SERIALIZE_DB_TEST_S3_ROOT=s3://awsds-sandbox-smus-projects/dzd-d8yrvx1ko7im6o/avhvbqn37ty7m8/shared/serialize-db-tests
-export SERIALIZE_DB_TEST_REPORT=$HOME/tests-report.json
-uv run pytest
-```
-
 # Ambiente Alvo
 
 ## Lista de variáveis de ambiente
@@ -149,24 +131,10 @@ Teste credencial expirando (leva 1h):
 
 ```
 # O leitor Delta sobre o snapshot do canal default e o leitor Redshift sobre as tabelas
-# publicadas, com o mesmo statement; o tempo de abertura das 12 views é a leitura pendente.
-PYTHONPATH=tests .venv/bin/python - <<'PY'
-import os
-import time
-import sqlalchemy as sa
-from client_model import Base
-from serialize_db import Database
-
-db = Database(os.environ["TARGET_ROOT_PATH"], "prd", Base.metadata)
-contas = Base.metadata.tables["cad_contas"]
-statement = sa.select(sa.func.count()).select_from(contas)
-started = time.perf_counter()
-with db.open_delta() as reader:
-    print(f"leitor Delta aberto em {time.perf_counter() - started:.3f} s: {reader.versions}")
-    print("delta:", reader.query(statement).to_pylist())
-with db.open_redshift() as reader:
-    print("redshift:", reader.query(statement).to_pylist())
-PY
+# publicadas, com o mesmo statement: o tempo de abertura das 12 views, as versões e a contagem de
+# cad_contas por cada leitor, que a sonda confere iguais. O relatório vai ao terminal e a
+# probes/output/operacao_leitores_<data-hora>.txt; código de saída 1 quando as contagens diferem.
+.venv/bin/python probes/operacao/probe_readers.py $TARGET_ROOT_PATH
 ```
 
 # Exportação e Compact
@@ -181,6 +149,24 @@ PY
 # compact: exige --partitions numa tabela particionada e recusa a tabela com um snapshot na
 # versão atual; numa partição de um arquivo só, não grava nada
 .venv/bin/serialize-db compact --root $TARGET_ROOT_PATH --environment prd --metadata client_model:Base.metadata --table cad_lancamentos --partitions 2026-03-31
+```
+
+# Sonda da base publicada
+
+```
+cd ~/work/projects/serialize-db
+
+# O EXPLAIN do join de prd_cad_lancamentos com prd_cad_contas por id_conta, a primeira partição
+# de cad_lancamentos refeita num snapshot novo e a ida e a volta pelo canal default, com o tempo e
+# o pico de RSS de cada tabela trocada. A sonda grava na própria base: a versão nova de
+# cad_lancamentos, o snapshot refeito-<execution_id> e os manifestos ficam, e o canal default e as
+# tabelas prd_* voltam ao snapshot de antes. Ela roda depois da exportação, que lê a versão atual
+# e assim exporta a da carga, não a da partição refeita. Ela pede cada tabela, publicada e atual,
+# na versão do snapshot do canal default, como a publicação acima deixa; fora disso, como numa
+# segunda rodada sobre a mesma base, para com o código 2 antes de gravar. O relatório vai ao
+# terminal e a probes/output/operacao_base_publicada_<data-hora>.txt; código de saída 1 quando
+# alguma checagem reprova.
+.venv/bin/python probes/operacao/probe_published_base.py $TARGET_ROOT_PATH
 ```
 
 # Sondas de consistência
