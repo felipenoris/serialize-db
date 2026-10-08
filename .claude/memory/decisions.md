@@ -1984,3 +1984,20 @@ user decided to keep the load as it is, with `--ignore-partitions 2025-09-30`: t
 being fixed at the source, and they are not this project's concern. `SUITE.md` passes the option
 to the migration script and to the five operation probes, and the item "A partição 2025-09-30 da
 origem" leaves `OPEN_QUESTIONS.md`, its readings kept in `source-base.md`.
+
+## The source base and the writes of `probe_published_base.py` (2026-10-08)
+
+Asked on a card whether `probes/operacao/probe_published_base.py` writes into the target's base
+the commit the return to an older snapshot needs ("Na base", recommended) or works on a copy of
+`cad_lancamentos` and `cad_contas` under the suites' root, published in its own tables ("Numa
+cópia"), the user chose "Numa cópia" (20:21 UTC), with the rule that neither the source nor the
+Delta base and the Redshift publication change after the initial load and publication. At 20:38
+UTC the user narrowed the rule to the source base, the `$SOURCE_PATH` of `SUITE.md`, and switched
+to "Na base": the probe leaves in the base the new version of `cad_lancamentos`, the snapshot
+`refeito-<execution_id>` and the `COPY` manifests under `prd/publicacao/`, and returns the channel
+`default` and the `prd_*` tables to the snapshot of before. The `SUITE.md` steps that write to the
+Delta base after the load stay as they are: `snapshot`, `archive`, the two `export`s under
+`prd/exportacao/` and `compact`. Every `SUITE.md` line that names `$SOURCE_PATH` reads it
+(`probes/parquet_source.py`, the migration script's `--source` and the five operation probes), and
+in the reports of 2026-10-07 neither the load's root nor the suites' root lies under the source
+path. The probe's docstring holds what it writes.
