@@ -12,12 +12,12 @@
 #
 # O script entra na pasta do repositório e para antes do primeiro passo quando alguma variável
 # falta. Cada passo é ecoado com a hora antes de rodar e com o código de saída e a duração
-# depois; um passo que falha não interrompe os seguintes, e Ctrl-C encerra o passo em curso e o
-# script. Tudo o que os passos mandam ao terminal, a saída de erro incluída, vai também para
-# probes/output/suite_alvo_<data-hora>.txt, ao lado dos relatórios que as sondas gravam, e o
-# arquivo termina com a tabela dos passos e o código de saída de cada um. Código de saída do
-# script: 0 quando todo passo saiu com 0, 1 quando algum não, 2 sem alguma variável, 130 quando
-# interrompido.
+# depois; um passo que falha não interrompe os seguintes, e Ctrl-C vai ao passo em curso e
+# encerra o script depois dele. Tudo o que os passos mandam ao terminal, a saída de erro
+# incluída, vai também para probes/output/suite_alvo_<data-hora>.txt, ao lado dos relatórios
+# que as sondas gravam, e o arquivo termina com a tabela dos passos e o código de saída de cada
+# um. Código de saída do script: 0 quando todo passo saiu com 0, 1 quando algum não, 2 sem
+# alguma variável, 130 quando interrompido.
 
 cd "$(dirname "$0")" || exit 1
 
@@ -50,21 +50,28 @@ section() {
 
 run() {
     # Roda um passo: ecoa o comando com a hora, executa e registra o código de saída e a
-    # duração. O passo que falha não interrompe os seguintes.
-    local number=$(( ${#STEP_COMMANDS[@]} + 1 ))
+    # duração. O passo que falha não interrompe os seguintes. O passo entra na tabela antes de
+    # rodar, com o código e a duração em branco, para constar nela se o Ctrl-C chegar durante ele.
     local command
     command=$(printf '%q ' "$@")
     command=${command% }
-    local started=$SECONDS
-    echo
-    echo "==> passo $number, $(date '+%Y-%m-%d %H:%M:%S %z'): $command"
-    "$@"
-    local status=$?
-    local seconds=$(( SECONDS - started ))
-    echo "<== passo $number: código de saída $status, $seconds s"
     STEP_COMMANDS+=("$command")
-    STEP_STATUSES+=("$status")
-    STEP_SECONDS+=("$seconds")
+    STEP_STATUSES+=("-")
+    STEP_SECONDS+=("-")
+    STEP_STARTED=$SECONDS
+    echo
+    echo "==> passo ${#STEP_COMMANDS[@]}, $(date '+%Y-%m-%d %H:%M:%S %z'): $command"
+    "$@"
+    finish_step $?
+}
+
+finish_step() {
+    # Registra o código de saída e a duração do passo em curso, o último da tabela.
+    local status=$1
+    local last=$(( ${#STEP_COMMANDS[@]} - 1 ))
+    STEP_STATUSES[last]=$status
+    STEP_SECONDS[last]=$(( SECONDS - STEP_STARTED ))
+    echo "<== passo $(( last + 1 )): código de saída $status, ${STEP_SECONDS[last]} s"
 }
 
 summary() {
@@ -74,10 +81,10 @@ summary() {
     local failed=0
     echo "PASSO  CÓDIGO  SEGUNDOS  COMANDO"
     for index in "${!STEP_COMMANDS[@]}"; do
-        printf '%5d  %6d  %8d  %s\n' \
+        printf '%5d  %6s  %8s  %s\n' \
             "$(( index + 1 ))" "${STEP_STATUSES[index]}" "${STEP_SECONDS[index]}" \
             "${STEP_COMMANDS[index]}"
-        if [ "${STEP_STATUSES[index]}" -ne 0 ]; then
+        if [ "${STEP_STATUSES[index]}" != 0 ]; then
             failed=$(( failed + 1 ))
         fi
     done
@@ -88,9 +95,14 @@ summary() {
 
 # shellcheck disable=SC2329
 interrupt() {
-    # Ctrl-C: o passo em curso já recebeu o sinal; a tabela fecha o log e o script sai com 130.
+    # Ctrl-C: o passo em curso recebeu o sinal junto, e $? é o código com que ele terminou; a
+    # tabela fecha o log e o script sai com 130.
+    local status=$?
     echo
     echo "suite_alvo.sh: interrompido por Ctrl-C"
+    if [ "${STEP_STATUSES[-1]}" = "-" ]; then
+        finish_step "$status"
+    fi
     summary
     exit 130
 }
