@@ -327,9 +327,9 @@ página que descreva o prefixo vazio, e pelas páginas da documentação:
 - <https://repost.aws/questions/QUwQYm3TWMR0ulsGD7iG2BuA/failed-to-copy-parquet-files-from-s3-to-redshift>
 
 O preço e a cobrança do Redshift Serverless, consultados em 2026-10-07 para a estimativa do custo de
-uma execução do `SUITE.md`, pela busca na web por `Redshift Serverless 60-second minimum charge how
-applied consecutive queries idle workgroup billing example`, que não achou página da AWS que diga
-como o mínimo de 60 s cobre comandos seguidos, pela Price List API da AWS e pelas páginas da
+uma execução do `SUITE_ALVO.md`, pela busca na web por `Redshift Serverless 60-second minimum charge
+how applied consecutive queries idle workgroup billing example`, que não achou página da AWS que
+diga como o mínimo de 60 s cobre comandos seguidos, pela Price List API da AWS e pelas páginas da
 documentação:
 
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-billing.html>

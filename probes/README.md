@@ -183,7 +183,7 @@ tipos exatos de `register_files` (a cópia sem o mínimo e o máximo de `Boolean
 como leituras conhecidas, não como reprovação; a soma de controle da auditoria acima de 1e32 fica
 fora dos dados da sonda da execução. Os achados da primeira rodada estão na seção "Achados das
 sondas de consistência de leitura e escrita" de `.claude/memory/OPEN_QUESTIONS.md`, e os comandos
-com as variáveis do ambiente alvo em `SUITE.md`.
+com as variáveis do ambiente alvo em `SUITE_ALVO.md`.
 
 | Sonda | O que atravessa |
 | --- | --- |
@@ -218,7 +218,7 @@ processo filho, e as interrompidas levam `SIGKILL`, como o kernel sem memória, 
 nenhum `finally`; `probe_parallel_gain.py` chama a biblioteca no próprio processo. Cada leitura sai
 no terminal e em `output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime
 `OK` ou `PROBLEMAS` com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as
-variáveis do ambiente alvo estão em `SUITE.md`, seção "Sondas da operação", e o de
+variáveis do ambiente alvo estão em `SUITE_ALVO.md`, seção "Sondas da operação", e o de
 `probe_published_base.py` na seção "Sonda da base publicada", depois da publicação e da exportação.
 As leituras do ambiente alvo, desde a primeira rodada de 2026-10-05, estão nos arquivos de tema de
 `.claude/memory/`: `source-base.md` (a retomada da carga), `delta.md` (o `archive`, o `vacuum` e o

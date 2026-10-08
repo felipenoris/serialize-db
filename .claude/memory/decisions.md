@@ -555,10 +555,10 @@ findings live in `source-base.md`, and `plan/` is not updated, so `plan/CURRENT_
 still list the issue #59 item on the migrated tables. The user offered to run the latest script
 again in the target; the assistant's analysis of the same day found that only the `cad_lancamentos`
 partition in `rewrite` and with `--no-sort` needs the rerun. The user declined the separate runs the
-assistant proposed and asked instead that the script produce the measurement when the `SUITE.md`
-commands run again, every table with the same parameters: the script measures, before each
-partitioned table's load, every requested partition in the four write variants, each in a new
-process (`spawn`) with its own peak (`VmHWM` on Linux) and a scratch table under
+assistant proposed and asked instead that the script produce the measurement when the
+`SUITE_ALVO.md` commands run again, every table with the same parameters: the script measures,
+before each partitioned table's load, every requested partition in the four write variants, each in
+a new process (`spawn`) with its own peak (`VmHWM` on Linux) and a scratch table under
 `<root>/_medicao_<table>/`, also when the partition is already in the log, and the report carries
 the machine; `--no-measure` turns it off (the assistant's design, named in the report).
 `source-base.md`, `.claude/memory/OPEN_QUESTIONS.md`
@@ -621,8 +621,8 @@ producer's namespace and the private addresses, each replaced by a placeholder t
 replaces it; the probe reports of 2026-09-21 stay out of git, and the older readings live in git
 history. The rule of the same day decides when a report leaves: once `plan/POC.md` and the stage
 file hold what it showed. The same identifiers remained elsewhere in the repository (`plan/POC.md`, the memory,
-`SUITE.md`, `examples/`, `tests/test_probes.py`) until the user's answer of the same day, in the
-section on the publication flow.
+`SUITE_LAB.md`, `SUITE_ALVO.md`, `examples/`, `tests/test_probes.py`) until the user's answer of the
+same day, in the section on the publication flow.
 
 On 2026-10-04 the user moved `plan/readings/` out of the repository, to the Claude project's
 library at `/mnt/project-files/readings/`, file by file as it was: the engine and publication suite
@@ -675,18 +675,18 @@ the `mode`, with a warning in the execution log (`log.warning`, the user's choic
 `warnings.warn`) when the mode asked for `register`; approved the empty text stream's schema from
 `schema_from_row_description` of `select * from (<texto>) as t limit 0`; and kept `load` through the
 `loader` after the `COPY` cost reading. The user also asked to mask the environment's sensitive
-identifiers everywhere in the repository except `SUITE.md`: `plan/POC.md`, the memory, the bucket
-path of `examples/redshift_copy_unload.py` and `examples/redshift_manifest.py`, and the lab
-account in a fabricated ARN of `tests/test_probes.py`, which took the documentation's
-`123456789012`, carry the placeholders of `plan/readings/README.md` (the lab's got their own:
-`<conta do laboratório>`, `dzd-<domínio do laboratório>`, `<projeto do laboratório>`); git
-history keeps the old values. `.claude/memory/OPEN_QUESTIONS.md`
+identifiers everywhere in the repository except `SUITE_LAB.md` and `SUITE_ALVO.md`: `plan/POC.md`,
+the memory, the bucket path of `examples/redshift_copy_unload.py` and
+`examples/redshift_manifest.py`, and the lab account in a fabricated ARN of `tests/test_probes.py`,
+which took the documentation's `123456789012`, carry the placeholders of `plan/readings/README.md`
+(the lab's got their own: `<conta do laboratório>`, `dzd-<domínio do laboratório>`,
+`<projeto do laboratório>`); git history keeps the old values. `.claude/memory/OPEN_QUESTIONS.md`
 
 ## The battery of 2026-09-23 at 22:49 and the parallel-processing instruction
 
 On 2026-09-23 the user added to the user section of `CLAUDE.md` that the programs using the package
 run on scalable AWS compute of the user's choosing, and that the plan optimizes for parallel
-processing. The same evening the user ran every `SUITE.md` command from `main` with #67, on a
+processing. The same evening the user ran every `SUITE_ALVO.md` command from `main` with #67, on a
 4 vCPU and 16 GB machine, with new roots under the personal folder (`.../shared/<usuário>/serialize-db/`),
 handed over the reports and offered to rerun the whole battery on a more powerful machine if that
 yields more information. The user also confirmed the assistant's reading of the stage 8
@@ -741,8 +741,8 @@ page since stage 4; `tests/test_package.py` checks every package.
 
 ## The battery of 2026-09-24 at 01:41 on a 16 vCPU machine
 
-On 2026-09-24 the user reran every `SUITE.md` command from `main` (fa734eb, with #69) on a 16 vCPU
-and 31,159 MB machine, handed over the reports and asked to analyze them and propagate the
+On 2026-09-24 the user reran every `SUITE_ALVO.md` command from `main` (fa734eb, with #69) on a
+16 vCPU and 31,159 MB machine, handed over the reports and asked to analyze them and propagate the
 revisions to the plan and the code. The assistant fixed `DuckDBConfig.threads` at the process's
 CPUs by the probe's reading, as the plan had assigned to that run, closed the open items on the
 `cad_lancamentos` migration, the half-memory fraction, the threads, the non-finite `Double` and the
@@ -771,16 +771,16 @@ work started: the publication's connection is an explicit `RedshiftConfig` given
 without the argument reads the `SERIALIZE_DB_REDSHIFT_*` variables and keeps that configuration
 on the execution; `serialize-db run --engine redshift` passes it, and `--redshift` passes it to a
 DuckDB execution); the commands of the new `redshift`-marked suites go in the report, and the user
-adds them to `SUITE.md`; and the `redshift` extra pins `redshift-connector==2.1.17`, the version
-installed in the development venv, whose source has the same `ps["row_desc"]` and `type_modifier`
-read in 2.1.16. The assistant's choices, named in the report: the audit's `_publicado` staging
-with every contract column, loaded only when the join runs (a positional `COPY` cannot load only
-the key columns); the `INSERT` from the staging with an explicit column list; the loader's
-temporary staging with `JSON_PARSE` for a table with a JSON column; the stream schema always from
-the `row_desc` of `select * from (...) limit 0`; `PARALLEL OFF` up to 5,000,000 rows, unmeasured;
-string min and max left out of the log for `UNLOAD` files; an empty partition registered through
-an empty file the engine writes; and the stage 8 suite publishing in a `poc<id>` environment,
-creating the control table only when absent and dropping it only in that case.
+adds them to `SUITE_ALVO.md`; and the `redshift` extra pins `redshift-connector==2.1.17`, the
+version installed in the development venv, whose source has the same `ps["row_desc"]` and
+`type_modifier` read in 2.1.16. The assistant's choices, named in the report: the audit's
+`_publicado` staging with every contract column, loaded only when the join runs (a positional `COPY`
+cannot load only the key columns); the `INSERT` from the staging with an explicit column list; the
+loader's temporary staging with `JSON_PARSE` for a table with a JSON column; the stream schema
+always from the `row_desc` of `select * from (...) limit 0`; `PARALLEL OFF` up to 5,000,000 rows,
+unmeasured; string min and max left out of the log for `UNLOAD` files; an empty partition registered
+through an empty file the engine writes; and the stage 8 suite publishing in a `poc<id>`
+environment, creating the control table only when absent and dropping it only in that case.
 `.claude/memory/OPEN_QUESTIONS.md`
 
 ## Stage 7 over the package and the measurement out of the script (2026-09-24)
@@ -847,13 +847,13 @@ docstring standard of `CLAUDE.md`, with the refactors applied, and answered the 
 questions before the work: the tests reviewed are the package's (the `test_*.py` files of `tests/`,
 `conftest.py`, `emulator.py`, `client_model/`, `lancamentos_model.py`, `source_db_projetado.py`),
 with `tests/proof_of_concept/` and `tests/reference_model/` out; public names may be renamed, with
-`docs/`, `plan/`, `README.md` and `SUITE.md` updated in the same commit; the refactor stays at the
-function level, every module keeping its place; and a defect the review finds is fixed with an
-assertion that fails on the old code and named in the report when small, and goes to
-`.claude/memory/OPEN_QUESTIONS.md` when large. Under the last answer the review closed two pending
-items: `check_models` lists a table with two partition columns instead of raising, and an empty
-`SERIALIZE_DB_ENVIRONMENT` counts as absent in every subcommand, as it did in `run`, `audit` and
-`publish`. The assistant's choices, named in the report: `Storage.create_text` in place of
+`docs/`, `plan/`, `README.md`, `SUITE_LAB.md` and `SUITE_ALVO.md` updated in the same commit; the
+refactor stays at the function level, every module keeping its place; and a defect the review finds
+is fixed with an assertion that fails on the old code and named in the report when small, and goes
+to `.claude/memory/OPEN_QUESTIONS.md` when large. Under the last answer the review closed two
+pending items: `check_models` lists a table with two partition columns instead of raising, and an
+empty `SERIALIZE_DB_ENVIRONMENT` counts as absent in every subcommand, as it did in `run`, `audit`
+and `publish`. The assistant's choices, named in the report: `Storage.create_text` in place of
 `write_text(if_none_match=True)`; `bind(sql, params, dialect)`; `sql.bound_statement`, the helpers
 the two engines repeated in `serialize_db.engine` (`batches_of`, `checked_batches`, `take`,
 `ARROW_ONLY`) and the rows check reading in `audit` (`readings_by_partition`,
@@ -914,9 +914,9 @@ and break or nest the archive's `arquivo/<name>/`; the user asked for the fix, a
 ## The production environment named `prd` (2026-09-24)
 
 The user asked to replace `prod` with `prd` wherever the plan, the code, the examples and
-`SUITE.md` reference the production environment; the source base already sits under
+`SUITE_ALVO.md` reference the production environment; the source base already sits under
 `databases/prd/`. The assistant renamed 293 references (docstrings, `docs/`, `README.md`,
-`SUITE.md`, the script's header, the tests, the study suites and the plan's examples) and kept
+`SUITE_ALVO.md`, the script's header, the tests, the study suites and the plan's examples) and kept
 the dated records of what ran, because the target still holds them: the 14:16 load into
 `<root>/prod/`, the 16:51 publication as `prod_<table>`, the transaction runs of 2026-09-23 and
 the stage 10 probe's `prod_` prefix, in `plan/POC.md`, `plan/CURRENT_STATE.md`,
@@ -975,8 +975,8 @@ base's dsv reading. `dev` stays as the Redshift database of the connection
 dependency group, the SageMaker project's `dev/` prefix, `/dev/null`, SQLMesh's `tabela__dev`,
 `plan/readings/` and the dated records: the transaction runs of 2026-09-23 with dev and prod in
 `plan/PLAN-STAGE-8.md`, and the probe of 2026-09-24 where `serialize-db audit` used `dev`. No
-target run relied on the default: `SUITE.md` passes `--environment prd` everywhere. The same day
-the user answered the open item on the target's `prod` environment: the user deletes every
+target run relied on the default: `SUITE_ALVO.md` passes `--environment prd` everywhere. The same
+day the user answered the open item on the target's `prod` environment: the user deletes every
 artifact of the base named `prod` there (the `<root>/prod/` folder, the `prod_<table>` tables
 and their `serialize_db_publications` rows), and the item left `.claude/memory/OPEN_QUESTIONS.md`.
 `CLAUDE.md`, `docs/operacao.md`
@@ -1662,10 +1662,10 @@ migration), the user chose "import": the module is `serialize_db.parquet_import`
 `serialize-db load`, with no alias, as with the publication names of 2026-09-27. `initial_` left
 the name because the function writes the partitions the log lacks, on the first run or on a
 resumed one. `discover_partitions`, `partition_query`, `check_requested_partitions`,
-`PartitionReport`, `scripts/migrate_parquet_to_delta.py`, the probe files `SUITE.md` calls, the
-`carga-` prefix of the `execution_id` and the prose "carga inicial" stay; the dated records
-(`plan/POC.md`, `plan/readings/`, the entries above) keep the old names. The user also asked the
-`db` argument's docstring to say it is the Delta base the data is imported into.
+`PartitionReport`, `scripts/migrate_parquet_to_delta.py`, the probe files `SUITE_LAB.md` and
+`SUITE_ALVO.md` call, the `carga-` prefix of the `execution_id` and the prose "carga inicial" stay;
+the dated records (`plan/POC.md`, `plan/readings/`, the entries above) keep the old names. The user
+also asked the `db` argument's docstring to say it is the Delta base the data is imported into.
 `src/serialize_db/parquet_import.py`, `src/serialize_db/cli.py`, `tests/test_parquet_import.py`,
 `scripts/migrate_parquet_to_delta.py`, `docs/index.md`, `docs/operacao.md`, `README.md`
 
@@ -1799,8 +1799,8 @@ on a decision card (2026-10-05, 01:09 UTC), the option the PR already implemente
 citation ("Manter"). `pyproject.toml` drops `examples` from the Ruff `extend-exclude` of 2026-10-01,
 the header of `.github/workflows/tests.yml` no longer lists the examples among what the tests leave
 out, and the `examples/` row of `plan/CURRENT_STATE.md` left with its citation of the notebook the
-user deleted in 429af3b. `SUITE.md` never cited the folder. `README.md`, `pyproject.toml`,
-`src/serialize_db/engine/redshift.py`
+user deleted in 429af3b. `SUITE_LAB.md` and `SUITE_ALVO.md` never cited the folder. `README.md`,
+`pyproject.toml`, `src/serialize_db/engine/redshift.py`
 
 ## The planning documents in the project library (2026-10-05)
 
@@ -1841,7 +1841,7 @@ of `plan/OPEN_QUESTIONS.md` in the repository names the new path, the dated entr
 and of `lessons.md` included, so a `plan/` citation always names the library's copy; in the library,
 `plan/README.md` names the new path, while the dated reports and the docstrings of the
 `target_env_examples/` scripts keep the old one. The assistant's choices, named in the report: one
-comment of `SUITE.md`, the user's file, takes the new path; `README.md` and the Ruff comment of
+comment of `SUITE_ALVO.md`, the user's file, takes the new path; `README.md` and the Ruff comment of
 `pyproject.toml`, which named `plan/` as a repository folder, name the library's or only `docs/`;
 and the SQLAlchemy item of `OPEN_QUESTIONS.md` lists `docs/tecnologias.md` in place of `plan/` among
 the prose that names the DuckDB dialect.
@@ -1961,9 +1961,9 @@ The battery of 2026-10-07 stopped five of the six operation probes on the source
 2025-09-30, the first of `cad_lancamentos` by name, which the load refuses with `ContractError`
 (`source-base.md`). Asked on a card whether the probes get an `--ignore-partitions` ("Ignorar",
 recommended) or wait for the partition to be rewritten upstream ("Esperar"), the user chose
-"Ignorar" (17:35 UTC) and asked at 17:36 UTC for the `SUITE.md` adjustments in a separate commit.
-`operation_lib.parse_arguments` reads the source and the option for the five probes that take
-`$SOURCE_PATH` (`probe_parallel_gain.py`, which generates its own tables, is unchanged), and
+"Ignorar" (17:35 UTC) and asked at 17:36 UTC for the `SUITE_ALVO.md` adjustments in a separate
+commit. `operation_lib.parse_arguments` reads the source and the option for the five probes that
+take `$SOURCE_PATH` (`probe_parallel_gain.py`, which generates its own tables, is unchanged), and
 `source_partitions` takes the first partitions outside the ignored ones through the protected
 `parquet_import.split_ignored_partitions`, printing the line of `serialize-db import` per ignored
 partition the source has; a value the source lacks is not refused, and fewer partitions than the
@@ -1973,17 +1973,17 @@ probe asks exit with 2, as before.
 first partition ignored (2026-10-07, 4 CPUs), `probe_archive_resume.py` and
 `probe_vacuum_orphans.py` passed every check over 2026-02-28 onward, and `probe_load_resume.py` and
 `probe_compact_memory.py` failed the same checks with and without the option, from the fixture's
-partitions of 60 rows (the kill after the three commits, the split in one file). `SUITE.md` passes
-`--ignore-partitions 2025-09-30` to the five lines.
+partitions of 60 rows (the kill after the three commits, the split in one file). `SUITE_ALVO.md`
+passes `--ignore-partitions 2025-09-30` to the five lines.
 
 ## The source's partition 2025-09-30 stays out of the load (2026-10-07)
 
 Told at 19:56 UTC that the reading of 18:25 UTC found the partition rewritten at the source with
 the id column null in every row (`source-base.md`, "The production base, read on 2026-10-07"), the
 user decided to keep the load as it is, with `--ignore-partitions 2025-09-30`: the defects are
-being fixed at the source, and they are not this project's concern. `SUITE.md` passes the option
-to the migration script and to the five operation probes, and the item "A partição 2025-09-30 da
-origem" leaves `OPEN_QUESTIONS.md`, its readings kept in `source-base.md`.
+being fixed at the source, and they are not this project's concern. `SUITE_ALVO.md` passes the
+option to the migration script and to the five operation probes, and the item "A partição 2025-09-30
+da origem" leaves `OPEN_QUESTIONS.md`, its readings kept in `source-base.md`.
 
 ## The source base and the writes of `probe_published_base.py` (2026-10-08)
 
@@ -1992,12 +1992,12 @@ the commit the return to an older snapshot needs ("Na base", recommended) or wor
 `cad_lancamentos` and `cad_contas` under the suites' root, published in its own tables ("Numa
 cópia"), the user chose "Numa cópia" (20:21 UTC), with the rule that neither the source nor the
 Delta base and the Redshift publication change after the initial load and publication. At 20:38
-UTC the user narrowed the rule to the source base, the `$SOURCE_PATH` of `SUITE.md`, and switched
-to "Na base": the probe leaves in the base the new version of `cad_lancamentos`, the snapshot
-`refeito-<execution_id>` and the `COPY` manifests under `prd/publicacao/`, and returns the channel
-`default` and the `prd_*` tables to the snapshot of before. The `SUITE.md` steps that write to the
-Delta base after the load stay as they are: `snapshot`, `archive`, the two `export`s under
-`prd/exportacao/` and `compact`. Every `SUITE.md` line that names `$SOURCE_PATH` reads it
+UTC the user narrowed the rule to the source base, the `$SOURCE_PATH` of `SUITE_ALVO.md`, and
+switched to "Na base": the probe leaves in the base the new version of `cad_lancamentos`, the
+snapshot `refeito-<execution_id>` and the `COPY` manifests under `prd/publicacao/`, and returns the
+channel `default` and the `prd_*` tables to the snapshot of before. The `SUITE_ALVO.md` steps that
+write to the Delta base after the load stay as they are: `snapshot`, `archive`, the two `export`s
+under `prd/exportacao/` and `compact`. Every `SUITE_ALVO.md` line that names `$SOURCE_PATH` reads it
 (`probes/parquet_source.py`, the migration script's `--source` and the five operation probes), and
 in the reports of 2026-10-07 neither the load's root nor the suites' root lies under the source
 path. The probe's docstring holds what it writes.

@@ -119,7 +119,7 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
 ## The early migration in the target
 
 - `scripts/migrate_parquet_to_delta.py` ran in the target over the copy of the production base in
-  the sandbox (`databases/prd/db_projetado`, the `--source` of `SUITE.md`), one process and one
+  the sandbox (`databases/prd/db_projetado`, the `--source` of `SUITE_ALVO.md`), one process and one
   `--report` JSON per table, in a version from d2c545b (2026-09-21) to 8de3c8b
   (2026-09-22), before the issue #59 rule of e2ed614: the user reported the success in the session
   of cea8a51 (2026-09-22) and handed the reports over on 2026-09-23. The JSON records neither the
@@ -153,7 +153,7 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `rewrite`, with and without the `sort_key` order), each in a new process with its own peak and a
   scratch table under `<root>/_medicao_<table>/`, also when the partition was already in the log
   (the script resumes from the log and would skip a loaded partition); the report carried the
-  machine. The user reran the `SUITE.md` commands, every table with the same parameters, on
+  machine. The user reran the `SUITE_ALVO.md` commands, every table with the same parameters, on
   2026-09-23 and 2026-09-24, and the measurement left the script on 2026-09-24 (user decision,
   `decisions.md`). Nothing
   else needs a rerun: since d2c545b the Delta schema changed
@@ -176,10 +176,10 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   killer, under DuckDB's default `memory_limit` of 12.3 GiB on the 15,786 MB machine. The script
   now opens every DuckDB connection with half the memory still available and gives each table its
   own connection; the rerun of `cad_lancamentos` confirms the partition fits.
-- The second migration ran one process per table in the order of `SUITE.md` (alphabetical):
+- The second migration ran one process per table in the order of `SUITE_ALVO.md` (alphabetical):
   `cad_lancamentos` ran alone between `cad_contratos`, whose report was written at 23:06 UTC, and
   `cad_operacoes`, which started at 23:14:58, and the threads probe came after, at 23:21: by the
-  sequence of `SUITE.md`, the kernel's kill owes nothing to the probe. The loads in the main
+  sequence of `SUITE_ALVO.md`, the kernel's kill owes nothing to the probe. The loads in the main
   process, one connection across
   the whole table: `rel_contrato_operacao` 2.2 s, 13.3 s and 11.3 s with the process peak at 508,
   2,459 and 2,712 MB, growing on the third partition although it is smaller than the second;

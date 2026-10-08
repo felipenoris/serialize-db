@@ -75,8 +75,8 @@ all of them expected readings; no check failed.
 
 The battery of 2026-09-24 at 16:51 UTC (from `main` with #73, the root loaded anew) ran on the
 same machine, 16 vCPUs and 31,383 MB with 28,074 MB available (Python 3.13.15, DuckDB 1.5.5,
-deltalake 1.6.4, pyarrow 25.0.1, `sa-east-1`), and finished the whole `SUITE.md` flow: the load,
-the audit, `history`, `snapshot`, `vacuum`, `archive` and the publication of the whole base;
+deltalake 1.6.4, pyarrow 25.0.1, `sa-east-1`), and finished the whole `SUITE_ALVO.md` flow: the
+load, the audit, `history`, `snapshot`, `vacuum`, `archive` and the publication of the whole base;
 `export`, `compact` and the threads probe did not run.
 
 The first target run of 2026-09-24 at 05:10 passed five of the six engine cases (`COPY ...
@@ -129,7 +129,7 @@ and 6,227 MiB in the load (half of 12,454 MB available); the caller's credential
 minutes (`RS-18`), 45 load errors in 30 days (`RS-12`), 2,980 non-current versions (86,695,363
 bytes) and 2,788 delete markers under the test root (`BK-14`), Lake Formation and S3 Tables
 timing out in 60.7 s and 30.3 s. Every suite case passed; `duckdb_threads.py` stopped at `DT-1`
-because `SUITE.md` passed the root without `prd`, and `compact` refused the partition because a
+because `SUITE_ALVO.md` passed the root without `prd`, and `compact` refused the partition because a
 snapshot pointed at the current version.
 
 The first part of the battery of 2026-09-26, the five probes and the seven pytest sessions from
@@ -223,31 +223,32 @@ bytes, and 9,539 delete markers, the listing again at its limit); the `RS-8` lis
 16 tables, no `exec_` table.
 
 The battery of 2026-10-05 from 16:38 UTC (from `main` at `bf8c3f8` or later, most likely `b54b998`,
-inferred from the 693 cases collected and from `SUITE.md` naming `.claude/memory/OPEN_QUESTIONS.md`)
-ran every `SUITE.md` block but `credentials.py`, on 8 vCPUs and 15,505 MB (Python 3.13.15, DuckDB
-1.5.5, deltalake 1.6.6, pyarrow 25.0.1, `redshift_connector` 2.1.17; boto3 1.43.108 and sqlglot
-30.21.0 against 1.43.102 and 30.19.0, and ruff 0.16.10 listed in `SP-9`). Every case and check
-passed: S3 638 and 1 skipped (the Windows memory test of `tests/test_resources.py`, by the platform)
-in 296.2 s, with `engine.stream.close_interrupts` at `0.002 s, erro NoneType` for the first time
-(the first batch came at the end and nothing was left to cancel, an outcome the case accepts;
-`OSError` at 0.013 s to 0.028 s in every earlier battery); Redshift 54 twice (685.0 s, 668.5 s),
-engine 11 twice (139.2 s, 157.8 s) and publication 11 twice (247.2 s, 242.7 s). The probes differed
-from 2026-09-30 in the Redshift version, `RS-8` (the `prd_*` tables and the control table gone,
-`redshift.md`), `RS-12` (56 load errors in 30 days), `BK-14` (10,507 non-current versions,
-249,621,376 bytes, and 9,492 delete markers, the listing at its limit), Lake Formation and S3 Tables
-timing out in 60.3 s and 30.5 s, and 28.7 GiB free on disk. The load from 17:45:01 (12,592 MB
-available, 8 threads and 6,296 MiB) read a source changed since 2026-09-29 (`source-base.md`) in
-505.0 s, peak 9,285 MB; after `publish_redshift --init` created the control table again, the whole
-base was published by `--channel default --max-workers 4` (`cad_lancamentos` 324.9 s at 285 MB), the
-Delta reader opened in 0.607 s, `export` took 18.4 s at 258 MB by copy and 66.9 s at 6,854 MB by
-rewrite, and `compact` refused. The consistency probes ran from 18:26 with every check passing
-(`concurrency.md`), the operation probes from 18:33, their first target run, with every check
-passing (`source-base.md`, `delta.md`, `redshift.md`, `concurrency.md`), and `duckdb_threads.py`
-from 19:22 to 20:09, alone [inferred from the clock] (`duckdb.md`).
+inferred from the 693 cases collected and from `SUITE_ALVO.md` naming
+`.claude/memory/OPEN_QUESTIONS.md`) ran every `SUITE_ALVO.md` block but `credentials.py`, on 8 vCPUs
+and 15,505 MB (Python 3.13.15, DuckDB 1.5.5, deltalake 1.6.6, pyarrow 25.0.1, `redshift_connector`
+2.1.17; boto3 1.43.108 and sqlglot 30.21.0 against 1.43.102 and 30.19.0, and ruff 0.16.10 listed in
+`SP-9`). Every case and check passed: S3 638 and 1 skipped (the Windows memory test of
+`tests/test_resources.py`, by the platform) in 296.2 s, with `engine.stream.close_interrupts` at
+`0.002 s, erro NoneType` for the first time (the first batch came at the end and nothing was left to
+cancel, an outcome the case accepts; `OSError` at 0.013 s to 0.028 s in every earlier battery);
+Redshift 54 twice (685.0 s, 668.5 s), engine 11 twice (139.2 s, 157.8 s) and publication 11 twice
+(247.2 s, 242.7 s). The probes differed from 2026-09-30 in the Redshift version, `RS-8` (the `prd_*`
+tables and the control table gone, `redshift.md`), `RS-12` (56 load errors in 30 days), `BK-14`
+(10,507 non-current versions, 249,621,376 bytes, and 9,492 delete markers, the listing at its
+limit), Lake Formation and S3 Tables timing out in 60.3 s and 30.5 s, and 28.7 GiB free on disk. The
+load from 17:45:01 (12,592 MB available, 8 threads and 6,296 MiB) read a source changed since
+2026-09-29 (`source-base.md`) in 505.0 s, peak 9,285 MB; after `publish_redshift --init` created the
+control table again, the whole base was published by `--channel default --max-workers 4`
+(`cad_lancamentos` 324.9 s at 285 MB), the Delta reader opened in 0.607 s, `export` took 18.4 s at
+258 MB by copy and 66.9 s at 6,854 MB by rewrite, and `compact` refused. The consistency probes ran
+from 18:26 with every check passing (`concurrency.md`), the operation probes from 18:33, their first
+target run, with every check passing (`source-base.md`, `delta.md`, `redshift.md`,
+`concurrency.md`), and `duckdb_threads.py` from 19:22 to 20:09, alone [inferred from the clock]
+(`duckdb.md`).
 
 The battery of 2026-10-06 from 14:24 UTC (from `main` at `e210089`, inferred from the three cases of
 PR #139 in the reports) ran `redshift.py`, `space.py`, `bucket.py`, `diagnose_aws.py` and
-`catalog.py`, the suites, the load and the publication of `SUITE.md`, on 4 vCPUs and 15,786 MB
+`catalog.py`, the suites, the load and the publication of `SUITE_ALVO.md`, on 4 vCPUs and 15,786 MB
 (8 vCPUs in every battery before) with the versions of 2026-10-05. Every case passed: S3 639 and
 1 skipped in 428.5 s; Redshift 57 twice (723.8 s, 698.7 s), engine 13 twice (163.7 s, 163.9 s) and
 publication 12 twice (291.4 s, 281.5 s), the three new cases' readings in `redshift.md`. The
@@ -265,21 +266,21 @@ and the whole-base publication by `--channel default` and by `--channel current`
 current version, publishing nothing.
 
 The battery of 2026-10-07 from 03:03 UTC (from `main` at `5457f58`, the squash of PR #140, stated
-by the user) ran every `SUITE.md` block but `credentials.py` and `duckdb_threads.py`, on 2 vCPUs
-and 7,819 MB (27.1 GiB free on disk) with the versions of 2026-10-05. Every case passed: S3 648 and
-1 skipped in 616.4 s, with `engine.stream.close_interrupts` again at `0.003 s, erro NoneType`;
-Redshift 57 twice (747.3 s, 763.2 s), engine 13 twice (197.5 s, 205.5 s) and publication 12 twice
-(343.7 s, 371.5 s). The probes differed from 2026-10-06 in the CPUs (DuckDB with 2 threads and a
-6.1 GiB `memory_limit` at the default), `RS-8` (0 of 3 tables again: the control table and
-`prd_cad_contas` of 2026-10-06 gone before the battery, `redshift.md`), `RS-12` (the count of
-`sys_load_error_detail` returned no row) and `BK-14` (10,419 non-current versions, 26,705,558,141
-bytes, and 9,580 delete markers, the listing at its limit); the Data API answered in 461 ms and
-167 ms, and Lake Formation and S3 Tables timed out in 60.7 s and 30.4 s. The load from 04:34:29
-(5,801 MB available, 2 threads and 2,900 MiB), the first with `--ignore-partitions 2025-09-30`,
-read the 25 partitions of 2026 in 1,225.3 s, peak 4,138 MB (`source-base.md`); the audit,
-`history`, `snapshot carga-2026-09-24`, `vacuum` (0 files) and `archive` (25 files,
-`cad_lancamentos` 21.1 s at 330 MB) followed. After `publish_redshift --init` created the control
-table again, the whole base was published by `--channel default --max-workers 4`
+by the user) ran every `SUITE_ALVO.md` block but `credentials.py` and `duckdb_threads.py`, on
+2 vCPUs and 7,819 MB (27.1 GiB free on disk) with the versions of 2026-10-05. Every case passed:
+S3 648 and 1 skipped in 616.4 s, with `engine.stream.close_interrupts` again at
+`0.003 s, erro NoneType`; Redshift 57 twice (747.3 s, 763.2 s), engine 13 twice (197.5 s, 205.5 s)
+and publication 12 twice (343.7 s, 371.5 s). The probes differed from 2026-10-06 in the CPUs (DuckDB
+with 2 threads and a 6.1 GiB `memory_limit` at the default), `RS-8` (0 of 3 tables again: the
+control table and `prd_cad_contas` of 2026-10-06 gone before the battery, `redshift.md`), `RS-12`
+(the count of `sys_load_error_detail` returned no row) and `BK-14` (10,419 non-current versions,
+26,705,558,141 bytes, and 9,580 delete markers, the listing at its limit); the Data API answered in
+461 ms and 167 ms, and Lake Formation and S3 Tables timed out in 60.7 s and 30.4 s. The load from
+04:34:29 (5,801 MB available, 2 threads and 2,900 MiB), the first with
+`--ignore-partitions 2025-09-30`, read the 25 partitions of 2026 in 1,225.3 s, peak 4,138 MB
+(`source-base.md`); the audit, `history`, `snapshot carga-2026-09-24`, `vacuum` (0 files) and
+`archive` (25 files, `cad_lancamentos` 21.1 s at 330 MB) followed. After `publish_redshift --init`
+created the control table again, the whole base was published by `--channel default --max-workers 4`
 (`cad_lancamentos` 300.2 s at 274 MB, `redshift.md`), the Delta reader opened the 12 views in
 1.440 s, `export` took 22.2 s at 253 MB by copy and 278.0 s at 3,507 MB by rewrite (2,900 MiB
 the DuckDB limit), and `compact` refused. The consistency probes ran from 14:45 with every check
