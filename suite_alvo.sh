@@ -35,6 +35,18 @@ VARIABLES=(
     TARGET_ROOT_PATH
 )
 
+# Sem uma variável, nada roda: cada passo a leria vazia.
+missing=()
+for name in "${VARIABLES[@]}"; do
+    if [ -z "${!name}" ]; then
+        missing+=("$name")
+    fi
+done
+if [ "${#missing[@]}" -ne 0 ]; then
+    echo "suite_alvo.sh: variáveis de ambiente sem valor: ${missing[*]}" >&2
+    exit 2
+fi
+
 # O que cada passo deixou, para a tabela do fim: o comando, o código de saída e a duração.
 STEP_COMMANDS=()
 STEP_STATUSES=()
@@ -333,18 +345,6 @@ main() {
 
     summary
 }
-
-# Sem uma variável, nada roda: cada passo a leria vazia.
-missing=()
-for name in "${VARIABLES[@]}"; do
-    if [ -z "${!name}" ]; then
-        missing+=("$name")
-    fi
-done
-if [ "${#missing[@]}" -ne 0 ]; then
-    echo "suite_alvo.sh: variáveis de ambiente sem valor: ${missing[*]}" >&2
-    exit 2
-fi
 
 export PYTHONPATH=tests
 # Com a saída num pipe, o Python guardaria o que imprime até encher o buffer ou sair; sem buffer,
