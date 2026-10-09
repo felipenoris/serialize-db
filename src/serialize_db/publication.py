@@ -99,6 +99,9 @@ __all__ = [
 ]
 
 log = logging.getLogger("serialize_db.publication")
+# O tempo da abertura de cada conexão e o de cada comando, em DEBUG, num logger à parte, que se liga
+# sem o resto do log da publicação.
+command_log = logging.getLogger("serialize_db.publication.commands")
 
 CONTROL_TABLE = "serialize_db_publications"
 """A tabela de controle: ``table_name``, ``delta_version``, ``execution_id`` e ``published_at``."""
@@ -520,14 +523,18 @@ def reconcile_published(
 
 class _Connection:
     """Uma conexão da publicação: um cursor por comando, o erro do servidor com o comando
-    mascarado numa nota, e o ``BEGIN``, o ``COMMIT`` e o ``ROLLBACK`` explícitos."""
+    mascarado numa nota, e o ``BEGIN``, o ``COMMIT`` e o ``ROLLBACK`` explícitos. O log
+    ``serialize_db.publication.commands`` dá em ``DEBUG`` o tempo da abertura da conexão e o de
+    cada comando, com o texto mascarado."""
 
     def __init__(
         self,
         config: RedshiftConfig,
     ) -> None:
         self.config = config
+        started = time.perf_counter()
         self.connection = connect(config)
+        command_log.debug("%s em %.3f s", "conexão", time.perf_counter() - started)
 
     def execute(
         self,
@@ -535,11 +542,14 @@ class _Connection:
     ) -> object:
         """Roda um comando num cursor novo e o devolve."""
         cursor = self.connection.cursor()
+        started = time.perf_counter()
         try:
             cursor.execute(text)
         except redshift_connector.Error as error:
             error.add_note(f"comando: {mask(text)}")
             raise
+        finally:
+            command_log.debug("%s em %.3f s", mask(text), time.perf_counter() - started)
         return cursor
 
     def rows(

@@ -2022,3 +2022,33 @@ because it moves `probes/output/` while the log would still be open and carries 
 shared-volume path. The two `| tee probes/output/consistencia_*.txt` of the consistency block
 left, the log holding that output, and the `mkdir` lines became one `mkdir -p` of `probes/output`
 and `SERIALIZE_DB_TEST_LOCAL_ROOT`.
+
+## The changes the battery of 2026-10-09 called for, and the source after the migration (2026-10-09)
+
+Asked at 15:09 UTC whether the battery's readings call for a package change or a new reading, the
+assistant answered that none was required and recommended: the Redshift engine refusing `append`,
+`appender`, `ingest` and `pinned_delta` inside a client transaction; `render` writing a
+non-finite `Double` as a `float8` text; the DuckDB `COPY`'s zero-sign loss documented; a reading
+that ends the engine's session by `pg_terminate_backend`; and, optional, the time of each command
+of `publish_redshift` with 4 workers. At 15:26 UTC the user approved the second and third items,
+the new reading and the command timing, and asked how the first would work and whether DuckDB has
+it; the answer (no package check on DuckDB) and the pending decision are in `OPEN_QUESTIONS.md`.
+
+- `render` and the `literal_text` of the Redshift `stream` write `NaN`, `inf` and `-inf` as
+  `'NaN'::float8`, `'Infinity'::float8` and `'-Infinity'::float8`, through `_FloatLiteral` and
+  `with_float_literals` in `serialize_db.sql`, the `float8` text that `audit` already wrote and
+  the target read in the proof of concept; `OPEN_QUESTIONS.md` had offered
+  `CAST('NaN' AS DOUBLE)` or a `SqlError` (`tests/test_sql.py`, `tests/test_engine_redshift.py`).
+- The zero-sign loss stays and is documented in the `Double` row of the type table of
+  `docs/index.md`; `DICTIONARY_SIZE_LIMIT 0` was not taken.
+- The command timing is the package's DEBUG logger `serialize_db.publication.commands` (the
+  connection's opening and each command, the text masked), which
+  `probes/operacao/probe_parallel_gain.py` reads in its `publicacao` section.
+
+The user stated at 15:26 UTC: in the target, the source is still the source of truth; once the
+package is mature, the user will migrate the source to Delta once, and the source will be
+discarded; after that, revisions of old partitions are redone in Delta through this package's
+API, which is why the work builds features to adjust old partitions in Delta. The load needs no
+path to reload a partition the source revised (`import_table` skips a partition already in the
+log): the revisions the source makes before the migration, like `cad_lancamentos` 2026-07-31
+rewritten upstream (`source-base.md`), enter with the one-time load.

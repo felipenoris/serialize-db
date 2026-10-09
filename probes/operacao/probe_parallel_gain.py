@@ -26,7 +26,9 @@ anteriores. Cada seção de ``--only`` compara a forma em série, a primeira, co
   consultas pequenas, como no DuckDB, com a abertura de cada sessão a mais no tempo; e
   ``run.publish_delta`` com ``max_workers=4`` contra 1;
 - ``publicacao``: ``publication.publish_redshift`` das quatro com ``max_workers=4`` contra 1, com
-  a despublicação depois de cada medida, fora do tempo.
+  a despublicação depois de cada medida, fora do tempo; cada medida imprime também, de cada tipo
+  de comando e da abertura das conexões, quantos houve, a soma e o maior tempo, lidos no log
+  ``serialize_db.publication.commands``.
 
 Checagem: cada medida contou as linhas ou as tabelas esperadas, e as linhas de cada tabela que o
 ``ingest`` e o ``materialize`` trouxeram são as geradas. Leituras: cada medida e, no resumo, o
@@ -761,13 +763,61 @@ def publish_to_redshift(
     return len(published)
 
 
+class CommandTimes(logging.Handler):
+    """Os tempos que o log ``serialize_db.publication.commands`` dá em ``DEBUG``: o tipo e os
+    segundos da abertura de cada conexão e de cada comando, na ordem em que terminaram."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.times: list[tuple[str, float]] = []
+
+    def emit(
+        self,
+        record: logging.LogRecord,
+    ) -> None:
+        """Guarda o tipo e o tempo da linha, que traz o texto e os segundos nos argumentos."""
+        text, seconds = record.args
+        self.times.append((command_kind(text), seconds))
+
+
+def command_kind(
+    text: str,
+) -> str:
+    """O tipo de um comando da publicação no resumo: a primeira palavra, ``CREATE TEMP`` na
+    staging, com ``controle`` no que lê ou grava a tabela de controle; ``conexão`` na abertura."""
+    words = text.split()
+    kind = words[0]
+    if kind == "CREATE" and words[1] == "TEMP":
+        kind = "CREATE TEMP"
+    if publication.CONTROL_TABLE in text:
+        kind += " controle"
+    return kind
+
+
+def commands_line(
+    times: list[tuple[str, float]],
+) -> str:
+    """Cada tipo de comando, na ordem em que apareceu: quantos, a soma e o maior tempo."""
+    seconds_by_kind: dict[str, list[float]] = {}
+    for kind, seconds in times:
+        seconds_by_kind.setdefault(kind, []).append(seconds)
+    parts = []
+    for kind, values in seconds_by_kind.items():
+        parts.append(f"{kind} {len(values)}x, soma {sum(values):.2f} s, máx {max(values):.2f} s")
+    return "; ".join(parts)
+
+
 def publication_variant(
     db: Database,
     config: RedshiftConfig,
+    commands: CommandTimes,
     workers: int,
 ) -> Run:
-    """A publicação medida e a despublicação das quatro tabelas depois, fora do tempo."""
+    """A publicação medida, com a linha dos tempos de cada tipo de comando dela, e a despublicação
+    das quatro tabelas depois, fora do tempo e da linha."""
+    commands.times.clear()
     run = timed(functools.partial(publish_to_redshift, db, config, workers))
+    print(f"publish_redshift, max_workers={workers}, comandos: {commands_line(commands.times)}")
     publication.unpublish_redshift(db, config, TABLES)
     return run
 
@@ -776,17 +826,27 @@ def publication_section(
     db: Database,
     repetitions: int,
 ) -> None:
-    """A publicação das quatro tabelas no Redshift; no fim, as tabelas ``poc<id>_*`` e as linhas
-    de controle delas saem, e a tabela de controle sai quando a sonda a criou."""
+    """A publicação das quatro tabelas no Redshift, com os tempos de cada comando lidos no log
+    ``serialize_db.publication.commands``, que vão só à linha de cada medida; no fim, as tabelas
+    ``poc<id>_*`` e as linhas de controle delas saem, e a tabela de controle sai quando a sonda a
+    criou."""
     config = RedshiftConfig.from_environment()
     control = f'"{config.schema}"."{publication.CONTROL_TABLE}"'
     created = not control_table_exists(config, control)
     if created:
         publication.create_publications_table(config)
+    commands = CommandTimes()
+    command_logger = logging.getLogger("serialize_db.publication.commands")
+    command_logger.setLevel(logging.DEBUG)
+    command_logger.propagate = False
+    command_logger.addHandler(commands)
     try:
-        variants = workers_variants(publication_variant, db, config)
+        variants = workers_variants(publication_variant, db, config, commands)
         measure("publish_redshift", variants, repetitions, len(TABLES))
     finally:
+        command_logger.removeHandler(commands)
+        command_logger.propagate = True
+        command_logger.setLevel(logging.NOTSET)
         cleanup = []
         for table in TABLES:
             cleanup.append(

@@ -82,8 +82,9 @@ apaga.
 
 Cada módulo registra as suas mensagens no `logging` do Python, pelo logger com o nome dele:
 `serialize_db.execution` (a abertura e o resumo de cada execução, o relatório de cada auditoria com
-o SQL e as amostras), `serialize_db.publication` (a linha de cada tabela publicada),
-`serialize_db.parquet_import`, `serialize_db.delta`, `serialize_db.reader`,
+o SQL e as amostras), `serialize_db.publication` (a linha de cada tabela publicada; em `DEBUG`, pelo
+logger `serialize_db.publication.commands`, o tempo da abertura de cada conexão e o de cada comando,
+com o texto mascarado), `serialize_db.parquet_import`, `serialize_db.delta`, `serialize_db.reader`,
 `serialize_db.engine.duckdb` e `serialize_db.engine.redshift`. A linha de comando imprime o log no
 stderr a partir do nível `INFO`; um programa que chama o pacote vê os avisos (`WARNING`) sem
 configurar nada, e o resto depois de `logging.basicConfig(level=logging.INFO)`. O log Delta, ou
@@ -1056,7 +1057,7 @@ valores. Um tipo fora do contrato é listado por `check_models` e recusado por `
 | `Integer` | `int32` | `integer` | `INTEGER` | `INTEGER` | |
 | `BigInteger` | `int64` | `long` | `BIGINT` | `BIGINT` | O tipo das chaves. Tipos sem sinal do Arrow e do DuckDB ficam fora do contrato. |
 | `Boolean` | `bool` | `boolean` | `BOOLEAN` | `BOOLEAN` | |
-| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Entra como chega, sem arredondamento, com `NaN` e infinito; numa partição com valor não finito, a coluna fica sem mínimo e máximo no log Delta. A documentação do `UNLOAD` avisa que descarregar e recarregar pode perder precisão; o pacote faz os dois em Parquet, que guarda o valor binário, e a perda não foi medida. |
+| `Double` | `float64` | `double` | `DOUBLE` | `DOUBLE PRECISION` | Entra como chega, sem arredondamento, com `NaN` e infinito; numa partição com valor não finito, a coluna fica sem mínimo e máximo no log Delta. A documentação do `UNLOAD` avisa que descarregar e recarregar pode perder precisão; o pacote faz os dois em Parquet, que guarda o valor binário, e a perda não foi medida. O `COPY` do DuckDB, que grava os arquivos do `export_partition` do motor DuckDB, de `import_table`, de `rewrite` e de `export_parquet(mode="rewrite")`, perde o sinal do zero: num grupo de linhas com `-0.0` e `0.0`, todos saem com o sinal do primeiro gravado (DuckDB 1.5.5, 2026-09-25). O escritor do delta-rs, de `publish_partition` e de `compact`, e o Redshift guardam o sinal, que só aparece no texto do valor, em `math.copysign` e em `1 / x` no DuckDB e no PyArrow (`-inf` no lugar de `inf`), nunca numa comparação ou numa soma. |
 | `Numeric(p, s)` | `decimal128(p, s)` | `decimal(p,s)` | `DECIMAL(p, s)` | `DECIMAL(p, s)` | `p` de 1 a 38 e `s` de 0 a `p`, até 37, o maior `s` do Redshift; fora disso `check_models` lista a violação. Sem `p` a precisão é 18, e sem `s` a escala é 0, os padrões do `DECIMAL` do Redshift. O tipo físico no Parquet varia com o escritor, e os leitores leem todos: o DuckDB e o delta-rs gravam `INT32` até 9 dígitos, `INT64` até 18 e `FIXED_LEN_BYTE_ARRAY` acima, e o `UNLOAD` do Redshift e o PyArrow gravaram `DECIMAL(18, 2)` em `FIXED_LEN_BYTE_ARRAY`. |
 | `String(n)` | `string` | `string` | `VARCHAR(n)` | `VARCHAR(n)` | `n` em bytes no Redshift, e é assim que `cast`, a auditoria e a carga inicial medem o texto; o DuckDB aceita o comprimento e o ignora. `String` sem `n` é violação, e também `Unicode`, `VARCHAR` e `CHAR` sem `n`. |
 | `Text` | `string` | `string` | `VARCHAR` | `VARCHAR(65535)` | O texto sem `n`, e o `n` de `Text(n)` é ignorado; o teto é o do `VARCHAR` do Redshift, que `cast`, a auditoria e a carga inicial medem; `TEXT` no Redshift seria `VARCHAR(256)`. |

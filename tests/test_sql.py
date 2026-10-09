@@ -228,6 +228,46 @@ def test_render_writes_the_backslash_as_each_engine_reads_it() -> None:
     assert connection.execute(escape_text).fetchall() == [(12,)]
 
 
+def test_render_writes_nonfinite_doubles_as_both_engines_read_them() -> None:
+    """``NaN`` e os infinitos de um ``Double`` ou de um ``Float`` embutido como constante saem como
+    texto convertido para ``float8`` nos dois motores, também em cada item de uma lista do ``IN``,
+    e o texto do DuckDB acha a linha de cada um; o número finito sai como antes."""
+    # A linha de cada valor no rascunho e o literal que o texto leva.
+    cases = [
+        (11, float("nan"), "'NaN'::float8"),
+        (12, float("inf"), "'Infinity'::float8"),
+        (13, float("-inf"), "'-Infinity'::float8"),
+        (14, 1.5, "1.5"),
+    ]
+    connection = draft_sandbox("")
+    for entry_id, value, _ in cases:
+        connection.execute(
+            "INSERT INTO \"cad_lancamentos\" VALUES ($id, 7, $valor, 'RH', '2026-08-31')",
+            {"id": entry_id, "valor": value},
+        )
+
+    # O texto de cada motor e a linha que o texto do DuckDB acha pelo `=`.
+    for entry_id, value, literal in cases:
+        statement = sa.select(DRAFT_ENTRIES.c.id_lancamento).where(DRAFT_ENTRIES.c.valor == value)
+        for dialect in ("duckdb", "redshift"):
+            text = sql.render(statement, dialect, DRAFT_METADATA, prefix="")
+            assert text.endswith(f'"cad_lancamentos"."valor" = {literal}'), (dialect, text)
+        duckdb_text = sql.render(statement, "duckdb", DRAFT_METADATA, prefix="")
+        assert connection.execute(duckdb_text).fetchall() == [(entry_id,)]
+
+    # O Float de uma constante sem coluna, e cada item de uma lista do IN.
+    constant = sa.select(sa.literal(float("nan")).label("valor"))
+    assert sql.render(constant, "redshift", DRAFT_METADATA) == "SELECT 'NaN'::float8 AS valor"
+    infinities = (
+        sa.select(DRAFT_ENTRIES.c.id_lancamento)
+        .where(DRAFT_ENTRIES.c.valor.in_([float("inf"), float("-inf")]))
+        .order_by(DRAFT_ENTRIES.c.id_lancamento)
+    )
+    in_text = sql.render(infinities, "duckdb", DRAFT_METADATA, prefix="")
+    assert "IN ('Infinity'::float8, '-Infinity'::float8)" in in_text
+    assert connection.execute(in_text).fetchall() == [(12,), (13,)]
+
+
 def test_render_writes_a_bindparam_without_value_as_placeholder() -> None:
     """Um `bindparam` sem valor sai como `:nome`, num `text()` inclusive, e o statement original
     fica intacto; com valor, é constante; um nome fora de `[a-z_][a-z0-9_]*` é `SqlError`."""

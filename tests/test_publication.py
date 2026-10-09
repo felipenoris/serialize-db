@@ -4,9 +4,10 @@ amostra no esquema.
 Os casos sem conexão conferem a tabela de controle exigida, o texto da transação e da
 despublicação, a conferência da versão lida (igual; abaixo; acima da pedida, com as versões de
 um snapshot, a volta da publicação; o ``UPDATE`` sem linha, o ``1023`` e a tabela publicada que
-outra primeira publicação criou), a reconciliação pelas colunas de ``svv_all_columns`` e o
-estado, sobre uma conexão de mentira que registra os comandos e responde a linha de controle (os
-que gravam um Delta na pasta local são ``local``). Os casos marcados ``redshift``, ``s3`` e
+outra primeira publicação criou), a reconciliação pelas colunas de ``svv_all_columns``, o estado
+e o tempo de cada comando no log em ``DEBUG``, sobre uma conexão de mentira que registra os
+comandos e responde a linha de controle (os que gravam um Delta na pasta local são ``local``). Os
+casos marcados ``redshift``, ``s3`` e
 ``local`` publicam no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` a partir de um Delta sob
 ``SERIALIZE_DB_TEST_S3_ROOT``, exportado pelo motor DuckDB com o ``temp_directory`` sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT``, num ambiente ``poc<id>`` próprio, cujas tabelas publicadas e
@@ -546,6 +547,59 @@ def test_publish_builds_the_credentials_for_each_copy(
         assert f"role/papel-{number}'" in command
     with_clause = [text for text in connection.texts() if "IAM_ROLE" in text]
     assert with_clause == connection.texts("COPY")
+
+
+@pytest.mark.local
+def test_publish_logs_the_time_of_each_command_at_debug(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """O log ``serialize_db.publication.commands`` dá em ``DEBUG`` uma linha por conexão aberta e
+    uma por comando, na ordem, com o texto mascarado e o tempo em segundos, a do comando que falha
+    inclusive; a chave da cláusula de credenciais do ``COPY`` não chega ao log."""
+    db = local_db(local_location)
+    published_entries(db, MONTHS)
+    connection = FakeConnection()
+    use_fake(monkeypatch, connection)
+    secret = "chave-secreta-do-teste"
+
+    def clause_with_key(
+        config: RedshiftConfig,
+    ) -> str:
+        return f"ACCESS_KEY_ID 'AKIATESTE' SECRET_ACCESS_KEY '{secret}'"
+
+    monkeypatch.setattr(publication, "credentials_clause", clause_with_key)
+    logger = "serialize_db.publication.commands"
+    with caplog.at_level(logging.DEBUG, logger=logger):
+        publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1")
+    log_records = [log_record for log_record in caplog.records if log_record.name == logger]
+
+    # A conferência da tabela de controle e a publicação da tabela abrem uma conexão cada, com o
+    # USE e o search_path dentro do tempo da abertura, e cada comando seguinte tem a sua linha.
+    texts = [log_record.args[0] for log_record in log_records]
+    assert texts.count("conexão") == 2
+    after_opening = []
+    for command in connection.texts():
+        if not command.startswith(("USE ", "SET search_path")):
+            after_opening.append(command)
+    assert [text for text in texts if text != "conexão"] == after_opening
+    for log_record in log_records:
+        assert log_record.levelno == logging.DEBUG
+        assert isinstance(log_record.args[1], float)
+    assert len(connection.texts("COPY")) == len(MONTHS)
+    assert secret not in caplog.text
+
+    # O comando que falha também tem a sua linha.
+    caplog.clear()
+    failing = FakeConnection(fail=(r"^COPY", server_error("Spectrum Scan Error")))
+    use_fake(monkeypatch, failing)
+    with caplog.at_level(logging.DEBUG, logger=logger):
+        with pytest.raises(redshift_connector.ProgrammingError, match="Spectrum Scan Error"):
+            publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-2")
+    logged = [log_record.args[0] for log_record in caplog.records if log_record.name == logger]
+    assert logged[-2].startswith("COPY")
+    assert logged[-1] == "ROLLBACK"
 
 
 def test_reconcile_published_add_column_and_recreate() -> None:

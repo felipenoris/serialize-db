@@ -50,9 +50,10 @@ Exemplo, com duas tabelas do contrato:
 
 from __future__ import annotations
 
+import math
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 import duckdb_engine
 import sqlalchemy as sa
@@ -80,11 +81,56 @@ SENTINEL = "{prefix}"
 """O sentinela do prefixo do sandbox no texto gerado: ``read_sql`` o troca pelo prefixo informado,
 o motor e o leitor Redshift pelo prefixo deles, e ``bind`` recusa um texto que ainda o traz."""
 
+
+class _FloatLiteral(sa.Float):
+    """O ``Float`` e o ``Double`` que os dialetos de ``with_float_literals`` embutem como constante.
+
+    ``NaN`` e os infinitos saem como texto convertido para ``float8``, que o DuckDB e o Redshift
+    leem; o SQLAlchemy os escreveria ``nan``, ``inf`` e ``-inf``, que os dois motores leem como nome
+    de coluna e recusam. O número finito sai como no SQLAlchemy.
+    """
+
+    def literal_processor(
+        self,
+        dialect: sa.engine.Dialect,
+    ) -> Callable[[object], str]:
+        """O conversor de cada valor no literal do texto."""
+        number_literal = super().literal_processor(dialect)
+
+        def process(
+            value: object,
+        ) -> str:
+            # O float do Python e o numpy.float64, subclasse dele; o resto sai pelo SQLAlchemy.
+            if not isinstance(value, float) or math.isfinite(value):
+                return number_literal(value)
+            if math.isnan(value):
+                return "'NaN'::float8"
+            if value > 0:
+                return "'Infinity'::float8"
+            return "'-Infinity'::float8"
+
+        return process
+
+
+def with_float_literals(
+    dialect: sa.engine.Dialect,
+) -> sa.engine.Dialect:
+    """O dialeto com o ``Float`` e o ``Double`` embutidos por ``_FloatLiteral``; protegida, também
+    para o compilador dos literais do motor Redshift.
+
+    O ``colspecs`` da instância troca o tipo que o dialeto adota para cada ``sa.Float`` e cada
+    subclasse dele, ``sa.Double`` inclusive; a classe do dialeto, que o cliente pode usar no
+    ``sqlalchemy.Engine`` dele, fica como está.
+    """
+    dialect.colspecs = {**dialect.colspecs, sa.Float: _FloatLiteral}
+    return dialect
+
+
 # O compilador de cada motor, com paramstyle "named" para o % dos literais não sair dobrado. São os
 # dialetos de terceiros, e não o postgresql do SQLAlchemy.
 _DIALECTS = {
-    "duckdb": duckdb_engine.Dialect(paramstyle="named"),
-    "redshift": RedshiftDialect_redshift_connector(paramstyle="named"),
+    "duckdb": with_float_literals(duckdb_engine.Dialect(paramstyle="named")),
+    "redshift": with_float_literals(RedshiftDialect_redshift_connector(paramstyle="named")),
 }
 # O DuckDB lê a contrabarra de uma constante como caractere, e o dialeto, herdado do PostgreSQL, a
 # dobraria; o Redshift a lê como escape, e o dialeto dele a dobra.
@@ -266,7 +312,8 @@ def render(
     O statement é compilado sobre a cópia prefixada (``prefixed``) pelo dialeto do motor com
     ``paramstyle="named"``, que não dobra o ``%`` dos literais. O ``bindparam`` sem valor é o
     parâmetro de execução, que ``bind`` reescreve para o motor; o ``bindparam`` com valor sai como
-    constante.
+    constante. O ``NaN`` e os infinitos de um ``Float`` ou ``Double`` saem como
+    ``'NaN'::float8``, ``'Infinity'::float8`` e ``'-Infinity'::float8``, que os dois motores leem.
 
     Exemplo:
 
