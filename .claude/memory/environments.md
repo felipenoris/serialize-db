@@ -296,6 +296,36 @@ quarters of the growth of `BK-14` on 2026-10-06), and the 15:46 run's `probe_par
 3,731 MB (the `raiz apagada` lines, in MB of 2^20 bytes), each object left as a non-current version
 (`.claude/memory/OPEN_QUESTIONS.md`).
 
+The battery of 2026-10-09 from 01:06:44 to 06:11 UTC (from `main` at `1a18fd5`, the squash of PR
+#146, stated by the user) was the first run of `suite_alvo.sh`: its 51 steps, every `SUITE_ALVO.md`
+block with `credentials.py` and `duckdb_threads.py`, on 4 vCPUs and 15,786 MB (28.7 GiB free on
+disk) with the versions of 2026-10-05, the log `probes/output/suite_alvo_20261009-010644.txt` and
+the reports in one archive. Six steps exited non-zero, each as expected: `space.py`, `bucket.py` and
+`catalog.py` with 1 for their failed calls (`sagemaker_studio` absent, six `AccessDenied` on the
+bucket's configuration, the Athena workgroup denied and Lake Formation and S3 Tables timing out in
+60.8 s and 30.8 s), `parquet_source.py` with 2 for `PQ-3`, `audit` with 1 for the 989,852 orphans
+and `compact` with 2, refusing the snapshot at the current version. Every case passed: S3 652 and
+1 skipped in 426.0 s, `engine.stream.close_interrupts` at `0.023 s, erro OSError`; Redshift 60
+twice (992.0 s, 907.0 s), engine 16 twice (222.7 s, 226.3 s) and publication 12 twice (310.2 s,
+309.9 s), the readings of the three engine cases of PR #145 in `redshift.md`. The probes differed
+from 2026-10-07 in the CPUs (DuckDB with 4 threads), `RS-12` (36 load errors in 30 days) and
+`BK-14` (10,248 non-current versions, 62,094,316,073 bytes, and 9,751 delete markers, the listing
+at its limit); `RS-8` read 0 of 3 tables again, and the Data API answered in 430 ms and 187 ms. The
+load from 02:10:39 (12,875 MB available, 4 threads and 6,437 MiB) read 28 partitions in 701.0 s,
+peak 9,195 MB, the source's new partition 2026-08-31 among them (`source-base.md`); the audit,
+`history`, `snapshot carga-2026-09-24`, `vacuum` (0 files) and `archive` (28 files,
+`cad_lancamentos` 19.2 s at 353 MB) followed, and `duckdb_threads.py` ran from 02:27 to 04:00
+(`duckdb.md`). After `publish_redshift --init` created the control table again, the whole base was
+published by `--channel default --max-workers 4` (`cad_lancamentos` 320.9 s at 280 MB,
+`redshift.md`), `credentials.py` ran from 04:06:57 to 05:09:58 with no read failing
+(`aws-s3.md`), `probe_readers.py`, in its first target run, opened the Delta reader's 12 views in
+0.844 s and counted 101 rows of `cad_contas` through both readers, `export` took 16.9 s at 264 MB by
+copy and 125.1 s at 6,221 MB by rewrite, `compact` refused, and `probe_published_base.py`, in its
+first target run, took 168 s (`redshift.md`). The consistency probes from 05:15 and the operation
+probes from 05:18 passed every check (`concurrency.md`, `source-base.md`, `delta.md`,
+`redshift.md`), and the operation probes' reports deleted 19,293 MB under the suite root at their
+end, each object left as a non-current version (`.claude/memory/OPEN_QUESTIONS.md`).
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group

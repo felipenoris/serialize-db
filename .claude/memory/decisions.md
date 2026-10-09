@@ -608,7 +608,10 @@ between published tables (`cad_lancamentos` with `cad_contas` on `id_conta`); an
 enters by `ALTER TABLE ... ALTER DISTKEY` only when the plan shows `DS_BCAST_INNER` or `DS_DIST_BOTH`.
 Rejected: `SHOW TABLE`, which probably shows only `DISTSTYLE AUTO`, and asking the administrator for
 the view. `tests/proof_of_concept/test_redshift.py::test_explain_of_a_join_on_the_share` reads whether
-the role may run `EXPLAIN` on the datashare. `.claude/memory/OPEN_QUESTIONS.md`
+the role may run `EXPLAIN` on the datashare. On 2026-10-09 `probes/operacao/probe_published_base.py`
+read the plan over the published base, `prd_cad_lancamentos` (283,835,836 rows) with
+`prd_cad_contas` (101 rows) on `id_conta`: `XN Hash Join DS_DIST_ALL_NONE`, with neither label that
+asks for the key, so the published tables stay `DISTSTYLE AUTO` with no `DISTKEY`. `redshift.md`
 
 ## The readings folder
 

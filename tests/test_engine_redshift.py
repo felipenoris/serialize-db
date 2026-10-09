@@ -1737,7 +1737,9 @@ def test_append_inside_a_client_transaction_is_read(
     linha do cliente, seguido do ``ROLLBACK`` do cliente: o desfecho do ``append`` e o do
     ``ROLLBACK``, os avisos do servidor e os ids que ficam na tabela são leituras, porque o
     ``COMMIT`` de ``transaction()`` pode levar junto a linha do cliente. Depois do bloco, um
-    ``append`` entra pela transação do motor."""
+    ``append`` entra pela transação do motor. No ambiente alvo, nas quatro rodadas de 2026-10-09,
+    o ``append`` carregou as 2 linhas, o ``ROLLBACK`` foi aceito, o único aviso foi o ``INFO`` do
+    ``COPY``, e ficaram os ids 1, 2 e 3: o ``COMMIT`` do motor levou a linha do cliente."""
     engine = target.engine
     name = f"{engine.prefix}cad_medidas"
     engine.create_table(MEASURES)
@@ -2089,7 +2091,10 @@ def test_nonfinite_double_constant_is_read(
     ``sql.render`` escreve, como no texto de uma verificação da auditoria, lida pelo ``query``; o
     valor do cliente que ``literal_text`` põe no ``UNLOAD`` do ``stream``; e o mesmo valor como
     parâmetro do driver no ``query``. O texto do ``render`` e o valor lido, ou a recusa do
-    servidor, são leituras."""
+    servidor, são leituras. No ambiente alvo, nas quatro rodadas de 2026-10-09, o texto do
+    ``render`` (``SELECT nan AS valor``) e o ``stream`` foram recusados com ``42703 column "nan"
+    does not exist`` (``column "inf" does not exist`` com ``inf`` e ``-inf``), e o parâmetro do
+    driver trouxe os três valores."""
     engine = target.engine
     parameter = sa.select(sa.bindparam("x", type_=sa.Double).label("valor"))
     readings = {}
@@ -2144,7 +2149,10 @@ def test_zero_sign_through_copy_query_and_unload_is_read(
     """``-0.0`` e ``0.0`` de um ``Double`` no mesmo arquivo, pelo ``COPY`` do appender, e pelo
     ``INSERT`` de uma constante: os zeros negativos que o servidor guarda, lidos no texto do
     valor e por ``atan2``, os que o ``query`` traz pelo cursor e os que o ``stream`` lê do arquivo
-    do ``UNLOAD`` são leituras. Cada caminho traz as 1002 linhas, todas com o valor zero."""
+    do ``UNLOAD`` são leituras. Cada caminho traz as 1002 linhas, todas com o valor zero. No
+    ambiente alvo, nas quatro rodadas de 2026-10-09, os 500 zeros negativos do ``COPY`` e o do
+    ``INSERT`` guardaram o sinal no servidor, pelo texto ``-0`` e por ``atan2``, e chegaram com
+    ele pelo cursor e pelo ``UNLOAD``."""
     engine = target.engine
     name = engine.qualified(f"{engine.prefix}cad_sinais")
     engine.create_table(SIGNS)

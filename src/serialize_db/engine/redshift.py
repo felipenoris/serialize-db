@@ -111,10 +111,10 @@ _IDENTIFIER_BYTES = 127
 _TABLE_NAME_BYTES = 63
 
 # As linhas até as quais o UNLOAD da exportação grava em série, num arquivo só (PARALLEL OFF): acima
-# delas o UNLOAD roda em paralelo, que pode fragmentar por slice. No ambiente alvo, em 2026-10-05 e
-# em 2026-10-07, o UNLOAD da partição ordenada pela sort_key, de 1.000.000 a 33.239.719 linhas de
-# cad_lancamentos, levou o mesmo tempo nos dois modos (de 2,0 s a 50,4 s, razão de 0,98 a 1,01) e
-# gravou um arquivo só em ambos (probes/operacao/probe_unload_parallel.py).
+# delas o UNLOAD roda em paralelo, que pode fragmentar por slice. No ambiente alvo, em 2026-10-05,
+# em 2026-10-07 e em 2026-10-09, o UNLOAD da partição ordenada pela sort_key, de 1.000.000 a
+# 33.239.719 linhas de cad_lancamentos, levou o mesmo tempo nos dois modos (de 2,0 s a 50,4 s,
+# razão de 0,98 a 1,01) e gravou um arquivo só em ambos (probes/operacao/probe_unload_parallel.py).
 _PARALLEL_OFF_ROWS = 5_000_000
 
 # A cláusula de credenciais que nunca vai a log: o valor de cada chave sai como ***.
@@ -1249,6 +1249,11 @@ class RedshiftEngine:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava.
 
+        Uma transação que o cliente abre no bloco não se compõe com o ``append``, o ``appender``,
+        o ``ingest`` e o ``pinned_delta``, que abrem a sua: o servidor aceita o ``BEGIN`` deles sem
+        erro nem aviso, o ``COMMIT`` deles confirma também o que o cliente fez antes, e o
+        ``ROLLBACK`` seguinte do cliente, já sem transação aberta, não desfaz nada.
+
         Exemplo:
 
         .. code-block:: python
@@ -1382,7 +1387,9 @@ class RedshiftEngine:
         Protegida, para o appender e para a carga de cada partição de ``ingest`` e ``pinned_delta``.
 
         O ``COMMIT`` e o ``ROLLBACK`` rodam dentro da transação, sem a reconexão de ``execute``:
-        numa conexão nova, eles não teriam transação a fechar.
+        numa conexão nova, eles não teriam transação a fechar. Ela não é reentrante: dentro de uma
+        transação que o cliente abriu em ``session()``, o ``BEGIN`` dela não abre outra, e o
+        ``COMMIT`` confirma também o trabalho do cliente.
 
         Exemplo:
 

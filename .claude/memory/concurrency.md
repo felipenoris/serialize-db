@@ -194,17 +194,17 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   local whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the
   shorter interval), on 2026-10-03 and on 2026-10-07 (0.005 s against 0.006 s; alone, three runs
   at 0.278 s to 0.444 s against 0.006 s to 0.024 s), and passed alone and in the other sessions.
-  In the target the `-m "not redshift"` session of `suite_alvo.sh` runs it, and it passed in the 13
-  sessions with a report from 2026-09-24 to 2026-10-07, at 0.381 s to 0.893 s beside the loop
-  against 0.012 s to 0.074 s with the shorter interval (`concurrency.gil.os_stat_200` of
-  `suite_s3.json`), 0.381 s against 0.012 s on 2 vCPUs on 2026-10-07; the item is in
-  `.claude/memory/OPEN_QUESTIONS.md`.
+  In the target the `-m "not redshift"` session of `suite_alvo.sh` runs it, and it passed in the 14
+  sessions with a report from 2026-09-24 to 2026-10-09, at 0.381 s to 0.893 s beside the loop
+  against 0.012 s to 0.086 s with the shorter interval (`concurrency.gil.os_stat_200` of
+  `suite_s3.json`), 0.381 s against 0.012 s on 2 vCPUs on 2026-10-07 and 0.773 s against 0.086 s
+  on 4 vCPUs on 2026-10-09; the item is in `.claude/memory/OPEN_QUESTIONS.md`.
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
   2026-09-25), and in the target machine's local folder 79 of 400 (175 conflicts) on 2026-09-26,
-  88 (204) on 2026-09-27, 65 (84) on 2026-09-29, 67 (108) on 2026-10-05 and 87 (165) on
-  2026-10-07; S3's `IfMatch` is server-side. `.claude/memory/OPEN_QUESTIONS.md`
+  88 (204) on 2026-09-27, 65 (84) on 2026-09-29, 67 (108) on 2026-10-05, 87 (165) on
+  2026-10-07 and 81 (151) on 2026-10-09; S3's `IfMatch` is server-side. `.claude/memory/OPEN_QUESTIONS.md`
 - `Execution.publish_delta` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
@@ -288,3 +288,22 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   33.135 s, above every serial repetition (26.750 s, 27.448 s and 29.068 s): the four-connection
   publication varied three times between repetitions of one run, like the 31.521 s of
   2026-10-05, with no server reading to name the cause. `docs/index.md` ("Multithreading")
+- The same probe on 2026-10-09 from 05:42 UTC (4 vCPUs, 13.3 GiB available, DuckDB limits
+  4 threads and 6,794 MiB, the tables prepared in 30.9 s, `main` at `1a18fd5`). DuckDB: `stream`
+  1.29x with no work (0.460 s, +4 MB, against 0.595 s, +311 MB) and 1.68x with pandas (0.592 s
+  against 0.992 s), `appender` 1.02x and 1.03x, both 1.08x and 1.23x, 200 small queries 0.756 s
+  serial, 0.785 s on the main session and 0.492 s with one `new_session()` each (1.54x),
+  `run.ingest` 1.57x (7.058 s, +864 MB, against 11.077 s, +692 MB), `materialize` 1.39x
+  (7.136 s against 9.896 s) and `publish_delta(max_workers=4)` 1.81x (11.059 s against
+  19.963 s): the pools gained between their 2-vCPU and 8-vCPU gains. Redshift: `run.ingest` 2.84x
+  (11.973 s against 33.998 s), `stream`, `appender` and both 1.04x, 1.00x and 1.07x with no work
+  and 1.04x, 1.06x and 1.07x with pandas, 80 small queries 3.808 s serial (about 48 ms each, its
+  first repetition 5.565 s), 3.727 s on the main session and 1.944 s with one extra session each
+  (1.96x), `publish_delta(max_workers=4)` 1.37x (19.057 s against 26.058 s) and
+  `publish_redshift` with four workers 2.03x (13.813 s against 28.083 s), its other two
+  repetitions at 32.850 s and 32.314 s. Across the four runs of 2026-10-05 to 2026-10-09 the 12
+  four-connection repetitions fell in two groups with nothing between: 6 at 11.133 s to 13.813 s
+  (the three of 15:48 on 2026-10-07, two of 18:55 and one of 2026-10-09) and 6 at 31.521 s to
+  33.148 s (the three of 2026-10-05, one of 18:55 on 2026-10-07 and two of 2026-10-09), against
+  26.750 s to 32.179 s for the 12 serial ones, and the cause is unread. `docs/index.md`
+  ("Multithreading")

@@ -835,8 +835,8 @@ levaram 0,270 s em série e 0,242 s em quatro threads com uma sessão a mais cad
 
 No ambiente alvo, com as tabelas no S3, o `run.ingest` das quatro tabelas de uma partição da base
 ganhou 1,25 vez com 4 vCPUs (2026-09-23, com o cache de arquivos externos do DuckDB ligado), 1,89
-vez com 16 vCPUs (2026-09-24) e de 1,16 a 1,22 vez com 8 vCPUs, numa partição em que a maior tabela
-tinha 85% das linhas (2026-09-27, 2026-09-29 e 2026-10-05).
+vez com 16 vCPUs (2026-09-24) e, numa partição em que a maior tabela tinha 85% das linhas, de 1,16 a
+1,22 vez com 8 vCPUs (2026-09-27, 2026-09-29 e 2026-10-05) e 1,05 vez com 4 vCPUs (2026-10-09).
 
 Em 2026-10-05, a comparação rodou no ambiente alvo, numa máquina de 8 vCPUs com 13,0 GiB
 disponíveis (Python 3.13.15 e as versões acima), sobre quatro tabelas Delta iguais de 5.000.000 de
@@ -882,6 +882,16 @@ de 1,02 a 1,61 vez no DuckDB e de 1,01 a 2,68 vezes no Redshift, e `publish_reds
 `max_workers=4` 2,40 vezes (11,133 s contra 26,750 s), com uma das três repetições em quatro
 conexões em 33,135 s, acima de toda repetição em série.
 
+Em 2026-10-09 a sonda rodou numa máquina de 4 vCPUs com 13,3 GiB disponíveis. No DuckDB, os pools
+ganharam entre o que ganharam com 2 e com 8 vCPUs: `run.ingest` das quatro 1,57 vez (7,058 s contra
+11,077 s), `materialize` das quatro 1,39 vez e `publish_delta` com `max_workers=4` 1,81 vez
+(11,059 s contra 19,963 s); o `stream` ganhou 1,29 vez sem trabalho e 1,68 vez com o pandas, e as
+200 consultas pequenas 1,54 vez na sessão a mais. No Redshift: `run.ingest` das quatro 2,84 vezes
+(11,973 s contra 33,998 s), as 80 consultas pequenas 1,96 vez na sessão a mais (1,944 s contra
+3,808 s), `publish_delta` com `max_workers=4` 1,37 vez (19,057 s contra 26,058 s) e
+`publish_redshift` com `max_workers=4` 2,03 vezes (13,813 s contra 28,083 s), com as outras duas
+repetições em quatro conexões em 32,850 s e 32,314 s.
+
 ### Como usar as threads
 
 - **Leia o resultado grande por `stream`, com o trabalho dentro do laço.** A consulta segue enquanto
@@ -925,11 +935,11 @@ conexões em 33,135 s, acima de toda repetição em série.
   conferências, o commit e a releitura de cada tabela esperam a rede. Na pasta local ele não ganhou,
   porque o arquivo de cada partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada
   tabela em curso soma a memória da sua escrita.
-- **`max_workers` de `publish_redshift` ganhou em duas das três medidas no ambiente alvo**: quatro
-  tabelas iguais levaram 31,521 s em quatro conexões e 29,987 s uma por vez em 2026-10-05, e
-  11,819 s e 11,133 s contra 27,757 s e 26,750 s em 2026-10-07, quando uma repetição em quatro
-  conexões levou 33,135 s; o tempo em quatro conexões varia três vezes entre repetições, a causa
-  não foi lida, e o runbook publica a base com `--max-workers 4`.
+- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo**: das 12 repetições
+  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-09, seis
+  levaram de 11,133 s a 13,813 s e seis de 31,521 s a 33,148 s, nenhuma entre os dois grupos,
+  contra 26,750 s a 32,179 s das 12 repetições uma tabela por vez. A causa não foi lida, e o
+  runbook publica a base com `--max-workers 4`.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
