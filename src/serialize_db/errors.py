@@ -144,16 +144,19 @@ class LogUnavailable(Exception):
 
 class SandboxError(ValueError):
     """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, o
-    motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem, ou a memória lida do
-    ambiente que não dá 1 MiB de ``memory_limit`` ao DuckDB.
+    motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem ou com a sessão numa
+    transação que o cliente abriu, ou a memória lida do ambiente que não dá 1 MiB de
+    ``memory_limit`` ao DuckDB.
 
     A mensagem nomeia o objeto: o nome que ``create_table`` achou ocupado, a tabela que o
     ``appender`` não achou no sandbox, ou a view do ``ingest``, que não recebe lotes; o cliente lê
-    a versão fixada por ``run.pinned_delta(table)`` sem ocupar nome. Sem ``iam_role`` na
-    configuração, as credenciais vêm da sessão ``boto3``, e a mensagem diz onde ela procurou. A
-    memória é a que o processo ainda pode usar, de ``serialize_db.resources``, abaixo de 2 MiB ou
-    negativa, quando a configuração do DuckDB não informa o ``memory_limit``; a mensagem traz a
-    leitura.
+    a versão fixada por ``run.pinned_delta(table)`` sem ocupar nome. O ``append``, o ``appender``,
+    o ``ingest`` e o ``pinned_delta`` do motor Redshift recusam a sessão numa transação do
+    cliente, que o ``COMMIT`` deles confirmaria junto, e a mensagem pede o ``COMMIT`` ou o
+    ``ROLLBACK`` dela antes. Sem ``iam_role`` na configuração, as credenciais vêm da sessão
+    ``boto3``, e a mensagem diz onde ela procurou. A memória é a que o processo ainda pode usar, de
+    ``serialize_db.resources``, abaixo de 2 MiB ou negativa, quando a configuração do DuckDB não
+    informa o ``memory_limit``; a mensagem traz a leitura.
 
     Exemplo:
 

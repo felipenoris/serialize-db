@@ -9,7 +9,9 @@ primitiva toma pelo tempo do seu comando; ``session()`` dá a conexão crua ao b
 tomado e reentrante na mesma thread, e ``new_session()`` abre outra conexão, com o seu lock. Uma
 conexão derrubada pelo servidor é reaberta uma vez por comando, fora de transação, e o comando é
 repetido; a carga de cada partição de ``ingest`` e de ``pinned_delta`` roda numa transação, para o
-``COPY`` e o ``INSERT`` nunca se repetirem.
+``COPY`` e o ``INSERT`` nunca se repetirem. O ``ingest``, o ``pinned_delta``, o ``appender`` e o
+``append`` recusam a sessão numa transação que o cliente abriu, lida no ``in_transaction`` do
+driver.
 
 As primitivas:
 
@@ -994,7 +996,9 @@ class RedshiftAppender:
     ``COPY`` direto com ``42601`` e o ``INSERT`` da staging com ``XX000``), e o arquivo ausente
     faz o ``COPY`` falhar. A tabela não muda antes dele, e um erro não deixa linha. Uma exceção
     dentro do ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o arquivo
-    sem inserir nada, e a segunda chamada de ``close`` não faz nada.
+    sem inserir nada, e a segunda chamada de ``close`` não faz nada. O ``close`` na sessão numa
+    transação que o cliente abriu depois da abertura levanta o ``SandboxError`` da transação do
+    motor e também só apaga o arquivo.
     """
 
     def __init__(
@@ -1225,6 +1229,10 @@ class RedshiftEngine:
         self._owner: int | None = None
         self._closed = False
         self._in_transaction = False
+        # A conexão derrubada numa transação: o in_transaction do driver fica o de antes da queda,
+        # porque só o ReadyForQuery do fim de um comando o muda, até a reconexão ou o próximo
+        # comando que termina.
+        self._connection_dropped = False
         self._parent = parent
         self._pending: dict[str, _PinnedStaging] = {}
         # A sessão a mais divide com a principal as tabelas a apagar e as stagings já carregadas.
@@ -1251,10 +1259,12 @@ class RedshiftEngine:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
         chamada dentro do bloco não trava.
 
-        Uma transação que o cliente abre no bloco não se compõe com o ``append``, o ``appender``,
-        o ``ingest`` e o ``pinned_delta``, que abrem a sua: o servidor aceita o ``BEGIN`` deles sem
-        erro nem aviso, o ``COMMIT`` deles confirma também o que o cliente fez antes, e o
-        ``ROLLBACK`` seguinte do cliente, já sem transação aberta, não desfaz nada.
+        O ``append``, o ``appender``, o ``ingest`` e o ``pinned_delta`` abrem a sua transação e
+        recusam a sessão numa transação que o cliente abriu no bloco, lida no ``in_transaction``
+        do driver, antes de qualquer comando: o servidor aceitaria o ``BEGIN`` deles sem erro nem
+        aviso, e o ``COMMIT`` deles confirmaria também o que o cliente fez antes (leitura de
+        2026-10-09). A transação do cliente segue aberta, para o ``COMMIT`` ou o ``ROLLBACK``
+        dele.
 
         Exemplo:
 
@@ -1321,6 +1331,29 @@ class RedshiftEngine:
         with contextlib.suppress(redshift_connector.Error, OSError):
             self._connection.close()
         self._connection = connect(self.config)
+        self._connection_dropped = False
+
+    def _inside_transaction(self) -> bool:
+        """Se a sessão está numa transação: a de ``transaction()``, ou a que o ``in_transaction``
+        do driver leu no fim do último comando, que não vale na conexão derrubada."""
+        if self._in_transaction:
+            return True
+        if self._connection_dropped:
+            return False
+        return self._connection.in_transaction
+
+    def _refuse_inside_transaction(
+        self,
+        subject: str,
+    ) -> None:
+        """``SandboxError`` na sessão numa transação, lida sob o lock, antes do ``BEGIN`` de uma
+        carga, que o servidor aceitaria sem abrir outra."""
+        with self.session():
+            if self._inside_transaction():
+                raise SandboxError(
+                    f"{subject}: a sessão do motor está numa transação aberta, que o COMMIT da "
+                    f"carga confirmaria junto; feche-a por COMMIT ou ROLLBACK antes"
+                )
 
     def _run(
         self,
@@ -1345,12 +1378,12 @@ class RedshiftEngine:
     ) -> object:
         """Roda um comando na sessão, sob o lock.
 
-        Uma conexão derrubada pelo servidor (``InterfaceError`` do driver) é reaberta uma vez, com
-        credencial nova, e o comando é repetido, fora de transação. A reconexão perde a tabela
+        Uma conexão derrubada pelo servidor (``InterfaceError`` do driver) fora de transação é
+        reaberta uma vez, com credencial nova, e o comando é repetido. A reconexão perde a tabela
         temporária que o pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift``
         avisa da perda. O driver não diz se o servidor aplicou o comando derrubado: um comando que
         não pode entrar duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda
-        em ``transaction()``, onde a queda sobe sem repetição.
+        em ``transaction()``, sem a repetição.
 
         Exemplo:
 
@@ -1363,16 +1396,19 @@ class RedshiftEngine:
             ``:nome``.
         :param params: os valores dos marcadores, por nome; ``None`` sem marcador.
         :return: o cursor do comando, com o resultado a ler.
-        :raises redshift_connector.InterfaceError: a conexão derrubada dentro de uma transação;
-            o erro sobe, porque a transação se perdeu.
+        :raises redshift_connector.InterfaceError: a conexão derrubada dentro de uma transação,
+            a de ``transaction()`` ou a que o cliente abriu por ``BEGIN``, lida no
+            ``in_transaction`` do driver; o erro sobe sem repetição, porque a transação se perdeu,
+            e o comando seguinte reabre a conexão.
         :raises redshift_connector.Error: o erro do servidor, com o comando mascarado por
             ``mask`` numa nota.
         """
         with self.session():
             try:
-                return self._run(text, params)
+                cursor = self._run(text, params)
             except redshift_connector.InterfaceError as error:
-                if self._in_transaction:
+                if self._inside_transaction():
+                    self._connection_dropped = True
                     raise
                 log.warning(
                     "sandbox %s: conexão derrubada (%s); reaberta com credencial nova, e "
@@ -1382,6 +1418,9 @@ class RedshiftEngine:
                 )
                 self._reconnect()
                 return self._run(text, params)
+            # O comando terminou, e o in_transaction do driver vale de novo.
+            self._connection_dropped = False
+            return cursor
 
     @contextlib.contextmanager
     def transaction(self) -> Iterator[None]:
@@ -1389,9 +1428,9 @@ class RedshiftEngine:
         Protegida, para o appender e para a carga de cada partição de ``ingest`` e ``pinned_delta``.
 
         O ``COMMIT`` e o ``ROLLBACK`` rodam dentro da transação, sem a reconexão de ``execute``:
-        numa conexão nova, eles não teriam transação a fechar. Ela não é reentrante: dentro de uma
-        transação que o cliente abriu em ``session()``, o ``BEGIN`` dela não abre outra, e o
-        ``COMMIT`` confirma também o trabalho do cliente.
+        numa conexão nova, eles não teriam transação a fechar. Ela não é reentrante: o servidor
+        aceita o ``BEGIN`` dentro de outra transação sem abrir outra, e o ``COMMIT`` confirmaria
+        também o trabalho dela.
 
         Exemplo:
 
@@ -1402,11 +1441,14 @@ class RedshiftEngine:
                 engine.register_created(engine.prefix + "cad_lancamentos_projetados")
 
         :return: o gerenciador de contexto da transação; o ``with`` dá ``None``.
+        :raises SandboxError: a sessão já numa transação, a sua ou a que o cliente abriu por
+            ``BEGIN``, lida no ``in_transaction`` do driver, antes do ``BEGIN``.
         :raises redshift_connector.InterfaceError: a conexão derrubada no bloco, que perde a
             transação, ou no ``COMMIT``, cujo resultado fica desconhecido; o comando seguinte,
             fora da transação, reabre a conexão.
         """
         with self.session():
+            self._refuse_inside_transaction(f"sandbox {self.execution_id}")
             self.execute("BEGIN")
             self._in_transaction = True
             try:
@@ -1610,9 +1652,10 @@ class RedshiftEngine:
             ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: não muda nada, porque o Redshift não lê o Delta no lugar, e a
             tabela é sempre carregada.
-        :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
-            sem versão (``version=None``); e, sem ``iam_role``, a sessão ``boto3`` sem
-            credenciais para o ``COPY``.
+        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
+            comando; o nome ocupado no sandbox, ou a tabela que não existe no Delta, sem versão
+            (``version=None``); e, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
+            ``COPY``.
         :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
             da partição.
         :raises redshift_connector.Error: o ``COPY`` recusado por uma coluna da versão que o
@@ -1622,6 +1665,7 @@ class RedshiftEngine:
             partição, que o servidor desfaz; a tabela fica criada, sem essa partição e sem as
             seguintes.
         """
+        self._refuse_inside_transaction(table.name)
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela não existe no Delta")
         name = self.prefix + table.name
@@ -1645,10 +1689,12 @@ class RedshiftEngine:
         self,
         staging: _PinnedStaging,
     ) -> None:
-        """A staging ``_versao_<versão>`` carregada uma vez por execução, entre as sessões."""
+        """A staging ``_versao_<versão>`` carregada uma vez por execução, entre as sessões; a
+        carga recusa a sessão numa transação do cliente antes do DDL."""
         with self._loaded_lock:
             if staging.name in self._loaded:
                 return
+            self._refuse_inside_transaction(staging.table.name)
             values = delta.partition_values(
                 delta.open_table(staging.uri, self.storage, staging.version),
                 table_options(staging.table).partition_by,
@@ -1680,12 +1726,14 @@ class RedshiftEngine:
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core, sobre a
             staging.
-        :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``);
-            e, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
+        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
+            comando; numa tabela que ainda não existe, sem versão (``version=None``); e, sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação de uma
             partição da carga, que o servidor desfaz; a staging fica criada, sem essa partição e
             sem as seguintes, até o ``cleanup``.
         """
+        self._refuse_inside_transaction(table.name)
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela ainda não existe")
         staging = self._pinned_staging(table, uri, version)
@@ -1874,8 +1922,10 @@ class RedshiftEngine:
             cheia, o ``write`` bloqueia.
         :return: o ``Appender`` da tabela, que guarda os lotes num Parquet do ``staging/`` até o
             ``close`` e os carrega por ``COPY ... MANIFEST``.
-        :raises SandboxError: a tabela que não existe no sandbox.
+        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
+            comando; ou a tabela que não existe no sandbox.
         """
+        self._refuse_inside_transaction(table.name)
         return RedshiftAppender(self, table, queue_depth)
 
     def append(
@@ -1900,8 +1950,9 @@ class RedshiftEngine:
         :return: as linhas acrescentadas.
         :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
             tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
-        :raises SandboxError: a tabela que não existe no sandbox; ou, sem ``iam_role``, a sessão
-            ``boto3`` sem credenciais para o ``COPY``.
+        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
+            comando; a tabela que não existe no sandbox; ou, sem ``iam_role``, a sessão ``boto3``
+            sem credenciais para o ``COPY``.
         """
         batches = batches_of(data)
         with self.appender(table) as appender:
@@ -2059,8 +2110,9 @@ class RedshiftEngine:
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
             ``Execution.audit`` levanta ``AuditFailed``.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição.
-        :raises SandboxError: sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
-            ``COPY`` da staging ``_versao``.
+        :raises SandboxError: a sessão numa transação que o cliente abriu, quando uma verificação
+            carrega a staging ``_versao``, antes do DDL dela; ou, sem ``iam_role``, a sessão
+            ``boto3`` sem credenciais para o ``COPY`` da staging ``_versao``.
         """
         pinned = None
         pinned_max_key = None

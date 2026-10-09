@@ -708,3 +708,14 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   drops the connection on a named command after passing it to the stand-in
   (`FakeConnection.drop_on`), so the repeat is measured, not assumed; the rule lives here
   because `CLAUDE.md` is at its size budget.
+- **A driver's state is read on the failure path before a guard relies on it** (2026-10-09). The
+  answer to the user at 16:46 UTC proposed refusing the Redshift engine's primitives by the
+  driver's `in_transaction` and said the same reading would stop `execute` from repeating a
+  command inside a client transaction. The driver sets `in_transaction` only in
+  `handle_READY_FOR_QUERY`, and a dropped connection sends none, so after a `COMMIT` dropped
+  inside `transaction()` the value stays `True`: the reading alone refused the next
+  `transaction()`, and on a dead socket every later command would have raised without the
+  reconnect. The engine marks the dropped connection, the local fake and the stand-in keep the
+  stale value as the driver does, and a variant without the mark fails two local tests. Before a
+  guard reads a library's state, trace what sets it on the error path; the rule lives here
+  because `CLAUDE.md` is at its size budget.

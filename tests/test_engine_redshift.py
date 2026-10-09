@@ -3,21 +3,22 @@
 Os casos sem conexão conferem o texto de cada comando, a configuração, o prefixo, a cláusula de
 credenciais e a máscara, o esquema de um resultado pelo ``row_desc``, a tabela montada por colunas,
 os valores do cliente como literais, o ``:`` dentro das aspas e o guarda do ``bindparam`` sem
-valor, o ``stream`` vazio, a sessão única, a reconexão e o ``COMMIT`` que não reconecta, a lista de
+valor, o ``stream`` vazio, a sessão única, a reconexão, o ``COMMIT`` que não reconecta e a queda
+na transação do cliente sem repetição, a recusa das primitivas na transação do cliente, a lista de
 colunas do ``COPY`` do appender e o segundo ``close``, e a troca da partição com ``Double`` não
 finito, sobre uma conexão de mentira que registra os comandos, responde ao que o motor pergunta e
 grava o arquivo de um ``UNLOAD`` numa pasta local (os que gravam são ``local``, sob
-``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência, e leem dois
-escritores na mesma tabela, o ``append`` dentro de um ``BEGIN`` do cliente, o ``Double`` não finito
-como constante e como parâmetro, o sinal do zero pelo ``COPY``, pelo cursor e pelo ``UNLOAD``, e a
-sessão encerrada por ``pg_terminate_backend``, ociosa, numa transação e no ``COPY`` do ``ingest``,
-com uma amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e arquivos sob
-``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de
-``target_env_examples/redshift_native.py``, da biblioteca do projeto Claude, e no substituto local
-(``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/emulator.py``, que os testes dão ao motor
-no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``, particionado por
-``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma ``DateTime`` e a
-coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
+``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência e a recusa
+das primitivas dentro de um ``BEGIN`` do cliente, e leem dois escritores na mesma tabela, o
+``Double`` não finito como constante e como parâmetro, o sinal do zero pelo ``COPY``, pelo cursor e
+pelo ``UNLOAD``, e a sessão encerrada por ``pg_terminate_backend``, ociosa, numa transação do motor
+e numa do cliente, e no ``COPY`` do ``ingest``, com uma amostra no esquema de
+``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e arquivos sob ``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente
+alvo pela conexão de ``target_env_examples/redshift_native.py``, da biblioteca do projeto Claude, e
+no substituto local (``SERIALIZE_DB_TEST_EMULATOR``) pela conexão de ``tests/emulator.py``, que os
+testes dão ao motor no lugar do ``redshift_connector``. O modelo é o de ``Lancamento``,
+particionado por ``data_base_str``, com uma chave estrangeira para ``Conta``, uma coluna JSON, uma
+``DateTime`` e a coluna ``to``, palavra reservada, e ``Projetado``, a tabela que o pipeline grava
 (``tests/lancamentos_model.py``), ``cad_medidas``, sem JSON, com uma coluna anulável no meio, e
 ``cad_sinais``, com um ``Double``; ``cad_colunas``, só de texto, recebe uma coluna nova no meio ou
 troca duas de lugar depois de uma partição gravada, e o ``ingest`` e o ``pinned_delta`` põem cada
@@ -41,7 +42,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
@@ -231,7 +232,9 @@ class FakeConnection:
     comando, sabe que tabelas existem, responde ``pg_last_unload_count()`` e, num ``UNLOAD``, grava
     ``unload_rows`` num Parquet da pasta local com o manifesto, como o Redshift faria; com
     ``fail``, cada comando recebe esse erro; com ``drop_on``, o primeiro comando que começa por
-    essa palavra derruba a conexão."""
+    essa palavra derruba a conexão. O ``in_transaction`` muda com o ``BEGIN``, o ``COMMIT`` e o
+    ``ROLLBACK`` respondidos, como o ``ReadyForQuery`` do driver o muda, e o comando derrubado o
+    deixa como estava."""
 
     def __init__(
         self,
@@ -252,6 +255,7 @@ class FakeConnection:
         self.fail: Exception | None = None
         self.drop_on: str | None = None
         self.autocommit = False
+        self.in_transaction = False
         self.closed = False
 
     def cursor(self) -> FakeCursor:
@@ -287,6 +291,10 @@ class FakeConnection:
         text: str,
     ) -> tuple[list, list]:
         first = text.split(None, 1)[0].upper()
+        if first == "BEGIN":
+            self.in_transaction = True
+        if first in ("COMMIT", "ROLLBACK"):
+            self.in_transaction = False
         if first == "UNLOAD":
             self._unload(text)
             return [], []
@@ -892,7 +900,8 @@ def test_connection_dropped_at_commit_raises_without_reconnecting(
 ) -> None:
     """Uma conexão derrubada no ``COMMIT``: o ``InterfaceError`` sobe da transação, porque o
     ``COMMIT`` roda dentro dela e o resultado dele é desconhecido, e nenhum comando vai a uma
-    segunda conexão; fechada a transação, a conexão derrubada volta a ser reaberta."""
+    segunda conexão; fechada a transação, a seguinte não é recusada pelo ``in_transaction`` que a
+    queda deixou na conexão, e o ``BEGIN`` dela vai à conexão reaberta."""
     connections = [FakeConnection(), FakeConnection()]
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
     engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
@@ -905,12 +914,46 @@ def test_connection_dropped_at_commit_raises_without_reconnecting(
     assert engine._connection is first
     assert len(connections) == 1
     assert first.texts()[-3:] == ["BEGIN", insert, "COMMIT"]
+    assert first.in_transaction
 
-    # Fora da transação, o comando na conexão derrubada vai à conexão reaberta.
+    # Fora da transação, o BEGIN da seguinte, na conexão derrubada, vai à conexão reaberta.
     first.drop_next = 1
-    engine.execute("SELECT 1")
+    with engine.transaction():
+        engine.execute("SELECT 1")
     assert connections == []
-    assert engine._connection.texts()[-1] == "SELECT 1"
+    assert engine._connection.texts()[-3:] == ["BEGIN", "SELECT 1", "COMMIT"]
+
+
+def test_connection_dropped_in_a_client_transaction_raises_without_repeating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uma conexão derrubada dentro de uma transação que o cliente abriu por ``BEGIN``, lida no
+    ``in_transaction`` da conexão: o ``InterfaceError`` sobe sem a reconexão nem a repetição do
+    comando, que entraria fora da transação perdida; o comando seguinte, com o ``in_transaction``
+    ainda o de antes da queda, vai à conexão reaberta."""
+    connections = [FakeConnection(), FakeConnection()]
+    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
+    first = engine._connection
+    insert = 'INSERT INTO "esquema"."t" VALUES (1)'
+    engine.execute("BEGIN")
+    first.drop_next = 1
+    with pytest.raises(redshift_connector.InterfaceError):
+        engine.execute(insert)
+    assert engine._connection is first
+    assert len(connections) == 1
+    assert first.texts()[-2:] == ["BEGIN", insert]
+    assert first.in_transaction
+
+    # O ROLLBACK do cliente, na conexão derrubada, vai à conexão reaberta, sem o INSERT.
+    first.drop_next = 1
+    engine.execute("ROLLBACK")
+    assert connections == []
+    assert engine._connection.texts() == [
+        "USE compartilhado",
+        "SET search_path TO esquema",
+        "ROLLBACK",
+    ]
 
 
 @pytest.mark.local
@@ -1078,6 +1121,51 @@ def test_appender_second_close_does_nothing(
     assert len([text for text in connection.texts() if text.startswith("COPY")]) == 1
     assert connection.texts().count("COMMIT") == 1
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+
+
+@pytest.mark.local
+def test_primitives_refuse_a_transaction_the_client_opened(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
+    """Numa transação que o cliente abriu por ``BEGIN``, lida no ``in_transaction`` da conexão, o
+    ``append``, o ``appender``, o ``ingest``, o ``pinned_delta`` e ``transaction()`` levantam
+    ``SandboxError`` sem mandar comando, e o ``close`` de um appender aberto antes do ``BEGIN``
+    não roda o ``COPY`` e apaga o arquivo; depois do ``ROLLBACK`` do cliente, o ``append`` entra
+    pela transação do motor."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    uri = storage.uri_of("prd/cad_lancamentos")
+    delta.create_table(uri, ENTRIES, storage)
+    rows = entry_rows(MONTHS[0], 1, 10)
+    version = delta.publish_partition(uri, ENTRIES, MONTHS[0], rows, METADATA, storage)
+    connection = FakeConnection(storage, existing={f"{PREFIX}cad_contas"})
+    engine = fake_engine(monkeypatch, connection, storage)
+    early = engine.appender(ACCOUNTS)
+    early.write(account_rows(["A"]))
+
+    # Nenhuma primitiva manda comando depois do BEGIN do cliente.
+    engine.execute("BEGIN")
+    before = len(connection.commands)
+    with pytest.raises(SandboxError, match="transação aberta"):
+        engine.append(ACCOUNTS, account_rows(["B"]))
+    with pytest.raises(SandboxError, match="transação aberta"):
+        engine.appender(ACCOUNTS)
+    with pytest.raises(SandboxError, match="transação aberta"):
+        engine.ingest(ENTRIES, uri, version)
+    with pytest.raises(SandboxError, match="transação aberta"):
+        engine.pinned_delta(ENTRIES, uri, version)
+    with pytest.raises(SandboxError, match="transação aberta"):
+        with engine.transaction():
+            engine.execute("SELECT 1")
+    with pytest.raises(SandboxError, match="transação aberta"):
+        early.close()
+    assert connection.texts()[before:] == []
+    assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+
+    # Depois do ROLLBACK do cliente, o append entra pela transação do motor.
+    engine.execute("ROLLBACK")
+    assert engine.append(ACCOUNTS, account_rows(["C"])) == 1
+    assert connection.texts()[-1] == "COMMIT"
 
 
 @pytest.mark.local
@@ -1741,57 +1829,40 @@ def test_appender_refuses_a_batch_without_a_not_null_column(
     assert count_of(engine, f"{engine.prefix}cad_lancamentos_projetados") == 0
 
 
-def notice_reading(
-    notices: Iterable[dict],
-) -> list[dict]:
-    """Os avisos do servidor que o driver guardou, com a severidade, o SQLSTATE e a mensagem; o
-    driver guarda a chave e o valor de cada campo em bytes."""
-    readings = []
-    for notice in notices:
-        reading = {}
-        for field in (b"S", b"C", b"M"):
-            reading[field.decode()] = notice.get(field, b"").decode("utf-8", "replace")
-        readings.append(reading)
-    return readings
-
-
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_append_inside_a_client_transaction_is_read(
+def test_primitives_refuse_a_transaction_the_client_opened_on_the_target(
     target: Target,
 ) -> None:
-    """Um ``append`` dentro de um ``BEGIN`` que o cliente abriu em ``session()``, depois de uma
-    linha do cliente, seguido do ``ROLLBACK`` do cliente: o desfecho do ``append`` e o do
-    ``ROLLBACK``, os avisos do servidor e os ids que ficam na tabela são leituras, porque o
-    ``COMMIT`` de ``transaction()`` pode levar junto a linha do cliente. Depois do bloco, um
-    ``append`` entra pela transação do motor. No ambiente alvo, nas quatro rodadas de 2026-10-09,
-    o ``append`` carregou as 2 linhas, o ``ROLLBACK`` foi aceito, o único aviso foi o ``INFO`` do
-    ``COPY``, e ficaram os ids 1, 2 e 3: o ``COMMIT`` do motor levou a linha do cliente."""
+    """Dentro de um ``BEGIN`` que o cliente abriu em ``session()``, depois de uma linha do
+    cliente, o ``append``, o ``appender``, o ``ingest`` e o ``pinned_delta`` levantam
+    ``SandboxError`` pelo ``in_transaction`` do driver, e o ``ROLLBACK`` do cliente desfaz a linha
+    dele, que o ``COMMIT`` do ``append`` confirmava antes da recusa (as quatro rodadas de
+    2026-10-09 no ambiente alvo deixaram os ids 1, 2 e 3). Fora do bloco, o ``append`` entra pela
+    transação do motor."""
     engine = target.engine
     name = f"{engine.prefix}cad_medidas"
+    uri = target.uri(ENTRIES)
+    version = published_table(target, ENTRIES, MONTHS[:1], rows=10)
     engine.create_table(MEASURES)
-    reading = {}
-    with engine.session() as connection:
-        connection.notices.clear()
+    with engine.session():
         engine.execute("BEGIN")
         engine.execute(f'INSERT INTO {engine.qualified(name)} ("id_medida") VALUES (1)')
-        try:
-            reading["append"] = engine.append(MEASURES, pa.table({"id_medida": [2, 3]}))
-        except redshift_connector.Error as error:
-            reading["append"] = refusal_reading(error)
-        try:
-            engine.execute("ROLLBACK")
-            reading["rollback"] = "aceito"
-        except redshift_connector.Error as error:
-            reading["rollback"] = refusal_reading(error)
-        reading["notices"] = notice_reading(connection.notices)
-    kept = engine.query(f'SELECT "id_medida" FROM {engine.qualified(name)} ORDER BY 1')
-    reading["ids"] = kept.column(0).to_pylist()
-    record("redshift.engine.append_inside_client_transaction", reading)
+        with pytest.raises(SandboxError, match="transação aberta"):
+            engine.append(MEASURES, pa.table({"id_medida": [2, 3]}))
+        with pytest.raises(SandboxError, match="transação aberta"):
+            engine.appender(MEASURES)
+        with pytest.raises(SandboxError, match="transação aberta"):
+            engine.ingest(ENTRIES, uri, version)
+        with pytest.raises(SandboxError, match="transação aberta"):
+            engine.pinned_delta(ENTRIES, uri, version)
+        engine.execute("ROLLBACK")
+    assert count_of(engine, name) == 0
+    assert not engine.name_in_use(f"{engine.prefix}cad_lancamentos")
 
     # Fora do bloco do cliente, o append entra pela transação do motor.
     assert engine.append(MEASURES, pa.table({"id_medida": [4]})) == 1
-    assert count_of(engine, name) == len(reading["ids"]) + 1
+    assert count_of(engine, name) == 1
 
 
 @pytest.mark.redshift
@@ -1987,12 +2058,12 @@ def next_command_reading(
 def test_session_terminated_by_the_server_is_read(
     target: Target,
 ) -> None:
-    """Uma sessão a mais do motor encerrada por ``pg_terminate_backend`` da principal, ociosa e
-    dentro de ``transaction()``: o pid que o comando seguinte lê, ou o erro dele com a classe, o
-    SQLSTATE e a mensagem, e o erro que sobe da transação são leituras, porque nenhum caso tinha
-    derrubado a sessão no ambiente alvo. A sessão ociosa recebe dois comandos, e a da transação um
-    comando depois dela, que mostram se a conexão voltou; a principal, que não é encerrada, apaga
-    as tabelas no fim."""
+    """Uma sessão a mais do motor encerrada por ``pg_terminate_backend`` da principal, ociosa,
+    dentro de ``transaction()`` e dentro de um ``BEGIN`` do cliente: o pid que o comando seguinte
+    lê, ou o erro dele com a classe, o SQLSTATE e a mensagem, e o erro que sobe da transação são
+    leituras, porque nenhum caso tinha derrubado a sessão no ambiente alvo. A sessão ociosa recebe
+    dois comandos, e as das transações um comando depois dela, que mostram se a conexão voltou; a
+    principal, que não é encerrada, apaga as tabelas no fim."""
     engine = target.engine
     reading = {}
 
@@ -2021,6 +2092,22 @@ def test_session_terminated_by_the_server_is_read(
             in_transaction["raised"] = error_chain(error)
         in_transaction["after"] = next_command_reading(inside, pid)
         reading["transacao"] = in_transaction
+
+    # Dentro de um BEGIN do cliente: o erro sobe sem repetição, e o comando seguinte, com o
+    # in_transaction do driver ainda o de antes da queda, reabre a conexão.
+    with engine.new_session() as client:
+        pid = backend_pid(client)
+        client_transaction = {}
+        client.execute("BEGIN")
+        client_transaction["terminated"] = terminate_session(engine, pid)
+        time.sleep(TERMINATION_WAIT)
+        try:
+            client.execute("SELECT 1")
+            client_transaction["raised"] = None
+        except (redshift_connector.Error, OSError) as error:
+            client_transaction["raised"] = error_chain(error)
+        client_transaction["after"] = next_command_reading(client, pid)
+        reading["transacao_do_cliente"] = client_transaction
     record("redshift.engine.terminated_session", reading)
 
 

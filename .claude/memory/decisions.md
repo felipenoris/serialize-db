@@ -2032,7 +2032,8 @@ non-finite `Double` as a `float8` text; the DuckDB `COPY`'s zero-sign loss docum
 that ends the engine's session by `pg_terminate_backend`; and, optional, the time of each command
 of `publish_redshift` with 4 workers. At 15:26 UTC the user approved the second and third items,
 the new reading and the command timing, and asked how the first would work and whether DuckDB has
-it; the answer (no package check on DuckDB) and the pending decision are in `OPEN_QUESTIONS.md`.
+it; the answer was no package check on DuckDB, and the decision on the first item is the next
+section.
 
 - `render` and the `literal_text` of the Redshift `stream` write `NaN`, `inf` and `-inf` as
   `'NaN'::float8`, `'Infinity'::float8` and `'-Infinity'::float8`, through `_FloatLiteral` and
@@ -2052,3 +2053,35 @@ API, which is why the work builds features to adjust old partitions in Delta. Th
 path to reload a partition the source revised (`import_table` skips a partition already in the
 log): the revisions the source makes before the migration, like `cad_lancamentos` 2026-07-31
 rewritten upstream (`source-base.md`), enter with the one-time load.
+
+## The Redshift engine's primitives inside a client transaction (2026-10-09)
+
+The battery of 2026-10-09 read the server taking the `BEGIN` of `transaction()` inside a
+transaction the client opened in `session()`, and the engine's `COMMIT` committing the client's
+row (`redshift.md`). At 16:46 UTC the user asked how a `BEGIN` sent as raw SQL could be detected
+and whether clients would have to use a library `transaction()` API; the assistant answered that
+no API is needed, because the driver's `in_transaction` follows the status of each
+`ReadyForQuery` (redshift_connector 2.1.17, `core.py:1493`). At 17:04 UTC the user decided: "Pode
+implementar a recusa", with its test, which the next `./suite_alvo.sh` battery runs.
+
+- `append`, `appender`, `ingest`, `pinned_delta`, the audit's load of a `_versao` staging and
+  `transaction()` raise `SandboxError` before any command when the session is in a transaction,
+  read under the lock from the engine's flag or the driver's `in_transaction`; the client's
+  transaction stays open for its `COMMIT` or `ROLLBACK`. The `close` of an appender opened before
+  the client's `BEGIN` raises from `transaction()` and only deletes its file.
+- `execute` no longer repeats a dropped command inside a client transaction, where it used to
+  reconnect and run it outside the lost transaction (the stand-in read `raised: None` for that
+  case with the old code). The drop leaves the driver's `in_transaction` as it was, so the
+  engine marks the dropped connection and the next command reconnects. Without the mark, the
+  local tests read the `transaction()` after a `COMMIT` dropped inside another one refused, and
+  the client's `ROLLBACK` after a drop in its transaction raising instead of reconnecting; on a
+  dead socket the engine would never reconnect. The answer of 16:46 UTC had said the driver's
+  state alone also fixed the reconnect.
+- DuckDB is unchanged: it refuses the nested `BEGIN` of `ingest(materialize=True)`, the engine's
+  `ROLLBACK` undoes the client's transaction and the client's `COMMIT` fails (docstrings of
+  `DuckDBEngine.session` and `ingest`), and the DuckDB `append` and `appender` join the client's
+  transaction.
+
+`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`
+(`test_primitives_refuse_a_transaction_the_client_opened`, its `_on_the_target` case,
+`test_connection_dropped_in_a_client_transaction_raises_without_repeating`), `tests/emulator.py`

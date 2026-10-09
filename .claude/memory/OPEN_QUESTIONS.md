@@ -62,24 +62,25 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
 - **A reconexão do motor Redshift.** As suítes do motor e da publicação rodaram no ambiente alvo
   em 2026-09-24, duas vezes cada, e leram o que esperavam (`POC.md`): fica sem medida a reconexão
   depois de uma queda do servidor (etapa 5). Desde 2026-10-09, duas leituras da suíte do motor a
-  provocam por `pg_terminate_backend` numa sessão a mais, ociosa e dentro de `transaction()`
+  provocam por `pg_terminate_backend` numa sessão a mais, ociosa, dentro de `transaction()` e
+  dentro de um `BEGIN` do cliente
   (`test_engine_redshift.py::test_session_terminated_by_the_server_is_read`) e logo depois do
   `COPY` de uma partição de 300.000 linhas do `ingest`
   (`::test_session_terminated_during_the_ingest_copy_is_read`), e esperam a bateria. O motor
   reabre a conexão só no `InterfaceError`, que o `redshift_connector` 2.1.17 levanta na leitura
   vazia do socket; o envio num socket fechado deixa passar o `OSError` (`BrokenPipeError`,
   `ConnectionResetError`), porque o `_flush` só converte o `AttributeError`, e essa queda chegaria
-  ao cliente sem reconexão [inferido do código do driver]. O substituto imita o `InterfaceError`.
-- **A transação do cliente em volta das primitivas do motor Redshift.** Na bateria de 2026-10-09,
-  o servidor aceitou o `BEGIN` de `transaction()` dentro da transação do cliente, e o `COMMIT` do
-  motor confirmou a linha do cliente (docstrings de `session()` e `transaction()`). Proposta ao
-  usuário em 2026-10-09: o motor lê o `in_transaction` do driver, que o `ReadyForQuery` atualiza,
-  antes do `BEGIN` e recusa `append`, `appender`, `ingest` e `pinned_delta` com um erro, deixando
-  intacta a transação do cliente; o mesmo estado impediria `execute` de reabrir a conexão e
-  repetir um comando dentro dela. O pacote não confere isso no DuckDB: o DuckDB recusa o `BEGIN`
-  aninhado de `ingest(materialize=True)`, o `ROLLBACK` do motor desfaz a transação do cliente e o
-  `COMMIT` do cliente falha; o `append` e o `appender` do DuckDB entram na transação do cliente.
-  Espera o usuário: recusar, a recomendação, ou deixar como está, documentado.
+  ao cliente sem reconexão [inferido do código do driver]. Dentro de uma transação, a do motor ou a
+  do cliente, a queda sobe sem repetição e o comando seguinte reabre a conexão, com o
+  `in_transaction` que o driver deixa como estava antes da queda (docstring de `execute`). O
+  substituto imita o `InterfaceError` e esse `in_transaction`.
+- **O `create_table` do motor Redshift dentro da transação do cliente.** A recusa de 2026-10-09
+  (`decisions.md`) cobre o `append`, o `appender`, o `ingest` e o `pinned_delta`, que abrem a sua
+  transação. O `create_table` não abre e roda na transação do cliente, mas o `name_in_use` dele
+  confere o nome livre por um `SELECT` que falha com a relação inexistente, e esse erro aborta a
+  transação do cliente: o DDL seguinte receberia `25P02` [inferido da regra do PostgreSQL e da
+  leitura de 2026-09-21 em `lessons.md`; o alvo não leu]. Espera o usuário: recusar também o
+  `create_table` na transação do cliente, conferir o nome pelo catálogo, ou deixar como está.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:

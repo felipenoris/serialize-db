@@ -546,9 +546,11 @@ do modelo e recusa com `serialize_db.errors.SandboxError` o nome já ocupado; o 
 com o mesmo erro a tabela que não existe e a view do `ingest`, e `run.pinned_delta(table)` lê a
 versão fixada sem ocupar nome.
 `with run.sandbox.session() as connection:` dá a conexão crua ao que as primitivas não cobrem, e
-`with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo. A
-execução usa sempre os limites da máquina; `DuckDBConfig(threads=..., memory_limit=...)` os troca
-só no motor construído à mão.
+`with run.sandbox.new_session() as other:` abre uma sessão a mais para o que roda em paralelo. No
+Redshift, o `append`, o `appender`, o `ingest` e o `pinned_delta` recusam com `SandboxError` a
+sessão numa transação que o cliente abriu por essa conexão, cujo trabalho o `COMMIT` deles
+confirmaria junto. A execução usa sempre os limites da máquina;
+`DuckDBConfig(threads=..., memory_limit=...)` os troca só no motor construído à mão.
 
 ### Auditar antes de publicar no Delta
 

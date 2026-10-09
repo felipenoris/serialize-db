@@ -30,11 +30,11 @@ isolamento serializável que a segunda publicação da mesma partição recebeu 
 tabela, na grafia do Redshift, e ``current_database()`` é descrito com o tipo ``name`` (OID 19),
 que o Redshift dá aos identificadores do catálogo. O ``pg_terminate_backend`` encerra a sessão: o
 comando seguinte dela, e o que estava rodando, recebem o ``InterfaceError`` que o driver levanta
-diante do socket fechado, com a transação aberta desfeita, o que o código do driver diz e o
-ambiente alvo ainda não mostrou. No resto, o DuckDB responde do jeito dele. Os
-bloqueios entre transações, a criptografia do bucket, a Data API, as credenciais do contêiner, o
-proxy e a comparação do ``NaN`` numa varredura de tabela, que no DuckDB segue a regra do PostgreSQL
-e no Redshift não, só o ambiente alvo mostra.
+diante do socket fechado, com a transação aberta desfeita e o ``in_transaction`` da conexão como
+estava antes, o que o código do driver diz e o ambiente alvo ainda não mostrou. No resto, o DuckDB
+responde do jeito dele. Os bloqueios entre transações, a criptografia do bucket, a Data API, as
+credenciais do contêiner, o proxy e a comparação do ``NaN`` numa varredura de tabela, que no DuckDB
+segue a regra do PostgreSQL e no Redshift não, só o ambiente alvo mostra.
 
 Duas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
 tratamento de falha:
@@ -488,11 +488,12 @@ class Connection:
             self.duckdb_connection.execute(statement)
         self.pid = database.register(self)
         self.autocommit = False
+        # O estado que o driver lê no ReadyForQuery do fim de cada comando, e a transação aberta
+        # no DuckDB, que o encerramento da sessão desfaz sem mudar o primeiro.
         self.in_transaction = False
+        self.duckdb_transaction = False
         # O pg_terminate_backend de outra conexão encerra esta: raise_if_terminated o lê.
         self.terminated = False
-        # Os avisos do servidor, que o driver guarda em notices; o substituto não manda nenhum.
-        self.notices: collections.deque = collections.deque(maxlen=100)
         # As linhas do último UNLOAD que passou, o que pg_last_unload_count() devolve.
         self.last_unload_count = 0
         # O esquema em que um CREATE TABLE sem esquema cai: o de SET search_path.
@@ -514,11 +515,14 @@ class Connection:
         self,
         command: str,
     ) -> None:
-        """Confirma ou desfaz a transação aberta por ``BEGIN``; sem ela, nada a fazer."""
+        """Confirma ou desfaz a transação aberta por ``BEGIN``; sem ela, nada a fazer, e na sessão
+        encerrada o erro do socket fechado."""
         if not self.in_transaction:
             return
+        raise_if_terminated(self)
         self.duckdb_connection.execute(command)
         self.in_transaction = False
+        self.duckdb_transaction = False
 
     def close(self) -> None:
         """Fecha a conexão do DuckDB e libera o pid."""
@@ -678,13 +682,14 @@ def raise_if_terminated(
     ``pg_terminate_backend`` encerrou, com a transação aberta desfeita, como o servidor faz.
 
     A mensagem é a de ``Connection.handle_messages`` do ``redshift_connector`` 2.1.17 diante da
-    leitura vazia do socket; o ambiente alvo não a mostrou.
+    leitura vazia do socket; o ambiente alvo não a mostrou. O ``in_transaction`` fica como
+    estava, porque o driver só o muda no ``ReadyForQuery``, que a sessão encerrada não manda.
     """
     if not connection.terminated:
         return
-    if connection.in_transaction:
+    if connection.duckdb_transaction:
         connection.duckdb_connection.execute("ROLLBACK")
-        connection.in_transaction = False
+        connection.duckdb_transaction = False
     # O erro interno do substituto, como a interrupção do DuckDB, sai da cadeia: o driver levanta
     # o InterfaceError sem outro erro por trás.
     raise redshift_connector.InterfaceError(
@@ -728,8 +733,10 @@ def run_in_duckdb(
     # A transação aberta por BEGIN, que o rollback da limpeza desfaz.
     if first_word == "BEGIN":
         connection.in_transaction = True
+        connection.duckdb_transaction = True
     if first_word in ("COMMIT", "ROLLBACK"):
         connection.in_transaction = False
+        connection.duckdb_transaction = False
     return result
 
 
