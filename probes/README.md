@@ -8,11 +8,13 @@ recurso; as sondas de `consistencia/` e de `operacao/` são a exceção, e grava
 das suítes, salvo `operacao/probe_published_base.py`, que grava na própria base publicada (as
 seções delas abaixo). Cada um roda com o interpretador da pasta preparada, imprime o relatório no
 terminal e o grava em `output/<script>_<data-hora>.txt`, pasta fora do git, para ser colado na
-conversa com o assistente. O formato segue os scripts de leitura de
-[felipenoris/AWS-DataScience](https://github.com/felipenoris/AWS-DataScience), pasta `aws/`: seções
-numeradas, cada chamada ecoada acima do seu resultado ou do seu erro, identificadores reaproveitados
-como `NOME=valor`, a tabela de checagens (`fail` primeiro, depois `note`, depois `pass`) e a seção
-final "Chamadas que falharam", para um bloco vazio nunca significar "negado". Uma chamada marcada
+conversa com o assistente; `suite_alvo.sh`, o script da bateria do ambiente alvo, grava na mesma
+pasta, em `suite_alvo_<data-hora>.txt`, tudo o que cada passo mandou ao terminal. O formato segue
+os scripts de leitura de [felipenoris/AWS-DataScience](https://github.com/felipenoris/AWS-DataScience),
+pasta `aws/`: seções numeradas, cada chamada ecoada acima do seu resultado ou do seu erro,
+identificadores reaproveitados como `NOME=valor`, a tabela de checagens (`fail` primeiro, depois
+`note`, depois `pass`) e a seção final "Chamadas que falharam", para um bloco vazio nunca
+significar "negado". Uma chamada marcada
 `expected` sai como `-- SEM RESULTADO` e fica fora dessa seção e do código de saída: a visão de
 sistema negada a um usuário comum e o pacote ausente fora de um espaço são leituras do ambiente.
 Código de saída: 0 toda checagem passou, 1 alguma chamada falhou, 2 alguma checagem reprovou.
@@ -184,7 +186,8 @@ tipos exatos de `register_files` (a cópia sem o mínimo e o máximo de `Boolean
 como leituras conhecidas, não como reprovação; a soma de controle da auditoria acima de 1e32 fica
 fora dos dados da sonda da execução. Os achados da primeira rodada estão na seção "Achados das
 sondas de consistência de leitura e escrita" de `.claude/memory/OPEN_QUESTIONS.md`, e os comandos
-com as variáveis do ambiente alvo em `SUITE_ALVO.md`.
+com as variáveis do ambiente alvo em `suite_alvo.sh`, o script da bateria, seção "Sondas de
+consistência".
 
 | Sonda | O que atravessa |
 | --- | --- |
@@ -220,12 +223,12 @@ kernel sem memória, que não deixa rodar nenhum `finally`; `probe_parallel_gain
 biblioteca no próprio processo. Cada leitura sai no terminal e em
 `output/operacao_<sonda>_<data-hora>.txt`, com os erros; cada checagem imprime `OK` ou `PROBLEMAS`
 com a lista, e o código de saída é 1 quando alguma reprovou. Os comandos com as variáveis do
-ambiente alvo estão em `SUITE_ALVO.md`, seção "Sondas da operação", e o de `probe_published_base.py`
-na seção "Sonda da base publicada", depois da publicação e da exportação, e o de `probe_readers.py`
-na seção "Acesso de leitura". As leituras do ambiente alvo, desde a primeira rodada de 2026-10-05,
-estão nos arquivos de tema de `.claude/memory/`: `source-base.md` (a retomada da carga), `delta.md`
-(o `archive`, o `vacuum` e o `compact`), `redshift.md` (o `UNLOAD`) e `concurrency.md` (o ganho das
-threads).
+ambiente alvo estão em `suite_alvo.sh`, o script da bateria, seção "Sondas da operação", e o de
+`probe_published_base.py` na seção "Sonda da base publicada", depois da publicação e da
+exportação, e o de `probe_readers.py` na seção "Acesso de leitura". As leituras do ambiente alvo,
+desde a primeira rodada de 2026-10-05, estão nos arquivos de tema de `.claude/memory/`:
+`source-base.md` (a retomada da carga), `delta.md` (o `archive`, o `vacuum` e o `compact`),
+`redshift.md` (o `UNLOAD`) e `concurrency.md` (o ganho das threads).
 
 | Sonda | O que roda |
 | --- | --- |

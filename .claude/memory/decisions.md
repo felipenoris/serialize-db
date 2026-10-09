@@ -2001,3 +2001,21 @@ under `prd/exportacao/` and `compact`. Every `SUITE_ALVO.md` line that names `$S
 (`probes/parquet_source.py`, the migration script's `--source` and the five operation probes), and
 in the reports of 2026-10-07 neither the load's root nor the suites' root lies under the source
 path. The probe's docstring holds what it writes.
+
+## The target battery as one script (2026-10-08)
+
+Asked at 22:40 UTC to turn the whole `SUITE_ALVO.md` into one script, bash or Python, run with
+the variables of "Lista de variáveis de ambiente" exported, that captures in a file everything the
+terminal shows, because the blocks pasted one by one lost output to the terminal's history limit
+and the probes' report files hold only what each probe prints, not the CLI commands, the pytest
+sessions or a traceback. The user wants one command to run the battery and to post the log with
+`probes/output/`. The script is `suite_alvo.sh`, a running list of `run` lines with the commands
+and the comments of `SUITE_ALVO.md` in its order, the log in
+`probes/output/suite_alvo_<data-hora>.txt` through `tee` with `PYTHONUNBUFFERED=1`, the variables
+checked before the first step, every step run whatever the previous one returned, and the table
+of exit codes and durations at the end.
+`SUITE_ALVO.md` keeps the variables, the command and the "Resultados" block, outside the script
+because it moves `probes/output/` while the log would still be open and carries the user's
+shared-volume path. The two `| tee probes/output/consistencia_*.txt` of the consistency block
+left, the log holding that output, and the `mkdir` lines became one `mkdir -p` of `probes/output`
+and `SERIALIZE_DB_TEST_LOCAL_ROOT`.

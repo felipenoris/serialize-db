@@ -141,7 +141,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-09-27, em 328,5 s com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s
   com 285 MB, e em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB. Esperam: a volta a um snapshot
   anterior ao publicado sobre a base, com o tempo e o pico de RSS por tabela, que pede um commit
-  depois do snapshot e que a seção "Sonda da base publicada" do `SUITE_ALVO.md` faz com
+  depois do snapshot e que a seção "Sonda da base publicada" do `suite_alvo.sh` faz com
   `probes/operacao/probe_published_base.py`, refazendo a primeira partição de `cad_lancamentos` (o
   passo 6 da publicação leu em cada bateria que cada versão já estava publicada); e o `UNLOAD` de um
   cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que serve a
@@ -203,7 +203,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   200 `os.stat` ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de
   troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra
   0,006 s (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão
-  `-m "not redshift"` do `SUITE_ALVO.md` roda o caso, e ele passou nas 13 sessões com relatório, de
+  `-m "not redshift"` do `suite_alvo.sh` roda o caso, e ele passou nas 13 sessões com relatório, de
   2026-09-24 a 2026-10-07, com 0,381 s a 0,893 s ao lado do laço contra 0,012 s a 0,074 s com o
   intervalo menor (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s
   contra 0,012 s. A esteira não roda `tests/proof_of_concept/`, e o caso só atrapalha a sessão
