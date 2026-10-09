@@ -516,12 +516,17 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   `Cursor.execute` unconverted and would reach the caller of `RedshiftEngine.execute` without the
   reconnect (redshift_connector 2.1.17, read in its code on 2026-10-09; never seen in the target).
   Since 2026-10-09 `tests/test_engine_redshift.py` ends an engine session with
-  `pg_terminate_backend` from the parent engine, idle and inside `transaction()`
-  (`redshift.engine.terminated_session`, keys `ociosa` and `transacao`) and during the `COPY` of
-  `ingest` over a 300,000-row partition (`redshift.engine.terminated_during_copy`), and records
-  the error chain, whether the next command reconnects and what the server kept; no battery has
-  run them yet. The stand-in imitates the driver's `InterfaceError` with the open transaction
-  rolled back.
+  `pg_terminate_backend` from the parent engine, idle, inside `transaction()` and inside a
+  client's `BEGIN` (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and
+  `transacao_do_cliente`) and during the `COPY` of `ingest` over a 300,000-row partition
+  (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next
+  command reconnects and what the server kept; no battery has run them yet. The driver's
+  `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop leaves it
+  as it was before the failed command; the engine reads it to refuse the primitives and to stop
+  the reconnect inside a client transaction, and marks the dropped connection
+  (`_connection_dropped`) so that the next command reconnects (read in the driver's code on
+  2026-10-09). The stand-in imitates the driver's `InterfaceError` with the open transaction
+  rolled back and `in_transaction` left as it was.
 - The battery of 2026-10-05 (16:38 to 20:09 UTC, `environments.md`) read the Redshift version
   `1.0.434008`, against `1.0.436211` in every battery from 2026-09-20 to 2026-09-30, a lower number
   the readings do not explain. Between the end of the battery of 2026-09-30 (15:42 UTC, the control
@@ -571,8 +576,12 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
     outside any transaction, without an error or a notice, the only notice the `COPY`'s `INFO`
     (`Load into table '<prefix>cad_medidas' completed, 2 record(s) loaded successfully.`); the
     `append` loaded its 2 rows, and the ids 1, 2 and 3 stayed, the client's row committed by the
-    engine's `COMMIT`. The stand-in refuses the nested `BEGIN`, as DuckDB does. The docstrings of
-    `session()` and `transaction()` of `serialize_db.engine.redshift` say so.
+    engine's `COMMIT`. The stand-in refuses the nested `BEGIN`, as DuckDB does. Since 2026-10-09
+    the engine refuses `append`, `appender`, `ingest` and `pinned_delta` inside a client
+    transaction, read from the driver's `in_transaction` (`decisions.md`), and the case, renamed
+    `test_primitives_refuse_a_transaction_the_client_opened_on_the_target`, asserts the four
+    refusals and that the client's `ROLLBACK` leaves no row; the docstrings of `session()` and
+    `transaction()` say so.
   - `test_nonfinite_double_constant_is_read`: the text of `sql.render` (`SELECT nan AS valor`, and
     the same with `inf` and `-inf`) and the `stream` of the client's value, which `literal_text`
     writes the same way, were refused with `42703 column "nan" does not exist` (`column "inf" does

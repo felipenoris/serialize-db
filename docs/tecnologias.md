@@ -3823,9 +3823,9 @@ corrente. Toda consulta conta como atividade cobrada, uma de keepalive inclusive
 60 s de RPU (páginas de faturamento, de considerações e de `ALTER USER` do serverless, lidas em
 2026-09-22). O motor Redshift (`serialize_db.engine.redshift.RedshiftEngine`) guarda uma sessão
 por execução: uma fase do pipeline fora do banco mais longa que uma hora perde a sessão, o motor
-reconecta no comando
-seguinte, e o que se perde é a tabela temporária que o pipeline tenha criado nela; as
-`exec_<id>_*` são permanentes.
+reconecta no comando seguinte, e o que se perde é a tabela temporária que o pipeline tenha criado
+nela; as `exec_<id>_*` são permanentes. Numa transação que o cliente deixou aberta, o comando
+seguinte levanta o `InterfaceError` do driver, porque a transação se perdeu, e o outro reconecta.
 
 #### O cache de prepared statements e a leitura do resultado no driver
 
