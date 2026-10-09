@@ -2023,6 +2023,10 @@ shared-volume path. The two `| tee probes/output/consistencia_*.txt` of the cons
 left, the log holding that output, and the `mkdir` lines became one `mkdir -p` of `probes/output`
 and `SERIALIZE_DB_TEST_LOCAL_ROOT`.
 
+On 2026-10-09 the user asked the log to carry the commit hash, to say which version the
+battery ran: the log opens with the full hash, the branch, the date and the subject, and
+says whether the working copy equals the commit or lists its changes; without git or
+`.git` the line says so and the battery goes on.
 ## The changes the battery of 2026-10-09 called for, and the source after the migration (2026-10-09)
 
 Asked at 15:09 UTC whether the battery's readings call for a package change or a new reading, the

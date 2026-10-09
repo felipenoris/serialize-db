@@ -11,7 +11,9 @@
 #     ./suite_alvo.sh
 #
 # O script entra na pasta do repositório e para antes do primeiro passo quando alguma variável
-# falta. Cada passo é ecoado com a hora antes de rodar e com o código de saída e a duração
+# falta. O log abre com a hora, o commit da cópia do repositório (hash, ramo, data e título) e o
+# que a cópia tem além dele, e o valor de cada variável; sem git ou sem a pasta .git, diz isso e
+# segue. Cada passo é ecoado com a hora antes de rodar e com o código de saída e a duração
 # depois; um passo que falha não interrompe os seguintes, e Ctrl-C vai ao passo em curso e
 # encerra o script depois dele. Tudo o que os passos mandam ao terminal, a saída de erro
 # incluída, vai também para probes/output/suite_alvo_<data-hora>.txt, ao lado dos relatórios
@@ -119,12 +121,35 @@ interrupt() {
     exit 130
 }
 
+repository_lines() {
+    # O commit em que a cópia do repositório está e o que ela tem além dele, para o log dizer a
+    # versão que rodou; sem git ou sem a pasta .git, a linha diz isso e a bateria segue.
+    local commit
+    if ! command -v git >/dev/null; then
+        echo "commit: desconhecido, git não encontrado no PATH"
+        return
+    fi
+    if ! commit=$(git rev-parse HEAD 2>/dev/null); then
+        echo "commit: desconhecido, a pasta não é uma cópia git"
+        return
+    fi
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    git log -1 --format="commit: $commit ($branch, %cI): %s"
+    if [ -z "$(git status --porcelain)" ]; then
+        echo "cópia de trabalho: igual ao commit"
+        return
+    fi
+    echo "cópia de trabalho: com alterações sobre o commit (git status --porcelain):"
+    git status --porcelain | sed 's/^/    /'
+}
+
 main() {
     trap interrupt INT
 
     section "Bateria do ambiente alvo"
     echo "início: $(date '+%Y-%m-%d %H:%M:%S %z'); log: $LOG"
-    echo "repositório: $(git log -1 --format='%h %cI %s')"
+    repository_lines
     for name in "${VARIABLES[@]}"; do
         echo "$name=${!name}"
     done
