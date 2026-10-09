@@ -1839,7 +1839,7 @@ def test_primitives_refuse_a_transaction_the_client_opened_on_the_target(
     ``SandboxError`` pelo ``in_transaction`` do driver, e o ``ROLLBACK`` do cliente desfaz a linha
     dele, que o ``COMMIT`` do ``append`` confirmava antes da recusa (as quatro rodadas de
     2026-10-09 no ambiente alvo deixaram os ids 1, 2 e 3). Fora do bloco, o ``append`` entra pela
-    transação do motor."""
+    transação do motor. As quatro rodadas da segunda bateria de 2026-10-09 leram a recusa."""
     engine = target.engine
     name = f"{engine.prefix}cad_medidas"
     uri = target.uri(ENTRIES)
@@ -2063,7 +2063,9 @@ def test_session_terminated_by_the_server_is_read(
     lê, ou o erro dele com a classe, o SQLSTATE e a mensagem, e o erro que sobe da transação são
     leituras, porque nenhum caso tinha derrubado a sessão no ambiente alvo. A sessão ociosa recebe
     dois comandos, e as das transações um comando depois dela, que mostram se a conexão voltou; a
-    principal, que não é encerrada, apaga as tabelas no fim."""
+    principal, que não é encerrada, apaga as tabelas no fim. Nas quatro rodadas da segunda bateria
+    de 2026-10-09, a sessão ociosa reconectou num pid novo, e nas duas transações o comando
+    levantou o ``InterfaceError`` do driver e o seguinte reconectou."""
     engine = target.engine
     reading = {}
 
@@ -2137,7 +2139,11 @@ def test_session_terminated_during_the_ingest_copy_is_read(
     instantes e o erro, o erro que sobe do ``ingest``, as linhas que ficam na tabela do sandbox, a
     staging que sobra e o comando seguinte na sessão são leituras. A carga da partição roda em
     ``transaction()``, onde a queda sobe sem repetição; o ``DROP`` da staging, fora dela, reabre a
-    conexão se o erro for o ``InterfaceError`` que o motor reconhece."""
+    conexão se o erro for o ``InterfaceError`` que o motor reconhece. Nas quatro rodadas da
+    segunda bateria de 2026-10-09, o ``COPY`` e o ``ROLLBACK`` levantaram o ``InterfaceError``; em
+    três, o ``DROP`` falhou no envio com ``BrokenPipeError``, que o motor não reconhece, e o
+    ``ingest`` o levantou com a staging deixada e a sessão sem reconectar; na outra, o ``DROP``
+    reabriu a conexão."""
     engine = target.engine
     uri = target.uri(ENTRIES)
     version = published_table(target, ENTRIES, MONTHS[:1], rows=COPY_ROWS)
@@ -2378,7 +2384,10 @@ def test_nonfinite_double_reaches_the_server_by_every_text_path(
     servidor, vão ao relatório antes das asserções. No ambiente alvo, nas quatro rodadas de
     2026-10-09, o texto que o ``render`` escrevia antes do ``float8`` (``SELECT nan AS valor``) e
     o ``stream`` foram recusados com ``42703 column "nan" does not exist`` (``column "inf" does
-    not exist`` com ``inf`` e ``-inf``), e o parâmetro do driver trouxe os três valores."""
+    not exist`` com ``inf`` e ``-inf``), e o parâmetro do driver trouxe os três valores. Nas
+    quatro rodadas da segunda bateria do dia, o ``render`` escreveu ``SELECT 'NaN'::float8 AS
+    valor`` (``'Infinity'::float8`` e ``'-Infinity'::float8`` com ``inf`` e ``-inf``), e os três
+    caminhos trouxeram os três valores."""
     engine = target.engine
     parameter = sa.select(sa.bindparam("x", type_=sa.Double).label("valor"))
     readings = {}

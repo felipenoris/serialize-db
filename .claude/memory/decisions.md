@@ -611,7 +611,8 @@ the view. `tests/proof_of_concept/test_redshift.py::test_explain_of_a_join_on_th
 the role may run `EXPLAIN` on the datashare. On 2026-10-09 `probes/operacao/probe_published_base.py`
 read the plan over the published base, `prd_cad_lancamentos` (283,835,836 rows) with
 `prd_cad_contas` (101 rows) on `id_conta`: `XN Hash Join DS_DIST_ALL_NONE`, with neither label that
-asks for the key, so the published tables stay `DISTSTYLE AUTO` with no `DISTKEY`. `redshift.md`
+asks for the key, so the published tables stay `DISTSTYLE AUTO` with no `DISTKEY`; the second
+battery of the same day read the same plan with 424,598,150 rows. `redshift.md`
 
 ## The readings folder
 
@@ -2085,6 +2086,9 @@ implementar a recusa", with its test, which the next `./suite_alvo.sh` battery r
   `ROLLBACK` undoes the client's transaction and the client's `COMMIT` fails (docstrings of
   `DuckDBEngine.session` and `ingest`), and the DuckDB `append` and `appender` join the client's
   transaction.
+
+The second battery of 2026-10-09 read the refusal in the target: the `_on_the_target` case passed
+in its four sessions (`redshift.md`).
 
 `src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`
 (`test_primitives_refuse_a_transaction_the_client_opened`, its `_on_the_target` case,

@@ -326,6 +326,35 @@ probes from 05:18 passed every check (`concurrency.md`, `source-base.md`, `delta
 `redshift.md`), and the operation probes' reports deleted 19,293 MB under the suite root at their
 end, each object left as a non-current version (`.claude/memory/OPEN_QUESTIONS.md`).
 
+The second battery of 2026-10-09 ran from 18:34:48 to 22:35 UTC, from `main` at `c503462` (the
+squash of PR #150), which the log's opening line names with the working copy equal to the commit:
+the 51 steps of `suite_alvo.sh` on 8 vCPUs and 15,617 MB (28.7 GiB free on disk) with the versions
+of 2026-10-05, the log `probes/output/suite_alvo_20261009-183448.txt` and the reports in one
+archive. The same six steps exited non-zero, each as expected: `space.py`, `bucket.py` and
+`catalog.py` with 1 (Lake Formation and S3 Tables timing out in 60.9 s and 30.1 s),
+`parquet_source.py` with 2 for `PQ-3`, `audit` with 1 for the 989,852 orphans and `compact` with 2.
+Every case passed: S3 657 and 1 skipped in 296.0 s, `engine.stream.close_interrupts` at `0.029 s,
+erro OSError`; Redshift 62 twice (810.5 s, 754.5 s), engine 18 twice (190.4 s, 173.0 s) and
+publication 12 twice (275.6 s, 270.5 s), the readings of PR #148 and PR #149 in `redshift.md`. The
+probes differed from 01:06 in the CPUs (DuckDB with 8 threads), the Redshift version
+(`1.0.477953`, `redshift.md`) and `BK-14` (10,110 non-current versions, 88,588,140,425 bytes, and
+9,889 delete markers, the listing at its limit); `RS-8` read 0 of 3 tables, `RS-12`'s count
+returned no row, and the Data API answered in 427 ms and 558 ms. The load from 19:29:31
+(12,651 MB available, 8 threads and 6,325 MiB) read 29 partitions in 759.3 s summed (883 s for the
+step), peak 9,557 MB, the source's new `cad_lancamentos` partition 2026-08-31 among them
+(`source-base.md`); the audit, `history`, `snapshot carga-2026-09-24`, `vacuum` (0 files) and
+`archive` (29 files, `cad_lancamentos` 29.0 s at 371 MB) followed, and `duckdb_threads.py` ran from
+19:45 to 20:31 (`duckdb.md`). After `publish_redshift --init` created the control table again, the
+whole base was published by `--channel default --max-workers 4` (`cad_lancamentos` 487.8 s at
+286 MB, `redshift.md`), `credentials.py` ran from 20:40:15 to 21:43:16 with no read failing
+(`aws-s3.md`), `probe_readers.py` opened the Delta reader's 12 views in 0.647 s and counted 101 rows
+of `cad_contas` through both readers, `export` took 23.0 s at 259 MB by copy and 85.5 s at
+7,796 MB by rewrite, `compact` refused, and `probe_published_base.py` took 154 s (`redshift.md`).
+The consistency probes from 21:47 and the operation probes from 21:50 passed every check
+(`concurrency.md`, `source-base.md`, `delta.md`, `redshift.md`), and the operation probes' reports
+deleted 19,289 MB under the suite root at their end, each object left as a non-current version
+(`.claude/memory/OPEN_QUESTIONS.md`).
+
 ## The prepared folder and the venv
 
 On 2026-09-19 `pyproject.toml` declared no runtime dependencies and pinned the `dev` group
