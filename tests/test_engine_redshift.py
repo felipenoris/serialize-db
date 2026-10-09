@@ -9,7 +9,8 @@ finito, sobre uma conexão de mentira que registra os comandos, responde ao que 
 grava o arquivo de um ``UNLOAD`` numa pasta local (os que gravam são ``local``, sob
 ``SERIALIZE_DB_TEST_LOCAL_ROOT``). Os casos marcados ``redshift`` repetem a sequência, e leem dois
 escritores na mesma tabela, o ``append`` dentro de um ``BEGIN`` do cliente, o ``Double`` não finito
-como constante e como parâmetro, e o sinal do zero pelo ``COPY``, pelo cursor e pelo ``UNLOAD``,
+como constante e como parâmetro, o sinal do zero pelo ``COPY``, pelo cursor e pelo ``UNLOAD``, e a
+sessão encerrada por ``pg_terminate_backend``, ociosa, numa transação e no ``COPY`` do ``ingest``,
 com uma amostra no esquema de ``SERIALIZE_DB_TEST_REDSHIFT_SCHEMA`` e arquivos sob
 ``SERIALIZE_DB_TEST_S3_ROOT``: no ambiente alvo pela conexão de
 ``target_env_examples/redshift_native.py``, da biblioteca do projeto Claude, e no substituto local
@@ -35,11 +36,12 @@ import itertools
 import json
 import logging
 import math
+import queue
 import re
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
@@ -50,7 +52,7 @@ import redshift_connector
 import sqlalchemy as sa
 from deltalake import write_deltalake
 
-from conftest import LocalLocation, S3Location, record, redshift_config
+from conftest import LocalLocation, S3Location, describe_error, record, redshift_config
 from lancamentos_model import ACCOUNTS, ENTRIES, MONTHS, PROJECTED, account_rows, entry_rows
 from serialize_db import delta, schema, sql
 from serialize_db.engine import Engine, redshift
@@ -90,6 +92,11 @@ MEASURES = sa.Table(
     sa.Column("altura", sa.BigInteger),
     sa.Column("largura", sa.BigInteger),
 )
+
+# A espera entre o pg_terminate_backend, que pede o fim da sessão e volta, e o comando seguinte
+# nela; e as linhas da partição cujo COPY a sessão encerrada interrompe.
+TERMINATION_WAIT = 1.0
+COPY_ROWS = 300_000
 
 # Uma tabela com uma coluna Double, para o sinal do zero.
 SIGNS = sa.Table(
@@ -716,6 +723,26 @@ def test_literal_text_keeps_the_backslash_before_a_colon_in_a_value() -> None:
     assert redshift.literal_text("SELECT 1 WHERE 'x' IN :v", {"v": [r"a\:b", "c"]}, PREFIX) == (
         r"SELECT 1 WHERE 'x' IN ('a\\\:b', 'c')"
     )
+
+
+def test_literal_text_writes_nonfinite_doubles_as_float8_text() -> None:
+    """``NaN`` e os infinitos do cliente chegam ao literal do ``UNLOAD`` como texto convertido para
+    ``float8``, pelo statement Core e pelo texto pronto, na lista do ``IN`` inclusive; o número
+    finito, como está."""
+    statement = sa.select(ENTRIES.c.id_lancamento).where(ENTRIES.c.valor == sa.bindparam("v"))
+    literal_by_value = [
+        (float("nan"), "'NaN'::float8"),
+        (float("inf"), "'Infinity'::float8"),
+        (float("-inf"), "'-Infinity'::float8"),
+        (2.5, "2.5"),
+    ]
+    for value, literal in literal_by_value:
+        from_statement = redshift.literal_text(statement, {"v": value}, PREFIX)
+        assert from_statement.endswith(f'"valor" = {literal}'), from_statement
+        from_text = redshift.literal_text("SELECT :v AS valor", {"v": value}, PREFIX)
+        assert from_text == f"SELECT {literal} AS valor"
+    in_list = redshift.literal_text("SELECT 1 WHERE 0.5 IN :v", {"v": [float("nan"), 0.5]}, PREFIX)
+    assert in_list == "SELECT 1 WHERE 0.5 IN ('NaN'::float8, 0.5)"
 
 
 @pytest.mark.local
@@ -1908,6 +1935,176 @@ def test_new_session_sees_committed_tables(
     assert engine.query(f"SELECT x FROM {temporary}").column("x").to_pylist() == [1]
 
 
+def backend_pid(
+    engine: RedshiftEngine,
+) -> int:
+    """O pid da sessão do motor no servidor."""
+    return engine.execute("SELECT pg_backend_pid()").fetchone()[0]
+
+
+def terminate_session(
+    engine: RedshiftEngine,
+    pid: int,
+) -> bool:
+    """Encerra a sessão ``pid`` por ``pg_terminate_backend`` na sessão de ``engine``; ``True``
+    quando o servidor achou a sessão."""
+    return bool(engine.execute(f"SELECT pg_terminate_backend({int(pid)})").fetchone()[0])
+
+
+def error_chain(
+    error: BaseException,
+) -> list[str]:
+    """O erro e os que ele traz, do mais novo ao mais antigo, na cadeia que o traceback mostra,
+    como ``describe_error`` os descreve: o ``ROLLBACK`` que falha numa conexão morta leva consigo o
+    erro que o motivou."""
+    described = []
+    current = error
+    while current is not None:
+        described.append(describe_error(current))
+        # O raise ... from troca o __context__ pelo __cause__, e o from None tira os dois.
+        if current.__suppress_context__:
+            current = current.__cause__
+        else:
+            current = current.__context__
+    return described
+
+
+def next_command_reading(
+    engine: RedshiftEngine,
+    pid: int,
+) -> dict:
+    """O comando seguinte numa sessão encerrada: o pid que ele leu e se é outro que ``pid``, a
+    conexão reaberta; ou o erro que ele recebeu."""
+    try:
+        current = backend_pid(engine)
+    except (redshift_connector.Error, OSError) as error:
+        return {"error": error_chain(error)}
+    return {"pid": current, "reconnected": current != pid}
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_session_terminated_by_the_server_is_read(
+    target: Target,
+) -> None:
+    """Uma sessão a mais do motor encerrada por ``pg_terminate_backend`` da principal, ociosa e
+    dentro de ``transaction()``: o pid que o comando seguinte lê, ou o erro dele com a classe, o
+    SQLSTATE e a mensagem, e o erro que sobe da transação são leituras, porque nenhum caso tinha
+    derrubado a sessão no ambiente alvo. A sessão ociosa recebe dois comandos, e a da transação um
+    comando depois dela, que mostram se a conexão voltou; a principal, que não é encerrada, apaga
+    as tabelas no fim."""
+    engine = target.engine
+    reading = {}
+
+    # Ociosa: o comando seguinte roda fora de transação, onde o motor reabre a conexão uma vez.
+    with engine.new_session() as idle:
+        pid = backend_pid(idle)
+        terminated = terminate_session(engine, pid)
+        time.sleep(TERMINATION_WAIT)
+        reading["ociosa"] = {
+            "terminated": terminated,
+            "next": next_command_reading(idle, pid),
+            "after": next_command_reading(idle, pid),
+        }
+
+    # Dentro de transaction(): o erro sobe sem repetição, e o comando seguinte roda fora dela.
+    with engine.new_session() as inside:
+        pid = backend_pid(inside)
+        in_transaction = {}
+        try:
+            with inside.transaction():
+                in_transaction["terminated"] = terminate_session(engine, pid)
+                time.sleep(TERMINATION_WAIT)
+                inside.execute("SELECT 1")
+            in_transaction["raised"] = None
+        except (redshift_connector.Error, OSError) as error:
+            in_transaction["raised"] = error_chain(error)
+        in_transaction["after"] = next_command_reading(inside, pid)
+        reading["transacao"] = in_transaction
+    record("redshift.engine.terminated_session", reading)
+
+
+def terminate_at_copy(
+    engine: RedshiftEngine,
+    pid: int,
+    signals: queue.Queue,
+    reading: dict,
+    started: float,
+) -> None:
+    """Espera o sinal do ``COPY`` da sessão ``pid`` e a encerra pela sessão de ``engine``,
+    anotando em ``reading`` o desfecho e o instante; o sinal ``fim`` a libera sem encerrar."""
+    if signals.get() != "copy":
+        return
+    reading["terminated"] = terminate_session(engine, pid)
+    reading["terminated_at"] = round(time.perf_counter() - started, 3)
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_session_terminated_during_the_ingest_copy_is_read(
+    target: Target,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uma sessão a mais encerrada por ``pg_terminate_backend`` da principal logo depois que o
+    ``ingest`` manda o ``COPY`` de uma partição de 300.000 linhas: cada comando da sessão com os
+    instantes e o erro, o erro que sobe do ``ingest``, as linhas que ficam na tabela do sandbox, a
+    staging que sobra e o comando seguinte na sessão são leituras. A carga da partição roda em
+    ``transaction()``, onde a queda sobe sem repetição; o ``DROP`` da staging, fora dela, reabre a
+    conexão se o erro for o ``InterfaceError`` que o motor reconhece."""
+    engine = target.engine
+    uri = target.uri(ENTRIES)
+    version = published_table(target, ENTRIES, MONTHS[:1], rows=COPY_ROWS)
+    reading = {}
+    commands = []
+    signals = queue.Queue()
+    with engine.new_session() as session:
+        pid = backend_pid(session)
+        started = time.perf_counter()
+        original_run = session._run
+
+        def recorded_run(
+            text: str,
+            params: Mapping[str, object] | None,
+        ) -> object:
+            # O comando da sessão com os instantes e o erro; o COPY manda o sinal à thread que
+            # encerra a sessão.
+            command = {"command": text.split(None, 1)[0]}
+            command["start"] = round(time.perf_counter() - started, 3)
+            commands.append(command)
+            if command["command"] == "COPY":
+                signals.put("copy")
+            try:
+                return original_run(text, params)
+            except (redshift_connector.Error, OSError) as error:
+                command["error"] = describe_error(error)
+                raise
+            finally:
+                command["end"] = round(time.perf_counter() - started, 3)
+
+        monkeypatch.setattr(session, "_run", recorded_run)
+        terminator = threading.Thread(
+            target=terminate_at_copy, args=(engine, pid, signals, reading, started)
+        )
+        terminator.start()
+        try:
+            session.ingest(ENTRIES, uri, version, partitions=[MONTHS[0]])
+            reading["raised"] = None
+        except (redshift_connector.Error, OSError) as error:
+            reading["raised"] = error_chain(error)
+        finally:
+            signals.put("fim")
+            terminator.join()
+        reading["after"] = next_command_reading(session, pid)
+    reading["commands"] = commands
+    reading["rows"] = count_of(engine, f"{engine.prefix}cad_lancamentos")
+    reading["staging_left"] = engine.name_in_use(f"{engine.prefix}cad_lancamentos_staging")
+    record("redshift.engine.terminated_during_copy", reading)
+
+    # A sessão mandou o COPY pela cópia de _run, e a thread a encerrou.
+    assert "COPY" in [command["command"] for command in commands]
+    assert "terminated" in reading
+
+
 @pytest.mark.redshift
 @pytest.mark.s3
 def test_two_writers_on_the_same_table_both_enter(
@@ -2084,17 +2281,17 @@ def double_texts(
 
 @pytest.mark.redshift
 @pytest.mark.s3
-def test_nonfinite_double_constant_is_read(
+def test_nonfinite_double_reaches_the_server_by_every_text_path(
     target: Target,
 ) -> None:
-    """``nan``, ``inf`` e ``-inf`` de um ``Double`` pelos caminhos do texto: a constante que
-    ``sql.render`` escreve, como no texto de uma verificação da auditoria, lida pelo ``query``; o
-    valor do cliente que ``literal_text`` põe no ``UNLOAD`` do ``stream``; e o mesmo valor como
-    parâmetro do driver no ``query``. O texto do ``render`` e o valor lido, ou a recusa do
-    servidor, são leituras. No ambiente alvo, nas quatro rodadas de 2026-10-09, o texto do
-    ``render`` (``SELECT nan AS valor``) e o ``stream`` foram recusados com ``42703 column "nan"
-    does not exist`` (``column "inf" does not exist`` com ``inf`` e ``-inf``), e o parâmetro do
-    driver trouxe os três valores."""
+    """``nan``, ``inf`` e ``-inf`` de um ``Double`` chegam ao servidor e voltam pelos caminhos do
+    texto: a constante que ``sql.render`` escreve, como no texto de uma verificação da auditoria,
+    lida pelo ``query``; o valor do cliente que ``literal_text`` põe no ``UNLOAD`` do ``stream``; e
+    o mesmo valor como parâmetro do driver no ``query``. O texto e o valor lido, ou a recusa do
+    servidor, vão ao relatório antes das asserções. No ambiente alvo, nas quatro rodadas de
+    2026-10-09, o texto que o ``render`` escrevia antes do ``float8`` (``SELECT nan AS valor``) e
+    o ``stream`` foram recusados com ``42703 column "nan" does not exist`` (``column "inf" does
+    not exist`` com ``inf`` e ``-inf``), e o parâmetro do driver trouxe os três valores."""
     engine = target.engine
     parameter = sa.select(sa.bindparam("x", type_=sa.Double).label("valor"))
     readings = {}
@@ -2117,6 +2314,12 @@ def test_nonfinite_double_constant_is_read(
             reading["query"] = refusal_reading(error)
         readings[str(value)] = reading
     record("redshift.engine.nonfinite_double_constant", readings)
+
+    # Cada caminho devolve o valor que entrou.
+    for value_text, reading in readings.items():
+        assert reading["query_render"] == [value_text], reading
+        assert reading["stream"] == [value_text], reading
+        assert reading["query"] == [value_text], reading
 
 
 def negatives_by_origin(

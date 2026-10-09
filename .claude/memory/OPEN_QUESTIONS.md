@@ -49,8 +49,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   minutos antes da expiração) ou na abertura das conexões de `rewrite`, `read_back`,
   `export_parquet` e da troca do motor Redshift, que duram uma tabela ou uma partição e ficam com a
   chave da abertura; o `COPY` mais longo que a credencial que ele leva; a queda de uma conexão
-  Redshift no meio de um `COPY`; e a sessão ociosa e a transação inativa do serverless, encerradas
-  depois de 3.600 s e 21.600 s
+  Redshift no meio de um `COPY`, que uma leitura da suíte do motor provoca desde 2026-10-09 (item
+  "A reconexão do motor Redshift"); e a sessão ociosa e a transação inativa do serverless,
+  encerradas depois de 3.600 s e 21.600 s
   ([`docs/tecnologias.md`, Redshift](../../docs/tecnologias.md#redshift)).
   A cláusula do `COPY` e do `UNLOAD` é montada a cada comando, no motor da etapa 5 e, desde a
   decisão do usuário de 2026-09-26, na publicação da etapa 8, que passou assim no alvo em
@@ -60,7 +61,25 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-10-04, para a queda no meio do `COPY` subir sem repetição (`POC.md`).
 - **A reconexão do motor Redshift.** As suítes do motor e da publicação rodaram no ambiente alvo
   em 2026-09-24, duas vezes cada, e leram o que esperavam (`POC.md`): fica sem medida a reconexão
-  depois de uma queda do servidor, que nenhum teste provoca lá (etapa 5).
+  depois de uma queda do servidor (etapa 5). Desde 2026-10-09, duas leituras da suíte do motor a
+  provocam por `pg_terminate_backend` numa sessão a mais, ociosa e dentro de `transaction()`
+  (`test_engine_redshift.py::test_session_terminated_by_the_server_is_read`) e logo depois do
+  `COPY` de uma partição de 300.000 linhas do `ingest`
+  (`::test_session_terminated_during_the_ingest_copy_is_read`), e esperam a bateria. O motor
+  reabre a conexão só no `InterfaceError`, que o `redshift_connector` 2.1.17 levanta na leitura
+  vazia do socket; o envio num socket fechado deixa passar o `OSError` (`BrokenPipeError`,
+  `ConnectionResetError`), porque o `_flush` só converte o `AttributeError`, e essa queda chegaria
+  ao cliente sem reconexão [inferido do código do driver]. O substituto imita o `InterfaceError`.
+- **A transação do cliente em volta das primitivas do motor Redshift.** Na bateria de 2026-10-09,
+  o servidor aceitou o `BEGIN` de `transaction()` dentro da transação do cliente, e o `COMMIT` do
+  motor confirmou a linha do cliente (docstrings de `session()` e `transaction()`). Proposta ao
+  usuário em 2026-10-09: o motor lê o `in_transaction` do driver, que o `ReadyForQuery` atualiza,
+  antes do `BEGIN` e recusa `append`, `appender`, `ingest` e `pinned_delta` com um erro, deixando
+  intacta a transação do cliente; o mesmo estado impediria `execute` de reabrir a conexão e
+  repetir um comando dentro dela. O pacote não confere isso no DuckDB: o DuckDB recusa o `BEGIN`
+  aninhado de `ingest(materialize=True)`, o `ROLLBACK` do motor desfaz a transação do cliente e o
+  `COMMIT` do cliente falha; o `append` e o `appender` do DuckDB entram na transação do cliente.
+  Espera o usuário: recusar, a recomendação, ou deixar como está, documentado.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -112,7 +131,10 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `test_deltalake.py::test_written_stats_lose_the_row_on_decimal`); `register_files` deixa o
   `decimal` sem mínimo e máximo, e `publish_partition` grava pelo delta-rs. Depois da carga, os
   leitores passam a abrir o Delta, e as pastas de origem ficam como cópia até a primeira publicação
-  no Redshift. Espera o usuário: a troca de `valor`, se vier, antes da carga da produção.
+  no Redshift. A origem segue fonte da verdade no alvo até o pacote amadurecer; a carga roda uma
+  vez, a origem é descartada, e a revisão de uma partição antiga passa a ser refeita no Delta pela
+  API do pacote (declaração do usuário de 2026-10-09, `decisions.md`). Espera o usuário: a troca
+  de `valor`, se vier, antes da carga da produção.
 - **O acesso de leitura no ambiente alvo.** A etapa 10 rodou no alvo nas baterias de 2026-09-25, de
   2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05, de 2026-10-07 e de 2026-10-09
   (`POC.md`, `.claude/memory/environments.md`): o leitor Delta abriu as 12 views da raiz carregada
@@ -230,18 +252,6 @@ paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas 
 repetiram os achados sem reprovar checagem (`POC.md`, `.claude/memory/environments.md`). Cada
 item espera o usuário: corrigir, ou aceitar como está.
 
-- **O sinal do zero pelo `COPY` do DuckDB.** O escritor Parquet do DuckDB codifica a coluna
-  `DOUBLE` por dicionário e trata `-0.0` e `0.0` como o mesmo valor: num grupo de linhas com os
-  dois, todos saem com o sinal do primeiro que apareceu, e um grupo de 4 linhas, gravado em `PLAIN`,
-  guarda o sinal (`.claude/memory/duckdb.md`). Atinge o `export_partition` do motor DuckDB,
-  `import_table`, `rewrite` e `export_parquet(mode="rewrite")`; `publish_partition` e `compact`,
-  pelo escritor do delta-rs, guardam o sinal, e o Redshift também: no ambiente alvo, em
-  2026-10-09, os zeros negativos do `COPY` e do `INSERT` guardaram o sinal no servidor, lido no
-  texto do valor e por `atan2`, e chegaram com ele pelo cursor e pelo `UNLOAD`
-  (`test_engine_redshift.py::test_zero_sign_through_copy_query_and_unload_is_read`). A diferença
-  aparece em `1 / x`, em `math.copysign` e no texto do valor, nunca numa comparação ou numa soma.
-  Opções: `DICTIONARY_SIZE_LIMIT 0` no `COPY` (sem dicionário em coluna alguma, arquivo maior), ou
-  registrar a perda na linha do `Double` da tabela de tipos de `docs/index.md`.
 - **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
   `DECIMAL(38, 6)` (`_totals` de `serialize_db.audit`): um valor finito de magnitude 1e32 ou mais
   falha no `CAST` (`ConversionException`), e uma soma acima disso estoura (`OutOfRangeException`),
@@ -289,20 +299,8 @@ item espera o usuário: corrigir, ou aceitar como está.
 
 A revisão de `src/serialize_db` na `main` de 2026-10-04, a pedido do usuário, com atenção à
 consistência das leituras, das escritas e da publicação, corrigiu no mesmo PR o `COPY` repetido
-pela reconexão do motor Redshift (`POC.md`, etapa 5) e deixa dois
-itens que pedem decisão:
+pela reconexão do motor Redshift (`POC.md`, etapa 5) e deixa a decisão que segue:
 
-- **O `Double` não finito nas constantes do `render`.** `render` escreve `nan`, `inf` e `-inf`
-  para um `Double` não finito embutido como constante, e o DuckDB recusa o texto com
-  `BinderException` (`Referenced column "nan" was not found`), e o `literal_text` do `stream` do
-  Redshift compila os parâmetros do cliente com o mesmo `literal_binds`. O Redshift recusa o texto
-  com `42703` (`column "nan" does not exist`, e `column "inf"` para `inf` e `-inf`), pela
-  constante do `render` no `query` e pelo valor do cliente no `stream`, e lê os três pelo
-  parâmetro do driver (2026-10-09,
-  `test_engine_redshift.py::test_nonfinite_double_constant_is_read`). Opções: um
-  `literal_processor` do `Double` nos dois dialetos, que escreva `CAST('NaN' AS DOUBLE)` e
-  `CAST('Infinity' AS DOUBLE)`; ou um `SqlError` na constante não finita, antes de o motor
-  recusar o texto.
 - **A ordem do `Execution.__exit__`.** O `__exit__` roda `sandbox.cleanup()` antes de
   `_write_snapshot()`: um descarte que falha, por uma conexão derrubada ou um `DROP` recusado,
   sobe ao cliente e deixa a execução sem a entrada do snapshot que `run.snapshot(...)` pediu,

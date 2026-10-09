@@ -102,8 +102,9 @@ __all__ = [
 log = logging.getLogger("serialize_db.engine.redshift")
 
 # O compilador dos statements Core: com o estilo named o dialeto não dobra o % dos literais, e o
-# marcador :nome é o que o redshift_connector lê com cursor.paramstyle = "named".
-_NAMED = RedshiftDialect_redshift_connector(paramstyle="named")
+# marcador :nome é o que o redshift_connector lê com cursor.paramstyle = "named". O NaN e os
+# infinitos que literal_text embute saem como texto convertido para float8.
+_NAMED = sql.with_float_literals(RedshiftDialect_redshift_connector(paramstyle="named"))
 
 # O teto de um identificador do Redshift, em bytes, e o espaço que o prefixo deixa ao nome da
 # tabela e aos sufixos _staging, _versao e _carga.
@@ -720,8 +721,9 @@ def literal_text(
     prefix: str,
 ) -> str:
     """O texto com os valores do cliente como literais, o que entra no ``UNLOAD``, que não recebe
-    parâmetro; protegida. O dialeto dobra a aspa simples e a contrabarra e mantém o ``%``, e as
-    regiões citadas de um texto pronto passam intactas, ``:nome`` inclusive."""
+    parâmetro; protegida. O dialeto dobra a aspa simples e a contrabarra, mantém o ``%`` e escreve
+    o ``NaN`` e os infinitos como texto convertido para ``float8``, e as regiões citadas de um
+    texto pronto passam intactas, ``:nome`` inclusive."""
     if isinstance(statement_or_sql, str):
         statement = _text_with_values(statement_or_sql, params, prefix)
     else:

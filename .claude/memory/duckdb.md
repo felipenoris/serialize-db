@@ -64,7 +64,11 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   with the sign of the first one written (2,000 alternating rows by `id` all `0.0`, by `id DESC`
   all `-0.0`); 4 rows go `PLAIN` and keep the sign, as does `DICTIONARY_SIZE_LIMIT 0`;
   `write_deltalake`, `pq.write_table` and Arrow IPC keep it (DuckDB 1.5.5, 2026-09-25).
-  `.claude/memory/OPEN_QUESTIONS.md`
+  The literal `-0.0` is a `DECIMAL(2,1)`, so `(-0.0)::DOUBLE` and `CAST(-0.0 AS DOUBLE)` give
+  `+0.0`, while `'-0.0'::DOUBLE` and `-(0.0::DOUBLE)` keep the sign; `1 / x` over a `-0.0` that
+  came from Arrow gives `-inf` in DuckDB, numpy and pyarrow, and Python's `1 / x` raises
+  `ZeroDivisionError` (2026-10-09). `docs/index.md` documents the loss in the `Double` row: the
+  sign shows only in the value's text, in `math.copysign` and in `1 / x`.
 - `CAST(x AS NUMERIC(38, 6))` fails with `ConversionException` from `1e32` up (`1e31` passes),
   and `sum` of that decimal overflows with `OutOfRangeException` past about 1e32 (20 rows of
   `1e31`, 20,000 of `1e28`): the audit's control total of a `Double` dies on such values

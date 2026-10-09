@@ -28,7 +28,10 @@ e o conflito entre duas transações do DuckDB sai com o ``1023`` do Redshift, a
 isolamento serializável que a segunda publicação da mesma partição recebeu no ambiente alvo em
 2026-09-23; ``svv_all_columns`` lista as colunas com os tipos e as larguras do DDL que criou cada
 tabela, na grafia do Redshift, e ``current_database()`` é descrito com o tipo ``name`` (OID 19),
-que o Redshift dá aos identificadores do catálogo. No resto, o DuckDB responde do jeito dele. Os
+que o Redshift dá aos identificadores do catálogo. O ``pg_terminate_backend`` encerra a sessão: o
+comando seguinte dela, e o que estava rodando, recebem o ``InterfaceError`` que o driver levanta
+diante do socket fechado, com a transação aberta desfeita, o que o código do driver diz e o
+ambiente alvo ainda não mostrou. No resto, o DuckDB responde do jeito dele. Os
 bloqueios entre transações, a criptografia do bucket, a Data API, as credenciais do contêiner, o
 proxy e a comparação do ``NaN`` numa varredura de tabela, que no DuckDB segue a regra do PostgreSQL
 e no Redshift não, só o ambiente alvo mostra.
@@ -428,8 +431,16 @@ class Cursor:
         operation: str,
         args: object = None,
     ) -> Cursor:
-        """Roda o comando e guarda o resultado."""
-        result = run_command(self.connection, operation, args, self.paramstyle)
+        """Roda o comando e guarda o resultado; na sessão que ``pg_terminate_backend`` encerrou
+        antes do comando ou durante ele, o erro do driver diante do socket fechado."""
+        raise_if_terminated(self.connection)
+        try:
+            result = run_command(self.connection, operation, args, self.paramstyle)
+        except (redshift_connector.Error, duckdb.Error):
+            # O comando interrompido pelo encerramento sai como o socket fechado.
+            raise_if_terminated(self.connection)
+            raise
+        raise_if_terminated(self.connection)
         self.description = result.description
         self.rowcount = result.rowcount
         self.ps = {"row_desc": result.row_desc}
@@ -478,6 +489,8 @@ class Connection:
         self.pid = database.register(self)
         self.autocommit = False
         self.in_transaction = False
+        # O pg_terminate_backend de outra conexão encerra esta: raise_if_terminated o lê.
+        self.terminated = False
         # Os avisos do servidor, que o driver guarda em notices; o substituto não manda nenhum.
         self.notices: collections.deque = collections.deque(maxlen=100)
         # As linhas do último UNLOAD que passou, o que pg_last_unload_count() devolve.
@@ -649,11 +662,36 @@ def session_command(
     terminate = re.fullmatch(r"SELECT\s+pg_terminate_backend\((\d+)\)", text, re.IGNORECASE)
     if terminate:
         target = connection.database.connections.get(int(terminate.group(1)))
-        # A sessão presa num comando do DuckDB recebe a interrupção, como o fim do backend.
+        # A sessão fica encerrada, e a que roda um comando do DuckDB recebe a interrupção, como o
+        # fim do backend.
         if target is not None:
+            target.terminated = True
             target.duckdb_connection.interrupt()
         return single_value("pg_terminate_backend", OIDS["BOOLEAN"], target is not None)
     return None
+
+
+def raise_if_terminated(
+    connection: Connection,
+) -> None:
+    """O ``InterfaceError`` que o driver levanta quando o servidor fecha o socket, na sessão que
+    ``pg_terminate_backend`` encerrou, com a transação aberta desfeita, como o servidor faz.
+
+    A mensagem é a de ``Connection.handle_messages`` do ``redshift_connector`` 2.1.17 diante da
+    leitura vazia do socket; o ambiente alvo não a mostrou.
+    """
+    if not connection.terminated:
+        return
+    if connection.in_transaction:
+        connection.duckdb_connection.execute("ROLLBACK")
+        connection.in_transaction = False
+    # O erro interno do substituto, como a interrupção do DuckDB, sai da cadeia: o driver levanta
+    # o InterfaceError sem outro erro por trás.
+    raise redshift_connector.InterfaceError(
+        "BrokenPipe: server socket closed. Please check that client side networking "
+        "configurations such as Proxies, firewalls, VPN, etc. are not affecting your network "
+        "connection."
+    ) from None
 
 
 def single_value(

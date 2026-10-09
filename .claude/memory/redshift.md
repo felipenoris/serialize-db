@@ -508,6 +508,20 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   `DELETE`, `COPY` and `INSERT` in `transaction()`, where the drop rises as `InterfaceError`
   after the `ROLLBACK` and the server discards the transaction; the appender already loaded
   inside one, and the publication's `_Connection` never retries.
+- The driver raises `InterfaceError` (`BrokenPipe: server socket closed. ...`) only when a read
+  returns no bytes; an `ErrorResponse` becomes `ProgrammingError` (`28000` `InterfaceError`,
+  `23505` `IntegrityError`); `_send_message` turns only `ValueError("write to closed file")` and
+  `AttributeError` into `InterfaceError`, and the socket `flush` that sends each command catches
+  only `AttributeError`, so its `OSError` (`BrokenPipeError`, `ConnectionResetError`) passes
+  `Cursor.execute` unconverted and would reach the caller of `RedshiftEngine.execute` without the
+  reconnect (redshift_connector 2.1.17, read in its code on 2026-10-09; never seen in the target).
+  Since 2026-10-09 `tests/test_engine_redshift.py` ends an engine session with
+  `pg_terminate_backend` from the parent engine, idle and inside `transaction()`
+  (`redshift.engine.terminated_session`, keys `ociosa` and `transacao`) and during the `COPY` of
+  `ingest` over a 300,000-row partition (`redshift.engine.terminated_during_copy`), and records
+  the error chain, whether the next command reconnects and what the server kept; no battery has
+  run them yet. The stand-in imitates the driver's `InterfaceError` with the open transaction
+  rolled back.
 - The battery of 2026-10-05 (16:38 to 20:09 UTC, `environments.md`) read the Redshift version
   `1.0.434008`, against `1.0.436211` in every battery from 2026-09-20 to 2026-09-30, a lower number
   the readings do not explain. Between the end of the battery of 2026-09-30 (15:42 UTC, the control
@@ -563,7 +577,10 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
     the same with `inf` and `-inf`) and the `stream` of the client's value, which `literal_text`
     writes the same way, were refused with `42703 column "nan" does not exist` (`column "inf" does
     not exist` for `inf` and `-inf`), and the driver's parameter in `query` returned `nan`, `inf`
-    and `-inf`.
+    and `-inf`. Since 2026-10-09 both texts write `'NaN'::float8`, `'Infinity'::float8` and
+    `'-Infinity'::float8` (`.claude/memory/sqlalchemy.md`), and the case, renamed
+    `test_nonfinite_double_reaches_the_server_by_every_text_path`, asserts that every path returns
+    the value.
   - `test_zero_sign_through_copy_query_and_unload_is_read`: of the 1,000 alternating zeros of the
     appender's file and the 2 `INSERT` constants, the 500 and the 1 negative zeros kept the sign in
     the server (the text `-0` and a negative `atan2(valor, -1)`), through the cursor of `query` and

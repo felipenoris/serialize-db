@@ -95,6 +95,19 @@ Read before `serialize_db.schema` and `serialize_db.sql`, a DDL rule per dialect
 - `Table.constraints` and `Table.indexes` are sets, and their iteration order changed between
   processes (SQLAlchemy 2.0.54, 2026-09-28): `table_options` orders the keys as the primary key,
   then the `UniqueConstraint`s by their column names, then the unique indexes the same way.
+- A `Float` or `Double` constant under `literal_binds` goes through `Numeric.literal_processor`,
+  which in 2.0.54 checks the value with `decimal.Decimal(value)` and writes `str(value)`: `NaN`
+  and the infinities come out as `nan`, `inf` and `-inf`, which DuckDB and Redshift read as column
+  names (Redshift answered 42703 in the battery of 2026-10-09). Neither dialect gives `Float` a
+  type of its own (`duckdb_engine.Dialect.colspecs` maps only `Numeric` to itself).
+  `serialize_db.sql.with_float_literals` sets the instance-level `colspecs` entry
+  `sa.Float: _FloatLiteral` on the two compilers of `render` and on `engine.redshift._NAMED`; the
+  type adaptation walks the MRO, so `Double`, `REAL`, `DOUBLE_PRECISION` and
+  `Float(asdecimal=True)` take it too, and `_FloatLiteral` writes `'NaN'::float8`,
+  `'Infinity'::float8` and `'-Infinity'::float8`, which both engines read; the dialect classes
+  stay as they are for the client's `sqlalchemy.Engine` (2026-10-09). A `-0.0` constant still
+  comes out `-0.0`, which DuckDB parses as `DECIMAL(2,1)` and turns into `+0.0`
+  (`.claude/memory/duckdb.md`). `tests/test_sql.py`, `tests/test_engine_redshift.py`
 
 ## SQL tooling
 
