@@ -4900,10 +4900,9 @@ Os 32 arquivos saíram de um `UNLOAD ... PARTITION BY` sem `ORDER BY`, de uma ta
 `DISTSTYLE KEY` (2026-09-21). O `UNLOAD` em paralelo do `SELECT` da exportação, sem
 `PARTITION BY` e com `ORDER BY` pela chave de ordenação, gravou um arquivo só de 1.000.000 a
 33.239.719 linhas de `cad_lancamentos` (17,4 MB a 559,0 MB), no tempo do `PARALLEL OFF` (razão de
-0,98 a 0,99 em 2026-10-05 e de 0,98 a 1,01 em 2026-10-07), sobre a tabela do sandbox, em
-`DISTSTYLE AUTO`, e cópias dela por
-`CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
-distribuição.
+0,98 a 0,99 em 2026-10-05 e em 2026-10-09 e de 0,98 a 1,01 em 2026-10-07), sobre a tabela do
+sandbox, em `DISTSTYLE AUTO`, e cópias dela por `CREATE TABLE AS ... LIMIT`; a leitura não separa
+o efeito do `ORDER BY`, do `PARTITION BY` e da distribuição.
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
 acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
@@ -5136,6 +5135,10 @@ de ordenação e de distribuição habilita o sort merge join sem fase de ordena
 | `DS_BCAST_INNER` | Tabela interna transmitida a todos os nós. | Ruim; as tabelas não estão unidas pela chave de distribuição. |
 | `DS_DIST_ALL_INNER` | Tabela interna inteira numa única slice, porque a externa é `ALL`. | Ruim; execução serial. |
 | `DS_DIST_BOTH` | As duas redistribuídas. | Ruim. |
+
+No ambiente alvo, o join de `prd_cad_lancamentos` (283.835.836 linhas) com `prd_cad_contas` (101
+linhas) por `id_conta`, as duas publicadas em `DISTSTYLE AUTO`, leu `XN Hash Join DS_DIST_ALL_NONE`
+em 2026-10-09: a tabela de contas está em `ALL`, e as tabelas publicadas seguem sem `DISTKEY`.
 
 **Escrita das consultas.** Sem `SELECT *`; predicados sobre a chave de ordenação; o mesmo filtro
 repetido nas duas tabelas de um join, mesmo que redundante, para que ambas sejam podadas; sem funções

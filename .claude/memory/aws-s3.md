@@ -131,6 +131,15 @@ Read before `serialize_db.storage`, the S3 suite, `prepare_offline.sh` or a prob
   rounds). The four switches read on 2026-09-26 and 2026-09-27 all fit one about 30 minutes before
   the old key's expiry (inferred). `credential_expiry` read the container expiry in `space.py`,
   `RS-18` and `CR-1`.
+- In the target on 2026-10-09 (04:06:57 to 05:09:58 UTC, 14 rounds over the same table, the first
+  run since 2026-09-29, a step of `suite_alvo.sh` from `main` at `1a18fd5`) no read failed: the
+  opening key, expiring at 05:06:15, had 59 minutes left; the chain served the key expiring at
+  05:36:38 between 04:32:02 and 04:37:03 and the one expiring at 06:07:26 between 05:07:08 and
+  05:09:58, `credentials_clause` followed from 04:37:03 (`CR-10`), and the secret moved to the new
+  key at 04:52:05, 14.2 minutes before the expiry (`CR-9`). delta-rs, `delta_scan`,
+  `read_parquet`, `S3FileSystem` and `boto3` read in the 2 rounds past the expiry, the Redshift
+  connection answered in the 2 rounds past its 05:06:58 password expiry (`CR-8`), and the five
+  new clients of the control read (`CR-11`).
 - botocore keeps a credential's expiry only in the private `RefreshableCredentials._expiry_time`
   (botocore 1.43.103; <https://github.com/boto/botocore/issues/2694>, asking for a public field,
   open since 2022-06-13), and a credential from the `AWS_*` variables is a

@@ -44,11 +44,12 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   consistency probes 2.3 min, and one minimum each for `probes/redshift.py` and the reader: about
   11.7 RPU-hours, US$ 6.98; `credentials.py`, absent from both batteries, adds about 15 isolated
   `select 1` minimums, US$ 1.20. The section "Sonda da base publicada", which `SUITE_ALVO.md` gained
-  on 2026-10-08, is outside the estimate and unread until its first run: `probe_published_base.py`
-  keeps Redshift active for the `EXPLAIN` and two publications by the channel, each swapping one
-  partition of `cad_lancamentos`. The estimate counts each block's wall time as active, because the
-  AWS pages do not say how the minimum covers consecutive commands, and assumes no scaling above
-  8 RPU, which is billed at the same rate; the probe never read the workgroup's max capacity.
+  on 2026-10-08, is outside the estimate: `probe_published_base.py` keeps Redshift active for the
+  `EXPLAIN` and two publications by the channel, each swapping one partition of `cad_lancamentos`,
+  and its first run, on 2026-10-09, took 168 s, 96.9 s of them in the two publications. The
+  estimate counts each block's wall time as active, because the AWS pages do not say how the
+  minimum covers consecutive commands, and assumes no scaling above 8 RPU, which is billed at the
+  same rate; the probe never read the workgroup's max capacity.
   `SYS_SERVERLESS_USAGE` (`charged_seconds` per minute, 7 days) is visible only to superusers,
   which the project's user is not; system-table queries are billed and autonomics are not.
   Managed storage costs US$ 0.043 per GB-month, charged to the producer's namespace [inferred].
@@ -111,6 +112,11 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   8.5 s, 16.4 s, 32.2 s and 50.4 s with `PARALLEL OFF` against 2.1 s, 8.4 s, 16.4 s, 32.8 s and
   51.0 s in parallel (0.98 to 1.01), the footers read in 0.03 s to 0.08 s: within 0.5 s of
   2026-10-05 with 8 vCPUs, the `UNLOAD` time is the server's.
+- The same probe on 2026-10-09 from 05:29 UTC (4 vCPUs, `environments.md`): the partition went
+  into the sandbox in 39.9 s, both modes wrote one file in every repetition, 17.4 MB, 86.4 MB,
+  172.1 MB, 338.9 MB and 559.1 MB, the best times 2.1 s, 8.4 s, 16.2 s, 32.1 s and 50.4 s with
+  `PARALLEL OFF` against 2.1 s, 8.4 s, 16.5 s, 32.5 s and 51.1 s in parallel (0.98 to 0.99), the
+  footers read in 0.04 s to 0.08 s.
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
@@ -542,3 +548,44 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   `--status` read the 12 `prd_<table>` with published equal to current, and `--channel current`
   and `--snapshot carga-2026-09-25 --tables cad_contas` answered `já está publicada` for every
   table. The Data API answered in 461 ms and 167 ms.
+- The battery of 2026-10-09 (01:06 to 06:11 UTC, `environments.md`) read the same version
+  `1.0.434008`, `RS-8` read 0 of 3 tables again, and `RS-12` counted 36 load errors in 30 days. The
+  three engine cases of PR #145 read the same in the four sessions that run them, the engine suite
+  and the whole Redshift suite twice each:
+  - `test_append_inside_a_client_transaction_is_read`: the server took the `BEGIN` of
+    `transaction()` inside the client's open transaction, and later the client's `ROLLBACK`
+    outside any transaction, without an error or a notice, the only notice the `COPY`'s `INFO`
+    (`Load into table '<prefix>cad_medidas' completed, 2 record(s) loaded successfully.`); the
+    `append` loaded its 2 rows, and the ids 1, 2 and 3 stayed, the client's row committed by the
+    engine's `COMMIT`. The stand-in refuses the nested `BEGIN`, as DuckDB does. The docstrings of
+    `session()` and `transaction()` of `serialize_db.engine.redshift` say so.
+  - `test_nonfinite_double_constant_is_read`: the text of `sql.render` (`SELECT nan AS valor`, and
+    the same with `inf` and `-inf`) and the `stream` of the client's value, which `literal_text`
+    writes the same way, were refused with `42703 column "nan" does not exist` (`column "inf" does
+    not exist` for `inf` and `-inf`), and the driver's parameter in `query` returned `nan`, `inf`
+    and `-inf`.
+  - `test_zero_sign_through_copy_query_and_unload_is_read`: of the 1,000 alternating zeros of the
+    appender's file and the 2 `INSERT` constants, the 500 and the 1 negative zeros kept the sign in
+    the server (the text `-0` and a negative `atan2(valor, -1)`), through the cursor of `query` and
+    through the `UNLOAD` file of `stream`.
+
+  The whole base was published by channel on 4 vCPUs after `--init` created the control table:
+  `cad_contas` 6.3 s at 248 MB, `cad_contratos` 43.5 s, `cad_operacoes` 58.2 s,
+  `rel_contrato_operacao` 77.5 s and `cad_lancamentos` (5 partitions, 283,835,836 rows) 320.9 s at
+  280 MB, 0.88 million rows per second, the command 341 s; `--status`, `--channel current` and
+  `--snapshot carga-2026-09-25 --tables cad_contas` read as on 2026-10-07. The Data API answered
+  in 430 ms and 187 ms.
+- `probes/operacao/probe_published_base.py` ran in the target for the first time on 2026-10-09
+  (05:12 UTC, 168 s, every check passing), over the base just published by the channel `default`
+  at `carga-2026-09-25`. The `EXPLAIN` of the join of `prd_cad_lancamentos` (283,835,836 rows) with
+  `prd_cad_contas` (101) on `id_conta` read `XN Hash Join DS_DIST_ALL_NONE`, the inner
+  `prd_cad_contas` hashed from a table in `ALL`, with no `DS_BCAST_INNER` or `DS_DIST_BOTH`, so the
+  published tables stay `DISTSTYLE AUTO` with no `DISTKEY` (`decisions.md`). The redo of the first
+  partition, 2026-01-31 (33,239,719 rows), in a DuckDB execution marked with the snapshot
+  `refeito-operacao-18a392d7` took 46.4 s at a process peak of 7,522 MB (`ingest` 0.136 s, `audit`
+  12.135 s, `publish_delta` 30.693 s), `cad_lancamentos` at version 6; with the channel on it, the
+  publication by channel swapped only that partition, version 6, in 42.8 s at 261 MB (47.6 s for
+  the command), and with the channel back on `carga-2026-09-25` it swapped it back, version 5, in
+  44.3 s at 258 MB (49.3 s), the other 11 tables `já está publicada` both ways. `prd_cad_lancamentos`
+  kept 283,835,836 rows and the `id_lancamento` sum 274,392,499,994,978,967 before the swap, after
+  it and after the return, and the channel ended on `carga-2026-09-25`.

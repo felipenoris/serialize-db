@@ -101,6 +101,20 @@ Read before `serialize_db.parquet_import`, `tests/source_db_projetado.py`, `test
   partitions keep the counts of the load of 2026-10-07 (`cad_lancamentos` 283,835,693 rows), every
   file is Snappy, and `meta_update_status` keeps 25 rows, ids up to 177.
 
+## The production base, read on 2026-10-09
+
+- `probes/parquet_source.py` over the production base at 02:05 UTC, in the battery of 2026-10-09
+  (`environments.md`; the report stays out of git): 14 tables, 2,045 files, 8,146,020,859 bytes
+  (2,031 files and 7,687,811,472 bytes on 2026-10-07), `schema.json` the only entry that is not
+  Parquet, every footer read. `cad_contratos`, `cad_operacoes` and `rel_contrato_operacao` gained
+  the partition 2026-08-31, after 2026-07-31, in each table's majority schema, with 73, 119 and 298
+  files against 70, 116 and 290 [inferred: the 14 new files are the new partition's, since the
+  listing names only the first 20 files of a table]; `cad_lancamentos` keeps six partitions, the
+  last 2026-07-31, and 1,545 files, with 331,349,419 rows (331,349,276 on 2026-10-07). The partition
+  2025-09-30 reads as on 2026-10-07, with `PQ-3` failing on the four tables (exit code 2); no file
+  carries footer metadata, the four partitioned tables hold the formats `1.0` and `2.6`, every file
+  is Snappy, and `meta_update_status` has 28 rows, ids up to 184 (25 rows and 177 before).
+
 ## The fixture
 
 On 2026-09-21 the user grouped the production `rel_contrato_operacao` by the contract key
@@ -342,3 +356,27 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   partition in the Delta, wrote 2026-02-28 (23,789,279 rows, 81.6 s) and 2026-03-31 (52,654,607
   rows, 251.4 s), checked the three equal and exited 0 in 492.2 s (128.6 s with 8 vCPUs on
   2026-10-05); the only file outside the log was the killed execution's. Every check passed.
+- The load of 2026-10-09 (`started_at` 02:10:39 UTC, from `main` at `1a18fd5`, stated by the
+  user, on 4 vCPUs, 12,875 MB available, 4 threads and 6,437 MiB, a fresh root,
+  `--ignore-partitions 2025-09-30`) loaded 28 partitions, 379,046,221 rows, every table matching,
+  701.0 s summed (878 s for the step), the process peak at 2,124 MB after `cad_operacoes`,
+  3,136 MB after `rel_contrato_operacao` and 9,195 MB at `cad_lancamentos` 2026-07-31;
+  `cad_lancamentos` took 53.0 s, 36.9 s, 92.2 s, 50.5 s and 264.1 s (2026-07-31 at 0.54 million
+  rows per second, 0.35 with 2 vCPUs on 2026-10-07 and 0.63 with 8 on 2026-10-05). The source had
+  changed since 2026-10-07 in four partitions: 2026-08-31 entered `cad_operacoes` (5,641,909 rows,
+  11.3 s), `rel_contrato_operacao` (15,304,200 rows, 20.4 s) and `cad_contratos` (4,051,422 rows,
+  8.2 s), with the conversions of the table's other partitions and no non-finite value, and
+  `cad_lancamentos` 2026-07-31 held 141,934,041 rows (141,933,898 before) with `valor` summing
+  168,037,036,522.799619 against 184,492,179,549.160073, 8.9% less with 143 rows more, the
+  partition rewritten upstream [inferred]; every other partition kept its counts and sums, and the
+  same three entries stayed outside the model. The audit of 2026-01-31 (version 5) read the same
+  989,852 orphans and `valor` total, `history` listed versions 0 to 5 (02:14:53 to 02:22:05 UTC),
+  and `archive` copied the 28 files, `cad_lancamentos` in 19.2 s at 353 MB.
+- The resume of a stopped load ran again in the target on 2026-10-09 from 05:18 UTC
+  (`probe_load_resume.py --ignore-partitions 2025-09-30`, 4 vCPUs, 13.3 GiB available,
+  `environments.md`): the `SIGKILL` came 25.3 s after the second partition's file appeared, 78.9 s
+  from the start (2026-01-31 in 51.5 s), with 2026-01-31 in the log and 2026-02-28 out of it, and
+  left the engine's temporary folder behind (0.0 MB, deleted by the probe). The same command found
+  one partition in the Delta, wrote 2026-02-28 (32.1 s) and 2026-03-31 (89.4 s), checked the three
+  equal and exited 0 in 189.0 s (128.6 s with 8 vCPUs on 2026-10-05, 492.2 s with 2 on
+  2026-10-07); the only file outside the log was the killed execution's. Every check passed.
