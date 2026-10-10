@@ -908,6 +908,22 @@ lido pela primeira vez, põe a diferença no `INSERT` da linha de controle, o ú
 lentas, até 24,87 s num só, enquanto o `COPY`, o `INSERT` dos dados e o `COMMIT` levaram o mesmo nas
 três.
 
+Em 2026-10-10 a sonda rodou de novo numa máquina de 8 vCPUs, com os ganhos de 2026-10-05. No
+DuckDB: `run.ingest` das quatro 2,61 vezes (3,923 s contra 10,255 s), `materialize` das quatro 2,33
+vezes e `publish_delta` com `max_workers=4` 2,04 vezes (8,140 s contra 16,585 s). No Redshift:
+`run.ingest` das quatro 2,68 vezes (13,780 s contra 36,866 s), as 80 consultas pequenas 2,32 vezes
+na sessão a mais e `publish_delta` com `max_workers=4` 1,36 vez. `publish_redshift` com
+`max_workers=4` levou 12,033 s e 12,537 s em duas repetições e 33,214 s na terceira, contra
+29,561 s a 30,266 s uma tabela por vez; sem a despublicação entre as medidas, cada medida trocando a
+versão publicada, as três repetições em quatro conexões levaram de 11,380 s a 12,658 s. O
+`sys_query_history` do servidor, lido para as 52 gravações da linha de controle, põe a espera no
+planejamento do comando: os dois `INSERT` lentos da terceira repetição levaram 21,070 s e 20,073 s
+de planejamento, com 0 s de fila, 0 s de espera por lock e 0,012 s de execução, e outros dois, da
+publicação que preparou as medidas sem despublicação, 20,067 s e 21,020 s; as outras 48 gravações
+planejaram em 0,040 s a 2,053 s. Os quatro foram `INSERT` de publicações que criaram as tabelas, e
+nenhum dos 24 `UPDATE` das publicações sem despublicação esperou. A quinta sessão, lendo
+`svv_transactions` a cada segundo, não viu lock pendente na repetição lenta.
+
 ### Como usar as threads
 
 - **Leia o resultado grande por `stream`, com o trabalho dentro do laço.** A consulta segue enquanto
@@ -951,12 +967,14 @@ três.
   conferências, o commit e a releitura de cada tabela esperam a rede. Na pasta local ele não ganhou,
   porque o arquivo de cada partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada
   tabela em curso soma a memória da sua escrita.
-- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo**: das 15 repetições
-  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-09, sete
-  levaram de 11,133 s a 13,813 s e oito de 31,521 s a 36,110 s, nenhuma entre os dois grupos,
-  contra 26,750 s a 32,179 s das 15 repetições uma tabela por vez. Nas lentas, as transações
-  esperam no `INSERT` da linha de controle, que cada uma grava no fim; a causa da espera não foi
-  lida, e o runbook publica a base com `--max-workers 4`.
+- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo**: das 18 repetições
+  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-10, nove
+  levaram de 11,133 s a 13,813 s e nove de 31,521 s a 36,110 s, nenhuma entre os dois grupos,
+  contra 26,750 s a 32,179 s das 18 repetições uma tabela por vez. Nas lentas, as transações
+  esperam no `INSERT` da linha de controle, que cada uma grava no fim, e o servidor conta a espera,
+  cerca de 20 s, como planejamento do comando, sem fila nem lock (leitura de 2026-10-10); ela só
+  veio em publicações que criaram as tabelas, a causa do planejamento longo não foi lida, e o
+  runbook publica a base com `--max-workers 4`.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor

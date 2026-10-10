@@ -4641,7 +4641,13 @@ distintas não esperam; linhas distintas da tabela de controle confirmam as duas
 criou espera o `COMMIT` dela; o `DELETE` das linhas que outra transação confirmada trocou recebe
 `1023 Serializable isolation violation`; o `LOCK` é recusado (`0A000 Operation is not supported
 through datashares`); e o `UPDATE` condicionado à versão lida espera o `COMMIT` da outra e afeta 0
-linhas. A publicação lê a linha de controle no início da transação e a grava no fim.
+linhas. A publicação lê a linha de controle no início da transação e a grava no fim. Em 2026-10-10,
+`probes/operacao/probe_parallel_gain.py` leu no `sys_query_history` as 52 gravações da linha de
+controle de 13 publicações de quatro tabelas, em quatro conexões ou uma por vez, e no
+`svv_transactions`, por uma quinta sessão a cada segundo, os locks delas: a espera por lock foi de
+até 0,132 s, sem fila, e o `PgXenWriteLock` na tabela de controle apareceu uma vez como pendente,
+por um segundo; os quatro `INSERT` que passaram de 3 s levaram de 20,067 s a 21,070 s no
+planejamento, todos em publicações que criaram as tabelas (`.claude/memory/concurrency.md`).
 
 ### Ingestão de dados
 
@@ -4899,9 +4905,10 @@ em série num arquivo só e respeita o `ORDER BY`, ou uma compactação posterio
 Os 32 arquivos saíram de um `UNLOAD ... PARTITION BY` sem `ORDER BY`, de uma tabela
 `DISTSTYLE KEY` (2026-09-21). O `UNLOAD` em paralelo do `SELECT` da exportação, sem
 `PARTITION BY` e com `ORDER BY` pela chave de ordenação, gravou um arquivo só de 1.000.000 a
-33.239.719 linhas de `cad_lancamentos` (17,4 MB a 559,0 MB), no tempo do `PARALLEL OFF` (razão de
-0,98 a 0,99 em 2026-10-05 e às 05:29 de 2026-10-09, de 0,98 a 1,01 em 2026-10-07 e de 0,97 a 1,00
-às 21:56 de 2026-10-09), sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e cópias dela por
+33.239.719 linhas de `cad_lancamentos` (17,3 MB a 559,5 MB), no tempo do `PARALLEL OFF` (razão de
+0,98 a 0,99 em 2026-10-05, às 05:29 de 2026-10-09 e em 2026-10-10, de 0,98 a 1,01 em 2026-10-07 e
+de 0,97 a 1,00 às 21:56 de 2026-10-09), sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e cópias
+dela por
 `CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
 distribuição.
 
@@ -5139,8 +5146,8 @@ de ordenação e de distribuição habilita o sort merge join sem fase de ordena
 
 No ambiente alvo, o join de `prd_cad_lancamentos` (283.835.836 linhas) com `prd_cad_contas` (101
 linhas) por `id_conta`, as duas publicadas em `DISTSTYLE AUTO`, leu `XN Hash Join DS_DIST_ALL_NONE`
-em 2026-10-09, e de novo às 21:45 do mesmo dia, com 424.598.150 linhas: a tabela de contas está em
-`ALL`, e as tabelas publicadas seguem sem `DISTKEY`.
+em 2026-10-09, e de novo às 21:45 do mesmo dia e em 2026-10-10, com 424.598.150 linhas: a tabela de
+contas está em `ALL`, e as tabelas publicadas seguem sem `DISTKEY`.
 
 **Escrita das consultas.** Sem `SELECT *`; predicados sobre a chave de ordenação; o mesmo filtro
 repetido nas duas tabelas de um join, mesmo que redundante, para que ambas sejam podadas; sem funções

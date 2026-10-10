@@ -10,8 +10,16 @@ imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem c
 que não é número, no nome repetido ou ausente e no conflito com outro escritor, no arquivo de
 controle ou na tabela. `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de
 memória residente do processo (`VmHWM`), a medida da rotina na tabela com que a máquina é
-dimensionada; a publicação a põe na linha de cada tabela no log `serialize_db.publication`. A linha
-de comando imprime o log no stderr a partir do nível `INFO`.
+dimensionada; a publicação a põe na linha de cada tabela no log `serialize_db.publication`, e
+`scripts/migrate_parquet_to_delta.py` o imprime por partição da carga. Nas oito cargas da base de
+2026-09-25 a 2026-10-10, em máquinas de 2, 4 e 8 vCPUs, o pico do processo da carga ficou entre
+1,38 e 1,51 vez o `memory_limit` do DuckDB, entre 69% e 76% da memória disponível, sempre na maior
+partição de `cad_lancamentos`: 4.138 MB com 5.801 MB disponíveis e 2.900 MiB de limite em
+2026-10-07, 9.557 MB com 12.651 MB e 6.325 MiB em 2026-10-09. O pico acompanha o limite, metade da
+memória disponível que `environment_limits` lê na abertura de cada conexão, e não o tamanho da
+partição: a carga coube em todas as máquinas medidas, com ao menos um quarto da memória disponível
+de folga, e a máquina maior só a encurta (0,35 milhão de linhas por segundo com 2 vCPUs, 0,66 com
+8). A linha de comando imprime o log no stderr a partir do nível `INFO`.
 
 ### Tabela de controle da publicação
 
@@ -141,7 +149,9 @@ de 51,4 a 65,1 MB, 367,1 MB, em 23,6 s, com o pico em 481 MB; e em 2026-10-09, c
 12,9 GiB disponíveis, em 50 arquivos de 5,3 a 19,5 MB virou 6 arquivos de 53,4 a 65,3 MB,
 368,6 MB, em 12,4 s, com o pico em 762 MB, e às 21:55 do mesmo dia, com 8 vCPUs e 12,4 GiB
 disponíveis, em 64 arquivos de 5,4 a 20,5 MB virou 6 arquivos de 55,1 a 66,9 MB, 370,1 MB, em
-5,6 s, com o pico em 1.445 MB. Depois:
+5,6 s, com o pico em 1.445 MB; e em 2026-10-10, com 8 vCPUs e 12,6 GiB disponíveis, em 64 arquivos
+de 5,4 a 16,6 MB virou 6 arquivos de 54,4 a 65,8 MB, 370,5 MB, em 6,0 s, com o pico em 1.649 MB.
+Depois:
 `numFilesAdded` e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a medida da
 memória da compactação; um commit `OPTIMIZE` com `dataChange` falso, que
 `serialize_db.delta.version_diff` não conta.

@@ -28,18 +28,27 @@ anteriores. Cada seção de ``--only`` compara a forma em série, a primeira, co
 - ``publicacao``: ``publication.publish_redshift`` das quatro com ``max_workers=4`` contra 1,
   primeiro com a despublicação depois de cada medida, fora do tempo, e depois sem ela, cada medida
   trocando a versão publicada pela outra de duas versões do Delta com as mesmas linhas: a da
-  partição escrita de novo antes dessas medidas e a de antes, publicada fora delas. Cada medida
-  imprime também, lidos no log ``serialize_db.publication.commands``, de cada tipo de comando e da
-  abertura das conexões, quantos houve, a soma e o maior tempo, e a linha do tempo de cada
-  conexão, com o início e a duração de cada comando; e os locks que uma quinta sessão leu em
+  partição escrita de novo antes dessas medidas e a de antes, publicada fora delas; e a primeira
+  publicação das quatro pela própria sonda, em quatro conexões, com os comandos de
+  ``publication_statements`` em três ordens, a da publicação (o ``CREATE TABLE``, a carga e o
+  ``INSERT`` da linha de controle), a linha de controle logo depois do ``CREATE TABLE``, antes da
+  staging e do ``COPY``, e as tabelas criadas e confirmadas antes da transação, fora do tempo, com
+  as tabelas e as linhas de controle removidas depois de cada medida; as três ordens separam a
+  hipótese de 2026-10-10, de que o planejamento do ``INSERT`` da linha de controle espera o
+  ``CREATE TABLE`` sem commit das outras transações (``.claude/memory/concurrency.md``). Cada
+  medida imprime também, lidos no log ``serialize_db.publication.commands``, de cada tipo de
+  comando e da abertura das conexões, quantos houve, a soma e o maior tempo, e a linha do tempo de
+  cada conexão, com o início e a duração de cada comando; e os locks que uma quinta sessão leu em
   ``svv_transactions`` a cada segundo durante a medida, os pendentes e os concedidos no objeto de
   um pendente. No fim da seção, as gravações da linha de controle de todas as medidas no
-  ``sys_query_history``, com o tempo de fila, de espera por lock e de execução de cada uma.
+  ``sys_query_history``, com a execução que gravou cada uma e o tempo de fila, de espera por lock,
+  de execução e de planejamento.
 
 Checagem: cada medida contou as linhas ou as tabelas esperadas, a publicação sem despublicação
-pelo ``UPDATE`` da linha de controle de cada tabela, e as linhas de cada tabela que o ``ingest`` e
-o ``materialize`` trouxeram são as geradas. Leituras: cada medida e, no resumo, o menor tempo de
-cada variante, o pico dessa medida e a razão sobre a variante em série.
+pelo ``UPDATE`` da linha de controle de cada tabela, a publicação pela sonda pelas transações
+confirmadas, e as linhas de cada tabela que o ``ingest`` e o ``materialize`` trouxeram são as
+geradas. Leituras: cada medida e, no resumo, o menor tempo de cada variante, o pico dessa medida e
+a razão da primeira variante, a em série ou a ordem da publicação, sobre ela.
 
 A sonda grava sob ``<raiz>/serialize-db-operacao/paralelo-<id>/``, num ambiente ``poc<id>``, e
 apaga a pasta no fim. ``redshift`` e ``publicacao`` pedem a raiz no S3 e as variáveis
@@ -104,9 +113,15 @@ REDSHIFT_QUERIES = 80
 LOCK_POLL_SECONDS = 1.0
 HISTORY_WAIT_SECONDS = 120
 HISTORY_RETRY_SECONDS = 10
-# Os tipos de comando que gravam a linha de controle, e o nome das tabelas da sonda num texto.
+# Os tipos de comando que gravam a linha de controle, o nome das tabelas da sonda num texto e a
+# execução que gravou a linha, no texto do INSERT ou do UPDATE; a da publicação pela sonda leva o
+# nome da ordem dos comandos.
 CONTROL_WRITES = ("INSERT controle", "UPDATE controle")
 PARALLEL_TABLE = re.compile(r"cad_paralelo_[a-d]")
+EXECUTION_ID = re.compile(r"paralelo-[a-z0-9-]+")
+# O log em que a publicação dá o tempo da abertura de cada conexão e de cada comando, e em que a
+# publicação pela sonda dá os seus.
+COMMAND_LOG = logging.getLogger("serialize_db.publication.commands")
 METADATA = sa.MetaData()
 INFO = {"serialize_db": {"partition_by": ["data_base_str"]}}
 
@@ -314,7 +329,7 @@ def summary_line(
     runs: dict[str, list[Run]],
 ) -> str:
     """O menor tempo de cada variante, o pico dessa medida e a razão do menor tempo da primeira
-    variante, a em série, sobre o dela."""
+    variante, a em série ou a ordem da publicação, sobre o dela."""
     names = list(runs)
     serial = best(runs[names[0]]).seconds
     parts = []
@@ -1126,7 +1141,8 @@ def history_line(
     row: tuple,
 ) -> str:
     """Uma gravação da linha de controle: o início em UTC, o pid da sessão, a transação, a tabela,
-    o comando, o estado e os tempos do ``sys_query_history``."""
+    o comando com a execução que o gravou entre parênteses, ``sem execução`` quando o texto não a
+    traz, o estado e os tempos do ``sys_query_history``."""
     (
         session,
         transaction,
@@ -1144,10 +1160,15 @@ def history_line(
     match = PARALLEL_TABLE.search(str(text))
     if match:
         table = match.group(0)
+    execution_id = "sem execução"
+    match = EXECUTION_ID.search(str(text))
+    if match:
+        execution_id = match.group(0)
     command = str(text).split()[0].upper()
     return (
         f"{start.strftime('%H:%M:%S.%f')[:-3]} UTC, pid {session}, transação {transaction}, "
-        f"{table}, {command} controle, {str(status).strip()}: decorrido {seconds_of(elapsed)}, "
+        f"{table}, {command} controle ({execution_id}), {str(status).strip()}: decorrido "
+        f"{seconds_of(elapsed)}, "
         f"fila {seconds_of(queue)}, lock {seconds_of(lock_wait)}, execução "
         f"{seconds_of(execution)}, compilação {seconds_of(compile_time)}, planejamento "
         f"{seconds_of(planning)}"
@@ -1272,6 +1293,192 @@ def republication_variant(
     return dataclasses.replace(run, count=count_commands(published, ("UPDATE controle",)))
 
 
+# ---------------------------------------------------------------- a publicação pela sonda
+
+
+@dataclasses.dataclass(frozen=True)
+class Ordering:
+    """Uma ordem dos comandos da primeira publicação de uma tabela pela sonda: o rótulo da medida,
+    se o ``CREATE TABLE`` roda e é confirmado antes da transação, fora do tempo, e se a linha de
+    controle entra logo depois do ``CREATE TABLE``, antes da staging e do ``COPY``."""
+
+    label: str
+    created_before: bool
+    control_first: bool
+
+
+# As ordens medidas, pelo nome que entra no execution_id, a da publicação primeiro. Elas separam a
+# hipótese de 2026-10-10, de que o planejamento do INSERT da linha de controle espera o CREATE
+# TABLE sem commit das outras transações: com ela, a linha antes do COPY espera enquanto nenhuma
+# transação confirmou, e as tabelas criadas antes não esperam.
+ORDERINGS = {
+    "publicacao": Ordering("ordem da publicação", created_before=False, control_first=False),
+    "linha-antes": Ordering(
+        "linha de controle antes do COPY", created_before=False, control_first=True
+    ),
+    "criadas-antes": Ordering(
+        "tabelas criadas antes da transação", created_before=True, control_first=False
+    ),
+}
+
+
+def first_publication_statements(
+    db: Database,
+    config: RedshiftConfig,
+    table: sa.Table,
+    execution_id: str,
+) -> list[str]:
+    """Os comandos da primeira publicação da tabela na versão atual do Delta, como
+    ``publication_statements`` os dá: o ``CREATE TABLE`` primeiro, a staging, a partição e o
+    ``INSERT`` da linha de controle por último, com os manifestos gravados em
+    ``<ambiente>/publicacao/<execução>/`` e a cláusula de credenciais montada agora."""
+    uri = db.uri(table)
+    version = delta.open_table(uri, db.storage).version()
+    folder = db.storage.join(db.publication_prefix(execution_id), table.name, PARTITION)
+    manifests = delta.copy_manifest(
+        uri, version, [PARTITION], db.storage.uri_of(folder), db.storage
+    )
+    return publication.publication_statements(
+        config.schema,
+        db.environment,
+        table,
+        [PARTITION],
+        {PARTITION: manifests},
+        version,
+        None,
+        execution_id,
+        redshift.credentials_clause(config),
+    )
+
+
+def ordered_statements(
+    statements: list[str],
+    ordering: Ordering,
+) -> list[str]:
+    """Os comandos da transação na ordem pedida: sem o ``CREATE TABLE``, o primeiro, quando a
+    tabela foi criada antes, e com a linha de controle, o último, logo depois dele quando ela vem
+    antes do ``COPY``."""
+    create, *load, control = statements
+    if ordering.created_before:
+        return [*load, control]
+    if ordering.control_first:
+        return [create, control, *load]
+    return statements
+
+
+def execute_logged(
+    connection: object,
+    text: str,
+) -> None:
+    """Roda um comando num cursor novo e dá o tempo dele, com o texto mascarado, no log
+    ``serialize_db.publication.commands``, como a publicação dá os seus."""
+    started = time.perf_counter()
+    try:
+        connection.cursor().execute(text)
+    finally:
+        COMMAND_LOG.debug("%s em %.3f s", redshift.mask(text), time.perf_counter() - started)
+
+
+def publish_one_in_order(
+    db: Database,
+    config: RedshiftConfig,
+    execution_id: str,
+    ordering: Ordering,
+    table: sa.Table,
+) -> int:
+    """A transação da primeira publicação de uma tabela pela sonda, numa conexão própria, como a da
+    publicação: o ``BEGIN``, a leitura da linha de controle, os comandos na ordem e o ``COMMIT``;
+    devolve 1 quando confirmou e 0 com o erro do servidor impresso, e a conexão fechada descarta a
+    transação aberta."""
+    started = time.perf_counter()
+    connection = redshift.connect(config)
+    COMMAND_LOG.debug("%s em %.3f s", "conexão", time.perf_counter() - started)
+    try:
+        execute_logged(connection, "BEGIN")
+        execute_logged(connection, publication.control_read(config.schema, db.environment, table))
+        statements = first_publication_statements(db, config, table, execution_id)
+        for text in ordered_statements(statements, ordering):
+            execute_logged(connection, text)
+        execute_logged(connection, "COMMIT")
+    except redshift_connector.Error as error:
+        print(
+            f"{table.name}, {execution_id}: a transação falhou: {type(error).__name__}: "
+            f"{redshift.mask(str(error))}"
+        )
+        return 0
+    finally:
+        connection.close()
+    return 1
+
+
+def publish_in_order(
+    db: Database,
+    config: RedshiftConfig,
+    execution_id: str,
+    ordering: Ordering,
+) -> int:
+    """A primeira publicação das quatro tabelas pela sonda, uma transação por tabela em ``WORKERS``
+    threads; devolve quantas confirmaram."""
+    publish = functools.partial(publish_one_in_order, db, config, execution_id, ordering)
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        committed = list(pool.map(publish, TABLES))
+    return sum(committed)
+
+
+def removal_statements(
+    config: RedshiftConfig,
+    environment: str,
+) -> list[str]:
+    """Os comandos que apagam as tabelas publicadas da sonda, existam ou não, e as linhas de
+    controle delas."""
+    statements = []
+    for table in TABLES:
+        statements.append(f'DROP TABLE IF EXISTS "{config.schema}"."{environment}_{table.name}"')
+    control = f'"{config.schema}"."{publication.CONTROL_TABLE}"'
+    statements.append(f"DELETE FROM {control} WHERE table_name LIKE '{environment}_%'")
+    return statements
+
+
+def ordering_variant(
+    db: Database,
+    config: RedshiftConfig,
+    commands: CommandTimes,
+    fifth: FifthSession,
+    name: str,
+) -> Run:
+    """A primeira publicação das quatro tabelas pela sonda, em quatro conexões, na ordem ``name``
+    de ``ORDERINGS``, com as linhas de ``observed_publication``; o ``CREATE TABLE`` das tabelas
+    criadas antes, confirmado um a um numa conexão própria, e a remoção das tabelas e das linhas
+    de controle depois ficam fora do tempo."""
+    ordering = ORDERINGS[name]
+    if ordering.created_before:
+        creates = []
+        for table in TABLES:
+            creates.append(publication.published_ddl(config.schema, db.environment, table))
+        execute_all(config, creates)
+    execution_id = f"paralelo-{name}-{uuid.uuid4().hex[:8]}"
+    measured = functools.partial(publish_in_order, db, config, execution_id, ordering)
+    label = f"publicação pela sonda, {ordering.label}"
+    run, _ = observed_publication(label, measured, commands, fifth)
+    execute_all(config, removal_statements(config, db.environment))
+    return run
+
+
+def ordering_variants(
+    db: Database,
+    config: RedshiftConfig,
+    commands: CommandTimes,
+    fifth: FifthSession,
+) -> dict[str, Callable[[], Run]]:
+    """As variantes da publicação pela sonda, uma por ordem de ``ORDERINGS``, pelo rótulo."""
+    variants = {}
+    for name, ordering in ORDERINGS.items():
+        variants[ordering.label] = functools.partial(
+            ordering_variant, db, config, commands, fifth, name
+        )
+    return variants
+
+
 def publication_measures(
     db: Database,
     config: RedshiftConfig,
@@ -1279,14 +1486,21 @@ def publication_measures(
     fifth: FifthSession,
     repetitions: int,
 ) -> None:
-    """As medidas da publicação com a despublicação depois de cada uma e sem ela, e as gravações
-    da linha de controle de todas no ``sys_query_history``."""
+    """As medidas da publicação com a despublicação depois de cada uma, sem ela e pela própria sonda
+    nas ordens de ``ORDERINGS``, e as gravações da linha de controle de todas no
+    ``sys_query_history``."""
     started = time.time()
     variants = workers_variants(publication_variant, db, config, commands, fifth)
     measure("publish_redshift", variants, repetitions, len(TABLES))
     alternation = prepare_republication(db, config)
     variants = workers_variants(republication_variant, db, config, commands, fifth, alternation)
     measure("publish_redshift sem despublicar", variants, repetitions, len(TABLES))
+
+    # A publicação pela sonda, nas ordens de ORDERINGS, com as tabelas publicadas removidas antes,
+    # fora da medida.
+    execute_all(config, removal_statements(config, db.environment))
+    variants = ordering_variants(db, config, commands, fifth)
+    measure("publicação pela sonda, quatro conexões", variants, repetitions, len(TABLES))
 
     # As gravações desde dez minutos antes das medidas, a margem para a diferença entre o relógio
     # da máquina e o do servidor.
@@ -1311,10 +1525,9 @@ def publication_section(
     if created:
         publication.create_publications_table(config)
     commands = CommandTimes()
-    command_logger = logging.getLogger("serialize_db.publication.commands")
-    command_logger.setLevel(logging.DEBUG)
-    command_logger.propagate = False
-    command_logger.addHandler(commands)
+    COMMAND_LOG.setLevel(logging.DEBUG)
+    COMMAND_LOG.propagate = False
+    COMMAND_LOG.addHandler(commands)
     fifth = None
     try:
         fifth = open_fifth_session(config)
@@ -1322,18 +1535,12 @@ def publication_section(
     finally:
         if fifth is not None:
             fifth.connection.close()
-        command_logger.removeHandler(commands)
-        command_logger.propagate = True
-        command_logger.setLevel(logging.NOTSET)
-        cleanup = []
-        for table in TABLES:
-            cleanup.append(
-                f'DROP TABLE IF EXISTS "{config.schema}"."{db.environment}_{table.name}"'
-            )
+        COMMAND_LOG.removeHandler(commands)
+        COMMAND_LOG.propagate = True
+        COMMAND_LOG.setLevel(logging.NOTSET)
+        cleanup = removal_statements(config, db.environment)
         if created:
             cleanup.append(f"DROP TABLE {control}")
-        else:
-            cleanup.append(f"DELETE FROM {control} WHERE table_name LIKE '{db.environment}_%'")
         execute_all(config, cleanup)
 
 
@@ -1382,7 +1589,7 @@ def main() -> None:
     if "publicacao" in arguments.only:
         publication_section(db, arguments.repetitions)
 
-    print("resumo, o menor tempo de cada variante e a razão sobre a em série:")
+    print("resumo, o menor tempo de cada variante e a razão da primeira variante sobre ela:")
     for label, runs in SUMMARY:
         print("  " + summary_line(label, runs))
     lib.check("cada medida contou as linhas ou as tabelas esperadas", PROBLEMS)

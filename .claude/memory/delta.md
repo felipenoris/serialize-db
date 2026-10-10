@@ -363,6 +363,20 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   5.6 s at a process peak of 1,445 MB, 12.4 GiB available, against 6.0 s at 1,714 MB with 8
   threads on 2026-10-05; the same rows and sum, `OPTIMIZE` at version 3. The `UNLOAD` reading is
   in `redshift.md`.
+- In the battery of 2026-10-10 the same probes ran from 03:58 UTC (`main` at `e38432f`,
+  `--ignore-partitions 2025-09-30`, 8 vCPUs, 12.7 GiB to 13.1 GiB available, `environments.md`),
+  every check passing. `probe_archive_resume.py`: the load of the three partitions took 94.3 s,
+  `snapshot` 2.1 s (version 3), the `SIGKILL` came 4.3 s into `archive`, after 2026-03-31 (one
+  file, 2.6 s), and the same command skipped it, copied 2026-02-28 and 2026-01-31 in 1.7 s and
+  2.2 s, finished in 6.5 s (5.1 s for the table) at a process peak of 314 MB and moved the snapshot
+  to `archived`. `probe_vacuum_orphans.py`: `vacuum --full` listed 0 files with the default
+  retention (2.0 s), the two orphans with `--retention-hours 0` (2.0 s) and deleted them with
+  `--apply` (2.4 s, version 3 after), the log's file kept with the same rows and sum.
+  `probe_compact_memory.py`: with 8 threads the split gave 64 files of 5.4 MB to 16.6 MB, and
+  `serialize-db compact` wrote 6 files of 54.4 MB to 65.8 MB, 370.5 MB, and removed the 64 in
+  6.0 s at a process peak of 1,649 MB, 12.6 GiB available, as on 2026-10-05 with 8 threads; the
+  same rows and sum, `OPTIMIZE` at version 3. The `UNLOAD` reading is in `redshift.md`.
+  `docs/operacao.md` ("Compactação")
 
 ## Alternatives assessed
 

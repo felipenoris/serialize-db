@@ -115,10 +115,11 @@ _TABLE_NAME_BYTES = 63
 
 # As linhas até as quais o UNLOAD da exportação grava em série, num arquivo só (PARALLEL OFF): acima
 # delas o UNLOAD roda em paralelo, que pode fragmentar por slice. No ambiente alvo, em 2026-10-05,
-# em 2026-10-07 e duas vezes em 2026-10-09, o UNLOAD da partição ordenada pela sort_key, de
-# 1.000.000 a 33.239.719 linhas de cad_lancamentos, levou o mesmo tempo nos dois modos (de 2,0 s a
-# 50,4 s, razão de 0,97 a 1,01) e gravou um arquivo só em ambos
-# (probes/operacao/probe_unload_parallel.py).
+# em 2026-10-07, duas vezes em 2026-10-09 e em 2026-10-10, o UNLOAD da partição ordenada pela
+# sort_key, de 1.000.000 a 33.239.719 linhas de cad_lancamentos, levou o mesmo tempo nos dois modos
+# (de 2,0 s a 50,4 s, razão de 0,97 a 1,01) e gravou um arquivo só em ambos
+# (probes/operacao/probe_unload_parallel.py, fora da bateria desde 2026-10-10 por decisão do
+# usuário).
 _PARALLEL_OFF_ROWS = 5_000_000
 
 # A cláusula de credenciais que nunca vai a log: o valor de cada chave sai como ***.
@@ -1391,7 +1392,8 @@ class RedshiftEngine:
         nova, e o comando é repetido. O motor lê a queda no ``InterfaceError`` do driver, que vem da
         leitura do socket fechado, e no ``OSError`` do socket, que o driver deixa sair: depois do
         ``COPY`` derrubado de um ``ingest``, o envio do ``DROP`` da staging recebeu
-        ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09). A reconexão perde a tabela
+        ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09), e com a conversão o ``DROP``
+        reabriu a conexão nas 4 rodadas de 2026-10-10. A reconexão perde a tabela
         temporária que o pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift``
         avisa da perda. O driver não diz se o servidor aplicou o comando derrubado: um comando que
         não pode entrar duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda em

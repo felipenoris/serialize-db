@@ -122,6 +122,13 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   every repetition, 17.4 MB, 86.3 MB, 172.0 MB, 339.0 MB and 558.9 MB, the best times 2.1 s, 8.3 s,
   16.3 s, 32.2 s and 49.9 s with `PARALLEL OFF` against 2.1 s, 8.5 s, 16.4 s, 32.9 s and 51.2 s in
   parallel (0.97 to 1.00), the footers read in 0.04 s to 0.07 s.
+- The same probe on 2026-10-10 from 04:01 UTC (8 vCPUs, `environments.md`): the partition went
+  into the sandbox in 36.1 s, both modes wrote one file in every repetition, 17.4 MB, 86.3 MB,
+  172.1 MB, 339.1 MB and 559.5 MB, the best times 2.1 s, 8.4 s, 16.2 s, 32.4 s and 49.9 s with
+  `PARALLEL OFF` against 2.1 s, 8.5 s, 16.4 s, 32.9 s and 51.0 s in parallel (0.98 to 0.99), the
+  footers read in 0.04 s to 0.09 s.
+  The user took the probe out of `suite_alvo.sh` on 2026-10-10 (`decisions.md`): the five
+  readings agree, and the probe runs by hand (`probes/README.md`, `SUITE_ALVO.md`).
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
@@ -302,9 +309,13 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   finished statements, with `session_id` (the process id) and, in microseconds, `elapsed_time`,
   `queue_time`, `execution_time`, `compile_time`, `planning_time` and `lock_wait_time` (the wait
   for a relation lock). A transaction releases all its table locks at once, at `COMMIT` or
-  `ROLLBACK`. Whether `svv_transactions` answers on the target's Serverless, and whether it shows
-  the locks of a write through the datashare, is unread; `probes/operacao/probe_parallel_gain.py`
-  reads both views since PR #151.
+  `ROLLBACK`. On 2026-10-10 `probes/operacao/probe_parallel_gain.py` read both views on the
+  target's Serverless, through the datashare: `svv_transactions` answered every poll of a fifth
+  session (11 to 33 readings per publication measure) and showed, in one reading, the
+  `PgXenWriteLock` two publication transactions held on the relation `723112` and a third waiting
+  for it, the relation named by OID only [inferred: the control table, the one relation the four
+  transactions share]; `sys_query_history` answered for 52 of 52 control-row writes, with the
+  ~20 s wait of the parallel publication in `planning_time` (`concurrency.md`).
 - An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
   credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two
@@ -538,7 +549,11 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and `transacao_do_cliente`) and
   during the `COPY` of `ingest` over a 300,000-row partition
   (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next command
-  reconnects and what the server kept; the second battery of 2026-10-09 ran them (below). The
+  reconnects and what the server kept; the second battery of 2026-10-09 ran them (below). Since the
+  user's decision of 2026-10-10 (`decisions.md`), `terminated_session` asserts the drop and the
+  reconnection: each command after the `pg_terminate_backend` repeats every 1 s
+  (`TERMINATION_WAIT`) for up to 10 s (`TERMINATION_LIMIT`) while the session answers on the same
+  pid, and the report keeps the seconds waited (`esperou`). The
   driver's `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop
   leaves it as it was before the failed command; the engine reads it to refuse the primitives and to
   stop the reconnect inside a client transaction, and marks the dropped connection
@@ -686,3 +701,50 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   `prd_cad_lancamentos` kept 424,598,150 rows and the `id_lancamento` sum
   538,418,094,708,709,063 before the swap, after it and after the return, and the channel ended on
   `carga-2026-09-25`.
+- The battery of 2026-10-10 (02:32 to 04:44 UTC, `environments.md`) read the version `1.0.477953`
+  again; `RS-8` read 0 of 3 tables, `RS-12` 60 load errors in 30 days, and the Data API's
+  `select 1` answered in 29 ms. The four sessions that run the engine cases read:
+  - `test_primitives_refuse_a_transaction_the_client_opened_on_the_target` and
+    `test_nonfinite_double_reaches_the_server_by_every_text_path` passed in all four, as at 18:34.
+  - `test_session_terminated_by_the_server_is_read`: inside `transaction()` and inside the client's
+    `BEGIN` the command raised the driver's `InterfaceError` (`BrokenPipe: server socket closed.
+    ...`) and the next command reconnected, 8 of 8 cases; the `KeyError: ('SELECT 1', ())` in the
+    error's context, in both batteries, is the miss of the driver's prepared-statement cache
+    (`cache["ps"][key]` in `Connection.execute`), inside whose `except` the statement is prepared
+    and the socket fails. The idle session's next command reconnected on a new pid in 3 sessions;
+    in `redshift_suite_2.json` it answered both commands on the same pid after a
+    `pg_terminate_backend` that returned true: the connection had not dropped, a reading the case
+    made and did not assert [inferred: the termination had not reached the backend within the
+    probe's 1 s wait and the two commands]. The user chose "Asserir e esperar" (06:44 UTC,
+    `decisions.md`): since PR #152 the case asserts the three cases, with each command after the
+    `pg_terminate_backend` repeated every 1 s for up to 10 s; whether 10 s cover the late
+    termination waits on the next battery (`OPEN_QUESTIONS.md`).
+  - `test_session_terminated_during_the_ingest_copy_is_read`: `pg_terminate_backend` ran 1.606 s to
+    2.051 s after the start, right after the `COPY` was sent, which raised the `InterfaceError`
+    0.32 s to 0.86 s later, and the `ROLLBACK` of `transaction()` raised it again. The staging's
+    `DROP` failed in the send within 3 ms in all four, with the driver's `InterfaceError` in three
+    and, in `engine_redshift_1.json`, the engine's `InterfaceError: o socket da conexão falhou:
+    BrokenPipeError: [Errno 32] Broken pipe`, the conversion of PR #151; in all four the engine
+    reconnected, the second `DROP` started 0.45 s to 0.52 s after the first and took 0.37 s to
+    0.49 s, `staging_left` was false, the sandbox table kept 0 rows and the next command ran on a
+    new pid. The item "A reconexão do motor Redshift no alvo" of `OPEN_QUESTIONS.md` closes here,
+    the reading in the case's docstring and in `execute`'s.
+
+  The whole base was published by channel on 8 vCPUs after `--init` created the control table:
+  `cad_contas` 3.1 s at 251 MB, the unpartitioned tables 3.2 s to 5.3 s, `cad_contratos` 53.9 s,
+  `cad_operacoes` 66.0 s, `rel_contrato_operacao` 84.3 s and `cad_lancamentos` (6 partitions,
+  424,598,150 rows) 504.0 s at 287 MB, 0.84 million rows per second, the command 521 s; the three
+  mid-size tables, with the same partitions as at 20:31 and at 01:06, took 1.1 s to 5.5 s less than
+  at 20:31 and 6.8 s to 10.4 s more than at 01:06. `--status`, `--channel current` and
+  `--snapshot carga-2026-09-25 --tables cad_contas` read as on 2026-10-07.
+- `probes/operacao/probe_published_base.py` in the battery of 2026-10-10 (03:50 UTC, 153 s, every
+  check passing), over the base just published at `carga-2026-09-25`: the `EXPLAIN` of the join of
+  `prd_cad_lancamentos` (424,598,150 rows) with `prd_cad_contas` (101) on `id_conta` read `XN Hash
+  Join DS_DIST_ALL_NONE` again. The redo of 2026-01-31 (33,239,719 rows) took 29.7 s at a process
+  peak of 8,466 MB (`ingest` 0.098 s, `audit` 5.82 s, `publish_delta` 21.101 s), `cad_lancamentos`
+  at version 7; with the channel on it, the publication by channel swapped only that partition,
+  version 7, in 45.0 s at 262 MB (49.2 s for the command), and with the channel back on
+  `carga-2026-09-25` it swapped it back, version 6, in 48.2 s at 262 MB (52.5 s), the other 11
+  tables `já está publicada` both ways. `prd_cad_lancamentos` kept 424,598,150 rows and the
+  `id_lancamento` sum 538,418,094,708,709,063 before the swap, after it and after the return, and
+  the channel ended on `carga-2026-09-25`.

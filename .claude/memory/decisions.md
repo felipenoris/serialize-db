@@ -612,7 +612,8 @@ the role may run `EXPLAIN` on the datashare. On 2026-10-09 `probes/operacao/prob
 read the plan over the published base, `prd_cad_lancamentos` (283,835,836 rows) with
 `prd_cad_contas` (101 rows) on `id_conta`: `XN Hash Join DS_DIST_ALL_NONE`, with neither label that
 asks for the key, so the published tables stay `DISTSTYLE AUTO` with no `DISTKEY`; the second
-battery of the same day read the same plan with 424,598,150 rows. `redshift.md`
+battery of the same day and the battery of 2026-10-10 read the same plan with 424,598,150 rows.
+`redshift.md`
 
 ## The readings folder
 
@@ -2125,6 +2126,76 @@ with a stand-in case that provokes it (recommended), or leave it. The user chose
   only `redshift_connector.Error`, so a `BrokenPipeError` there would replace the drop's error as
   the table's failure; the table fails either way.
 
+The battery of 2026-10-10 read the assertions in the target, in all four sessions: the staging's
+`DROP` failed in the send, the engine reconnected, the second `DROP` ran, and the next command ran
+on a new pid (`redshift.md`).
+
 `src/serialize_db/engine/redshift.py` (`_run`, `execute`, `ingest`),
-`tests/test_engine_redshift.py`, `tests/emulator.py`, `README.md`,
-`.claude/memory/OPEN_QUESTIONS.md` ("A reconexão do motor Redshift no alvo")
+`tests/test_engine_redshift.py`, `tests/emulator.py`, `README.md`, `redshift.md`
+
+## The control row's planning wait: the probe extended (2026-10-10)
+
+The battery of 2026-10-10 read the ~20 s of the parallel publication's slow repetitions as the
+server planning the control row's `INSERT` (`planning_time` of `sys_query_history`, no queue, no
+lock wait), only in publications that created the tables (`concurrency.md`). The assistant offered
+on a decision card: accept the wait; extend the probe so the next battery separates the hypothesis
+that the planner waits on the other transactions' uncommitted `CREATE TABLE` (recommended); or
+change the publication to create the final table in its own transaction, committed before the
+load. The user chose "Estender a sonda" (2026-10-10, 05:32 UTC).
+
+- `probes/operacao/probe_parallel_gain.py`, section `publicacao`, publishes the four tables by its
+  own transactions, one connection per table in four threads, with the statements of
+  `publication_statements` in three orders, measured `--repetitions` times each with the
+  timelines, the fifth session and the `sys_query_history` reading, which names the execution of
+  each control write: the publication's order (`CREATE TABLE`, the load, the control row's
+  `INSERT`), the control row right after the `CREATE TABLE`, before the staging and the `COPY`,
+  and the tables created and committed before the transaction, outside the measured time. With the
+  hypothesis, the control row before the `COPY` waits while no transaction has committed, and the
+  tables created before do not wait.
+- The package does not change until the reading: the choice between accepting the wait and
+  creating the final table in its own transaction waits on the next battery
+  (`OPEN_QUESTIONS.md`, "A espera da linha de controle na publicação em paralelo").
+
+`probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
+`OPEN_QUESTIONS.md`, `concurrency.md`
+
+## The terminated session's test asserts the reconnection (2026-10-10)
+
+`test_session_terminated_by_the_server_is_read` recorded readings until the battery of 2026-10-10:
+in the two batteries since 2026-10-09 the command inside `transaction()` and inside the client's
+`BEGIN` raised the driver's `InterfaceError` and the next command reconnected in 8 of 8 cases, the
+idle session reconnected 1 s after the `pg_terminate_backend` in 7 of 8, and in one it answered two
+commands on the same pid after a `pg_terminate_backend` that returned true (`redshift.md`). The
+assistant offered on a decision card: assert the three cases, with each command after the
+`pg_terminate_backend` repeated every second for up to 10 s until the session drops (recommended);
+assert only the two transaction cases; or keep the readings. The user chose "Asserir e esperar"
+(2026-10-10, 06:44 UTC).
+
+- The case asserts `terminated`, the `InterfaceError` first in the chain the transaction cases
+  raise, and the reconnection of the next command in the three cases. Each command after the
+  `pg_terminate_backend` repeats every `TERMINATION_WAIT` (1 s) for up to `TERMINATION_LIMIT`
+  (10 s) while the session answers on the same pid, and the report keeps the seconds waited
+  (`esperou`). On the stand-in with the termination disabled, the idle case fails after 10 s with
+  `reconnected` false and the transaction cases with `raised` none. Whether 10 s cover the late
+  termination waits on the next battery (`OPEN_QUESTIONS.md`).
+
+`tests/test_engine_redshift.py`, `redshift.md`
+
+## The UNLOAD probe leaves the battery (2026-10-10)
+
+`probes/operacao/probe_unload_parallel.py` measures the export's `_PARALLEL_OFF_ROWS` threshold
+(5,000,000 rows): the `UNLOAD` of 1, 5, 10 and 20 million rows and of the whole first partition of
+`cad_lancamentos` (33,239,719 rows) with `PARALLEL OFF` and in parallel, three times each. Five
+batteries, 2026-10-05, 2026-10-07, twice on 2026-10-09 and 2026-10-10, read the same on the
+Serverless workgroup: one file in both modes at every size, the same time (ratio 0.97 to 1.01),
+so the threshold changes nothing in the target (`redshift.md`). The step cost 772 s of the battery
+and the Redshift of a 33-million-row load and 30 `UNLOAD`s per run. The assistant asked on a
+decision card whether to take the step out of `suite_alvo.sh` (recommended) or keep it; the user
+chose "Tirar" (2026-10-10, 16:03 UTC).
+
+- The `run` line and its comment leave `suite_alvo.sh`; the probe, its command in
+  `probes/README.md` and `README.md`, and the threshold stay as they are, for a rerun by hand when
+  the workgroup changes or a provisioned cluster enters.
+
+`suite_alvo.sh`, `probes/README.md`, `serialize_db.engine.redshift` (the `_PARALLEL_OFF_ROWS`
+comment), `redshift.md`
