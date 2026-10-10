@@ -10,7 +10,8 @@ os valores que a carga inicial tem de tratar, a leitura pelos dois leitores da b
 controle de esquema da biblioteca anterior e a consistência da base com o modelo de referência. O
 esquema esperado é a seção 3 do relatório, transcrita; a saída do probe fica em ``probes/output/``,
 fora do git, e a transcrição é o que o teste guarda dela. A base é o material de
-``tests/test_migrate_parquet_to_delta.py``, o teste da migração adiantada da carga inicial.
+``tests/test_parquet_import.py``, de ``tests/test_migrate_parquet_to_delta.py`` e de
+``tests/test_pipeline.py``, e da sonda ``probes/consistencia/probe_load.py``.
 """
 
 from __future__ import annotations

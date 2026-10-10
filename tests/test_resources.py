@@ -9,7 +9,9 @@ não devolve, no v2 e no v1, a memória abaixo de 2 MiB ou negativa que ``enviro
 recusa, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do Python. No Windows,
 a memória sem ``/proc`` é a disponível que a API do sistema informa, e a física dessa leitura é
 conferida contra a do WMI. O pico de memória residente é lido de um ``/proc/self/status``
-fabricado, sem ele, e num processo filho que toca 64 MiB.
+fabricado, sem ele, e num processo filho que toca 64 MiB. As folgas fabricadas, de 1,25 a 3,5 GiB,
+valem numa máquina com mais memória física que elas, porque ``available_memory`` toma o mínimo com
+a física.
 """
 
 from __future__ import annotations
@@ -269,5 +271,7 @@ def test_peak_rss_mb_is_the_peak_of_the_process_itself() -> None:
     completed = subprocess.run(
         [sys.executable, "-c", program], check=True, capture_output=True, text=True
     )
-    before, after = (float(value) for value in completed.stdout.split())
+    printed = completed.stdout.split()
+    before = float(printed[0])
+    after = float(printed[1])
     assert after - before >= 48

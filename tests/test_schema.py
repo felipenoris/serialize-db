@@ -241,6 +241,13 @@ def test_arrow_schema_refuses_numeric_outside_the_decimal(
         schema.arrow_schema(table)
 
 
+def delta_document(
+    table: sa.Table,
+) -> dict:
+    """O esquema Delta da tabela como documento JSON."""
+    return json.loads(schema.delta_schema(table).to_json())
+
+
 @pytest.mark.parametrize(("precision", "scale"), [(38, 2), (38, 37), (10, 10), (1, 0)], ids=str)
 def test_arrow_schema_accepts_numeric_at_the_decimal_limits(
     precision: int,
@@ -250,13 +257,6 @@ def test_arrow_schema_accepts_numeric_at_the_decimal_limits(
     table = sa.Table("larga", sa.MetaData(), sa.Column("valor", sa.Numeric(precision, scale)))
     assert schema.arrow_schema(table).field("valor").type == pa.decimal128(precision, scale)
     assert delta_document(table)["fields"][0]["type"] == f"decimal({precision},{scale})"
-
-
-def delta_document(
-    table: sa.Table,
-) -> dict:
-    """O esquema Delta da tabela como documento JSON."""
-    return json.loads(schema.delta_schema(table).to_json())
 
 
 def test_delta_schema_json_matches_versioned_file() -> None:
@@ -372,20 +372,33 @@ def test_sql_type_per_dialect() -> None:
     """Cada tipo do contrato no texto de cada motor."""
     duckdb_types = {column.name: schema.sql_type(column, "duckdb") for column in TUDO.columns}
     redshift_types = {column.name: schema.sql_type(column, "redshift") for column in TUDO.columns}
-    assert duckdb_types["valor"] == redshift_types["valor"] == "DECIMAL(18, 2)"
-    assert duckdb_types["nome"] == redshift_types["nome"] == "VARCHAR(100)"
-    assert duckdb_types["observacao"] == "VARCHAR"
-    assert redshift_types["observacao"] == "VARCHAR(65535)"
-    assert duckdb_types["chave"] == redshift_types["chave"] == "VARCHAR(36)"
-    assert (duckdb_types["meta"], redshift_types["meta"]) == ("JSON", "SUPER")
-    assert (duckdb_types["spread"], redshift_types["spread"]) == ("DOUBLE", "DOUBLE PRECISION")
-    assert duckdb_types["timestamp"] == redshift_types["timestamp"] == "TIMESTAMP"
-    assert duckdb_types["carimbo_utc"] == redshift_types["carimbo_utc"] == "TIMESTAMPTZ"
-    assert (duckdb_types["parcelas"], duckdb_types["sistema"], duckdb_types["id"]) == (
-        "SMALLINT",
-        "INTEGER",
-        "BIGINT",
-    )
+    # Os dois motores diferem no texto sem comprimento, no JSON e no Double.
+    shared_types = {
+        "id": "BIGINT",
+        "data": "DATE",
+        "nome": "VARCHAR(100)",
+        "to": "VARCHAR(2)",
+        "valor": "DECIMAL(18, 2)",
+        "parcelas": "SMALLINT",
+        "sistema": "INTEGER",
+        "ativa": "BOOLEAN",
+        "timestamp": "TIMESTAMP",
+        "carimbo_utc": "TIMESTAMPTZ",
+        "chave": "VARCHAR(36)",
+        "data_str": "VARCHAR(10)",
+    }
+    assert duckdb_types == {
+        **shared_types,
+        "observacao": "VARCHAR",
+        "meta": "JSON",
+        "spread": "DOUBLE",
+    }
+    assert redshift_types == {
+        **shared_types,
+        "observacao": "VARCHAR(65535)",
+        "meta": "SUPER",
+        "spread": "DOUBLE PRECISION",
+    }
 
 
 def test_ddl_per_dialect() -> None:
@@ -396,12 +409,7 @@ def test_ddl_per_dialect() -> None:
     assert schema.ddl(TUDO, "redshift") == EXPECTED_REDSHIFT_DDL
 
 
-# Os ids evitam "redshift", o marcador da suíte Redshift: o id do parâmetro vira palavra-chave do
-# teste, e o conftest pula o teste com essa palavra-chave quando SERIALIZE_DB_TEST_REDSHIFT_SCHEMA
-# falta.
-@pytest.mark.parametrize(
-    "dialect", ["duckdb", "redshift"], ids=["dialect_duckdb", "dialect_redshift"]
-)
+@pytest.mark.parametrize("dialect", ["duckdb", "redshift"])
 def test_ddl_quotes_every_identifier(
     dialect: str,
 ) -> None:
@@ -858,20 +866,6 @@ def test_partition_column_is_any_text_and_the_source_optional() -> None:
     ]
 
 
-def references_a_key(
-    constraint: sa.ForeignKeyConstraint,
-) -> bool:
-    """Se as colunas apontadas são a chave primária ou uma `UniqueConstraint` da tabela apontada,
-    na mesma ordem."""
-    referred = constraint.referred_table
-    referenced = tuple(element.column.name for element in constraint.elements)
-    targets = [tuple(column.name for column in referred.primary_key.columns)]
-    for candidate in referred.constraints:
-        if isinstance(candidate, sa.UniqueConstraint):
-            targets.append(tuple(column.name for column in candidate.columns))
-    return referenced in targets
-
-
 def foreign_key_model(
     local_columns: list[str],
     referenced: list[str],
@@ -934,45 +928,13 @@ def test_check_models_lists_the_reference_model_defects() -> None:
         "string": sum(" sem comprimento; declare String(n)" in text for text in problems),
         "target": sum("sem chave primária nem UniqueConstraint" in text for text in problems),
     }
-    tables = list(ReferenceBase.metadata.tables.values())
-    columns = []
-    foreign_keys = []
-    for table in tables:
-        columns.extend(table.columns)
-        foreign_keys.extend(table.foreign_key_constraints)
-    # String e as subclasses dela sem comprimento; Text não declara comprimento, e o Enum sai
-    # como tipo fora do contrato.
-    strings = []
-    for column in columns:
-        kind = column.type
-        excluded = isinstance(kind, (sa.Text, sa.Enum))
-        if isinstance(kind, sa.String) and not excluded and not kind.length:
-            strings.append(column)
-    deferrable = [key for key in foreign_keys if key.deferrable]
-    unkeyed = [key for key in foreign_keys if not references_a_key(key)]
-    assert counts == {
-        "autoincrement": len(tables),
-        "deferrable": len(deferrable),
-        "string": len(strings),
-        "target": len(unkeyed),
-    }
+    # Uma chave com autoincrement por tabela, as 12 chaves estrangeiras DEFERRABLE das 14, as 20
+    # colunas String sem comprimento (Text não declara comprimento, e o Enum sai como tipo fora
+    # do contrato) e as 3 chaves estrangeiras sem chave no alvo.
+    assert counts == {"autoincrement": 12, "deferrable": 12, "string": 20, "target": 3}
     assert sum(counts.values()) == len(problems)
     # O comentário é opcional: o modelo sem comentário algum não produz violação por isso.
     assert [text for text in problems if "comentário" in text] == []
-    sizes = {
-        "tables": len(tables),
-        "foreign_keys": len(foreign_keys),
-        "deferrable": len(deferrable),
-        "strings": len(strings),
-        "unkeyed": len(unkeyed),
-    }
-    assert sizes == {
-        "tables": 12,
-        "foreign_keys": 14,
-        "deferrable": 12,
-        "strings": 20,
-        "unkeyed": 3,
-    }
 
 
 def test_client_model_is_clean() -> None:

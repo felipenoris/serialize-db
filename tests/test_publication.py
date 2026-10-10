@@ -602,7 +602,7 @@ def test_publish_logs_the_time_of_each_command_at_debug(
     assert logged[-1] == "ROLLBACK"
 
 
-def test_reconcile_published_add_column_and_recreate() -> None:
+def test_reconcile_published_add_column_and_destructive_changes() -> None:
     """A tabela igual ao modelo não tem diff; a coluna anulável nova sai por ``ADD COLUMN`` no
     fim; a coluna removida, a ``NOT NULL`` nova, o tipo, a largura de ``VARCHAR(n)`` e a escala
     que mudaram são destrutivos, nas duas grafias de ``svv_all_columns``."""
@@ -789,11 +789,7 @@ def export_with_duckdb(
         engine.append(table, entry_rows(months[0], 1, rows, table))
         version = engine.export_partition(table, uri, months[0], METADATA, expected_rows=rows)
         for index, month in enumerate(months[1:], 1):
-            data = entry_rows(month, 1 + index * rows, rows, table)
-            with engine.session() as connection:
-                connection.register("lote", data)
-                connection.execute(f'INSERT INTO "{table.name}" BY NAME SELECT * FROM lote')
-                connection.unregister("lote")
+            engine.append(table, entry_rows(month, 1 + index * rows, rows, table))
             version = engine.export_partition(table, uri, month, METADATA, expected_rows=rows)
     return version
 
@@ -1070,7 +1066,7 @@ def test_concurrent_publication_raises_execution_conflict(
             outcome["result"] = publication.publish_redshift(
                 db, target.config, [PROJECTED], "exec-b"
             )
-        except BaseException as error:  # noqa: BLE001 - o desfecho de B é a leitura
+        except Exception as error:  # o desfecho de B, erro ou resultado, é a leitura do teste
             outcome["error"] = error
 
     monkeypatch.setattr(redshift, "driver_connect", connect_b)
@@ -1156,13 +1152,14 @@ def test_failed_copy_leaves_control_row_untouched(
             broken.append(manifests[0].uri)
         return manifests
 
-    # O erro vem do COPY, depois que o dublê gravou o manifesto inválido.
+    # O erro é o do servidor no COPY da segunda partição, com o manifesto inválido que o dublê
+    # gravou no comando anotado.
     monkeypatch.setattr(delta, "copy_manifest", broken_manifest)
-    with pytest.raises(Exception) as failure:  # noqa: B017 - o erro do COPY: servidor ou S3
+    with pytest.raises(redshift_connector.Error) as failure:
         publication.publish_redshift(db, target.config, [PROJECTED], "exec-2")
     record("redshift.publication.failed_copy", type(failure.value).__name__)
     assert len(broken) == 1
-    assert not isinstance(failure.value, ExecutionConflict)
+    assert broken[0] in failure.value.__notes__[0]
     rows = published_rows(target, PROJECTED)
     assert [row[0] for row in rows[MONTHS[0]]] == list(range(1, 41))
     assert [row[0] for row in rows[MONTHS[1]]] == list(range(41, 81))

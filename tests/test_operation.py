@@ -109,7 +109,7 @@ def exit_code(
 def count_and_sum(
     db: Database,
     uri: str,
-) -> tuple:
+) -> tuple[int, float]:
     """As linhas e a soma de ``valor`` de uma tabela pelo ``delta_scan``."""
     with db.storage.duckdb_connect() as connection:
         query = f"SELECT count(*), sum(valor) FROM delta_scan('{uri}')"
@@ -339,6 +339,9 @@ def test_archive_copies_each_table_with_the_same_sums(
         patch.setattr(Storage, "copy", copy_until_the_third)
         with pytest.raises(OSError, match="cópia interrompida"):
             cli.main(["archive", *common_arguments(db), "--name", "2026T4"])
+    assert len(copies) == 3
+    assert "cad_contas" in copies[0]
+    assert "cad_lancamentos" in copies[2]
     resumed_entries_uri = storage.uri_of("prd/arquivo/2026T4/cad_lancamentos")
     assert delta.open_table(resumed_entries_uri, storage).version() == 1
     control, _ = delta.read_snapshots(storage, "prd")

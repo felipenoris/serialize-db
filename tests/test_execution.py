@@ -15,9 +15,10 @@ regra, as partições anteriores, a execução sem partição, as faixas de ``ne
 na versão que ``publish_delta`` avançou, a ingestão de uma tabela na sessão principal e de várias em
 sessões a mais, a auditoria exigida e a reprovada, as mensagens da tabela inteira, a reexecução, os
 conflitos, o pool da publicação, as colunas não finitas e a contagem passadas à exportação, os
-metadados de commit, o snapshot, o nome de snapshot já usado recusado antes de qualquer commit, o
-log da saída que falha ao gravá-lo e a linha de comando, com a ingestão recusada impressa como
-auditoria reprovada e o erro de acesso do ``ingest`` subindo com o traceback. O motor de mentira
+metadados de commit, o snapshot, marcado uma vez por execução, o nome de snapshot já usado
+recusado antes de qualquer commit, o log da saída que falha ao gravá-lo e a linha de comando, com a
+ingestão recusada impressa como auditoria reprovada, o erro de acesso do ``ingest`` subindo com o
+traceback, o motor desconhecido e a configuração do Redshift sem conexão. O motor de mentira
 registra as chamadas que a execução faz. A extensão ``delta`` do DuckDB precisa estar na pasta de
 extensões.
 """
@@ -303,7 +304,7 @@ def test_execution_opens_every_table_and_fixes_versions(
             assert run.versions == expected
             assert run.execution_id == "exec-2026-09-05"
             assert run.sandbox is engine
-    messages = [record.getMessage() for record in caplog.records]
+    messages = [log_record.getMessage() for log_record in caplog.records]
     assert "execução exec-2026-09-05 aberta: partição 2026-08-31" in messages[0]
     assert "versões lidas {'cad_lancamentos': 4}" in messages[-1]
     assert engine.calls[-1] == "cleanup"
@@ -343,17 +344,20 @@ def test_execution_refuses_an_invalid_partition(
     value: str,
 ) -> None:
     """O valor vazio, com ``/``, ``=``, espaço, ``'``, ``:``, ``%`` ou acento, começado por ``.``,
-    ``_`` ou ``-``, ou acima do ``String(n)`` é recusado antes do sandbox, e o ``execution_id`` fora
-    da regra também; ``2026-08-31`` e ``2026-Q1`` passam; o ambiente de ``Database`` fora da regra
-    também é recusado."""
-    with pytest.raises(ContractError):
+    ``_`` ou ``-``, ou acima do ``String(n)`` é recusado antes do sandbox."""
+    with pytest.raises(ContractError, match="fora da regra da partição|acima de String"):
         Execution(db, FakeEngine(db.storage), value, "exec-1")
 
-    # O execution_id fora da regra, a partição que passa e o ambiente fora da regra.
-    with pytest.raises(ContractError):
+
+def test_execution_refuses_an_invalid_execution_id_and_environment(
+    db: Database,
+) -> None:
+    """O ``execution_id`` fora da regra da partição é recusado antes do sandbox, e o ambiente de
+    ``Database`` fora da regra também; ``2026-08-31`` e ``2026-Q1`` passam."""
+    with pytest.raises(ContractError, match="exec 1"):
         Execution(db, FakeEngine(db.storage), "2026-08-31", "exec 1")
     assert Execution(db, FakeEngine(db.storage), "2026-Q1", "exec-1").partition == "2026-Q1"
-    with pytest.raises(ContractError):
+    with pytest.raises(ContractError, match="pr od"):
         Database(db.root, "pr od", Base.metadata)
 
 
@@ -600,16 +604,17 @@ def test_failed_audit_leaves_the_delta_untouched(
     """A auditoria reprovada levanta ``AuditFailed``, a versão da tabela não muda e o sandbox
     sai."""
     engine = engine_for(db, folder, "exec-1")
+    sandbox_file = folder / "sandbox_exec-1" / "exec-1.duckdb"
     with pytest.raises(AuditFailed, match="chave_id_lancamento"):
         with Execution(db, engine, "2026-08-31", "exec-1") as run:
             # Cada id duas vezes.
             once = rows(PROJECTED, "2026-08-31", range(1, 4))
             repeated = pa.concat_tables([once, once])
             create_and_append(run, PROJECTED, repeated)
+            assert sandbox_file.exists()
             run.audit(PROJECTED, ["2026-08-31"])
-            run.publish_delta(PROJECTED, partitions=["2026-08-31"])
     assert not delta.table_exists(db.uri(PROJECTED), db.storage)
-    assert not (folder / "sandbox_exec-1" / "exec-1.duckdb").exists()
+    assert not sandbox_file.exists()
 
 
 def test_rerun_with_the_same_execution_id_produces_the_same_rows(
@@ -675,7 +680,7 @@ def test_two_executions_on_the_same_partition_conflict(
         for run in (first, second):
             run.audit(ENTRIES, ["2026-08-31"])
         first.publish_delta(ENTRIES, partitions=["2026-08-31"])
-        with pytest.raises(ExecutionConflict):
+        with pytest.raises(ExecutionConflict, match="2026-08-31"):
             second.publish_delta(ENTRIES, partitions=["2026-08-31"])
 
 
@@ -692,7 +697,8 @@ def test_publish_delta_with_two_workers_matches_one(
             results[workers] = run.publish_delta(
                 ENTRIES, PROJECTED, partitions=["2026-08-31"], audit=False, max_workers=workers
             )
-    assert results[1] == results[2] == {ENTRIES.name: 1, PROJECTED.name: 1}
+    expected = {ENTRIES.name: 1, PROJECTED.name: 1}
+    assert results == {1: expected, 2: expected}
 
     # Com um worker, a segunda tabela falha: a primeira terminou e a terceira nem começa. As três
     # tabelas ficam num MetaData próprio, sem tocar o de Base.
@@ -798,7 +804,7 @@ def test_snapshot_writes_the_control_file_at_exit(
     assert control == {"snapshots": {"2026T3": versions}}
 
     # A execução que falha.
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="falha do pipeline"):
         with Execution(db, FakeEngine(db.storage), "2026-08-31") as run:
             run.snapshot("2026T4")
             raise RuntimeError("falha do pipeline")

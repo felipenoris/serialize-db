@@ -282,8 +282,8 @@ def test_interrupted_import_resumes(
 
     def failing_on_the_third(
         uri: str,
-        registered: object,
-        files: list,
+        table: sa.Table,
+        files: list[delta.RegisteredFile],
         value: str | None,
         *arguments: object,
         **options: object,
@@ -291,15 +291,16 @@ def test_interrupted_import_resumes(
         attempts.append(value)
         if len(attempts) == 3:
             raise RuntimeError("interrompida")
-        return original(uri, registered, files, value, *arguments, **options)
+        return original(uri, table, files, value, *arguments, **options)
 
-    monkeypatch.setattr(delta, "register_files", failing_on_the_third)
-    with pytest.raises(RuntimeError, match="interrompida"):
-        parquet_import.import_table(db, table, origin, config=config)
+    # O dublê sai no fim do bloco: monkeypatch.undo() desfaria também o que as fixtures trocaram.
+    with monkeypatch.context() as patch:
+        patch.setattr(delta, "register_files", failing_on_the_third)
+        with pytest.raises(RuntimeError, match="interrompida"):
+            parquet_import.import_table(db, table, origin, config=config)
     assert attempts == PARTITION_VALUES[:3]
     assert delta.open_table(db.uri(table), db.storage).version() == 2
 
-    monkeypatch.undo()
     assert parquet_import.import_table(db, table, origin, config=config) == PARTITION_VALUES[2:]
     assert delta.open_table(db.uri(table), db.storage).version() == 4
 
@@ -378,6 +379,16 @@ def replace_first_value(
     return chunk.set_column(index, field, pa.array(values, field.type))
 
 
+def rewrite_chunk(
+    path: Path,
+    rows: pa.Table,
+) -> None:
+    """Regrava ``path`` com ``rows`` no layout dos arquivos da origem."""
+    pq.write_table(
+        rows, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
+    )
+
+
 def rewrite_first_chunk(
     folder: Path,
     column: str,
@@ -386,10 +397,7 @@ def rewrite_first_chunk(
     """Regrava ``chunk_0.parquet`` de ``folder`` com ``value`` na primeira linha de ``column``, no
     layout da origem."""
     path = folder / "chunk_0.parquet"
-    altered = replace_first_value(pq.read_table(path), column, value)
-    pq.write_table(
-        altered, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
-    )
+    rewrite_chunk(path, replace_first_value(pq.read_table(path), column, value))
 
 
 def source_with_defect(
@@ -441,7 +449,7 @@ def assert_refused_without_commit(
         ),
     ],
 )
-def test_source_value_different_from_the_path_aborts(
+def test_value_off_the_path_or_above_the_length_aborts_without_commit(
     base: source.SourceBase,
     db: Database,
     config: DuckDBConfig,
@@ -484,16 +492,6 @@ def copy_operacoes_partition(
     destination = folder / "origem" / "cad_operacoes" / folder_name
     shutil.copytree(base.root / "cad_operacoes" / folder_name, destination)
     return destination
-
-
-def rewrite_chunk(
-    path: Path,
-    rows: pa.Table,
-) -> None:
-    """Regrava ``path`` com ``rows`` no layout dos arquivos da origem."""
-    pq.write_table(
-        rows, path, version="1.0", use_dictionary=False, use_deprecated_int96_timestamps=True
-    )
 
 
 def source_without_column(
@@ -617,10 +615,9 @@ def test_text_is_measured_as_in_cast_and_the_audit(
     db = Database(str(folder / "delta"), "prd", metadata)
 
     # Os três textos acima do limite do contrato, recusados sem commit.
-    with pytest.raises(ContractError) as refusal:
+    with pytest.raises(ContractError, match="^cad_documentos tabela inteira: ") as refusal:
         parquet_import.import_table(db, documents, str(origin), config=config)
     message = str(refusal.value)
-    assert message.startswith("cad_documentos tabela inteira: ")
     assert "1 textos acima dos 36 bytes de um Uuid em chave" in message
     assert "1 documentos JSON acima de 65535 bytes em documento" in message
     assert "1 textos acima do teto de 65535 bytes em nota" in message
@@ -1093,9 +1090,11 @@ def test_cli_import_imports_the_base_and_reports(
     printed = capsys.readouterr().out
     assert "fora do modelo: alembic_version, meta_update_status, schema.json" in printed
     assert "12 tabela(s) conferida(s), contagens e somas iguais" in printed
-    unpartitioned_line = printed.index("cad_contas: 1 partição(ões) gravada(s): tabela inteira")
-    partitioned_line = printed.index("cad_operacoes: 4 partição(ões) gravada(s): 2026-01-31")
-    assert unpartitioned_line < partitioned_line
+    unpartitioned = "cad_contas: 1 partição(ões) gravada(s): tabela inteira"
+    partitioned = "cad_operacoes: 4 partição(ões) gravada(s): 2026-01-31"
+    assert unpartitioned in printed
+    assert partitioned in printed
+    assert printed.index(unpartitioned) < printed.index(partitioned)
     assert "conversões: id_lancamento: int32 -> int64" in printed
     assert Path(root, "prd", "cad_lancamentos", "_delta_log").is_dir()
 

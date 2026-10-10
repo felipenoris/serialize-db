@@ -116,8 +116,9 @@ def test_the_tables_and_columns_are_the_references_with_the_partition_column_las
         assert [column.name for column in client_table.columns] == expected, name
 
 
-def test_types_and_nullability_change_only_where_the_plan_says() -> None:
-    """``Integer`` vira ``BigInteger`` só nas chaves e ``String`` ganha ``n``; o resto fica igual.
+def test_types_and_nullability_change_only_where_the_client_model_lists() -> None:
+    """``Integer`` vira ``BigInteger`` só nas chaves e ``String`` ganha ``n``, as correções que
+    ``tests/client_model/__init__.py`` lista; o resto fica igual.
 
     A nulidade de cada coluna é a do original.
     """

@@ -17,7 +17,7 @@ import types
 
 import pytest
 
-from conftest import USAGE, connect_redshift, failure_message, mask_credentials
+from conftest import FAILURE_MESSAGE_LIMIT, USAGE, connect_redshift, failure_message
 
 # As variáveis SERIALIZE_DB_REDSHIFT_* que connect_redshift lê.
 REDSHIFT_VARIABLES = ("DATABASE", "HOST", "PORT", "USER", "PASSWORD", "WORKGROUP", "SHARE_DATABASE")
@@ -71,8 +71,7 @@ def use_fake_driver(
     ``SERIALIZE_DB_REDSHIFT_*`` de ``variables``.
 
     As variáveis do ambiente de quem roda a suíte saem, para o teste ler só as que declara, e o
-    substituto local fica desligado, porque o teste confere o caminho do driver; a região fica
-    definida, para ``connect_redshift`` não perguntar ao ``boto3``.
+    substituto local fica desligado, porque o teste confere o caminho do driver.
     """
     monkeypatch.setitem(
         sys.modules, "redshift_connector", types.SimpleNamespace(connect=FakeConnection)
@@ -82,7 +81,6 @@ def use_fake_driver(
         monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
     for name, value in variables.items():
         monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
-    monkeypatch.setenv("AWS_DEFAULT_REGION", "sa-east-1")
 
 
 def test_connect_redshift_turns_autocommit_on_before_the_use(
@@ -148,10 +146,9 @@ def test_failure_message_masks_the_credentials_before_the_cut() -> None:
 
     recorded = failure_message(report)
 
-    # O relatório passa o valor registrado por mask_credentials de novo na impressão e no JSON.
-    assert "segredo" not in mask_credentials(recorded)
+    assert "segredo" not in recorded
     assert "SECRET_ACCESS_KEY '***'" in recorded
-    assert len(recorded) <= 300
+    assert len(recorded) <= FAILURE_MESSAGE_LIMIT
 
 
 def test_redshift_usage_names_the_local_root() -> None:

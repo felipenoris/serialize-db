@@ -163,7 +163,7 @@ def test_render_embeds_constants_and_keeps_parameters() -> None:
         text = sql.render(STATEMENTS["lancamentos_por_contrato"], dialect, ClientBase.metadata)
         assert '"{prefix}cad_contratos"."to"' in text
         assert '"{prefix}cad_lancamentos"."timestamp"' in text
-        assert 'CAST("{prefix}cad_lancamentos"."valor" AS NUMERIC(18, 2)) AS valor_centavos' in text
+        assert 'CAST("{prefix}cad_lancamentos"."valor" AS NUMERIC(18, 2)) AS valor_decimal' in text
 
     # Cada statement do pipeline fictício: o mesmo texto nos dois motores, sem espaço no fim das
     # linhas.
@@ -535,37 +535,29 @@ def test_cli_sql_check_reads_the_versioned_files(
     """`sql check` sai com 0 sem diff, 1 com o diff impresso e 2 sem `--statements` ou com um
     `--statements` que não é um dicionário."""
     directory = str(SQL_DIRECTORY)
-    assert (
-        main(
-            [
-                "sql",
-                "check",
-                "--metadata",
-                "client_model:Base.metadata",
-                "--statements",
-                "client_model.statements:STATEMENTS",
-                directory,
-            ]
-        )
-        == 0
-    )
+    versioned_check = [
+        "sql",
+        "check",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--statements",
+        "client_model.statements:STATEMENTS",
+        directory,
+    ]
+    assert main(versioned_check) == 0
     assert "atualizados" in capsys.readouterr().out
 
     # O statement mudado: saída 1 e o diff impresso.
-    assert (
-        main(
-            [
-                "sql",
-                "check",
-                "--metadata",
-                "client_model:Base.metadata",
-                "--statements",
-                "test_sql:CHANGED_STATEMENTS",
-                directory,
-            ]
-        )
-        == 1
-    )
+    changed_check = [
+        "sql",
+        "check",
+        "--metadata",
+        "client_model:Base.metadata",
+        "--statements",
+        "test_sql:CHANGED_STATEMENTS",
+        directory,
+    ]
+    assert main(changed_check) == 1
     assert "count(*) AS lancamentos" in capsys.readouterr().out
 
     # Sem --statements, ou com um que não é dicionário: saída 2.

@@ -16,7 +16,7 @@ um ``CAST``, e um ``INSERT ... SELECT`` cujo alvo aparece de novo numa subconsul
 - ``rateio_por_operacao``: o valor dos lançamentos de cada contrato rateado entre as operações
   dele por ``fator_rateio``, na partição, só na área de TI.
 - ``lancamentos_por_contrato``: os lançamentos da partição com o contrato, o prazo (``to``) e o
-  carimbo (``timestamp``), o valor em centavos por ``CAST``.
+  carimbo (``timestamp``), o valor em ``DECIMAL(18, 2)`` por ``CAST``.
 - ``veiculos_novos``: os veículos que os lançamentos da partição citam e ``dom_veiculos`` ainda
   não tem, inseridos com um nome provisório.
 
@@ -80,13 +80,13 @@ APPORTIONMENT_BY_OPERATION = (
 )
 
 # Os lançamentos da partição com o contrato: as colunas `to` e `timestamp` são palavras reservadas
-# dos motores, e o valor sai em centavos por CAST.
+# dos motores, e o valor sai em DECIMAL(18, 2) por CAST.
 ENTRIES_BY_CONTRACT = (
     sa.select(
         CONTRACTS.c.contrato,
         CONTRACTS.c.to,
         ENTRIES.c.timestamp,
-        sa.cast(ENTRIES.c.valor, sa.Numeric(18, 2)).label("valor_centavos"),
+        sa.cast(ENTRIES.c.valor, sa.Numeric(18, 2)).label("valor_decimal"),
     )
     .join_from(
         ENTRIES,

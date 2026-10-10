@@ -332,11 +332,12 @@ def test_main_refuses_a_model_with_violations(
     tabela fora do modelo, um ``--metadata`` que não importa, um valor de ``--partitions`` fora
     da regra da partição e ``--partitions`` com ``--ignore-partitions`` são erros de uso."""
     never_written = folder / "nunca-gravada"
+    # A origem inexistente prova que o modelo é recusado antes de qualquer leitura dela.
     arguments = [
         "--metadata",
         "reference_model.model_db_projetado:Base.metadata",
         "--source",
-        str(base.root),
+        str(folder / "inexistente"),
         "--root",
         str(never_written),
     ]
@@ -359,6 +360,7 @@ def test_main_refuses_a_model_with_violations(
             ]
         )
     assert refusal.value.code == 2
+    assert "tabelas fora do modelo: nada" in capsys.readouterr().err
     assert not never_written.exists()
 
     # O --metadata que não importa sai como erro de uso, sem traceback.

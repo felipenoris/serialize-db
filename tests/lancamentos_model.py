@@ -1,11 +1,12 @@
-"""O modelo das suítes do motor Redshift e da publicação: ``Conta``, ``Lancamento`` e
-``Projetado``, e as linhas de uma partição no contrato.
+"""O modelo das suítes do motor Redshift, da publicação, do leitor, da execução e da operação:
+``Conta``, ``Lancamento`` e ``Projetado``, e as linhas de uma partição no contrato.
 
 ``Lancamento`` é particionado por ``data_base_str`` com a origem ``data_base``, tem uma chave
 estrangeira para ``Conta``, uma coluna JSON, uma ``DateTime``, uma ``Numeric(18, 2)`` e a coluna
 ``to``, palavra reservada; ``Projetado`` é a tabela que o pipeline grava, com as mesmas colunas e
-a unicidade de ``codigo``. ``tests/test_engine_redshift.py`` e ``tests/test_publication.py`` o
-importam.
+a unicidade de ``codigo``. ``tests/test_engine_redshift.py``, ``tests/test_publication.py``,
+``tests/test_reader.py``, ``tests/test_execution.py``, ``tests/test_operation.py`` e as sondas
+``probes/consistencia/probe_append_test.py`` e ``probe_redshift_test.py`` o importam.
 """
 
 from __future__ import annotations

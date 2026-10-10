@@ -1,29 +1,15 @@
 """Testes das funções puras dos probes, sem AWS e sem rede, salvo uma consulta DNS.
 
 Os probes (``probes/``) leem o ambiente; as decisões que eles tomam sobre o que leram são funções
-puras, testadas aqui com respostas fabricadas: a classificação dos erros do ``boto3``, a expiração
-da credencial do botocore, os rótulos de DNS, as tabelas e os segredos mascarados, o código de saída
-do relatório, no ``diagnose_aws.py``, o veredito do STS, a linha do endpoint e a variável vazia
-separada da ausente, o inventário do bucket (tabelas Delta, sessões da suíte, versões não
-correntes), o versionamento pela amostra, o Object Lock, o ciclo de vida, a montagem de
-``~/shared``, as versões fixadas e as extensões do DuckDB do ``space.py``, o formato das tabelas do
-Glue, os parâmetros da conexão Redshift, a simulação do ``RS-11`` com uma chamada por recurso,
-contra um IAM fabricado, e os endpoints que o ``RS-14`` julga, no
-``duckdb_threads.py``, os valores de ``threads`` e o rótulo da referência, a partição comum, os
-totais do log, a tabela das medições e as checagens delas, o ``--metadata`` que não importa e a
-seção interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos
-dos clientes segurados e das chaves, a linha do tempo, as checagens e a sonda inteira sobre uma
-tabela Delta local, no ``operation_lib.py`` das sondas da operação, a linha de comando e as
-primeiras partições da origem fora das ignoradas, no ``probe_published_base.py``, as tabelas
-trocadas pela saída do ``serialize-db publish_redshift`` e, no ``probe_parallel_gain.py``, os
-comandos lidos no log da publicação, a linha do tempo de cada conexão, os locks lidos pela quinta
-sessão, as gravações da linha de controle no ``sys_query_history``, as três ordens dos comandos da
-primeira publicação pela sonda e os comandos que removem as tabelas dela. Um ``Report`` grava em
-``probes/output/``; ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao
-pytest no fim. Os testes que gravam, o relatório e os arquivos fabricados, são ``local``: gravam
-numa pasta nova sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do
-``parquet_source.py`` não abre arquivo algum: as suas funções recebem colunas e rodapés
-fabricados.
+puras, testadas aqui com respostas fabricadas, numa seção por sonda: ``probelib.py``,
+``bucket.py``, ``space.py``, ``catalog.py``, ``redshift.py`` e ``diagnose_aws.py``,
+``parquet_source.py``, ``duckdb_threads.py``, ``credentials.py``, o ``operation_lib.py`` das sondas
+da operação, ``probe_published_base.py`` e ``probe_parallel_gain.py``; a docstring de cada teste diz
+o que ele confere. Um ``Report`` grava em ``probes/output/``; ``make_report`` o aponta para a pasta
+do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes que gravam, o relatório e os arquivos
+fabricados, são ``local``: gravam numa pasta nova sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados
+sem ela. O do ``parquet_source.py`` não abre arquivo algum: as suas funções recebem colunas e
+rodapés fabricados.
 
 A consulta DNS é a do nome ``nao.existe.invalid`` em
 ``test_endpoint_reachable_skips_the_call_when_the_port_does_not_answer``: ``socket.getaddrinfo``
@@ -122,7 +108,7 @@ def make_report(
         sys.stdout = stdout
 
 
-def checks(
+def details(
     report: probelib.Report,
     check_id: str,
 ) -> list[str]:
@@ -134,7 +120,7 @@ def checks(
     return details
 
 
-def statuses(
+def verdicts(
     report: probelib.Report,
     check_id: str,
 ) -> list[str]:
@@ -270,7 +256,7 @@ def test_credential_expiry_reads_only_a_temporary_credential() -> None:
     ``AWS_CREDENTIAL_EXPIRATION`` e a ausente não a têm."""
     expiry = datetime.datetime(2026, 9, 27, 16, 0, tzinfo=datetime.timezone.utc)
     temporary = botocore.credentials.RefreshableCredentials(
-        "AKIAEXEMPLO", "segredo", "token", expiry, dict, "container-role"
+        "AKIAEXEMPLO", "segredo", "token", expiry, refresh_using=dict, method="container-role"
     )
     assert probelib.credential_expiry(temporary) == expiry
     fixed = botocore.credentials.Credentials("AKIAEXEMPLO", "segredo", method="env")
@@ -533,7 +519,7 @@ def test_report_exit_code(
             assert report.call("falha()", denied_call) is None
             assert report.last_reason == "negado (AccessDenied)"
         assert report.finish() == expected
-        assert report.path.read_text(encoding="utf-8").count("# ") >= 2
+        assert f"código de saída {expected}:" in report.path.read_text(encoding="utf-8")
 
 
 @pytest.mark.local
@@ -638,7 +624,7 @@ def test_object_versions_reads_denied_accumulated_and_clean(
         bucket.object_versions(report, accumulated, "b", PREFIX)
         bucket.object_versions(report, clean, "b", PREFIX)
 
-        notes = checks(report, "BK-14")
+        notes = details(report, "BK-14")
         assert notes[0].startswith("não lidas: negado (AccessDenied)")
         assert notes[1].startswith("2 (50 bytes) e 2 marcadores de exclusão")
         assert notes[2] == "nenhuma, nem marcador de exclusão"
@@ -657,7 +643,7 @@ def test_versioning_check_uses_the_api_or_the_sample(
         bucket.versioning_check(report, None, "negado (AccessDenied)", {"VersionId": "ORjAs2CA"})
         bucket.versioning_check(report, None, "negado (AccessDenied)", {"VersionId": "null"})
 
-        notes = checks(report, "BK-4")
+        notes = details(report, "BK-4")
         assert notes[0].startswith("ativo pela API:")
         assert notes[1] == "Suspended; o Delta não precisa dele"
         assert notes[2].startswith(
@@ -704,9 +690,9 @@ def test_bucket_settings_read_the_region_the_encryption_and_the_denied_versionin
         assert kms_key == KMS_KEY
         assert status is None
         assert why == "negado (AccessDenied)"
-        assert checks(report, "BK-1") == ["b"]
-        assert checks(report, "BK-2") == ["us-west-2"]
-        assert checks(report, "BK-5") == [f"aws:kms {KMS_KEY}; bucket key True"]
+        assert details(report, "BK-1") == ["b"]
+        assert details(report, "BK-2") == ["us-west-2"]
+        assert details(report, "BK-5") == [f"aws:kms {KMS_KEY}; bucket key True"]
 
 
 @pytest.mark.parametrize(
@@ -739,7 +725,7 @@ def test_bucket_settings_interpret_object_lock(
     e a retenção padrão sai por extenso."""
     with make_report(folder, monkeypatch) as report:
         bucket.bucket_settings(report, bucket_client(lock), "b", None)
-        assert checks(report, "BK-12")[0].startswith(expected)
+        assert details(report, "BK-12")[0].startswith(expected)
 
 
 @pytest.mark.local
@@ -773,8 +759,8 @@ def test_lifecycle_flags_an_enabled_expiration_that_reaches_the_root(
             client = FakeS3(get_bucket_lifecycle_configuration=response)
             bucket.lifecycle(report, client, "b", "dzd/proj")
 
-        notes = checks(report, "BK-3")
-        assert statuses(report, "BK-3") == ["fail", "pass", "pass", "note"]
+        notes = details(report, "BK-3")
+        assert verdicts(report, "BK-3") == ["fail", "pass", "pass", "note"]
         assert notes[0].startswith("expira (prefixo 'dzd/'):")
         assert notes[1] == "nenhuma das 2 regras expira objetos sob dzd/proj"
         assert notes[2] == "nenhuma das 0 regras expira objetos sob dzd/proj"
@@ -824,8 +810,8 @@ def test_lifecycle_reads_the_noncurrent_expiration_and_compares_the_root_as_a_fo
             client = FakeS3(get_bucket_lifecycle_configuration=response)
             bucket.lifecycle(report, client, "b", "dzd/proj")
 
-        notes = checks(report, "BK-3")
-        assert statuses(report, "BK-3") == ["note", "pass", "fail"]
+        notes = details(report, "BK-3")
+        assert verdicts(report, "BK-3") == ["note", "pass", "fail"]
         assert notes[0] == (
             "nenhuma das 1 regras expira objetos correntes sob dzd/proj; "
             "serialize-db-versoes-nao-correntes (prefixo 'dzd/proj/'): só versões não correntes, "
@@ -864,11 +850,11 @@ def test_mount_state_follows_the_link_and_reads_proc_mounts(
         f"s3fs {real} fuse.s3fs rw,nosuid,nodev,relatime,user_id=1000,allow_other 0 0\n"
         "proc /proc proc rw 0 0\n"
     )
-    mounts.write_text(mounted_rw)
+    mounts.write_text(mounted_rw, encoding="utf-8")
     assert space.mount_state(link, str(mounts)) == f"montada, tipo fuse.s3fs, rw (link para {real})"
 
     # A montagem só de leitura, pelo caminho real.
-    mounts.write_text(f"s3fs {real} fuse.s3fs ro,nosuid 0 0\n")
+    mounts.write_text(f"s3fs {real} fuse.s3fs ro,nosuid 0 0\n", encoding="utf-8")
     assert space.mount_state(real, str(mounts)) == "montada, tipo fuse.s3fs, ro"
 
     # O caminho ausente, e o existente sem montagem.
@@ -958,8 +944,8 @@ def test_python_packages_fail_sp9_on_a_version_below_the_runtime_pin(
 
     with make_report(folder, monkeypatch) as report:
         space.python_packages(report)
-        assert statuses(report, "SP-9") == ["fail"]
-        detail = checks(report, "SP-9")[0]
+        assert verdicts(report, "SP-9") == ["fail"]
+        detail = details(report, "SP-9")[0]
         assert detail.startswith(
             "boto3 1.40.0 (esperado 1.43.102); redshift_connector 2.1.0 (esperado 2.1.17);"
         )
@@ -978,12 +964,12 @@ def test_extensions_check_fails_on_any_extension_that_does_not_load(
         space.extensions_check(report, ["delta"], "/extensoes")
         space.extensions_check(report, [], None)
 
-        assert statuses(report, "SP-10") == ["fail", "pass"]
-        details = checks(report, "SP-10")
-        assert details[0] == (
+        assert verdicts(report, "SP-10") == ["fail", "pass"]
+        found = details(report, "SP-10")
+        assert found[0] == (
             "não carregam: delta; rode prepare_offline.sh ou informe SERIALIZE_DB_DUCKDB_EXTENSIONS"
         )
-        assert details[1] == "httpfs, delta, parquet, json de pasta padrão"
+        assert found[1] == "httpfs, delta, parquet, json de pasta padrão"
 
 
 @pytest.mark.local
@@ -999,11 +985,12 @@ def test_duckdb_section_neither_loads_nor_lists_aws(
 
     with make_report(folder, monkeypatch) as report:
         space.duckdb_section(report)
-        assert statuses(report, "SP-10") == ["fail"]
-        assert checks(report, "SP-10")[0].startswith("não carregam: httpfs, delta;")
+        assert verdicts(report, "SP-10") == ["fail"]
+        assert details(report, "SP-10")[0].startswith("não carregam: httpfs, delta;")
 
         # A primeira célula de cada linha das duas tabelas é o nome da extensão.
-        first_cells = [line.split(" ")[0] for line in report.path.read_text().splitlines()]
+        report_lines = report.path.read_text(encoding="utf-8").splitlines()
+        first_cells = [line.split(" ")[0] for line in report_lines]
         assert "httpfs" in first_cells
         assert "aws" not in first_cells
 
@@ -1198,10 +1185,8 @@ class FakeIam:
             raise client_error("Throttling", "SimulatePrincipalPolicy")
         results = []
         for action in actions:
-            decision = "allowed"
-            for resource in resources:
-                if self.allowed.get(action) != resource:
-                    decision = "implicitDeny"
+            allowed = all(self.allowed.get(action) == resource for resource in resources)
+            decision = "allowed" if allowed else "implicitDeny"
             results.append({"EvalActionName": action, "EvalDecision": decision})
         return {"EvaluationResults": results}
 
@@ -1219,7 +1204,7 @@ def test_copy_access_simulates_each_action_against_its_resource(
     with make_report(folder, monkeypatch) as report:
         least_privilege = FakeIam(LEAST_PRIVILEGE)
         redshift.copy_access(report, least_privilege, principal, "s3://b/raiz")
-        assert statuses(report, "RS-11") == ["pass"]
+        assert verdicts(report, "RS-11") == ["pass"]
         assert least_privilege.calls == [
             (["s3:ListBucket"], [BUCKET_ARN]),
             (["s3:GetObject", "s3:PutObject"], [OBJECTS_ARN]),
@@ -1237,11 +1222,11 @@ def test_copy_access_simulates_each_action_against_its_resource(
         without_put = {"s3:ListBucket": BUCKET_ARN, "s3:GetObject": OBJECTS_ARN}
         redshift.copy_access(report, FakeIam(without_put), principal, "s3://b/raiz")
 
-        assert statuses(report, "RS-11") == ["pass", "pass", "fail"]
-        details = checks(report, "RS-11")
-        assert details[0] == f"{who}: ListBucket, GetObject e PutObject sob s3://b/raiz"
-        assert details[1] == f"{who}: ListBucket, GetObject e PutObject sob s3://b"
-        assert details[2] == f"{who}: s3:PutObject negadas sob s3://b/raiz"
+        assert verdicts(report, "RS-11") == ["pass", "pass", "fail"]
+        found = details(report, "RS-11")
+        assert found[0] == f"{who}: ListBucket, GetObject e PutObject sob s3://b/raiz"
+        assert found[1] == f"{who}: ListBucket, GetObject e PutObject sob s3://b"
+        assert found[2] == f"{who}: s3:PutObject negadas sob s3://b/raiz"
 
 
 @pytest.mark.local
@@ -1261,8 +1246,8 @@ def test_copy_access_reads_a_failed_object_simulation(
         iam = FakeIam(LEAST_PRIVILEGE, failing_call=2)
         redshift.copy_access(report, iam, principal, "s3://b/raiz")
 
-        assert statuses(report, "RS-11") == ["note"]
-        assert checks(report, "RS-11")[0] == (
+        assert verdicts(report, "RS-11") == ["note"]
+        assert details(report, "RS-11")[0] == (
             "SERIALIZE_DB_REDSHIFT_IAM_ROLE (arn:aws:iam::1:role/outro): simulação o serviço "
             f"respondeu Throttling; o primeiro COPY da suíte Redshift é o teste; {blocker}"
         )
@@ -1310,7 +1295,7 @@ def test_network_judges_only_the_api_endpoints(
         redshift.network(report, target)
         monkeypatch.setattr(redshift, "region", lambda: "us-west-2")
         redshift.network(report, target)
-        without_region, with_region = checks(report, "RS-14")
+        without_region, with_region = details(report, "RS-14")
     assert without_region.startswith("sem região")
     assert with_region.startswith("sem endpoint VPC: redshift.us-west-2.amazonaws.com")
     assert "wg.exemplo.invalid" not in with_region
@@ -1877,10 +1862,10 @@ def test_partition_totals_sum_the_partition_or_the_whole_table() -> None:
 
 def test_threads_metadata_that_does_not_import_is_a_usage_error() -> None:
     """Um ``--metadata`` que não importa é erro de uso, com o código 2, em vez de traceback."""
-    with pytest.raises(argparse.ArgumentTypeError):
+    with pytest.raises(argparse.ArgumentTypeError, match="nao_existe"):
         duckdb_threads.resolve_metadata("nao_existe:Base.metadata")
+    arguments = ["/raiz", "--metadata", "nao_existe:Base.metadata"]
     with pytest.raises(SystemExit) as refusal:
-        arguments = ["/raiz", "--metadata", "nao_existe:Base.metadata"]
         duckdb_threads.build_parser().parse_args(arguments)
     assert refusal.value.code == 2
     assert duckdb_threads.resolve_metadata("client_model:Base.metadata") is Base.metadata
@@ -1984,9 +1969,9 @@ def test_measurement_checks_flag_rows_threads_and_failed_configurations(
     ]
     with make_report(folder, monkeypatch) as report:
         duckdb_threads.measurement_checks(report, measurements, inputs)
-        assert checks(report, "DT-2") == ["materializada/8: 9 contra 10"]
-        assert checks(report, "DT-3") == ["agregada/4: 2"]
-        assert checks(report, "DT-4") == ["agregada/8: IOException: sem arquivo"]
+        assert details(report, "DT-2") == ["materializada/8: 9 contra 10"]
+        assert details(report, "DT-3") == ["agregada/4: 2"]
+        assert details(report, "DT-4") == ["agregada/8: IOException: sem arquivo"]
         assert report.failures == [("agregada com threads=8", "IOException: sem arquivo")]
         assert report.finish() == 2
 
@@ -2205,15 +2190,15 @@ def test_credential_checks_blame_a_held_client_only_when_a_new_one_reads(
 
     with make_report(folder, monkeypatch) as report:
         credentials.checks(report, storage, rounds, controls, held, config, "terminou")
-        assert statuses(report, "CR-1") == ["pass"]
-        assert statuses(report, "CR-2") == ["pass"]
-        assert checks(report, "CR-3") == ["cliente não aberto"]
-        assert statuses(report, "CR-4") == ["fail"]
-        assert statuses(report, "CR-6") == ["note"]
-        assert checks(report, "CR-6")[0].endswith("a falha é do ambiente")
-        assert checks(report, "CR-9") == ["a chave aaaa1111 não trocou em 2 rodada(s)"]
-        assert statuses(report, "CR-10") == ["fail"]
-        assert checks(report, "CR-11") == ["falharam: pyarrow"]
+        assert verdicts(report, "CR-1") == ["pass"]
+        assert verdicts(report, "CR-2") == ["pass"]
+        assert details(report, "CR-3") == ["cliente não aberto"]
+        assert verdicts(report, "CR-4") == ["fail"]
+        assert verdicts(report, "CR-6") == ["note"]
+        assert details(report, "CR-6")[0].endswith("a falha é do ambiente")
+        assert details(report, "CR-9") == ["a chave aaaa1111 não trocou em 2 rodada(s)"]
+        assert verdicts(report, "CR-10") == ["fail"]
+        assert details(report, "CR-11") == ["falharam: pyarrow"]
         assert report.finish() == 2
 
 
@@ -2257,6 +2242,8 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
     ):
         monkeypatch.delenv(name, raising=False)
 
+    # O main constrói o próprio Report, que devolve o sys.stdout no finish; a restauração aqui é
+    # para o caminho da falha, que não chega ao finish.
     stdout = sys.stdout
     try:
         code = credentials.main(
@@ -2280,6 +2267,7 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
 
 def test_parse_arguments_reads_the_source_and_the_ignored_partitions(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
 ) -> None:
     """``parse_arguments`` das sondas da operação: a origem obrigatória, ``ignore_partitions``
     vazio sem a opção e com os valores de ``--ignore-partitions``; sem a origem, o código 2."""
@@ -2306,6 +2294,7 @@ def test_parse_arguments_reads_the_source_and_the_ignored_partitions(
     with pytest.raises(SystemExit) as refused:
         operation_lib.parse_arguments("a sonda")
     assert refused.value.code == 2
+    assert "fora da regra da partição" in capsys.readouterr().err
 
 
 @pytest.mark.local
@@ -2339,17 +2328,17 @@ def test_source_partitions_skips_the_ignored_partitions(
 def test_published_base_problems_name_the_tables_off_the_expected_versions() -> None:
     """``published_problems`` e ``current_problems`` da sonda da base publicada nomeiam a tabela
     cuja versão publicada, ou atual, não é a esperada, e a ausente da situação como ``None``."""
-    status = publication.PublicationStatus
-    statuses = {
-        "cad_contas": status("prd_cad_contas", 2, 2, ()),
-        "cad_lancamentos": status("prd_cad_lancamentos", 6, 7, ("2026-01-31",)),
+    Status = publication.PublicationStatus
+    by_table = {
+        "cad_contas": Status("prd_cad_contas", 2, 2, ()),
+        "cad_lancamentos": Status("prd_cad_lancamentos", 6, 7, ("2026-01-31",)),
     }
     expected = {"cad_contas": 2, "cad_lancamentos": 7, "cad_operacoes": 1}
-    assert probe_published_base.published_problems(statuses, expected) == [
+    assert probe_published_base.published_problems(by_table, expected) == [
         "cad_lancamentos: publicada na versão 6, não 7",
         "cad_operacoes: publicada na versão None, não 1",
     ]
-    assert probe_published_base.current_problems(statuses, expected) == [
+    assert probe_published_base.current_problems(by_table, expected) == [
         "cad_operacoes: versão atual None, não 1",
     ]
 
@@ -2379,12 +2368,12 @@ def test_published_tables_reads_the_swapped_tables() -> None:
 def test_parallel_gain_summary_takes_the_fastest_run_of_each_variant() -> None:
     """``summary_line`` da sonda de paralelismo: o menor tempo de cada forma, o pico dessa medida e
     a razão do menor tempo da primeira forma sobre o dela; ``best`` é a medida mais rápida."""
-    run = probe_parallel_gain.Run
+    Run = probe_parallel_gain.Run
     runs = {
-        "serie": [run(2.0, 10.0, 80), run(1.5, 12.0, 80), run(1.8, None, 80)],
-        "threads": [run(0.75, None, 80), run(0.9, 3.0, 80)],
+        "serie": [Run(2.0, 10.0, 80), Run(1.5, 12.0, 80), Run(1.8, None, 80)],
+        "threads": [Run(0.75, None, 80), Run(0.9, 3.0, 80)],
     }
-    assert probe_parallel_gain.best(runs["serie"]) == run(1.5, 12.0, 80)
+    assert probe_parallel_gain.best(runs["serie"]) == Run(1.5, 12.0, 80)
     assert probe_parallel_gain.summary_line("redshift 80 consultas", runs) == (
         "redshift 80 consultas: serie 1.500 s (1.00x, pico +12 MB); threads 0.750 s (2.00x)"
     )
@@ -2420,12 +2409,12 @@ def test_parallel_gain_command_kinds_count_and_summarize() -> None:
     assert kind(f'INSERT INTO "esquema"."{control}" VALUES (...)') == "INSERT controle"
     assert kind(f'SELECT * FROM "esquema"."{control}"') == "SELECT controle"
     assert kind("conexão") == "conexão"
-    command = probe_parallel_gain.Command
+    Command = probe_parallel_gain.Command
     commands = [
-        command("conexão", None, 1, 0.0, 0.25),
-        command("COPY", "cad_paralelo_a", 1, 1.0, 2.5),
-        command("INSERT controle", "cad_paralelo_a", 1, 4.0, 20.5),
-        command("COPY", "cad_paralelo_b", 2, 1.0, 1.5),
+        Command("conexão", None, 1, 0.0, 0.25),
+        Command("COPY", "cad_paralelo_a", 1, 1.0, 2.5),
+        Command("INSERT controle", "cad_paralelo_a", 1, 4.0, 20.5),
+        Command("COPY", "cad_paralelo_b", 2, 1.0, 1.5),
     ]
     assert probe_parallel_gain.count_commands(commands, ("COPY",)) == 2
     assert probe_parallel_gain.count_commands(commands, ("INSERT controle", "UPDATE controle")) == 1
@@ -2484,18 +2473,18 @@ def test_parallel_gain_timeline_splits_the_connections_by_thread_and_opening() -
     """``timeline_lines`` da sonda de paralelismo põe numa conexão a abertura e os comandos
     seguintes da mesma thread até a próxima abertura nela, ordena as conexões pelo início da
     abertura e conta o início de cada comando de ``origin``."""
-    command = probe_parallel_gain.Command
+    Command = probe_parallel_gain.Command
     # Os comandos na ordem em que terminaram: duas tabelas em sequência na thread 2 do pool e uma
     # na thread 3, depois da conexão da thread principal, que confere a tabela de controle.
     commands = [
-        command("conexão", None, 1, 100.0, 0.25),
-        command("SELECT controle", None, 1, 100.25, 0.05),
-        command("conexão", None, 3, 100.4, 0.25),
-        command("conexão", None, 2, 100.5, 0.25),
-        command("INSERT controle", "cad_paralelo_a", 2, 101.0, 2.0),
-        command("INSERT controle", "cad_paralelo_c", 3, 101.5, 1.0),
-        command("conexão", None, 2, 103.5, 0.25),
-        command("INSERT controle", "cad_paralelo_b", 2, 104.0, 0.125),
+        Command("conexão", None, 1, 100.0, 0.25),
+        Command("SELECT controle", None, 1, 100.25, 0.05),
+        Command("conexão", None, 3, 100.4, 0.25),
+        Command("conexão", None, 2, 100.5, 0.25),
+        Command("INSERT controle", "cad_paralelo_a", 2, 101.0, 2.0),
+        Command("INSERT controle", "cad_paralelo_c", 3, 101.5, 1.0),
+        Command("conexão", None, 2, 103.5, 0.25),
+        Command("INSERT controle", "cad_paralelo_b", 2, 104.0, 0.125),
     ]
 
     assert probe_parallel_gain.timeline_lines(commands, 100.0) == [
@@ -2511,7 +2500,7 @@ def test_parallel_gain_lock_lines_show_the_pending_lock_and_its_holders() -> Non
     objeto, com a primeira e a última leitura que os viram, deixa de fora os locks dos outros
     objetos e termina com o erro que encerrou as leituras; sem lock pendente, ``nenhum lock
     pendente``, e sem leitura que respondeu, só o erro."""
-    reading = probe_parallel_gain.LockReading
+    Reading = probe_parallel_gain.LockReading
     holder = (11, "ShareRowExclusiveLock", "relation", 500, True)
     reader = (12, "AccessShareLock", "relation", 500, True)
     # O modo com espaços no fim, como numa coluna char.
@@ -2520,10 +2509,10 @@ def test_parallel_gain_lock_lines_show_the_pending_lock_and_its_holders() -> Non
     own_table = (12, "AccessExclusiveLock", "relation", 600, True)
     transaction = (12, "ExclusiveLock", "transactionid", None, True)
     readings = [
-        reading(101.0, [holder, reader, waiting, own_table, transaction]),
-        reading(102.0, [holder, reader, waiting, own_table, transaction]),
-        reading(103.0, [reader, granted, own_table, transaction]),
-        reading(104.0, [], "ProgrammingError: permissão negada"),
+        Reading(101.0, [holder, reader, waiting, own_table, transaction]),
+        Reading(102.0, [holder, reader, waiting, own_table, transaction]),
+        Reading(103.0, [reader, granted, own_table, transaction]),
+        Reading(104.0, [], "ProgrammingError: permissão negada"),
     ]
 
     seen = "3 leitura(s) de svv_transactions de +1.0 s a +3.0 s; pids vistos: 11, 12"
@@ -2536,10 +2525,10 @@ def test_parallel_gain_lock_lines_show_the_pending_lock_and_its_holders() -> Non
         "a leitura parou em +4.0 s: ProgrammingError: permissão negada",
     ]
 
-    quiet = [reading(101.0, [holder, reader, transaction])]
+    quiet = [Reading(101.0, [holder, reader, transaction])]
     assert probe_parallel_gain.lock_lines(quiet, 100.0) == ["nenhum lock pendente"]
 
-    failed = [reading(100.5, [], "InterfaceError: queda")]
+    failed = [Reading(100.5, [], "InterfaceError: queda")]
     unanswered = "nenhuma leitura de svv_transactions respondeu"
     assert probe_parallel_gain.readings_line(failed, 100.0) == unanswered
     stopped = "a leitura parou em +0.5 s: InterfaceError: queda"
@@ -2552,7 +2541,7 @@ def test_parallel_gain_history_keeps_the_control_writes_and_their_times() -> Non
     ``INSERT`` e o ``UPDATE`` da linha de controle, pela primeira palavra em qualquer caixa, e
     ``history_line`` escreve os tempos em segundos, com ``-`` no tempo sem valor, e a execução lida
     no texto entre parênteses, ``sem execução`` quando ele não a traz."""
-    since = datetime.datetime(2026, 10, 9, 22, 0, tzinfo=datetime.UTC).timestamp()
+    since = datetime.datetime(2026, 10, 9, 22, 0, tzinfo=datetime.timezone.utc).timestamp()
     query = probe_parallel_gain.control_history_query(since, "poc1")
     assert "WHERE start_time >= '2026-10-09 22:00:00'" in query
     assert "query_text ILIKE '%serialize_db_publications%'" in query

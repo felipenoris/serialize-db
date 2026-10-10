@@ -14,9 +14,10 @@ num arquivo em Snappy; o ``max_key`` sem os arquivos de zero linhas; a reconcili
 comentários e a recusa da destrutiva; a reescrita num commit; a diferença de versões pelo log e a
 recusa do log limpo; o arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que preserva
 os snapshots; a compactação; a exportação nos dois modos, com pastas novas acima do destino e com a
-barra final; a cópia profunda com o esquema da versão copiada; os caminhos fora da raiz recusados
-antes de gravar; a pasta copiada que abre na mesma versão; e os limites do ambiente em cada conexão
-do DuckDB. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+barra final; o manifesto do ``COPY`` por versão e por lista de colunas do rodapé; a cópia profunda
+com o esquema da versão copiada; os caminhos fora da raiz recusados antes de gravar; a pasta copiada
+que abre na mesma versão; a memória recusada lida antes do commit; e os limites do ambiente em cada
+conexão do DuckDB. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -369,6 +370,8 @@ def test_publish_partition_returns_its_own_version(
         patch.setattr(delta, "open_table", lambda *args, **kwargs: opened)
         version = delta.publish_partition(uri, OPERACOES, "2026-08-31", stream, METADATA, storage)
     assert version == 3
+    # O objeto aberto antes só avança se a escrita passou por ele: a prova de que o dublê rodou.
+    assert opened.version() == 3
     assert delta.open_table(uri, storage).version() == 3
 
 
@@ -738,7 +741,9 @@ def test_nonfinite_double_columns_leave_min_max_out(
     footer = pq.ParquetFile(storage.open_input_file(july_file)).metadata
     valor_index = footer.schema.names.index("valor")
     statistics = footer.row_group(0).column(valor_index).statistics
-    assert statistics is None or not statistics.has_min_max
+    # O delta-rs não grava o struct de estatísticas da coluna, em vez de gravá-lo sem mínimo e
+    # máximo; lido na pasta local e no substituto do S3 em 2026-10-10.
+    assert statistics is None
     codecs = {footer.row_group(0).column(index).compression for index in range(footer.num_columns)}
     assert codecs == {"SNAPPY"}
 
@@ -937,7 +942,7 @@ def test_rewrite_in_one_commit_keeps_previous_version_readable(
 
     # A coluna do contrato ausente e fora de expressions falha sem commit.
     renamed = evolved(drop=["descricao"], add=[sa.Column("historico", sa.String(200))])
-    with pytest.raises(duckdb.BinderException):
+    with pytest.raises(duckdb.BinderException, match="historico"):
         delta.rewrite(uri, renamed, storage)
     assert delta.open_table(uri, storage).version() == 2
 
@@ -1050,7 +1055,7 @@ def test_snapshot_control_file_is_written_conditionally(
     delta.snapshot(storage, "prd", "2026T4", {"cad_operacoes": 7})
     with monkeypatch.context() as patch:
         patch.setattr(delta, "read_snapshots", lambda *args, **kwargs: stale)
-        with pytest.raises(ConflictError):
+        with pytest.raises(ConflictError, match="snapshots.json"):
             delta.snapshot(storage, "prd", "2026T5", {"cad_operacoes": 8})
     current, _ = delta.read_snapshots(storage, "prd")
     assert list(current["snapshots"]) == ["2026T2", "2026T3", "2026T4"]
@@ -1111,7 +1116,7 @@ def test_channel_points_to_a_snapshot_and_refuses(
     delta.snapshot(storage, "prd", "2026T4", {"cad_operacoes": 7})
     with monkeypatch.context() as patch:
         patch.setattr(delta, "read_snapshots", lambda *args, **kwargs: stale)
-        with pytest.raises(ConflictError):
+        with pytest.raises(ConflictError, match="snapshots.json"):
             delta.set_channel(storage, "prd", "default", "2026T3")
     current, _ = delta.read_snapshots(storage, "prd")
     assert current["channels"] == {"default": "2026T3"}
@@ -1137,8 +1142,8 @@ def test_vacuum_keeps_snapshot_versions(
     )
     assert sorted(removed) == sorted(listed)
     assert delta.open_table(uri, storage, version=2).to_pyarrow_dataset().count_rows() == 10
-    # O erro vem do leitor de arquivos, e a classe varia.
-    with pytest.raises(Exception):  # noqa: B017
+    # O erro vem do leitor de arquivos do delta-rs, na pasta local e no S3.
+    with pytest.raises(FileNotFoundError, match="Object at location"):
         delta.open_table(uri, storage, version=3).to_pyarrow_dataset().to_table()
 
 

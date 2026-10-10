@@ -21,6 +21,7 @@ import stat
 import sys
 import uuid
 from pathlib import Path
+from typing import NoReturn
 
 import botocore.credentials
 import botocore.exceptions
@@ -96,13 +97,15 @@ def test_storage_for_uri(
     local = Storage.for_uri(folder.as_uri())
     assert isinstance(local.filesystem, pafs.LocalFileSystem)
     assert not local.is_s3
-    assert local.uri == local.path == folder.as_posix()
+    assert local.uri == folder.as_posix()
+    assert local.path == folder.as_posix()
     relative = Path(os.path.realpath("relativa/delta"))
     assert Storage.for_uri("relativa/delta").uri == relative.as_posix()
     spaced_folder = Path(os.path.realpath("/tmp/meu banco/delta"))
     assert "meu%20banco" in spaced_folder.as_uri()
     spaced = Storage.for_uri(spaced_folder.as_uri())
-    assert spaced.uri == spaced.path == spaced_folder.as_posix()
+    assert spaced.uri == spaced_folder.as_posix()
+    assert spaced.path == spaced_folder.as_posix()
 
     # Outro esquema e o S3 sem região são erro.
     with pytest.raises(ValueError, match="esquema"):
@@ -282,14 +285,14 @@ def test_create_text_and_write_text_if_match(
 
     # A criação condicional.
     first = storage.create_text(path, '{"snapshots": {}}')
-    with pytest.raises(ConflictError):
+    with pytest.raises(ConflictError, match="já existe|PreconditionFailed|412"):
         storage.create_text(path, "{}")
     text, fingerprint = storage.read_text(path)
     assert (text, fingerprint) == ('{"snapshots": {}}', first)
 
     # A escrita condicional pela impressão digital lida.
     second = storage.write_text(path, '{"snapshots": {"2026T3": {}}}', if_match=fingerprint)
-    with pytest.raises(ConflictError):
+    with pytest.raises(ConflictError, match="mudou desde a leitura|PreconditionFailed|412"):
         storage.write_text(path, "{}", if_match=fingerprint)
     assert storage.read_text(path) == ('{"snapshots": {"2026T3": {}}}', second)
 
@@ -310,7 +313,7 @@ class RefusingS3Client:
     def put_object(
         self,
         **request: object,
-    ) -> dict:
+    ) -> NoReturn:
         """Registra o pedido e levanta a ``ClientError`` do botocore com o código dado."""
         self.requests.append(request)
         response = {

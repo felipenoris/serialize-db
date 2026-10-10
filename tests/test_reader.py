@@ -6,7 +6,8 @@ de ``tests/lancamentos_model.py`` numa pasta por teste, que também recebe a pas
 processo, porque ``DuckDBConfig()`` cria a pasta do motor em ``tempfile.mkdtemp``. Eles conferem
 o canal ``default`` sem argumento e o erro sem o canal; o snapshot pelo nome, vivo e arquivado; o
 canal ``current`` e a view presa à versão da abertura; a tabela criada depois do snapshot, sem
-view; a materialização inteira e parcial, em paralelo, e a que falha e devolve a view; os tipos
+view; a materialização inteira e parcial, com um worker por tabela, e a que falha e devolve a
+view; os tipos
 do contrato em ``query``, em ``stream`` e no pandas; a recusa dos comandos; a poda das partições
 pelo log ``FileSystem`` do DuckDB; o ``close`` e o finalizador que apagam a pasta do motor; e o
 leitor fora de uma variável, que o stream e a sessão que ele deu mantêm vivo até o fim deles. Os
@@ -46,6 +47,7 @@ from serialize_db.engine import redshift
 from serialize_db.engine.duckdb import DuckDBEngine
 from serialize_db.errors import ContractError
 from serialize_db.execution import Database
+from serialize_db import reader as reader_module
 from serialize_db.reader import DeltaReader, RedshiftReader, open_redshift
 from serialize_db.storage import Storage
 from test_engine_redshift import CONFIG, FakeConnection
@@ -257,11 +259,24 @@ def test_table_created_after_the_snapshot_has_no_view(
 @pytest.mark.local
 def test_materialize_swaps_the_view_for_a_table(
     db: Database,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``materialize`` troca a view da tabela por uma tabela do banco local, inteira ou só das
-    partições pedidas, as tabelas em paralelo, e troca de novo na chamada seguinte;
-    ``partitions`` numa tabela sem partição e o valor fora da regra são ``ContractError`` antes
-    de qualquer troca."""
+    partições pedidas, as tabelas num pool com um worker por tabela, e troca de novo na chamada
+    seguinte; ``partitions`` numa tabela sem partição e o valor fora da regra são
+    ``ContractError`` antes de qualquer troca."""
+    # O dublê do pool guarda o tamanho pedido e chama a função guardada antes da troca.
+    pool_sizes = []
+    original_run_in_pool = reader_module.run_in_pool
+
+    def recording_run_in_pool(
+        tasks: list,
+        max_workers: int,
+    ) -> dict[str, object]:
+        pool_sizes.append(max_workers)
+        return original_run_in_pool(tasks, max_workers)
+
+    monkeypatch.setattr(reader_module, "run_in_pool", recording_run_in_pool)
     with db.open_delta(snapshot="2026T3") as reader:
         reader.materialize(ACCOUNTS)
         assert reader.materialized == {ACCOUNTS.name: None}
@@ -278,8 +293,9 @@ def test_materialize_swaps_the_view_for_a_table(
         assert reader.query(months).column(0).to_pylist() == sorted(wanted)
         assert count(reader, ENTRIES) == 20
 
-        # A chamada seguinte troca as duas tabelas de novo, inteiras.
+        # A chamada seguinte troca as duas tabelas de novo, inteiras, num pool de dois workers.
         reader.materialize(ACCOUNTS, ENTRIES)
+        assert pool_sizes[-1] == 2
         assert reader.materialized == {ACCOUNTS.name: None, ENTRIES.name: None}
         assert count(reader, ENTRIES) == 30
         assert count(reader, ACCOUNTS) == 3
@@ -428,6 +444,7 @@ def test_close_and_the_finalizer_remove_the_engine_folder(
     created = list(folder.glob("serialize_db_*"))
     assert len(created) == 1
     assert count(reader, ACCOUNTS) == 3
+    # As views abrem numa sessão a mais cada, cujo cleanup também conta: só o do close interessa.
     calls.clear()
     reader.close()
     assert len(calls) == 1
@@ -551,7 +568,8 @@ def test_database_open_redshift_unloads_under_staging(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``db.open_redshift`` abre o leitor com o modelo do banco e o ``UNLOAD`` de ``stream`` em
-    ``<raiz>/<ambiente>/staging/<id do leitor>/``, que o ``close`` esvazia."""
+    ``<raiz>/<ambiente>/staging/<id do leitor>/``, que o ``close`` esvazia, de um arquivo que o
+    stream não gravou inclusive."""
     rows = account_rows(["A", "B"])
     connection = FakeConnection(db.storage, unload_rows=rows)
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
@@ -559,6 +577,8 @@ def test_database_open_redshift_unloads_under_staging(
         with reader.stream(sa.select(ACCOUNTS)) as batches:
             assert batches.read_all().num_rows == 2
         reader_prefix = db.storage.join("prd", "staging", reader.reader_id)
+        # O stream apaga os próprios arquivos na saída: a sobra é o que prova o close.
+        db.storage.write_text(db.storage.join(reader_prefix, "sobra.txt"), "x")
         unload = [
             command.text for command in connection.commands if command.text.startswith("UNLOAD")
         ]
@@ -580,8 +600,9 @@ def test_redshift_reader_matches_the_delta_reader(
     s3_location: S3Location,
 ) -> None:
     """A tabela publicada lida pelo leitor Redshift, por ``query`` e por ``stream``, dá as mesmas
-    linhas que o leitor Delta na versão atual; o ``close`` apaga os arquivos do ``UNLOAD`` do
-    leitor, sob ``unload_to`` e sob o ``staging/`` do banco."""
+    linhas que o leitor Delta na versão atual; o ``close`` esvazia a pasta do leitor, sob
+    ``unload_to`` e sob o ``staging/`` do banco, de um arquivo que o stream não gravou
+    inclusive."""
     db = target.db
     export_with_duckdb(target, ENTRIES, MONTHS)
     publication.publish_redshift(db, target.config, [ENTRIES], "exec-1")
@@ -606,13 +627,17 @@ def test_redshift_reader_matches_the_delta_reader(
         with reader.stream(statement, batch_size=25) as batches:
             streamed = batches.read_all().to_pylist()
         reader_id = reader.reader_id
+        # O stream apaga os próprios arquivos na saída: a sobra é o que prova o close.
+        unload_storage = Storage.for_uri(unload_to)
+        unload_storage.write_text(unload_storage.join(reader_id, "sobra.txt"), "x")
     assert queried == expected
     assert streamed == expected
-    assert Storage.for_uri(unload_to).list_files(reader_id) == []
+    assert unload_storage.list_files(reader_id) == []
 
     with db.open_redshift(target.config) as reader:
         with reader.stream(statement, batch_size=25) as batches:
             assert batches.read_all().to_pylist() == expected
-        reader_id = reader.reader_id
-    assert db.storage.list_files(db.storage.join(target.environment, "staging", reader_id)) == []
+        reader_prefix = db.storage.join(target.environment, "staging", reader.reader_id)
+        db.storage.write_text(db.storage.join(reader_prefix, "sobra.txt"), "x")
+    assert db.storage.list_files(reader_prefix) == []
     record("reader.redshift_matches_delta_rows", len(expected))

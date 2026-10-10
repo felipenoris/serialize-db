@@ -231,13 +231,17 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+# O prazo para o moto abrir a porta, em segundos.
+LISTENING_TIMEOUT_SECONDS = 30.0
+
+
 def wait_until_listening(
     process: subprocess.Popen,
     port: int,
-    timeout: float = 30.0,
 ) -> None:
-    """Espera o moto abrir a porta; o processo que sai antes, ou o prazo esgotado, é erro."""
-    deadline = time.monotonic() + timeout
+    """Espera o moto abrir a porta por até ``LISTENING_TIMEOUT_SECONDS``; o processo que sai antes,
+    ou o prazo esgotado, é erro."""
+    deadline = time.monotonic() + LISTENING_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(
@@ -249,7 +253,7 @@ def wait_until_listening(
         except OSError:
             time.sleep(0.05)
     process.kill()
-    raise RuntimeError(f"o moto não abriu a porta {port} em {timeout:.0f} s")
+    raise RuntimeError(f"o moto não abriu a porta {port} em {LISTENING_TIMEOUT_SECONDS:.0f} s")
 
 
 def emulator_environment(
@@ -440,10 +444,15 @@ class Cursor:
         raise_if_sent_after_termination(self.connection)
         try:
             result = run_command(self.connection, operation, args, self.paramstyle)
-        except (redshift_connector.Error, duckdb.Error):
+        except redshift_connector.Error:
             # O comando interrompido pelo encerramento sai como o socket fechado.
             raise_if_terminated(self.connection)
             raise
+        except duckdb.Error as error:
+            # Um erro do DuckDB que escapou da tradução de um comando sai como erro do servidor,
+            # a classe que a biblioteca lê; o alvo nunca mostra uma exceção do DuckDB.
+            raise_if_terminated(self.connection)
+            raise duckdb_error(error) from None
         raise_if_terminated(self.connection)
         self.description = result.description
         self.rowcount = result.rowcount
@@ -988,10 +997,10 @@ def redshift_data_type(
     a largura do texto e a precisão e a escala do ``NUMERIC``; um tipo fora da lista sai como
     está."""
     upper = kind.strip().upper()
-    # O nome mais longo primeiro: DOUBLE PRECISION antes de DOUBLE, CHARACTER VARYING antes de
-    # CHARACTER.
+    # A barreira de palavra separa INT de INTEGER, CHAR de CHARACTER VARYING e TIMESTAMP de
+    # TIMESTAMPTZ.
     name = None
-    for candidate in sorted(DATA_TYPES, key=len, reverse=True):
+    for candidate in DATA_TYPES:
         if re.match(rf"{candidate}\b", upper):
             name = candidate
             break
@@ -1025,11 +1034,7 @@ def remember_ddl(
     database.varchar_lengths[table] = {}
     database.super_columns[table] = set()
     for column, kind in definitions:
-        varchar = re.search(r"(?:VARCHAR|CHARACTER VARYING)\s*\((\d+)\)", kind, re.IGNORECASE)
-        if varchar:
-            database.varchar_lengths[table][column] = int(varchar.group(1))
-        if re.search(r"\bSUPER\b", kind, re.IGNORECASE):
-            database.super_columns[table].add(column)
+        remember_column_kind(database, table, column, kind)
     if re.match(r"CREATE\s+TEMP", text, re.IGNORECASE):
         return
     schema = table_schema(connection, match.group("name"))
@@ -1039,6 +1044,21 @@ def remember_ddl(
             "INSERT INTO main.emulador_colunas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [SHARE_DATABASE, schema, table, column, data_type, length, precision, scale, position],
         )
+
+
+def remember_column_kind(
+    database: RedshiftDatabase,
+    table: str,
+    column: str,
+    kind: str,
+) -> None:
+    """Guarda de uma coluna o ``n`` de ``VARCHAR(n)`` e se ela é ``SUPER``, que o ``COPY``
+    confere, do ``CREATE TABLE`` e do ``ADD COLUMN``."""
+    varchar = re.search(r"(?:VARCHAR|CHARACTER VARYING)\s*\((\d+)\)", kind, re.IGNORECASE)
+    if varchar:
+        database.varchar_lengths.setdefault(table, {})[column] = int(varchar.group(1))
+    if re.search(r"\bSUPER\b", kind, re.IGNORECASE):
+        database.super_columns.setdefault(table, set()).add(column)
 
 
 def forget_ddl(
@@ -1059,7 +1079,8 @@ def remember_added_column(
     connection: Connection,
     text: str,
 ) -> None:
-    """Põe em ``svv_all_columns`` a coluna de um ``ALTER TABLE ... ADD COLUMN``, no fim."""
+    """Põe em ``svv_all_columns`` a coluna de um ``ALTER TABLE ... ADD COLUMN``, no fim, e guarda
+    dela o que o ``COPY`` confere, como ``remember_ddl``."""
     match = re.match(
         r"ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)\s+(.+)", text, re.IGNORECASE | re.DOTALL
     )
@@ -1068,6 +1089,8 @@ def remember_added_column(
     database = connection.database.duckdb_connection
     schema = table_schema(connection, match.group(1))
     table = table_key(match.group(1))
+    column = match.group(2).strip('"').lower()
+    remember_column_kind(connection.database, table, column, match.group(3))
     position = database.execute(
         "SELECT coalesce(max(ordinal_position), 0) + 1 FROM main.emulador_colunas "
         "WHERE schema_name = ? AND table_name = ?",
@@ -1076,17 +1099,7 @@ def remember_added_column(
     data_type, length, precision, scale = redshift_data_type(match.group(3))
     database.execute(
         "INSERT INTO main.emulador_colunas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [
-            SHARE_DATABASE,
-            schema,
-            table,
-            match.group(2).strip('"').lower(),
-            data_type,
-            length,
-            precision,
-            scale,
-            position,
-        ],
+        [SHARE_DATABASE, schema, table, column, data_type, length, precision, scale, position],
     )
 
 

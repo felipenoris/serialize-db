@@ -43,7 +43,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
@@ -255,7 +255,7 @@ class FakeConnection:
         self,
         storage: Storage | None = None,
         unload_rows: pa.Table | None = None,
-        existing: set[str] = frozenset(),
+        existing: Collection[str] = frozenset(),
         delay: float = 0.0,
         drop_next: int = 0,
     ) -> None:
@@ -374,12 +374,21 @@ def fake_engine(
     return RedshiftEngine(CONFIG, EXECUTION_ID, root, f"prd/staging/{EXECUTION_ID}")
 
 
+def run_together(
+    *tasks: tuple,
+) -> None:
+    """Roda cada tarefa, ``(função, *argumentos)``, numa thread, e espera todas; o erro de uma
+    thread sobe no teste, pelo ``result()``."""
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        futures = [pool.submit(*task) for task in tasks]
+        for future in futures:
+            future.result()
+
+
 # ---------------------------------------------------------------- a configuração e os textos
 
 
-def test_config_from_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_config_from_environment() -> None:
     """``SERIALIZE_DB_REDSHIFT_*`` para ``RedshiftConfig``; a variável vazia é ausente; o par
     informado e o workgroup são os caminhos de conexão, e sem os dois a conexão é recusada."""
     variables = {
@@ -836,23 +845,18 @@ def test_statements_serialize_on_the_single_session(
     assert isinstance(engine, Engine)
 
     # Três comandos de três threads.
-    threads = []
-    for number in range(3):
-        threads.append(threading.Thread(target=engine.query, args=(f"SELECT {number}",)))
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    run_together(*[(engine.query, f"SELECT {number}") for number in range(3)])
     # Cada comando termina antes de o seguinte começar.
     windows = sorted((command.started, command.finished) for command in connection.commands[-3:])
     for previous, following in itertools.pairwise(windows):
         assert previous[1] <= following[0]
 
-    # Um comando enquanto o stream ainda lê os arquivos.
+    # Um comando de outra thread enquanto o stream ainda lê os arquivos: o lock é reentrante, e
+    # só outra thread prova que ele soltou.
     with engine.stream(sa.select(ENTRIES), batch_size=10) as stream:
         first = stream.read_next_batch()
         started = time.perf_counter()
-        engine.query("SELECT 1")
+        run_together((engine.query, "SELECT 1"))
         assert time.perf_counter() - started < 1.0
         assert first.num_rows == 10
         assert sum(batch.num_rows for batch in stream) == 290
@@ -903,7 +907,7 @@ def test_connection_dropped_by_the_server_is_reopened_once(
     assert "derrubada" in caplog.text
 
     # Dentro de uma transação o erro sobe, com o ROLLBACK tentado.
-    with pytest.raises(redshift_connector.InterfaceError):
+    with pytest.raises(redshift_connector.InterfaceError, match="server socket closed"):
         with engine.transaction():
             engine._connection.drop_next = 1
             engine.execute("SELECT 2")
@@ -922,7 +926,7 @@ def test_connection_dropped_at_commit_raises_without_reconnecting(
     engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
     first = engine._connection
     insert = 'INSERT INTO "esquema"."t" VALUES (1)'
-    with pytest.raises(redshift_connector.InterfaceError):
+    with pytest.raises(redshift_connector.InterfaceError, match="server socket closed"):
         with engine.transaction():
             engine.execute(insert)
             first.drop_next = 1
@@ -953,7 +957,7 @@ def test_connection_dropped_in_a_client_transaction_raises_without_repeating(
     insert = 'INSERT INTO "esquema"."t" VALUES (1)'
     engine.execute("BEGIN")
     first.drop_next = 1
-    with pytest.raises(redshift_connector.InterfaceError):
+    with pytest.raises(redshift_connector.InterfaceError, match="server socket closed"):
         engine.execute(insert)
     assert engine._connection is first
     assert len(connections) == 1
@@ -1109,14 +1113,17 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
 
     # O lote recusado pelo cast.
-    with pytest.raises(ContractError):
+    with pytest.raises(ContractError, match="id_lancamento"):
         with engine.appender(PROJECTED) as appender:
             appender.write(pa.table({"id_lancamento": ["x"]}))
     assert "BEGIN" not in connection.texts()[before + 1 :]
 
-    # O DataFrame é recusado antes de qualquer gravação.
+    # Um lote fora do Arrow (um dict) é recusado antes de qualquer comando, com a conversão do
+    # DataFrame na mensagem.
+    before = len(connection.commands)
     with pytest.raises(ContractError, match="from_pandas"):
         engine.append(PROJECTED, {"id_lancamento": [1]})
+    assert connection.texts()[before:] == []
 
 
 @pytest.mark.local
@@ -1285,7 +1292,7 @@ def test_ingest_loads_each_partition_through_the_staging(
     assert len(copies) == 3
     engine.pinned_delta(ENTRIES, uri, 2)
     assert len([text for text in connection.texts() if text.startswith("COPY")]) == 3
-    with pytest.raises(SandboxError):
+    with pytest.raises(SandboxError, match="sem versão fixada"):
         engine.pinned_delta(ENTRIES, uri, None)
 
     # Outra versão numa staging nova, com a partição única da versão 1.
@@ -1324,7 +1331,7 @@ def test_ingest_partition_load_raises_on_a_dropped_connection_without_retry(
     connection = FakeConnection(storage)
     engine = fake_engine(monkeypatch, connection, storage)
     connection.drop_on = {"COPY": dropped()}
-    with pytest.raises(redshift_connector.InterfaceError):
+    with pytest.raises(redshift_connector.InterfaceError, match="server socket closed"):
         engine.ingest(ENTRIES, uri, 1, partitions=[MONTHS[0]])
     texts = connection.texts()
     staging = f'"esquema"."{PREFIX}cad_lancamentos_staging"'
@@ -1438,10 +1445,11 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     stats = pa.table(delta.open_table(uri, storage).get_add_actions(flatten=True))
     assert stats.column("max.id_lancamento").to_pylist() == [1000]
     assert stats.column("min.valor").to_pylist() == [0.25]
-    assert "max.codigo" not in stats.column_names or stats.column("max.codigo").null_count == 1
+    # O texto fica sem mínimo e máximo no registro, e o delta-rs os materializa como nulos.
+    assert stats.column("max.codigo").null_count == 1
 
     # Duas exportações da mesma partição recebem destinos distintos; a contagem diferente recusa.
-    with pytest.raises(RegistrationRefused):
+    with pytest.raises(RegistrationRefused, match="999 na fonte"):
         engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=999)
     unloads = [text for text in connection.texts() if text.startswith("UNLOAD")]
     destinations = {re.search(r"TO '([^']+)'", text).group(1) for text in unloads}
@@ -1809,10 +1817,11 @@ def test_appender_copies_the_file_at_close(
         sink.storage.delete([sink.path])
         return uri
 
-    monkeypatch.setattr(redshift, "_write_file_manifest", manifest_without_file)
-    with pytest.raises(redshift_connector.Error) as missing:
-        engine.append(PROJECTED, entry_rows(MONTHS[0], 11, 10, PROJECTED))
-    monkeypatch.undo()
+    # O dublê sai no fim do bloco: monkeypatch.undo() desfaria também o substituto da conexão.
+    with monkeypatch.context() as patch:
+        patch.setattr(redshift, "_write_file_manifest", manifest_without_file)
+        with pytest.raises(redshift_connector.Error) as missing:
+            engine.append(PROJECTED, entry_rows(MONTHS[0], 11, 10, PROJECTED))
     assert len(manifests) == 1
     note = missing.value.__notes__[0]
     assert note.startswith("comando: COPY")
@@ -2098,14 +2107,10 @@ def test_new_session_sees_committed_tables(
         with engine.new_session() as session:
             session.ingest(table, uri, pinned)
 
-    threads = [
-        threading.Thread(target=ingest, args=(ENTRIES, target.uri(ENTRIES), version)),
-        threading.Thread(target=ingest, args=(ACCOUNTS, accounts_uri, accounts_version)),
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    run_together(
+        (ingest, ENTRIES, target.uri(ENTRIES), version),
+        (ingest, ACCOUNTS, accounts_uri, accounts_version),
+    )
     assert count_of(engine, f"{engine.prefix}cad_lancamentos") == 40
     assert count_of(engine, f"{engine.prefix}cad_contas") == 3
     with engine.new_session() as session:
@@ -2413,14 +2418,6 @@ def test_two_writers_on_the_same_table_both_enter(
         engine.query(
             sa.update(table).where(table.c.id_lancamento <= 500).values(valor=table.c.valor + 1)
         )
-
-    def run_together(
-        *tasks: tuple,
-    ) -> None:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [pool.submit(*task) for task in tasks]
-            for future in futures:
-                future.result()
 
     # Dois appenders, cada um numa sessão a mais.
     sessions = PROJECTED.to_metadata(sa.MetaData(), name="cad_escritores_sessoes")
