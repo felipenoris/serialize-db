@@ -118,7 +118,8 @@ _TABLE_NAME_BYTES = 63
 # em 2026-10-07, duas vezes em 2026-10-09 e em 2026-10-10, o UNLOAD da partição ordenada pela
 # sort_key, de 1.000.000 a 33.239.719 linhas de cad_lancamentos, levou o mesmo tempo nos dois modos
 # (de 2,0 s a 50,4 s, razão de 0,97 a 1,01) e gravou um arquivo só em ambos
-# (probes/operacao/probe_unload_parallel.py).
+# (probes/operacao/probe_unload_parallel.py, fora da bateria desde 2026-10-10 por decisão do
+# usuário).
 _PARALLEL_OFF_ROWS = 5_000_000
 
 # A cláusula de credenciais que nunca vai a log: o valor de cada chave sai como ***.

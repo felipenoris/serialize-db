@@ -357,11 +357,6 @@ main() {
     run .venv/bin/python probes/operacao/probe_compact_memory.py "$SOURCE_PATH" \
         --ignore-partitions 2025-09-30
 
-    # O UNLOAD da exportação com PARALLEL OFF e em paralelo, de 1, 5, 10 e 20 milhões de linhas e
-    # da primeira partição inteira, três vezes cada; as tabelas exec_operacao_<id>_* saem no fim.
-    run .venv/bin/python probes/operacao/probe_unload_parallel.py "$SOURCE_PATH" \
-        --ignore-partitions 2025-09-30
-
     # O ganho das APIs com threads sobre a execução em série no motor DuckDB, nos pools de
     # tabelas, no motor Redshift e na publicação no Redshift, três medidas de cada forma, sobre
     # quatro tabelas de 5 milhões de linhas que a sonda gera; a publicação é medida com e sem a

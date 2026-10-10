@@ -2180,3 +2180,22 @@ assert only the two transaction cases; or keep the readings. The user chose "Ass
   termination waits on the next battery (`OPEN_QUESTIONS.md`).
 
 `tests/test_engine_redshift.py`, `redshift.md`
+
+## The UNLOAD probe leaves the battery (2026-10-10)
+
+`probes/operacao/probe_unload_parallel.py` measures the export's `_PARALLEL_OFF_ROWS` threshold
+(5,000,000 rows): the `UNLOAD` of 1, 5, 10 and 20 million rows and of the whole first partition of
+`cad_lancamentos` (33,239,719 rows) with `PARALLEL OFF` and in parallel, three times each. Five
+batteries, 2026-10-05, 2026-10-07, twice on 2026-10-09 and 2026-10-10, read the same on the
+Serverless workgroup: one file in both modes at every size, the same time (ratio 0.97 to 1.01),
+so the threshold changes nothing in the target (`redshift.md`). The step cost 772 s of the battery
+and the Redshift of a 33-million-row load and 30 `UNLOAD`s per run. The assistant asked on a
+decision card whether to take the step out of `suite_alvo.sh` (recommended) or keep it; the user
+chose "Tirar" (2026-10-10, 16:03 UTC).
+
+- The `run` line and its comment leave `suite_alvo.sh`; the probe, its command in
+  `probes/README.md` and `README.md`, and the threshold stay as they are, for a rerun by hand when
+  the workgroup changes or a provisioned cluster enters.
+
+`suite_alvo.sh`, `probes/README.md`, `serialize_db.engine.redshift` (the `_PARALLEL_OFF_ROWS`
+comment), `redshift.md`

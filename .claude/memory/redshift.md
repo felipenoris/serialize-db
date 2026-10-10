@@ -127,6 +127,8 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   172.1 MB, 339.1 MB and 559.5 MB, the best times 2.1 s, 8.4 s, 16.2 s, 32.4 s and 49.9 s with
   `PARALLEL OFF` against 2.1 s, 8.5 s, 16.4 s, 32.9 s and 51.0 s in parallel (0.98 to 0.99), the
   footers read in 0.04 s to 0.09 s.
+  The user took the probe out of `suite_alvo.sh` on 2026-10-10 (`decisions.md`): the five
+  readings agree, and the probe runs by hand (`probes/README.md`, `SUITE_ALVO.md`).
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;

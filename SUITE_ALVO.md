@@ -30,6 +30,17 @@ cd ~/work/projects/serialize-db
 ./suite_alvo.sh
 ```
 
+## Sonda do UNLOAD em paralelo
+
+Fora da bateria desde 2026-10-10: cinco rodadas, de 2026-10-05 a 2026-10-10, leram um arquivo nos
+dois modos e o mesmo tempo. Roda à mão, com as variáveis acima exportadas, se o workgroup mudar ou
+um cluster provisionado entrar; o relatório sai em `probes/output/operacao_unload_<data-hora>.txt`.
+
+```
+cd ~/work/projects/serialize-db
+.venv/bin/python probes/operacao/probe_unload_parallel.py "$SOURCE_PATH" --ignore-partitions 2025-09-30
+```
+
 # Resultados
 
 ```
