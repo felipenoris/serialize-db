@@ -115,9 +115,10 @@ _TABLE_NAME_BYTES = 63
 
 # As linhas até as quais o UNLOAD da exportação grava em série, num arquivo só (PARALLEL OFF): acima
 # delas o UNLOAD roda em paralelo, que pode fragmentar por slice. No ambiente alvo, em 2026-10-05,
-# em 2026-10-07 e em 2026-10-09, o UNLOAD da partição ordenada pela sort_key, de 1.000.000 a
-# 33.239.719 linhas de cad_lancamentos, levou o mesmo tempo nos dois modos (de 2,0 s a 50,4 s,
-# razão de 0,98 a 1,01) e gravou um arquivo só em ambos (probes/operacao/probe_unload_parallel.py).
+# em 2026-10-07 e duas vezes em 2026-10-09, o UNLOAD da partição ordenada pela sort_key, de
+# 1.000.000 a 33.239.719 linhas de cad_lancamentos, levou o mesmo tempo nos dois modos (de 2,0 s a
+# 50,4 s, razão de 0,97 a 1,01) e gravou um arquivo só em ambos
+# (probes/operacao/probe_unload_parallel.py).
 _PARALLEL_OFF_ROWS = 5_000_000
 
 # A cláusula de credenciais que nunca vai a log: o valor de cada chave sai como ***.
@@ -1361,7 +1362,7 @@ class RedshiftEngine:
         params: Mapping[str, object] | None,
     ) -> object:
         """Um comando num cursor novo da conexão; o erro do servidor leva o comando mascarado numa
-        nota."""
+        nota, e o ``OSError`` do socket sobe como o ``InterfaceError`` da conexão derrubada."""
         cursor = self._connection.cursor()
         cursor.paramstyle = "named"
         try:
@@ -1369,6 +1370,14 @@ class RedshiftEngine:
         except redshift_connector.Error as error:
             error.add_note(f"comando: {mask(text)}")
             raise
+        except OSError as error:
+            # O driver converte em InterfaceError a leitura vazia do socket fechado, mas deixa
+            # sair o OSError do socket, como o BrokenPipeError do envio lido no ambiente alvo.
+            dropped = redshift_connector.InterfaceError(
+                f"o socket da conexão falhou: {type(error).__name__}: {error}"
+            )
+            dropped.add_note(f"comando: {mask(text)}")
+            raise dropped from error
         return cursor
 
     def execute(
@@ -1378,12 +1387,15 @@ class RedshiftEngine:
     ) -> object:
         """Roda um comando na sessão, sob o lock.
 
-        Uma conexão derrubada pelo servidor (``InterfaceError`` do driver) fora de transação é
-        reaberta uma vez, com credencial nova, e o comando é repetido. A reconexão perde a tabela
+        Uma conexão derrubada pelo servidor fora de transação é reaberta uma vez, com credencial
+        nova, e o comando é repetido. O motor lê a queda no ``InterfaceError`` do driver, que vem da
+        leitura do socket fechado, e no ``OSError`` do socket, que o driver deixa sair: depois do
+        ``COPY`` derrubado de um ``ingest``, o envio do ``DROP`` da staging recebeu
+        ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09). A reconexão perde a tabela
         temporária que o pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift``
         avisa da perda. O driver não diz se o servidor aplicou o comando derrubado: um comando que
-        não pode entrar duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda
-        em ``transaction()``, sem a repetição.
+        não pode entrar duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda em
+        ``transaction()``, sem a repetição.
 
         Exemplo:
 
@@ -1399,7 +1411,8 @@ class RedshiftEngine:
         :raises redshift_connector.InterfaceError: a conexão derrubada dentro de uma transação,
             a de ``transaction()`` ou a que o cliente abriu por ``BEGIN``, lida no
             ``in_transaction`` do driver; o erro sobe sem repetição, porque a transação se perdeu,
-            e o comando seguinte reabre a conexão.
+            e o comando seguinte reabre a conexão. O ``OSError`` do socket sobe convertido nele,
+            com o original em ``__cause__``.
         :raises redshift_connector.Error: o erro do servidor, com o comando mascarado por
             ``mask`` numa nota.
         """
@@ -1663,7 +1676,7 @@ class RedshiftEngine:
             modelo, não a tem; o modelo tem de acompanhar a tabela.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação de uma
             partição, que o servidor desfaz; a tabela fica criada, sem essa partição e sem as
-            seguintes.
+            seguintes, e a staging sai pelo ``DROP`` do fim, que reabre a conexão.
         """
         self._refuse_inside_transaction(table.name)
         if version is None:

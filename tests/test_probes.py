@@ -14,12 +14,15 @@ totais do log, a tabela das medições e as checagens delas, o ``--metadata`` qu
 seção interrompida e, no ``credentials.py``, a impressão digital das chaves, a espera, os vereditos
 dos clientes segurados e das chaves, a linha do tempo, as checagens e a sonda inteira sobre uma
 tabela Delta local, no ``operation_lib.py`` das sondas da operação, a linha de comando e as
-primeiras partições da origem fora das ignoradas e, no ``probe_published_base.py``, as tabelas
-trocadas pela saída do ``serialize-db publish_redshift``. Um ``Report`` grava em ``probes/output/``;
-``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
-que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
-``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
-algum: as suas funções recebem colunas e rodapés fabricados.
+primeiras partições da origem fora das ignoradas, no ``probe_published_base.py``, as tabelas
+trocadas pela saída do ``serialize-db publish_redshift`` e, no ``probe_parallel_gain.py``, os
+comandos lidos no log da publicação, a linha do tempo de cada conexão, os locks lidos pela quinta
+sessão e as gravações da linha de controle no ``sys_query_history``. Um ``Report`` grava em
+``probes/output/``; ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao
+pytest no fim. Os testes que gravam, o relatório e os arquivos fabricados, são ``local``: gravam
+numa pasta nova sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do
+``parquet_source.py`` não abre arquivo algum: as suas funções recebem colunas e rodapés
+fabricados.
 
 A consulta DNS é a do nome ``nao.existe.invalid`` em
 ``test_endpoint_reachable_skips_the_call_when_the_port_does_not_answer``: ``socket.getaddrinfo``
@@ -34,6 +37,7 @@ import contextlib
 import datetime
 import hashlib
 import io
+import logging
 import socket
 import sys
 import tempfile
@@ -56,6 +60,7 @@ import diagnose_aws
 import duckdb_threads
 import operation_lib
 import parquet_source
+import probe_parallel_gain
 import probe_published_base
 import probelib
 import redshift
@@ -2341,3 +2346,170 @@ def test_published_tables_reads_the_swapped_tables() -> None:
             "rss": "270",
         }
     }
+
+
+def test_parallel_gain_commands_keep_the_start_the_thread_and_the_table() -> None:
+    """``CommandTimes`` da sonda de paralelismo guarda de cada linha do log
+    ``serialize_db.publication.commands`` o tipo do comando, a tabela ``cad_paralelo_*`` que o
+    texto cita, a thread e o início, o instante da linha, que sai no fim do comando, menos a
+    duração."""
+    commands = probe_parallel_gain.CommandTimes()
+    lines = [
+        ("conexão", 0.25, 1000.0),
+        (
+            'INSERT INTO "esquema"."serialize_db_publications" VALUES '
+            "('poc1_cad_paralelo_b', 3, 'paralelo-1', getdate())",
+            2.5,
+            1003.0,
+        ),
+    ]
+    for text, seconds, created in lines:
+        record = logging.LogRecord(
+            "serialize_db.publication.commands",
+            logging.DEBUG,
+            __file__,
+            1,
+            "%s em %.3f s",
+            (text, seconds),
+            None,
+        )
+        record.created = created
+        record.thread = 7
+        commands.handle(record)
+
+    assert commands.commands == [
+        probe_parallel_gain.Command("conexão", None, 7, 999.75, 0.25),
+        probe_parallel_gain.Command("INSERT controle", "cad_paralelo_b", 7, 1000.5, 2.5),
+    ]
+
+
+def test_parallel_gain_timeline_splits_the_connections_by_thread_and_opening() -> None:
+    """``timeline_lines`` da sonda de paralelismo põe numa conexão a abertura e os comandos
+    seguintes da mesma thread até a próxima abertura nela, ordena as conexões pelo início da
+    abertura e conta o início de cada comando de ``origin``."""
+    command = probe_parallel_gain.Command
+    # Os comandos na ordem em que terminaram: duas tabelas em sequência na thread 2 do pool e uma
+    # na thread 3, depois da conexão da thread principal, que confere a tabela de controle.
+    commands = [
+        command("conexão", None, 1, 100.0, 0.25),
+        command("SELECT controle", None, 1, 100.25, 0.05),
+        command("conexão", None, 3, 100.4, 0.25),
+        command("conexão", None, 2, 100.5, 0.25),
+        command("INSERT controle", "cad_paralelo_a", 2, 101.0, 2.0),
+        command("INSERT controle", "cad_paralelo_c", 3, 101.5, 1.0),
+        command("conexão", None, 2, 103.5, 0.25),
+        command("INSERT controle", "cad_paralelo_b", 2, 104.0, 0.125),
+    ]
+
+    assert probe_parallel_gain.timeline_lines(commands, 100.0) == [
+        "conexão 1, sem tabela: conexão 0.000+0.250; SELECT controle 0.250+0.050",
+        "conexão 2, cad_paralelo_c: conexão 0.400+0.250; INSERT controle 1.500+1.000",
+        "conexão 3, cad_paralelo_a: conexão 0.500+0.250; INSERT controle 1.000+2.000",
+        "conexão 4, cad_paralelo_b: conexão 3.500+0.250; INSERT controle 4.000+0.125",
+    ]
+
+
+def test_parallel_gain_lock_lines_show_the_pending_lock_and_its_holders() -> None:
+    """``lock_lines`` da sonda de paralelismo lista cada lock pendente e os concedidos no mesmo
+    objeto, com a primeira e a última leitura que os viram, deixa de fora os locks dos outros
+    objetos e termina com o erro que encerrou as leituras; sem lock pendente, ``nenhum lock
+    pendente``, e sem leitura que respondeu, só o erro."""
+    reading = probe_parallel_gain.LockReading
+    holder = (11, "ShareRowExclusiveLock", "relation", 500, True)
+    reader = (12, "AccessShareLock", "relation", 500, True)
+    # O modo com espaços no fim, como numa coluna char.
+    waiting = (12, "ShareRowExclusiveLock   ", "relation", 500, False)
+    granted = (12, "ShareRowExclusiveLock", "relation", 500, True)
+    own_table = (12, "AccessExclusiveLock", "relation", 600, True)
+    transaction = (12, "ExclusiveLock", "transactionid", None, True)
+    readings = [
+        reading(101.0, [holder, reader, waiting, own_table, transaction]),
+        reading(102.0, [holder, reader, waiting, own_table, transaction]),
+        reading(103.0, [reader, granted, own_table, transaction]),
+        reading(104.0, [], "ProgrammingError: permissão negada"),
+    ]
+
+    seen = "3 leitura(s) de svv_transactions de +1.0 s a +3.0 s; pids vistos: 11, 12"
+    assert probe_parallel_gain.readings_line(readings, 100.0) == seen
+    assert probe_parallel_gain.lock_lines(readings, 100.0) == [
+        "pid 11 tem ShareRowExclusiveLock em relation 500: de +1.0 s a +2.0 s, em 2 leitura(s)",
+        "pid 12 tem AccessShareLock em relation 500: de +1.0 s a +3.0 s, em 3 leitura(s)",
+        "pid 12 espera ShareRowExclusiveLock em relation 500: de +1.0 s a +2.0 s, em 2 leitura(s)",
+        "pid 12 tem ShareRowExclusiveLock em relation 500: de +3.0 s a +3.0 s, em 1 leitura(s)",
+        "a leitura parou em +4.0 s: ProgrammingError: permissão negada",
+    ]
+
+    quiet = [reading(101.0, [holder, reader, transaction])]
+    assert probe_parallel_gain.lock_lines(quiet, 100.0) == ["nenhum lock pendente"]
+
+    failed = [reading(100.5, [], "InterfaceError: queda")]
+    unanswered = "nenhuma leitura de svv_transactions respondeu"
+    assert probe_parallel_gain.readings_line(failed, 100.0) == unanswered
+    stopped = "a leitura parou em +0.5 s: InterfaceError: queda"
+    assert probe_parallel_gain.lock_lines(failed, 100.0) == [stopped]
+
+
+def test_parallel_gain_history_keeps_the_control_writes_and_their_times() -> None:
+    """A leitura do ``sys_query_history`` da sonda de paralelismo consulta os comandos que citam a
+    tabela de controle e o ambiente desde o instante pedido, em UTC; ``control_writes`` guarda só o
+    ``INSERT`` e o ``UPDATE`` da linha de controle, pela primeira palavra em qualquer caixa, e
+    ``history_line`` escreve os tempos em segundos, com ``-`` no tempo sem valor."""
+    since = datetime.datetime(2026, 10, 9, 22, 0, tzinfo=datetime.UTC).timestamp()
+    query = probe_parallel_gain.control_history_query(since, "poc1")
+    assert "WHERE start_time >= '2026-10-09 22:00:00'" in query
+    assert "query_text ILIKE '%serialize_db_publications%'" in query
+    assert "query_text ILIKE '%poc1%'" in query
+
+    start = datetime.datetime(2026, 10, 9, 22, 9, 14, 123456)
+    read = (
+        1073741234,
+        5555,
+        start,
+        "success   ",
+        40_000,
+        0,
+        0,
+        30_000,
+        0,
+        10_000,
+        'SELECT delta_version FROM "esquema"."serialize_db_publications" '
+        "WHERE table_name = 'poc1_cad_paralelo_b'",
+    )
+    insert = (
+        1073741234,
+        5555,
+        start,
+        "success   ",
+        24_870_000,
+        0,
+        24_500_000,
+        300_000,
+        0,
+        10_000,
+        'INSERT INTO "esquema"."serialize_db_publications" VALUES '
+        "('poc1_cad_paralelo_b', 3, 'paralelo-1', getdate())",
+    )
+    update = (
+        1073741299,
+        5560,
+        start,
+        "running",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        'update "esquema"."serialize_db_publications" set delta_version = 4 '
+        "where table_name = 'poc1_cad_paralelo_c' and delta_version = 3",
+    )
+    assert probe_parallel_gain.control_writes([read, insert, update]) == [insert, update]
+    assert probe_parallel_gain.history_line(insert) == (
+        "22:09:14.123 UTC, pid 1073741234, transação 5555, cad_paralelo_b, INSERT controle, "
+        "success: decorrido 24.870 s, fila 0.000 s, lock 24.500 s, execução 0.300 s, "
+        "compilação 0.000 s, planejamento 0.010 s"
+    )
+    assert probe_parallel_gain.history_line(update) == (
+        "22:09:14.123 UTC, pid 1073741299, transação 5560, cad_paralelo_c, UPDATE controle, "
+        "running: decorrido -, fila -, lock -, execução -, compilação -, planejamento -"
+    )

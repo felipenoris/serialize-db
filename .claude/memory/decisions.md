@@ -611,7 +611,8 @@ the view. `tests/proof_of_concept/test_redshift.py::test_explain_of_a_join_on_th
 the role may run `EXPLAIN` on the datashare. On 2026-10-09 `probes/operacao/probe_published_base.py`
 read the plan over the published base, `prd_cad_lancamentos` (283,835,836 rows) with
 `prd_cad_contas` (101 rows) on `id_conta`: `XN Hash Join DS_DIST_ALL_NONE`, with neither label that
-asks for the key, so the published tables stay `DISTSTYLE AUTO` with no `DISTKEY`. `redshift.md`
+asks for the key, so the published tables stay `DISTSTYLE AUTO` with no `DISTKEY`; the second
+battery of the same day read the same plan with 424,598,150 rows. `redshift.md`
 
 ## The readings folder
 
@@ -2086,6 +2087,44 @@ implementar a recusa", with its test, which the next `./suite_alvo.sh` battery r
   `DuckDBEngine.session` and `ingest`), and the DuckDB `append` and `appender` join the client's
   transaction.
 
+The second battery of 2026-10-09 read the refusal in the target: the `_on_the_target` case passed
+in its four sessions (`redshift.md`).
+
 `src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`
 (`test_primitives_refuse_a_transaction_the_client_opened`, its `_on_the_target` case,
 `test_connection_dropped_in_a_client_transaction_raises_without_repeating`), `tests/emulator.py`
+
+## The socket's `OSError` read as the Redshift engine's drop (2026-10-09)
+
+The second battery of 2026-10-09 read, in 3 of its 4 sessions, the staging's `DROP` that `ingest`
+runs after a `COPY` dropped by `pg_terminate_backend` failing in the driver's send with
+`BrokenPipeError: [Errno 32] Broken pipe`, an `OSError` the engine did not read as the drop:
+`ingest` raised it, the staging stayed, and every later command on the session failed the same way
+(`redshift.md`). The assistant offered on a decision card: treat the send's `OSError` as the drop,
+with a stand-in case that provokes it (recommended), or leave it. The user chose "Corrigir"
+(2026-10-09, 23:56 UTC).
+
+- `RedshiftEngine._run` turns an `OSError` from `cursor.execute` into the driver's
+  `InterfaceError`, with the original as `__cause__` and the masked command in a note. `execute`
+  then reconnects and repeats outside a transaction and raises inside one, and `transaction()`
+  suppresses it on the `ROLLBACK`. Every `OSError` counts, not only `BrokenPipeError`: the
+  connection has no timeout and the engine's command passes no `stream`, so an `OSError` there
+  comes from the socket, after which the protocol's state is lost.
+- `FakeConnection.drop_on` maps a command's first word to the error it raises once.
+  `test_broken_pipe_in_the_send_is_read_as_the_dropped_connection` and
+  `test_ingest_staging_drop_reopens_the_connection_after_a_broken_pipe`, the target's sequence,
+  failed on the old code with the `BrokenPipeError` and pass on the new.
+- `SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE` fails the second and later commands sent on a
+  terminated stand-in session with `BrokenPipeError`. With it,
+  `test_session_terminated_during_the_ingest_copy_is_read` read the target's sequence on the old
+  code (the `DROP` and the next `SELECT` with `BrokenPipeError`, the staging left) and failed its
+  new assertions, that the staging leaves and the next command runs; on the new code the `DROP`
+  went to a new connection and the case passed. The next battery runs those assertions in the
+  target.
+- The publication's `_Connection` stays as it was: it never reconnects, and its `rollback` catches
+  only `redshift_connector.Error`, so a `BrokenPipeError` there would replace the drop's error as
+  the table's failure; the table fails either way.
+
+`src/serialize_db/engine/redshift.py` (`_run`, `execute`, `ingest`),
+`tests/test_engine_redshift.py`, `tests/emulator.py`, `README.md`,
+`.claude/memory/OPEN_QUESTIONS.md` ("A reconexão do motor Redshift no alvo")

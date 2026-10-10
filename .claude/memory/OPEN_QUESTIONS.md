@@ -11,76 +11,73 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
 
 - **Versões não correntes.** O bucket é versionado e o papel não lê o ciclo de vida: cada exclusão
   (o `vacuum`, a limpeza da suíte S3) deixa uma versão não corrente invisível à listagem. `BK-14`
-  conta o acumulado (219 versões não correntes, 1.388.530 bytes, e 219 marcadores de exclusão
-  sob a raiz dos probes em 2026-09-23; 366 versões, 16.345.479 bytes, com 358 marcadores sob a
-  raiz nova em 2026-09-24 às 01:42, depois das três sessões de 2026-09-23; e 907 versões,
-  32.966.477 bytes, com 859 marcadores às 12:39 do mesmo dia; e 1.943 versões, 50.394.018 bytes,
-  com 1.823 marcadores às 23:26; e 2.980 versões, 86.695.363 bytes, com 2.788 marcadores em
-  2026-09-25 às 17:26; e 5.269 versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às
-  15:14; e 7.619 versões, 233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822
-  versões, 270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões,
+  conta o acumulado (219 versões não correntes, 1.388.530 bytes, e 219 marcadores de exclusão sob a
+  raiz dos probes em 2026-09-23; 366 versões, 16.345.479 bytes, com 358 marcadores sob a raiz nova
+  em 2026-09-24 às 01:42, depois das três sessões de 2026-09-23; e 907 versões, 32.966.477 bytes,
+  com 859 marcadores às 12:39 do mesmo dia; e 1.943 versões, 50.394.018 bytes, com 1.823 marcadores
+  às 23:26; e 2.980 versões, 86.695.363 bytes, com 2.788 marcadores em 2026-09-25 às 17:26; e 5.269
+  versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às 15:14; e 7.619 versões,
+  233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822 versões,
+  270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões,
   307.133.320 bytes, com 9.504 marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes,
   com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
   20.000 entradas, `POC.md`; e, com a listagem no mesmo limite, ao menos 10.419 versões,
-  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:04, e ao menos 10.248 versões,
-  62.094.316.073 bytes, com 9.751 marcadores em 2026-10-09 às 01:07,
-  `.claude/memory/environments.md`), e a regra `NoncurrentVersionExpiration` sob a raiz, junto
-  com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
-  `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
-  removidos", traz a regra de exemplo e como mudar a retenção. A mesma pergunta vale para a regra
-  de ciclo de vida que `docs/operacao.md`, seção "Arquivo", espera na pasta `arquivo/`: a passagem
-  dos arquivos dela à classe de armazenamento mais barata. As sondas da operação também apagam a
-  pasta delas sob a raiz da suíte no fim de cada rodada: 19.293 MB em 2026-10-05, 19.284 MB na
-  segunda rodada de 2026-10-07 e 19.293 MB em 2026-10-09, em MB de 2^20 bytes, pelas linhas `raiz
-  apagada` dos relatórios. Cada rodada deixa ao menos isso em versões não correntes, cerca de três
-  quartos do salto de `BK-14` de 249.621.376 bytes em 2026-10-05 para 26.705.708.023 em 2026-10-06,
-  e os 23.015 MB das duas rodadas de 2026-10-07 cerca de dois terços do salto de 26.705.558.141
-  bytes para 62.094.316.073 em 2026-10-09 [inferido].
+  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:04, ao menos 10.248 versões,
+  62.094.316.073 bytes, com 9.751 marcadores em 2026-10-09 às 01:07, e ao menos 10.110 versões,
+  88.588.140.425 bytes, com 9.889 marcadores às 18:35, `.claude/memory/environments.md`), e a regra
+  `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
+  para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
+  `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
+  retenção. A mesma pergunta vale para a regra de ciclo de vida que `docs/operacao.md`, seção
+  "Arquivo", espera na pasta `arquivo/`: a passagem dos arquivos dela à classe de armazenamento mais
+  barata. As sondas da operação também apagam a pasta delas sob a raiz da suíte no fim de cada
+  rodada: 19.293 MB em 2026-10-05, 19.284 MB na segunda rodada de 2026-10-07, 19.293 MB em
+  2026-10-09 às 05:18 e 19.289 MB às 21:50, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos
+  relatórios. Cada rodada deixa ao menos isso em versões não correntes, cerca de três quartos do
+  salto de `BK-14` de 249.621.376 bytes em 2026-10-05 para 26.705.708.023 em 2026-10-06, e os
+  23.015 MB das duas rodadas de 2026-10-07 cerca de dois terços do salto de 26.705.558.141 bytes
+  para 62.094.316.073 em 2026-10-09, e os 19.293 MB da rodada das 05:18 cerca de três quartos do
+  salto para 88.588.140.425 bytes às 18:35 [inferido].
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
-  2026-09-27, em 2026-09-29 (`POC.md`) e em 2026-10-09 (`.claude/memory/aws-s3.md`), o delta-rs, o
-  `S3FileSystem` e o `boto3` renovando a credencial do contêiner, que troca de chave a cada cerca de
-  30 minutos, e a conexão Redshift aberta seguindo depois da expiração da senha de
-  `GetCredentials` (3.600 s). O `delta_scan` do DuckDB, que falhou uma vez em 2026-09-25 com a
-  chave vencida do secret `credential_chain`, leu em todas as rodadas de 2026-09-26, de
-  2026-09-27, de 2026-09-29 e de 2026-10-09 pelo secret que leva a chave da credencial do `boto3` e
-  que o motor recria na entrada de cada sessão quando ela troca (decisão do usuário de 2026-09-25,
-  etapa 3, etapa 4). Seguem sem medida um comando do DuckDB mais longo que os 15 minutos
-  que a chave tem pela frente, no mínimo, na entrada da sessão (o botocore a renova entre 15 e 10
-  minutos antes da expiração) ou na abertura das conexões de `rewrite`, `read_back`,
-  `export_parquet` e da troca do motor Redshift, que duram uma tabela ou uma partição e ficam com a
-  chave da abertura; o `COPY` mais longo que a credencial que ele leva; a queda de uma conexão
-  Redshift no meio de um `COPY`, que uma leitura da suíte do motor provoca desde 2026-10-09 (item
-  "A reconexão do motor Redshift"); e a sessão ociosa e a transação inativa do serverless,
+  2026-09-27, em 2026-09-29 (`POC.md`) e duas vezes em 2026-10-09 (`.claude/memory/aws-s3.md`), o
+  delta-rs, o `S3FileSystem` e o `boto3` renovando a credencial do contêiner, que troca de chave a
+  cada cerca de 30 minutos, e a conexão Redshift aberta seguindo depois da expiração da senha de
+  `GetCredentials` (3.600 s). O `delta_scan` do DuckDB, que falhou uma vez em 2026-09-25 com a chave
+  vencida do secret `credential_chain`, leu em todas as rodadas de 2026-09-26, de 2026-09-27, de
+  2026-09-29 e de 2026-10-09 pelo secret que leva a chave da credencial do `boto3` e que o motor
+  recria na entrada de cada sessão quando ela troca (decisão do usuário de 2026-09-25, etapa 3,
+  etapa 4). Seguem sem medida um comando do DuckDB mais longo que os 15 minutos que a chave tem pela
+  frente, no mínimo, na entrada da sessão (o botocore a renova entre 15 e 10 minutos antes da
+  expiração) ou na abertura das conexões de `rewrite`, `read_back`, `export_parquet` e da troca do
+  motor Redshift, que duram uma tabela ou uma partição e ficam com a chave da abertura; o `COPY`
+  mais longo que a credencial que ele leva; e a sessão ociosa e a transação inativa do serverless,
   encerradas depois de 3.600 s e 21.600 s
-  ([`docs/tecnologias.md`, Redshift](../../docs/tecnologias.md#redshift)).
-  A cláusula do `COPY` e do `UNLOAD` é montada a cada comando, no motor da etapa 5 e, desde a
-  decisão do usuário de 2026-09-26, na publicação da etapa 8, que passou assim no alvo em
-  2026-09-27, e leva uma chave com cerca de 29 minutos ou mais pela frente; o motor reconecta uma
-  vez por comando fora de transação e perde só a tabela temporária que o pipeline tenha criado na
-  sessão, e a carga de cada partição de `ingest` e de `pinned_delta` roda numa transação desde
-  2026-10-04, para a queda no meio do `COPY` subir sem repetição (`POC.md`).
-- **A reconexão do motor Redshift.** As suítes do motor e da publicação rodaram no ambiente alvo
-  em 2026-09-24, duas vezes cada, e leram o que esperavam (`POC.md`): fica sem medida a reconexão
-  depois de uma queda do servidor (etapa 5). Desde 2026-10-09, duas leituras da suíte do motor a
-  provocam por `pg_terminate_backend` numa sessão a mais, ociosa, dentro de `transaction()` e
-  dentro de um `BEGIN` do cliente
-  (`test_engine_redshift.py::test_session_terminated_by_the_server_is_read`) e logo depois do
-  `COPY` de uma partição de 300.000 linhas do `ingest`
-  (`::test_session_terminated_during_the_ingest_copy_is_read`), e esperam a bateria. O motor
-  reabre a conexão só no `InterfaceError`, que o `redshift_connector` 2.1.17 levanta na leitura
-  vazia do socket; o envio num socket fechado deixa passar o `OSError` (`BrokenPipeError`,
-  `ConnectionResetError`), porque o `_flush` só converte o `AttributeError`, e essa queda chegaria
-  ao cliente sem reconexão [inferido do código do driver]. Dentro de uma transação, a do motor ou a
-  do cliente, a queda sobe sem repetição e o comando seguinte reabre a conexão, com o
-  `in_transaction` que o driver deixa como estava antes da queda (docstring de `execute`). O
-  substituto imita o `InterfaceError` e esse `in_transaction`.
+  ([`docs/tecnologias.md`, Redshift](../../docs/tecnologias.md#redshift)). A cláusula do `COPY` e do
+  `UNLOAD` é montada a cada comando, no motor da etapa 5 e, desde a decisão do usuário de
+  2026-09-26, na publicação da etapa 8, que passou assim no alvo em 2026-09-27, e leva uma chave com
+  cerca de 29 minutos ou mais pela frente; o motor reconecta uma vez por comando fora de transação e
+  perde só a tabela temporária que o pipeline tenha criado na sessão, e a carga de cada partição de
+  `ingest` e de `pinned_delta` roda numa transação desde 2026-10-04, para a queda no meio do `COPY`
+  subir sem repetição (`POC.md`); o alvo leu essa queda em 2026-10-09 (item "A reconexão do motor
+  Redshift no alvo").
+- **A reconexão do motor Redshift no alvo.** Na segunda bateria de 2026-10-09, logo depois do
+  `COPY` derrubado de um `ingest`, o `DROP` da staging falhou no envio com `BrokenPipeError` em 3
+  das 4 sessões, e a sessão ficou presa na conexão morta (`.claude/memory/redshift.md`). Por
+  decisão do usuário do mesmo dia (`decisions.md`), o `_run` do motor converte o `OSError` do
+  socket no `InterfaceError` da queda, que o `execute` trata como a conexão derrubada;
+  `tests/test_engine_redshift.py` cobre a conversão com a conexão de mentira, e
+  `SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE` provoca o erro no substituto.
+  `test_session_terminated_during_the_ingest_copy_is_read` passou a conferir que a staging sai e
+  que a sessão segue, o que espera a próxima bateria no alvo.
 - **O `create_table` do motor Redshift dentro da transação do cliente.** A recusa de 2026-10-09
-  (`decisions.md`) cobre o `append`, o `appender`, o `ingest` e o `pinned_delta`, que abrem a sua
-  transação. O `create_table` não abre e roda na transação do cliente, mas o `name_in_use` dele
-  confere o nome livre por um `SELECT` que falha com a relação inexistente, e esse erro aborta a
-  transação do cliente: o DDL seguinte receberia `25P02` [inferido da regra do PostgreSQL e da
-  leitura de 2026-09-21 em `lessons.md`; o alvo não leu]. Espera o usuário: recusar também o
-  `create_table` na transação do cliente, conferir o nome pelo catálogo, ou deixar como está.
+  (`decisions.md`), que o alvo leu nas quatro sessões da segunda bateria do dia
+  (`.claude/memory/redshift.md`), cobre o `append`, o `appender`, o `ingest` e o `pinned_delta`, que
+  abrem a sua transação. O `create_table` não abre e roda na transação do cliente, mas o
+  `name_in_use` dele confere o nome livre por um `SELECT` que falha com a relação inexistente, e
+  esse erro aborta a transação do cliente: o DDL seguinte receberia `25P02` [inferido da regra do
+  PostgreSQL e da leitura de 2026-09-21 em `lessons.md`; o alvo não leu]. Espera o usuário: recusar
+  também o `create_table` na transação do cliente, conferir o nome pelo catálogo, ou deixar como
+  está.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -137,30 +134,54 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   API do pacote (declaração do usuário de 2026-10-09, `decisions.md`). Espera o usuário: a troca
   de `valor`, se vier, antes da carga da produção.
 - **O acesso de leitura no ambiente alvo.** A etapa 10 rodou no alvo nas baterias de 2026-09-25, de
-  2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05, de 2026-10-07 e de 2026-10-09
-  (`POC.md`, `.claude/memory/environments.md`): o leitor Delta abriu as 12 views da raiz carregada
-  em 0,645 s, em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s, com 2 vCPUs em 1,440 s e, com 4
-  vCPUs, em 0,844 s; as suítes passaram a publicação por canal e por snapshot, com a volta a um
-  snapshot anterior, e a comparação dos dois leitores, com o `stream` do leitor Redshift pelo
-  `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a volta pelo canal; e
-  em 2026-09-26 a base inteira foi publicada por `--channel default`, `cad_lancamentos` em 295,1 s
-  com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, em 2026-09-29,
-  em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s com 285 MB, em 2026-10-07, com 2 vCPUs, em
-  300,2 s com 274 MB, e em 2026-10-09, com 4 vCPUs, em 320,9 s com 280 MB. Em 2026-10-09,
-  `probes/operacao/probe_published_base.py` voltou a base publicada a um snapshot anterior: a
-  partição 2026-01-31 de `cad_lancamentos`, refeita num snapshot novo, foi publicada pelo canal em
-  42,8 s com o pico do processo em 261 MB, e a volta ao snapshot de antes a trocou de novo em
-  44,3 s com 258 MB (`.claude/memory/redshift.md`). Espera o `UNLOAD` de um cliente com usuário só
-  de leitura para um bucket próprio, com o caminho de credencial que serve a ele, que precisa de um
-  papel de cliente no alvo.
+  2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05, de 2026-10-07 e nas duas de
+  2026-10-09 (`POC.md`, `.claude/memory/environments.md`): o leitor Delta abriu as 12 views da raiz
+  carregada em 0,645 s, em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s, com 2 vCPUs em 1,440 s, com
+  4 vCPUs em 0,844 s e com 8 vCPUs em 0,647 s; as suítes passaram a publicação por canal e por
+  snapshot, com a volta a um snapshot anterior, e a comparação dos dois leitores, com o `stream` do
+  leitor Redshift pelo `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a
+  volta pelo canal; e em 2026-09-26 a base inteira foi publicada por `--channel default`,
+  `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s
+  com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s com 285 MB, em
+  2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB, e em 2026-10-09, com 4 vCPUs, em 320,9 s com
+  280 MB e, às 20:31, com 8 vCPUs e a partição 2026-08-31 a mais (424.598.150 linhas), em 487,8 s
+  com 286 MB. Nas duas baterias de 2026-10-09, `probes/operacao/probe_published_base.py` voltou a
+  base publicada a um snapshot anterior: a partição 2026-01-31 de `cad_lancamentos`, refeita num
+  snapshot novo, foi publicada pelo canal em 42,8 s e em 44,3 s, com o pico do processo em 261 MB e
+  em 262 MB, e a volta ao snapshot de antes a trocou de novo em 44,3 s com 258 MB e em 46,7 s com
+  262 MB (`.claude/memory/redshift.md`). Espera o `UNLOAD` de um cliente com usuário só de leitura
+  para um bucket próprio, com o caminho de credencial que serve a ele, que precisa de um papel de
+  cliente no alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
   de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"), e em
-  2026-10-07, duas vezes, numa de 2 vCPUs, e em 2026-10-09 numa de 4 vCPUs
-  (`.claude/memory/concurrency.md`): no DuckDB os pools ganharam com 2 vCPUs a metade do que em 8,
-  e com 4 vCPUs entre os dois, e no Redshift o ganho não dependeu da máquina; o ganho com mais CPUs
-  segue sem medida e espera a sonda numa máquina maior.
+  2026-10-07, duas vezes, numa de 2 vCPUs, e em 2026-10-09 numa de 4 vCPUs e, às 22:09, de novo numa
+  de 8 vCPUs, com os ganhos de 2026-10-05 (`.claude/memory/concurrency.md`): no DuckDB os pools
+  ganharam com 2 vCPUs a metade do que em 8, e com 4 vCPUs entre os dois, e no Redshift o ganho não
+  dependeu da máquina; o ganho com mais CPUs segue sem medida e espera a sonda numa máquina maior.
+- **A espera da linha de controle na publicação em paralelo.**
+  `probes/operacao/probe_parallel_gain.py` publica quatro tabelas iguais em quatro conexões, e das
+  15 repetições de 2026-10-05 a 2026-10-09 sete levaram de 11,133 s a 13,813 s e oito de 31,521 s a
+  36,110 s, contra 26,750 s a 32,179 s das 15 uma tabela por vez (`docs/index.md`, seção
+  "Multithreading"). O tempo de cada comando, lido às 22:09 de 2026-10-09
+  (`.claude/memory/concurrency.md`), põe a diferença no `INSERT` da linha de controle, o último
+  comando de cada transação antes do `COMMIT`: os quatro somaram 5,42 s na repetição rápida e
+  70,03 s e 65,94 s nas lentas, até 24,87 s num só, e ao menos três passaram de 9 s em cada lenta,
+  enquanto o `COPY`, o `INSERT` dos dados e o `COMMIT`, de até 1,49 s, levaram o mesmo nas três.
+  Cada transação segura o lock de escrita da tabela de controle do `INSERT` ao `COMMIT`
+  (`docs/tecnologias.md`, Redshift, "Transações concorrentes"), e uma fila nesse lock esperaria a
+  soma dos `COMMIT`s, poucos segundos; a causa da espera de cerca de 20 s não foi lida. Na
+  publicação da base às 20:31 do mesmo dia, `cad_contratos`, `cad_operacoes` e
+  `rel_contrato_operacao`, com as partições da bateria de 01:06, levaram de 10,8 s a 13,3 s a mais
+  que nela, talvez pela mesma espera [inferido], e o comando não imprime o tempo de cada comando
+  (`.claude/memory/redshift.md`). O usuário escolheu em 2026-10-10 estender a sonda, que desde o
+  PR #151 imprime em cada medida da publicação a linha do tempo de cada conexão, com o início e a
+  duração de cada comando, e os locks que uma quinta sessão lê em `svv_transactions` a cada
+  segundo; mede a publicação também sem a despublicação entre as medidas, trocando a versão
+  publicada; e lê no fim da seção, no `sys_query_history`, o tempo de fila, de espera por lock e de
+  execução de cada gravação da linha de controle. Espera a próxima bateria no alvo, que diz se a
+  espera é de lock e de quem, e se ela some sem a despublicação.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
@@ -211,12 +232,12 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   200 `os.stat` ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de
   troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra
   0,006 s (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão
-  `-m "not redshift"` do `suite_alvo.sh` roda o caso, e ele passou nas 14 sessões com relatório, de
-  2026-09-24 a 2026-10-09, com 0,381 s a 0,893 s ao lado do laço contra 0,012 s a 0,086 s com o
-  intervalo menor (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s
-  contra 0,012 s, e a de 2026-10-09, com 4 vCPUs, 0,773 s contra 0,086 s. A esteira não roda
-  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o
-  usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
+  `-m "not redshift"` do `suite_alvo.sh` roda o caso, e ele passou nas 15 sessões com relatório, de
+  2026-09-24 a 2026-10-09, com 0,381 s a 0,899 s ao lado do laço contra 0,012 s a 0,086 s com o
+  intervalo menor (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s contra
+  0,012 s, e as duas de 2026-10-09, com 4 e 8 vCPUs, 0,773 s contra 0,086 s e 0,899 s contra
+  0,052 s. A esteira não roda `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes
+  do commit. Espera o usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   (`POC.md`), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
@@ -239,9 +260,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   não reescreve os dados: um Iceberg registra os Parquet do Delta por `add_files`, e o Apache XTable
   converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
   `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
-  tabela Iceberg no Glue ou um table bucket no S3 Tables: nas leituras das baterias de 2026-10-05
-  a 2026-10-09, a última às 01:07 de 2026-10-09, o Glue seguia com um banco e uma tabela Parquet, e
-  o Lake Formation e o S3 Tables não responderam ao papel do projeto
+  tabela Iceberg no Glue ou um table bucket no S3 Tables: nas leituras das baterias de 2026-10-05 a
+  2026-10-09, a última às 18:35 de 2026-10-09, o Glue seguia com um banco e uma tabela Parquet, e o
+  Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
 
 ## Achados das sondas de consistência de leitura e escrita

@@ -32,6 +32,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import decimal
+import errno
 import io
 import itertools
 import json
@@ -175,6 +176,16 @@ def server_error(
     return redshift_connector.ProgrammingError({"S": "ERROR", "C": code, "M": message})
 
 
+def dropped() -> redshift_connector.InterfaceError:
+    """O erro do driver na leitura vazia do socket que o servidor fechou."""
+    return redshift_connector.InterfaceError("BrokenPipe: server socket closed")
+
+
+def broken_pipe() -> BrokenPipeError:
+    """O erro do socket no envio depois que o servidor o fechou, que o driver deixa sair."""
+    return BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+
 # ---------------------------------------------------------------- a conexão de mentira
 
 
@@ -231,10 +242,11 @@ class FakeConnection:
     """A conexão de mentira: registra cada comando com o instante, dorme ``delay`` segundos por
     comando, sabe que tabelas existem, responde ``pg_last_unload_count()`` e, num ``UNLOAD``, grava
     ``unload_rows`` num Parquet da pasta local com o manifesto, como o Redshift faria; com
-    ``fail``, cada comando recebe esse erro; com ``drop_on``, o primeiro comando que começa por
-    essa palavra derruba a conexão. O ``in_transaction`` muda com o ``BEGIN``, o ``COMMIT`` e o
-    ``ROLLBACK`` respondidos, como o ``ReadyForQuery`` do driver o muda, e o comando derrubado o
-    deixa como estava."""
+    ``fail``, cada comando recebe esse erro; com ``drop_next``, os próximos comandos derrubam a
+    conexão; com ``drop_on``, o primeiro comando que começa por uma palavra do dicionário levanta o
+    erro dela, como ``dropped()`` ou ``broken_pipe()``. O ``in_transaction`` muda com o ``BEGIN``,
+    o ``COMMIT`` e o ``ROLLBACK`` respondidos, como o ``ReadyForQuery`` do driver o muda, e o
+    comando derrubado o deixa como estava."""
 
     def __init__(
         self,
@@ -253,7 +265,7 @@ class FakeConnection:
         self.last_unload_count = 0
         self.write_manifest = True
         self.fail: Exception | None = None
-        self.drop_on: str | None = None
+        self.drop_on: dict[str, Exception] = {}
         self.autocommit = False
         self.in_transaction = False
         self.closed = False
@@ -274,10 +286,10 @@ class FakeConnection:
         self.commands.append(command)
         if self.drop_next > 0:
             self.drop_next -= 1
-            raise redshift_connector.InterfaceError("BrokenPipe: server socket closed")
-        if self.drop_on is not None and text.upper().startswith(self.drop_on.upper()):
-            self.drop_on = None
-            raise redshift_connector.InterfaceError("BrokenPipe: server socket closed")
+            raise dropped()
+        first = text.split(None, 1)[0].upper()
+        if first in self.drop_on:
+            raise self.drop_on.pop(first)
         time.sleep(self.delay)
         try:
             if self.fail is not None:
@@ -956,6 +968,39 @@ def test_connection_dropped_in_a_client_transaction_raises_without_repeating(
     ]
 
 
+def test_broken_pipe_in_the_send_is_read_as_the_dropped_connection(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """O ``BrokenPipeError`` do envio no socket que o servidor fechou, que o driver deixa sair, é a
+    conexão derrubada: fora de transação, a conexão é reaberta e o comando repetido; dentro de uma
+    transação do cliente, sobe o ``InterfaceError``, com o ``BrokenPipeError`` em ``__cause__`` e
+    o comando numa nota, sem a reconexão nem a repetição."""
+    connections = [FakeConnection(), FakeConnection(), FakeConnection()]
+    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
+    first = engine._connection
+    first.drop_on = {"SELECT": broken_pipe()}
+    with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
+        engine.query("SELECT 1")
+    assert first.closed
+    second = engine._connection
+    assert second.texts() == ["USE compartilhado", "SET search_path TO esquema", "SELECT 1"]
+    assert "BrokenPipeError" in caplog.text
+
+    # Dentro da transação do cliente, o erro sobe convertido, e o comando não vai a outra conexão.
+    insert = 'INSERT INTO "esquema"."t" VALUES (1)'
+    engine.execute("BEGIN")
+    second.drop_on = {"INSERT": broken_pipe()}
+    with pytest.raises(redshift_connector.InterfaceError, match="BrokenPipeError") as raised:
+        engine.execute(insert)
+    assert isinstance(raised.value.__cause__, BrokenPipeError)
+    assert raised.value.__notes__ == [f"comando: {insert}"]
+    assert engine._connection is second
+    assert len(connections) == 1
+    assert second.texts()[-2:] == ["BEGIN", insert]
+
+
 @pytest.mark.local
 def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     monkeypatch: pytest.MonkeyPatch,
@@ -1275,7 +1320,7 @@ def test_ingest_partition_load_raises_on_a_dropped_connection_without_retry(
     delta.publish_partition(uri, ENTRIES, MONTHS[0], rows, METADATA, storage)
     connection = FakeConnection(storage)
     engine = fake_engine(monkeypatch, connection, storage)
-    connection.drop_on = "COPY"
+    connection.drop_on = {"COPY": dropped()}
     with pytest.raises(redshift_connector.InterfaceError):
         engine.ingest(ENTRIES, uri, 1, partitions=[MONTHS[0]])
     texts = connection.texts()
@@ -1286,6 +1331,40 @@ def test_ingest_partition_load_raises_on_a_dropped_connection_without_retry(
     # Nenhuma conexão nova: o USE e o search_path rodaram só na abertura.
     assert texts.count("USE compartilhado") == 1
     assert engine.name_in_use(f"{PREFIX}cad_lancamentos")
+
+
+@pytest.mark.local
+def test_ingest_staging_drop_reopens_the_connection_after_a_broken_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
+    """A queda no ``COPY`` de uma partição como o ambiente alvo a mostrou em 2026-10-09: o
+    ``COPY`` e o ``ROLLBACK`` levantam o ``InterfaceError``, e o ``DROP`` da staging falha no envio
+    com o ``BrokenPipeError``. O ``DROP`` vai à conexão reaberta, sem comando da carga repetido, a
+    staging sai do registro, e o ``ingest`` levanta o ``InterfaceError`` do ``COPY``."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    uri = storage.uri_of("prd/cad_lancamentos")
+    delta.create_table(uri, ENTRIES, storage)
+    rows = entry_rows(MONTHS[0], 1, 10)
+    delta.publish_partition(uri, ENTRIES, MONTHS[0], rows, METADATA, storage)
+    connections = [FakeConnection(storage), FakeConnection(storage)]
+    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    engine = RedshiftEngine(CONFIG, EXECUTION_ID, storage, f"prd/staging/{EXECUTION_ID}")
+    first = engine._connection
+    first.drop_on = {"COPY": dropped(), "ROLLBACK": dropped(), "DROP": broken_pipe()}
+    with pytest.raises(redshift_connector.InterfaceError) as raised:
+        engine.ingest(ENTRIES, uri, 1, partitions=[MONTHS[0]])
+    assert raised.value.__notes__[0].startswith("comando: COPY")
+    texts = first.texts()
+    staging = f'"esquema"."{PREFIX}cad_lancamentos_staging"'
+    assert texts[-3].startswith("COPY")
+    assert texts[-2:] == ["ROLLBACK", f"DROP TABLE IF EXISTS {staging}"]
+    assert engine._connection.texts() == [
+        "USE compartilhado",
+        "SET search_path TO esquema",
+        f"DROP TABLE IF EXISTS {staging}",
+    ]
+    assert f"{PREFIX}cad_lancamentos_staging" not in engine._created
 
 
 @pytest.mark.local
@@ -1839,7 +1918,7 @@ def test_primitives_refuse_a_transaction_the_client_opened_on_the_target(
     ``SandboxError`` pelo ``in_transaction`` do driver, e o ``ROLLBACK`` do cliente desfaz a linha
     dele, que o ``COMMIT`` do ``append`` confirmava antes da recusa (as quatro rodadas de
     2026-10-09 no ambiente alvo deixaram os ids 1, 2 e 3). Fora do bloco, o ``append`` entra pela
-    transação do motor."""
+    transação do motor. As quatro rodadas da segunda bateria de 2026-10-09 leram a recusa."""
     engine = target.engine
     name = f"{engine.prefix}cad_medidas"
     uri = target.uri(ENTRIES)
@@ -2063,7 +2142,9 @@ def test_session_terminated_by_the_server_is_read(
     lê, ou o erro dele com a classe, o SQLSTATE e a mensagem, e o erro que sobe da transação são
     leituras, porque nenhum caso tinha derrubado a sessão no ambiente alvo. A sessão ociosa recebe
     dois comandos, e as das transações um comando depois dela, que mostram se a conexão voltou; a
-    principal, que não é encerrada, apaga as tabelas no fim."""
+    principal, que não é encerrada, apaga as tabelas no fim. Nas quatro rodadas da segunda bateria
+    de 2026-10-09, a sessão ociosa reconectou num pid novo, e nas duas transações o comando
+    levantou o ``InterfaceError`` do driver e o seguinte reconectou."""
     engine = target.engine
     reading = {}
 
@@ -2137,7 +2218,12 @@ def test_session_terminated_during_the_ingest_copy_is_read(
     instantes e o erro, o erro que sobe do ``ingest``, as linhas que ficam na tabela do sandbox, a
     staging que sobra e o comando seguinte na sessão são leituras. A carga da partição roda em
     ``transaction()``, onde a queda sobe sem repetição; o ``DROP`` da staging, fora dela, reabre a
-    conexão se o erro for o ``InterfaceError`` que o motor reconhece."""
+    conexão, e o caso confere que a staging sai e que a sessão segue. Nas quatro rodadas da
+    segunda bateria de 2026-10-09, o ``COPY`` e o ``ROLLBACK`` levantaram o ``InterfaceError``; em
+    três, o ``DROP`` falhou no envio com ``BrokenPipeError``, que o motor ainda não lia como a
+    queda, e o ``ingest`` o levantou com a staging deixada e a sessão sem reconectar; na outra, o
+    ``DROP`` reabriu a conexão. ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE`` provoca o
+    ``BrokenPipeError`` no substituto."""
     engine = target.engine
     uri = target.uri(ENTRIES)
     version = published_table(target, ENTRIES, MONTHS[:1], rows=COPY_ROWS)
@@ -2190,6 +2276,9 @@ def test_session_terminated_during_the_ingest_copy_is_read(
     # A sessão mandou o COPY pela cópia de _run, e a thread a encerrou.
     assert "COPY" in [command["command"] for command in commands]
     assert "terminated" in reading
+    # A staging saiu pelo DROP do fim, e o comando seguinte rodou na sessão.
+    assert reading["staging_left"] is False
+    assert "error" not in reading["after"]
 
 
 @pytest.mark.redshift
@@ -2378,7 +2467,10 @@ def test_nonfinite_double_reaches_the_server_by_every_text_path(
     servidor, vão ao relatório antes das asserções. No ambiente alvo, nas quatro rodadas de
     2026-10-09, o texto que o ``render`` escrevia antes do ``float8`` (``SELECT nan AS valor``) e
     o ``stream`` foram recusados com ``42703 column "nan" does not exist`` (``column "inf" does
-    not exist`` com ``inf`` e ``-inf``), e o parâmetro do driver trouxe os três valores."""
+    not exist`` com ``inf`` e ``-inf``), e o parâmetro do driver trouxe os três valores. Nas
+    quatro rodadas da segunda bateria do dia, o ``render`` escreveu ``SELECT 'NaN'::float8 AS
+    valor`` (``'Infinity'::float8`` e ``'-Infinity'::float8`` com ``inf`` e ``-inf``), e os três
+    caminhos trouxeram os três valores."""
     engine = target.engine
     parameter = sa.select(sa.bindparam("x", type_=sa.Double).label("valor"))
     readings = {}

@@ -25,14 +25,21 @@ anteriores. Cada seção de ``--only`` compara a forma em série, a primeira, co
   ``query`` do Redshift passa pelo cursor; o ``appender`` e os dois juntos, como no DuckDB; 80
   consultas pequenas, como no DuckDB, com a abertura de cada sessão a mais no tempo; e
   ``run.publish_delta`` com ``max_workers=4`` contra 1;
-- ``publicacao``: ``publication.publish_redshift`` das quatro com ``max_workers=4`` contra 1, com
-  a despublicação depois de cada medida, fora do tempo; cada medida imprime também, de cada tipo
-  de comando e da abertura das conexões, quantos houve, a soma e o maior tempo, lidos no log
-  ``serialize_db.publication.commands``.
+- ``publicacao``: ``publication.publish_redshift`` das quatro com ``max_workers=4`` contra 1,
+  primeiro com a despublicação depois de cada medida, fora do tempo, e depois sem ela, cada medida
+  trocando a versão publicada pela outra de duas versões do Delta com as mesmas linhas: a da
+  partição escrita de novo antes dessas medidas e a de antes, publicada fora delas. Cada medida
+  imprime também, lidos no log ``serialize_db.publication.commands``, de cada tipo de comando e da
+  abertura das conexões, quantos houve, a soma e o maior tempo, e a linha do tempo de cada
+  conexão, com o início e a duração de cada comando; e os locks que uma quinta sessão leu em
+  ``svv_transactions`` a cada segundo durante a medida, os pendentes e os concedidos no objeto de
+  um pendente. No fim da seção, as gravações da linha de controle de todas as medidas no
+  ``sys_query_history``, com o tempo de fila, de espera por lock e de execução de cada uma.
 
-Checagem: cada medida contou as linhas ou as tabelas esperadas, e as linhas de cada tabela que o
-``ingest`` e o ``materialize`` trouxeram são as geradas. Leituras: cada medida e, no resumo, o
-menor tempo de cada variante, o pico dessa medida e a razão sobre a variante em série.
+Checagem: cada medida contou as linhas ou as tabelas esperadas, a publicação sem despublicação
+pelo ``UPDATE`` da linha de controle de cada tabela, e as linhas de cada tabela que o ``ingest`` e
+o ``materialize`` trouxeram são as geradas. Leituras: cada medida e, no resumo, o menor tempo de
+cada variante, o pico dessa medida e a razão sobre a variante em série.
 
 A sonda grava sob ``<raiz>/serialize-db-operacao/paralelo-<id>/``, num ambiente ``poc<id>``, e
 apaga a pasta no fim. ``redshift`` e ``publicacao`` pedem a raiz no S3 e as variáveis
@@ -55,14 +62,18 @@ from __future__ import annotations
 import argparse
 import ctypes
 import dataclasses
+import datetime
 import functools
 import gc
+import itertools
 import logging
 import operator
+import re
 import sys
+import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -73,7 +84,7 @@ import pyarrow.compute as pc
 import redshift_connector
 import sqlalchemy as sa
 
-from serialize_db import publication
+from serialize_db import delta, publication
 from serialize_db.engine import Engine, redshift
 from serialize_db.engine.redshift import RedshiftConfig
 from serialize_db.execution import Database, Execution
@@ -87,6 +98,15 @@ WORKERS = 4
 QUERY_WIDTH = 1_000
 DUCKDB_QUERIES = 200
 REDSHIFT_QUERIES = 80
+# A quinta sessão lê os locks a cada segundo durante cada publicação medida, e a leitura das
+# gravações da linha de controle no sys_query_history espera as que faltam por até 120 s, de 10 em
+# 10 s.
+LOCK_POLL_SECONDS = 1.0
+HISTORY_WAIT_SECONDS = 120
+HISTORY_RETRY_SECONDS = 10
+# Os tipos de comando que gravam a linha de controle, e o nome das tabelas da sonda num texto.
+CONTROL_WRITES = ("INSERT controle", "UPDATE controle")
+PARALLEL_TABLE = re.compile(r"cad_paralelo_[a-d]")
 METADATA = sa.MetaData()
 INFO = {"serialize_db": {"partition_by": ["data_base_str"]}}
 
@@ -756,28 +776,76 @@ def publish_to_redshift(
     db: Database,
     config: RedshiftConfig,
     workers: int,
+    versions: Mapping[str, int] | None = None,
 ) -> int:
-    """``publication.publish_redshift`` das quatro tabelas, ``workers`` ao mesmo tempo."""
+    """``publication.publish_redshift`` das quatro tabelas, ``workers`` ao mesmo tempo, nas
+    ``versions`` do Delta ou, sem elas, na versão atual de cada tabela."""
     execution_id = f"paralelo-{uuid.uuid4().hex[:8]}"
-    published = publication.publish_redshift(db, config, TABLES, execution_id, max_workers=workers)
+    published = publication.publish_redshift(
+        db, config, TABLES, execution_id, max_workers=workers, versions=versions
+    )
     return len(published)
 
 
+def current_versions(
+    db: Database,
+) -> dict[str, int]:
+    """A versão atual de cada tabela no Delta."""
+    versions = {}
+    for table in TABLES:
+        versions[table.name] = delta.open_table(db.uri(table), db.storage).version()
+    return versions
+
+
+def rewrite_partition(
+    db: Database,
+) -> dict[str, int]:
+    """A partição das quatro tabelas escrita de novo no Delta, com as mesmas linhas, por uma
+    execução do motor DuckDB; devolve a versão nova de cada tabela."""
+    with Execution(db, "duckdb", PARTITION) as run:
+        run.ingest(*TABLES, materialize=True)
+        for table in TABLES:
+            run.audit(table, [PARTITION])
+        return run.publish_delta(*TABLES, partitions=[PARTITION], max_workers=WORKERS)
+
+
+# ---------------------------------------------------------------- os comandos da publicação
+
+
+@dataclasses.dataclass
+class Command:
+    """Um comando da publicação lido no log ``serialize_db.publication.commands``: o tipo, a tabela
+    ``cad_paralelo_*`` que o texto cita, ``None`` sem nenhuma, a thread que o rodou, o início pelo
+    relógio do sistema, em segundos desde a época, e a duração em segundos."""
+
+    kind: str
+    table: str | None
+    thread: int
+    started: float
+    seconds: float
+
+
 class CommandTimes(logging.Handler):
-    """Os tempos que o log ``serialize_db.publication.commands`` dá em ``DEBUG``: o tipo e os
-    segundos da abertura de cada conexão e de cada comando, na ordem em que terminaram."""
+    """Os comandos que o log ``serialize_db.publication.commands`` dá em ``DEBUG``: a abertura de
+    cada conexão e cada comando, na ordem em que terminaram."""
 
     def __init__(self) -> None:
         super().__init__(level=logging.DEBUG)
-        self.times: list[tuple[str, float]] = []
+        self.commands: list[Command] = []
 
     def emit(
         self,
         record: logging.LogRecord,
     ) -> None:
-        """Guarda o tipo e o tempo da linha, que traz o texto e os segundos nos argumentos."""
+        """Guarda o comando da linha, que sai no fim dele, na thread que o rodou, com o texto e os
+        segundos nos argumentos."""
         text, seconds = record.args
-        self.times.append((command_kind(text), seconds))
+        table = None
+        match = PARALLEL_TABLE.search(text)
+        if match:
+            table = match.group(0)
+        started = record.created - seconds
+        self.commands.append(Command(command_kind(text), table, record.thread, started, seconds))
 
 
 def command_kind(
@@ -794,42 +862,449 @@ def command_kind(
     return kind
 
 
+def count_commands(
+    commands: list[Command],
+    kinds: tuple[str, ...],
+) -> int:
+    """Quantos comandos são de um dos tipos ``kinds``."""
+    count = 0
+    for command in commands:
+        if command.kind in kinds:
+            count += 1
+    return count
+
+
 def commands_line(
-    times: list[tuple[str, float]],
+    commands: list[Command],
 ) -> str:
     """Cada tipo de comando, na ordem em que apareceu: quantos, a soma e o maior tempo."""
     seconds_by_kind: dict[str, list[float]] = {}
-    for kind, seconds in times:
-        seconds_by_kind.setdefault(kind, []).append(seconds)
+    for command in commands:
+        seconds_by_kind.setdefault(command.kind, []).append(command.seconds)
     parts = []
     for kind, values in seconds_by_kind.items():
         parts.append(f"{kind} {len(values)}x, soma {sum(values):.2f} s, máx {max(values):.2f} s")
     return "; ".join(parts)
 
 
+def connections_of(
+    commands: list[Command],
+) -> list[list[Command]]:
+    """Os comandos de cada conexão, na ordem da abertura: a abertura numa thread começa uma
+    conexão, que leva os comandos seguintes da thread até a próxima abertura nela."""
+    connections = []
+    current: dict[int, list[Command]] = {}
+    for command in commands:
+        if command.kind == "conexão":
+            current[command.thread] = []
+            connections.append(current[command.thread])
+        current[command.thread].append(command)
+    return sorted(connections, key=lambda connection: connection[0].started)
+
+
+def connection_table(
+    connection: list[Command],
+) -> str:
+    """A primeira tabela ``cad_paralelo_*`` que os comandos da conexão citam."""
+    for command in connection:
+        if command.table is not None:
+            return command.table
+    return "sem tabela"
+
+
+def clock(
+    seconds: float,
+) -> str:
+    """O instante, em segundos desde a época, na hora UTC com milissegundos."""
+    moment = datetime.datetime.fromtimestamp(seconds, datetime.UTC)
+    return moment.strftime("%H:%M:%S.%f")[:-3]
+
+
+def timeline_lines(
+    commands: list[Command],
+    origin: float,
+) -> list[str]:
+    """Uma linha por conexão, na ordem da abertura: a tabela que os comandos dela citam e cada
+    comando com o início, em segundos desde ``origin``, e a duração."""
+    lines = []
+    for number, connection in enumerate(connections_of(commands), start=1):
+        steps = []
+        for command in connection:
+            steps.append(f"{command.kind} {command.started - origin:.3f}+{command.seconds:.3f}")
+        lines.append(f"conexão {number}, {connection_table(connection)}: " + "; ".join(steps))
+    return lines
+
+
+# ---------------------------------------------------------------- a quinta sessão
+
+
+@dataclasses.dataclass
+class FifthSession:
+    """A quinta sessão, que lê os locks durante as publicações: a conexão e o pid dela, cujas
+    linhas ficam fora das leituras."""
+
+    connection: object
+    pid: int
+
+
+@dataclasses.dataclass
+class LockReading:
+    """Uma leitura de ``svv_transactions``: o envio pelo relógio do sistema, em segundos desde a
+    época, as linhas das outras sessões, na ordem das colunas de ``LOCKS_QUERY``, e o erro que
+    encerrou as leituras, ``None`` na leitura que respondeu."""
+
+    sent: float
+    rows: list[tuple]
+    error: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class Lock:
+    """Um lock lido em ``svv_transactions``, a chave das leituras que o viram: o pid, o modo, o
+    tipo do objeto, a relação, ``None`` no tipo ``transactionid``, e se foi concedido."""
+
+    pid: int
+    mode: str
+    kind: str
+    relation: int | None
+    granted: bool
+
+
+LOCKS_QUERY = "SELECT pid, lock_mode, lockable_object_type, relation, granted FROM svv_transactions"
+
+
+def open_fifth_session(
+    config: RedshiftConfig,
+) -> FifthSession:
+    """A conexão da quinta sessão e o pid dela."""
+    connection = redshift.connect(config)
+    cursor = connection.cursor()
+    cursor.execute("SELECT pg_backend_pid()")
+    (pid,) = cursor.fetchone()
+    return FifthSession(connection, int(pid))
+
+
+def read_locks(
+    fifth: FifthSession,
+    stop: threading.Event,
+    readings: list[LockReading],
+) -> None:
+    """Lê ``svv_transactions`` a cada ``LOCK_POLL_SECONDS`` até ``stop``, sem as linhas da própria
+    sessão; o primeiro erro vai à última leitura e encerra as leituras."""
+    cursor = fifth.connection.cursor()
+    while True:
+        sent = time.time()
+        try:
+            cursor.execute(LOCKS_QUERY)
+            rows = cursor.fetchall()
+        except (redshift_connector.Error, OSError) as error:
+            readings.append(LockReading(sent, [], f"{type(error).__name__}: {error}"))
+            return
+        others = [tuple(row) for row in rows if row[0] != fifth.pid]
+        readings.append(LockReading(sent, others))
+        if stop.wait(LOCK_POLL_SECONDS):
+            return
+
+
+def readings_line(
+    readings: list[LockReading],
+    origin: float,
+) -> str:
+    """Quantas leituras responderam, de quando a quando, em segundos desde ``origin``, e os pids
+    que elas viram."""
+    answered = [reading for reading in readings if reading.error is None]
+    if not answered:
+        return "nenhuma leitura de svv_transactions respondeu"
+    pids = set()
+    for reading in answered:
+        for row in reading.rows:
+            pids.add(row[0])
+    first = answered[0].sent - origin
+    last = answered[-1].sent - origin
+    listed = ", ".join(str(pid) for pid in sorted(pids)) or "nenhum"
+    return (
+        f"{len(answered)} leitura(s) de svv_transactions de {first:+.1f} s a {last:+.1f} s; "
+        f"pids vistos: {listed}"
+    )
+
+
+def locks_seen(
+    readings: list[LockReading],
+    origin: float,
+) -> dict[Lock, list[float]]:
+    """Os instantes das leituras que viram cada lock, em segundos desde ``origin``."""
+    seen: dict[Lock, list[float]] = {}
+    for reading in readings:
+        for pid, mode, kind, relation, granted in reading.rows:
+            lock = Lock(pid, str(mode).strip(), str(kind).strip(), relation, bool(granted))
+            seen.setdefault(lock, []).append(reading.sent - origin)
+    return seen
+
+
+def lock_line(
+    lock: Lock,
+    offsets: list[float],
+) -> str:
+    """Um lock: o pid, se ele tem ou espera o lock, o modo, o tipo e a relação, e a primeira e a
+    última leitura que o viram."""
+    state = "tem" if lock.granted else "espera"
+    target = lock.kind if lock.relation is None else f"{lock.kind} {lock.relation}"
+    return (
+        f"pid {lock.pid} {state} {lock.mode} em {target}: de {offsets[0]:+.1f} s a "
+        f"{offsets[-1]:+.1f} s, em {len(offsets)} leitura(s)"
+    )
+
+
+def lock_lines(
+    readings: list[LockReading],
+    origin: float,
+) -> list[str]:
+    """Os locks lidos durante a publicação, em segundos desde ``origin``: cada lock pendente e cada
+    lock concedido no objeto de um pendente, na ordem da primeira leitura que o viu, ou ``nenhum
+    lock pendente`` quando alguma leitura respondeu; e o erro que encerrou as leituras."""
+    seen = locks_seen(readings, origin)
+    # O objeto de cada lock pendente: o tipo e a relação.
+    waited = set()
+    for lock in seen:
+        if not lock.granted:
+            waited.add((lock.kind, lock.relation))
+    answered = [reading for reading in readings if reading.error is None]
+    lines = []
+    if answered and not waited:
+        lines.append("nenhum lock pendente")
+    for lock, offsets in sorted(seen.items(), key=lambda item: item[1][0]):
+        if (lock.kind, lock.relation) in waited:
+            lines.append(lock_line(lock, offsets))
+    if readings and readings[-1].error is not None:
+        stopped = readings[-1].sent - origin
+        lines.append(f"a leitura parou em {stopped:+.1f} s: {readings[-1].error}")
+    return lines
+
+
+# ---------------------------------------------------------------- as gravações da linha de controle
+
+
+def control_history_query(
+    since: float,
+    environment: str,
+) -> str:
+    """A consulta dos comandos do ``sys_query_history`` que citam a tabela de controle e o
+    ambiente, desde ``since``, em segundos desde a época, na ordem do início."""
+    moment = datetime.datetime.fromtimestamp(since, datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        "SELECT session_id, transaction_id, start_time, status, elapsed_time, queue_time, "
+        "lock_wait_time, execution_time, compile_time, planning_time, query_text "
+        f"FROM sys_query_history WHERE start_time >= '{moment}' "
+        f"AND query_text ILIKE '%{publication.CONTROL_TABLE}%' "
+        f"AND query_text ILIKE '%{environment}%' ORDER BY start_time"
+    )
+
+
+def control_writes(
+    rows: list[tuple],
+) -> list[tuple]:
+    """As linhas do ``INSERT`` e do ``UPDATE`` da linha de controle, pela primeira palavra do
+    texto, o último campo da linha."""
+    writes = []
+    for row in rows:
+        words = str(row[-1]).split()
+        if words and words[0].upper() in ("INSERT", "UPDATE"):
+            writes.append(row)
+    return writes
+
+
+def seconds_of(
+    microseconds: int | None,
+) -> str:
+    """Os microssegundos do ``sys_query_history`` em segundos; ``-`` sem valor."""
+    if microseconds is None:
+        return "-"
+    return f"{microseconds / 1_000_000:.3f} s"
+
+
+def history_line(
+    row: tuple,
+) -> str:
+    """Uma gravação da linha de controle: o início em UTC, o pid da sessão, a transação, a tabela,
+    o comando, o estado e os tempos do ``sys_query_history``."""
+    (
+        session,
+        transaction,
+        start,
+        status,
+        elapsed,
+        queue,
+        lock_wait,
+        execution,
+        compile_time,
+        planning,
+        text,
+    ) = row
+    table = "sem tabela"
+    match = PARALLEL_TABLE.search(str(text))
+    if match:
+        table = match.group(0)
+    command = str(text).split()[0].upper()
+    return (
+        f"{start.strftime('%H:%M:%S.%f')[:-3]} UTC, pid {session}, transação {transaction}, "
+        f"{table}, {command} controle, {str(status).strip()}: decorrido {seconds_of(elapsed)}, "
+        f"fila {seconds_of(queue)}, lock {seconds_of(lock_wait)}, execução "
+        f"{seconds_of(execution)}, compilação {seconds_of(compile_time)}, planejamento "
+        f"{seconds_of(planning)}"
+    )
+
+
+def read_control_history(
+    fifth: FifthSession,
+    since: float,
+    environment: str,
+    expected: int,
+) -> list[str]:
+    """As gravações da linha de controle no ``sys_query_history``: a primeira linha com quantas a
+    leitura achou das ``expected`` e uma linha por gravação; a leitura se repete a cada
+    ``HISTORY_RETRY_SECONDS`` até achar as ``expected`` ou passar ``HISTORY_WAIT_SECONDS``, e o
+    erro da consulta vai à primeira linha."""
+    query = control_history_query(since, environment)
+    deadline = time.monotonic() + HISTORY_WAIT_SECONDS
+    cursor = fifth.connection.cursor()
+    while True:
+        try:
+            cursor.execute(query)
+            writes = control_writes(list(cursor.fetchall()))
+        except (redshift_connector.Error, OSError) as error:
+            return [f"a consulta falhou: {type(error).__name__}: {error}"]
+        if len(writes) >= expected or time.monotonic() >= deadline:
+            break
+        time.sleep(HISTORY_RETRY_SECONDS)
+    lines = [f"{len(writes)} de {expected}"]
+    for row in writes:
+        lines.append(history_line(row))
+    return lines
+
+
+# ---------------------------------------------------------------- as medidas da publicação
+
+
+def observed_publication(
+    label: str,
+    measured: Callable[[], int],
+    commands: CommandTimes,
+    fifth: FifthSession,
+) -> tuple[Run, list[Command]]:
+    """Mede a publicação com a quinta sessão lendo os locks numa thread, que para no ``finally``,
+    e imprime a linha de cada tipo de comando, a linha do tempo de cada conexão e os locks lidos;
+    devolve a medida e os comandos da publicação."""
+    first = len(commands.commands)
+    readings: list[LockReading] = []
+    stop = threading.Event()
+    reader = threading.Thread(target=read_locks, args=(fifth, stop, readings), name="quinta-sessao")
+    reader.start()
+    try:
+        run = timed(measured)
+    finally:
+        stop.set()
+        reader.join()
+
+    # As linhas da publicação, com os instantes contados da abertura da primeira conexão.
+    published = commands.commands[first:]
+    origin = min(command.started for command in published)
+    print(f"{label}, comandos: {commands_line(published)}")
+    print(f"{label}, linha do tempo, início {clock(origin)} UTC:")
+    for line in timeline_lines(published, origin):
+        print(f"  {line}")
+    print(f"{label}, quinta sessão: {readings_line(readings, origin)}")
+    for line in lock_lines(readings, origin):
+        print(f"  {line}")
+    return run, published
+
+
 def publication_variant(
     db: Database,
     config: RedshiftConfig,
     commands: CommandTimes,
+    fifth: FifthSession,
     workers: int,
 ) -> Run:
-    """A publicação medida, com a linha dos tempos de cada tipo de comando dela, e a despublicação
-    das quatro tabelas depois, fora do tempo e da linha."""
-    commands.times.clear()
-    run = timed(functools.partial(publish_to_redshift, db, config, workers))
-    print(f"publish_redshift, max_workers={workers}, comandos: {commands_line(commands.times)}")
+    """A publicação medida, com as linhas de ``observed_publication``, e a despublicação das quatro
+    tabelas depois, fora do tempo e das linhas."""
+    label = f"publish_redshift, max_workers={workers}"
+    measured = functools.partial(publish_to_redshift, db, config, workers)
+    run, _ = observed_publication(label, measured, commands, fifth)
     publication.unpublish_redshift(db, config, TABLES)
     return run
+
+
+def prepare_republication(
+    db: Database,
+    config: RedshiftConfig,
+) -> Iterator[dict[str, int]]:
+    """Prepara a publicação sem despublicação: a partição das quatro tabelas escrita de novo no
+    Delta e a publicação, fora da medida, da versão de antes dessa escrita, que cria as tabelas
+    publicadas e as linhas de controle; devolve o ciclo das versões que as medidas publicam, a nova
+    e a de antes, uma de cada vez."""
+    previous = current_versions(db)
+    rewritten = rewrite_partition(db)
+    started = time.perf_counter()
+    publish_to_redshift(db, config, WORKERS, previous)
+    seconds = time.perf_counter() - started
+    print(
+        f"publish_redshift sem despublicar: a partição escrita de novo no Delta nas versões "
+        f"{dict(sorted(rewritten.items()))}, e as de antes, {previous}, publicadas fora da medida "
+        f"em {seconds:.1f} s"
+    )
+    return itertools.cycle([rewritten, previous])
+
+
+def republication_variant(
+    db: Database,
+    config: RedshiftConfig,
+    commands: CommandTimes,
+    fifth: FifthSession,
+    alternation: Iterator[dict[str, int]],
+    workers: int,
+) -> Run:
+    """A publicação medida da próxima versão de ``alternation`` sobre a publicada, sem
+    despublicação entre as medidas, com as linhas de ``observed_publication``; a medida conta as
+    linhas de controle gravadas pelo ``UPDATE``, uma por tabela que trocou de versão."""
+    label = f"publish_redshift sem despublicar, max_workers={workers}"
+    measured = functools.partial(publish_to_redshift, db, config, workers, next(alternation))
+    run, published = observed_publication(label, measured, commands, fifth)
+    return dataclasses.replace(run, count=count_commands(published, ("UPDATE controle",)))
+
+
+def publication_measures(
+    db: Database,
+    config: RedshiftConfig,
+    commands: CommandTimes,
+    fifth: FifthSession,
+    repetitions: int,
+) -> None:
+    """As medidas da publicação com a despublicação depois de cada uma e sem ela, e as gravações
+    da linha de controle de todas no ``sys_query_history``."""
+    started = time.time()
+    variants = workers_variants(publication_variant, db, config, commands, fifth)
+    measure("publish_redshift", variants, repetitions, len(TABLES))
+    alternation = prepare_republication(db, config)
+    variants = workers_variants(republication_variant, db, config, commands, fifth, alternation)
+    measure("publish_redshift sem despublicar", variants, repetitions, len(TABLES))
+
+    # As gravações desde dez minutos antes das medidas, a margem para a diferença entre o relógio
+    # da máquina e o do servidor.
+    expected = count_commands(commands.commands, CONTROL_WRITES)
+    lines = read_control_history(fifth, started - 600, db.environment, expected)
+    print(f"publish_redshift, gravações da linha de controle no sys_query_history: {lines[0]}")
+    for line in lines[1:]:
+        print(f"  {line}")
 
 
 def publication_section(
     db: Database,
     repetitions: int,
 ) -> None:
-    """A publicação das quatro tabelas no Redshift, com os tempos de cada comando lidos no log
-    ``serialize_db.publication.commands``, que vão só à linha de cada medida; no fim, as tabelas
-    ``poc<id>_*`` e as linhas de controle delas saem, e a tabela de controle sai quando a sonda a
-    criou."""
+    """A publicação das quatro tabelas no Redshift, com as medidas de ``publication_measures``, os
+    tempos de cada comando lidos no log ``serialize_db.publication.commands`` e a quinta sessão
+    aberta para elas; no fim, as tabelas ``poc<id>_*`` e as linhas de controle delas saem, e a
+    tabela de controle sai quando a sonda a criou."""
     config = RedshiftConfig.from_environment()
     control = f'"{config.schema}"."{publication.CONTROL_TABLE}"'
     created = not control_table_exists(config, control)
@@ -840,10 +1315,13 @@ def publication_section(
     command_logger.setLevel(logging.DEBUG)
     command_logger.propagate = False
     command_logger.addHandler(commands)
+    fifth = None
     try:
-        variants = workers_variants(publication_variant, db, config, commands)
-        measure("publish_redshift", variants, repetitions, len(TABLES))
+        fifth = open_fifth_session(config)
+        publication_measures(db, config, commands, fifth, repetitions)
     finally:
+        if fifth is not None:
+            fifth.connection.close()
         command_logger.removeHandler(commands)
         command_logger.propagate = True
         command_logger.setLevel(logging.NOTSET)

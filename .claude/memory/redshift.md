@@ -117,6 +117,11 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   172.1 MB, 338.9 MB and 559.1 MB, the best times 2.1 s, 8.4 s, 16.2 s, 32.1 s and 50.4 s with
   `PARALLEL OFF` against 2.1 s, 8.4 s, 16.5 s, 32.5 s and 51.1 s in parallel (0.98 to 0.99), the
   footers read in 0.04 s to 0.08 s.
+- The same probe in the second battery of 2026-10-09, from 21:56 UTC (8 vCPUs,
+  `environments.md`): the partition went into the sandbox in 37.2 s, both modes wrote one file in
+  every repetition, 17.4 MB, 86.3 MB, 172.0 MB, 339.0 MB and 558.9 MB, the best times 2.1 s, 8.3 s,
+  16.3 s, 32.2 s and 49.9 s with `PARALLEL OFF` against 2.1 s, 8.5 s, 16.4 s, 32.9 s and 51.2 s in
+  parallel (0.97 to 1.00), the footers read in 0.04 s to 0.07 s.
 - The result description read on 2026-09-23: OIDs 20, 23, 21, 701, 700, 1700, 1043, 1042, 1082,
   1114, 1184, 16 and 4000 for `BIGINT`, `INTEGER`, `SMALLINT`, `DOUBLE PRECISION`, `REAL`,
   `DECIMAL`, `VARCHAR`, `CHAR`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `BOOLEAN` and `SUPER`;
@@ -289,6 +294,17 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   first and writes it last, by `INSERT` or by the `UPDATE` conditioned on the version read, and the
   unpublish flow deletes it with the published table (user decision of 2026-09-23,
   `decisions.md`). `docs/tecnologias.md` (Redshift)
+- The system views that read locks and each statement's times, from the AWS docs read on
+  2026-10-10 (`REFERENCES.md`): `svv_transactions` is visible to all users, a regular user seeing
+  only their own rows, and lists each lock held or requested, by `pid`, `xid`, `lock_mode`,
+  `lockable_object_type` (`relation` or `transactionid`), `relation` and `granted` (false while
+  pending); `stv_locks` is visible only to superusers; `sys_query_history` holds running and
+  finished statements, with `session_id` (the process id) and, in microseconds, `elapsed_time`,
+  `queue_time`, `execution_time`, `compile_time`, `planning_time` and `lock_wait_time` (the wait
+  for a relation lock). A transaction releases all its table locks at once, at `COMMIT` or
+  `ROLLBACK`. Whether `svv_transactions` answers on the target's Serverless, and whether it shows
+  the locks of a write through the datashare, is unread; `probes/operacao/probe_parallel_gain.py`
+  reads both views since PR #151.
 - An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
   credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two
@@ -509,24 +525,27 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   after the `ROLLBACK` and the server discards the transaction; the appender already loaded
   inside one, and the publication's `_Connection` never retries.
 - The driver raises `InterfaceError` (`BrokenPipe: server socket closed. ...`) only when a read
-  returns no bytes; an `ErrorResponse` becomes `ProgrammingError` (`28000` `InterfaceError`,
-  `23505` `IntegrityError`); `_send_message` turns only `ValueError("write to closed file")` and
+  returns no bytes; an `ErrorResponse` becomes `ProgrammingError` (`28000` `InterfaceError`, `23505`
+  `IntegrityError`); `_send_message` turns only `ValueError("write to closed file")` and
   `AttributeError` into `InterfaceError`, and the socket `flush` that sends each command catches
   only `AttributeError`, so its `OSError` (`BrokenPipeError`, `ConnectionResetError`) passes
-  `Cursor.execute` unconverted and would reach the caller of `RedshiftEngine.execute` without the
-  reconnect (redshift_connector 2.1.17, read in its code on 2026-10-09; never seen in the target).
-  Since 2026-10-09 `tests/test_engine_redshift.py` ends an engine session with
-  `pg_terminate_backend` from the parent engine, idle, inside `transaction()` and inside a
-  client's `BEGIN` (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and
-  `transacao_do_cliente`) and during the `COPY` of `ingest` over a 300,000-row partition
-  (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next
-  command reconnects and what the server kept; no battery has run them yet. The driver's
-  `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop leaves it
-  as it was before the failed command; the engine reads it to refuse the primitives and to stop
-  the reconnect inside a client transaction, and marks the dropped connection
+  `Cursor.execute` unconverted (redshift_connector 2.1.17, read in its code on 2026-10-09). The
+  target showed it the same day, a `BrokenPipeError` on the staging's `DROP` after a dropped `COPY`
+  (below), and since then `RedshiftEngine._run` turns an `OSError` from `cursor.execute` into the
+  drop's `InterfaceError`, with the original as `__cause__` (`decisions.md`). Since 2026-10-09
+  `tests/test_engine_redshift.py` ends an engine session with `pg_terminate_backend` from the parent
+  engine, idle, inside `transaction()` and inside a client's `BEGIN`
+  (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and `transacao_do_cliente`) and
+  during the `COPY` of `ingest` over a 300,000-row partition
+  (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next command
+  reconnects and what the server kept; the second battery of 2026-10-09 ran them (below). The
+  driver's `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop
+  leaves it as it was before the failed command; the engine reads it to refuse the primitives and to
+  stop the reconnect inside a client transaction, and marks the dropped connection
   (`_connection_dropped`) so that the next command reconnects (read in the driver's code on
-  2026-10-09). The stand-in imitates the driver's `InterfaceError` with the open transaction
-  rolled back and `in_transaction` left as it was.
+  2026-10-09). The stand-in imitates the driver's `InterfaceError` with the open transaction rolled
+  back and `in_transaction` left as it was, and with `SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE` the
+  send's `BrokenPipeError` from the second command sent on a terminated session.
 - The battery of 2026-10-05 (16:38 to 20:09 UTC, `environments.md`) read the Redshift version
   `1.0.434008`, against `1.0.436211` in every battery from 2026-09-20 to 2026-09-30, a lower number
   the readings do not explain. Between the end of the battery of 2026-09-30 (15:42 UTC, the control
@@ -615,3 +634,55 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   44.3 s at 258 MB (49.3 s), the other 11 tables `já está publicada` both ways. `prd_cad_lancamentos`
   kept 283,835,836 rows and the `id_lancamento` sum 274,392,499,994,978,967 before the swap, after
   it and after the return, and the channel ended on `carga-2026-09-25`.
+- The second battery of 2026-10-09 (18:34 to 22:35 UTC, `environments.md`) read the version
+  `1.0.477953`, the first change since the `1.0.434008` of 2026-10-05, the error messages naming the
+  package `RedshiftPADB-1.0.377953.0` (`1.0.334008.0` before); `RS-8` read 0 of 3 tables, `RS-12`'s
+  count returned no row, and the Data API answered in 427 ms and 558 ms. The four sessions that run
+  the engine cases, the engine suite and the whole Redshift suite twice each, read:
+  - `test_primitives_refuse_a_transaction_the_client_opened_on_the_target` passed in all four, the
+    refusal of PR #149 read in the target.
+  - `test_nonfinite_double_reaches_the_server_by_every_text_path`: `sql.render` wrote
+    `SELECT 'NaN'::float8 AS valor`, and the same with `'Infinity'::float8` and
+    `'-Infinity'::float8`, and the rendered text through `query`, the `stream` and the driver's
+    parameter returned `nan`, `inf` and `-inf` (PR #148).
+  - `test_session_terminated_by_the_server_is_read` (`redshift.engine.terminated_session`): in the
+    idle session the next command reconnected on a new pid; inside `transaction()` and inside the
+    client's `BEGIN` the command raised the driver's `InterfaceError` (`BrokenPipe: server socket
+    closed. ...`), and the next command, outside, reconnected; 12 of 12 cases.
+  - `test_session_terminated_during_the_ingest_copy_is_read`
+    (`redshift.engine.terminated_during_copy`): `pg_terminate_backend` ran 1.675 s to 2.080 s after
+    the start, right after the `COPY` was sent, which raised the `InterfaceError` 0.34 s to 0.67 s
+    after it was sent, and the `ROLLBACK` of `transaction()` raised it again. In 3 of the 4
+    sessions the next command, the `DROP TABLE IF EXISTS` of the staging that `ingest` runs after
+    the transaction, failed in the driver's send with `BrokenPipeError: [Errno 32] Broken pipe`, an
+    `OSError` that `execute` did not catch then: `ingest` raised the `BrokenPipeError`, with the
+    `COPY`'s `InterfaceError` in its context, the staging stayed, and the next command on the
+    session, `SELECT pg_backend_pid()`, failed the same way, the session stuck on the dead
+    connection. In the fourth (`engine_redshift_2.json`) the `DROP` got the `InterfaceError`, the
+    engine reconnected and dropped the staging, and the next command ran on a new pid. The sandbox
+    table kept 0 rows in all four. What makes the send fail is unread: in `terminated_session`
+    the command, the `ROLLBACK` and the next command all wrote to the closed connection and read
+    its end, while after the `COPY` the second write failed in 3 of 4 sessions [inferred: a reset
+    from the server side arriving before the write, a matter of timing]. The user chose the fix
+    the same day (`decisions.md`), and the case now asserts that the staging leaves and the session
+    goes on; `.claude/memory/OPEN_QUESTIONS.md` ("A reconexão do motor Redshift no alvo").
+
+  The whole base was published by channel on 8 vCPUs after `--init` created the control table:
+  `cad_contas` 3.2 s at 251 MB, the unpartitioned tables 3.2 s to 4.3 s, `cad_contratos` 55.0 s,
+  `cad_operacoes` 71.5 s, `rel_contrato_operacao` 88.3 s and `cad_lancamentos` (6 partitions,
+  424,598,150 rows) 487.8 s at 286 MB, 0.87 million rows per second, the command 506 s. The three
+  mid-size tables, with the partitions of 01:06, took 10.8 s to 13.3 s more than then, a cause the
+  battery does not read: the command prints no per-command time (the `DEBUG` log
+  `serialize_db.publication.commands`). `--status`, `--channel current` and
+  `--snapshot carga-2026-09-25 --tables cad_contas` read as on 2026-10-07.
+- `probes/operacao/probe_published_base.py` in the second battery of 2026-10-09 (21:45 UTC, 154 s,
+  every check passing), over the base just published at `carga-2026-09-25`: the `EXPLAIN` of the
+  join of `prd_cad_lancamentos` (424,598,150 rows) with `prd_cad_contas` (101) on `id_conta` read
+  `XN Hash Join DS_DIST_ALL_NONE` again. The redo of 2026-01-31 (33,239,719 rows) took 32.6 s at a
+  process peak of 8,162 MB, `cad_lancamentos` at version 7; with the channel on it, the
+  publication by channel swapped only that partition, version 7, in 44.3 s at 262 MB (48.5 s for
+  the command), and with the channel back on `carga-2026-09-25` it swapped it back, version 6, in
+  46.7 s at 262 MB (50.8 s), the other 11 tables `já está publicada` both ways.
+  `prd_cad_lancamentos` kept 424,598,150 rows and the `id_lancamento` sum
+  538,418,094,708,709,063 before the swap, after it and after the return, and the channel ended on
+  `carga-2026-09-25`.

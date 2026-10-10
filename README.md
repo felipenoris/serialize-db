@@ -214,6 +214,7 @@ que a segunda a repete.
 | `SERIALIZE_DB_TEST_EMULATOR` | Qualquer valor troca o S3 e o Redshift pelo substituto local de `tests/emulator.py` e define as raízes das suítes S3 e Redshift nele. |
 | `SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL` | Com o substituto, uma expressão regular: o comando que casa com ela recebe um erro do servidor, para provocar a falha que um tratamento corrige. |
 | `SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST` | Com o substituto, qualquer valor faz o `UNLOAD ... MANIFEST` passar sem gravar o manifesto. |
+| `SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE` | Com o substituto, qualquer valor faz o envio do segundo comando em diante numa sessão encerrada por `pg_terminate_backend` falhar com o `BrokenPipeError` do socket. |
 | `SERIALIZE_DB_TEST_KEEP` | Qualquer valor mantém a pasta, os objetos e as tabelas `serialize_db_poc_<id>_*` criados pela sessão; o sandbox dos motores e as tabelas publicadas pelos casos da publicação e do leitor saem mesmo assim. |
 | `SERIALIZE_DB_TEST_REPORT` | Caminho de um JSON onde o relatório da sessão é gravado, além de impresso. |
 | `SERIALIZE_DB_DUCKDB_EXTENSIONS` | Pasta de extensões do DuckDB, a única onde a suíte instala as que faltam. Sem ela, `.duckdb/` na raiz do repositório quando existir, senão a pasta padrão do DuckDB, e nada é instalado. A biblioteca carrega as extensões da mesma pasta, e sem ela de `.duckdb/` ao lado do ambiente virtual, sem instalar nada. |

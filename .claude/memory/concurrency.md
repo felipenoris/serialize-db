@@ -307,3 +307,29 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   33.148 s (the three of 2026-10-05, one of 18:55 on 2026-10-07 and two of 2026-10-09), against
   26.750 s to 32.179 s for the 12 serial ones, and the cause is unread. `docs/index.md`
   ("Multithreading")
+- The same probe in the second battery of 2026-10-09, from 22:09 UTC (8 vCPUs, 12.9 GiB
+  available, DuckDB limits 8 threads and 6,595 MiB, the tables prepared in 25.9 s, `main` at
+  `c503462`). DuckDB: `stream` 1.33x with no work (0.344 s, +4 MB, against 0.458 s, +312 MB) and
+  1.84x with pandas (0.381 s against 0.702 s), `appender` 1.00x and 1.23x, both 1.10x and 1.21x,
+  200 small queries 0.525 s serial, 0.534 s on the main session and 0.350 s with one
+  `new_session()` each (1.50x), `run.ingest` 2.45x (4.192 s, +1,088 MB, against 10.290 s,
+  +917 MB), `materialize` 2.42x (3.897 s against 9.416 s) and `publish_delta(max_workers=4)` 2.08x
+  (8.209 s against 17.044 s), as on 8 vCPUs on 2026-10-05. Redshift: `run.ingest` 2.68x
+  (12.443 s against 33.405 s), `stream`, `appender` and both 1.01x, 1.10x and 1.06x with no work
+  and 1.05x, 1.10x and 1.04x with pandas, 80 small queries 3.494 s serial, 3.332 s on the main
+  session and 1.918 s with one extra session each (1.82x), `publish_delta(max_workers=4)` 1.34x
+  (18.761 s against 25.162 s) and `publish_redshift` with four workers 2.01x (13.782 s against
+  27.657 s), its other two repetitions at 36.110 s and 34.213 s. The per-command times of the log
+  `serialize_db.publication.commands` (PR #148), read for the first time, place the difference in
+  the control row's `INSERT`, the last statement before each `COMMIT`: the four summed 5.42 s, at
+  most 2.98 s, in the 13.782 s repetition, and 70.03 s and 65.94 s, at most 24.87 s and 23.40 s,
+  in the slow ones, so at least three of the four took over 9 s there, while the `COPY`s summed
+  12.60 s to 13.80 s, the data `INSERT`s 12.68 s to 14.63 s and the `COMMIT`s 3.14 s to 3.84 s,
+  at most 1.49 s, in all three. One table at a time, the control `INSERT`s summed 1.34 s to
+  3.77 s, at most 0.49 s to 2.80 s. Each transaction holds the control table's write lock from its
+  `INSERT` to its `COMMIT` (`docs/tecnologias.md`, Redshift, "Transações concorrentes"), and no
+  `COMMIT` took more than 1.49 s, so what made the `INSERT`s wait about 20 s is unread
+  (`.claude/memory/OPEN_QUESTIONS.md`). Across the five runs of 2026-10-05 to 2026-10-09 the 15
+  four-connection repetitions fell in the two groups, 7 at 11.133 s to 13.813 s and 8 at 31.521 s
+  to 36.110 s, against 26.750 s to 32.179 s for the 15 serial ones. `docs/index.md`
+  ("Multithreading")

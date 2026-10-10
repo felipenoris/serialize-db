@@ -312,3 +312,14 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   8 threads in series (93.9 s, 1.03x over 4, 0.95x with 16 and 20) and in extra sessions (88.0 s,
   1.04x); extra sessions beat the series by 1.05x to 1.13x, 1.05x with 4. `threads` stays at the
   process's CPUs.
+- Threads against the machine (target, the second battery of 2026-10-09, 8 vCPUs with two threads
+  per physical core, 13,495 MB available, partition 2026-08-31 of `cad_lancamentos`, new in the
+  source, with 140,762,244 rows, 2,309 MB, alone as a step of `suite_alvo.sh`, threads 4 to 40
+  against the engine's 8): materializing took 56.2 s with 4 threads, 36.5 s with 8, 33.2 s with
+  16, 36.1 s with 24, 35.1 s with 32 and 35.0 s with 40, the process peak from 3,320 MB to
+  6,296 MB (3,876 MB with 8, 4,848 MB with 16); 16 threads beat 8 by 1.10x, against 1.12x on the
+  8-vCPU runs of 2026-09-29 and 2026-10-05. The aggregated S3 read took 20.2 s with 4, 8.0 s with
+  8 and 3.8 s with 24 (2.07x). The four tables (165,759,775 rows) were fastest in series with 8
+  threads (47.6 s, 6% slower with 16) and in extra sessions with 16 (39.7 s, 1.02x over 8's
+  40.6 s); extra sessions beat the series by 1.13x to 1.48x, 1.17x with 8. `threads` stays at the
+  process's CPUs.

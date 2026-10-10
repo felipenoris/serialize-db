@@ -31,23 +31,27 @@ tabela, na grafia do Redshift, e ``current_database()`` é descrito com o tipo `
 que o Redshift dá aos identificadores do catálogo. O ``pg_terminate_backend`` encerra a sessão: o
 comando seguinte dela, e o que estava rodando, recebem o ``InterfaceError`` que o driver levanta
 diante do socket fechado, com a transação aberta desfeita e o ``in_transaction`` da conexão como
-estava antes, o que o código do driver diz e o ambiente alvo ainda não mostrou. No resto, o DuckDB
-responde do jeito dele. Os bloqueios entre transações, a criptografia do bucket, a Data API, as
-credenciais do contêiner, o proxy e a comparação do ``NaN`` numa varredura de tabela, que no DuckDB
-segue a regra do PostgreSQL e no Redshift não, só o ambiente alvo mostra.
+estava antes, como o código do driver diz e o ambiente alvo mostrou em 2026-10-09. No resto, o
+DuckDB responde do jeito dele. Os bloqueios entre transações, a criptografia do bucket, a Data
+API, as credenciais do contêiner, o proxy e a comparação do ``NaN`` numa varredura de tabela, que
+no DuckDB segue a regra do PostgreSQL e no Redshift não, só o ambiente alvo mostra.
 
-Duas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
+Estas variáveis provocam falhas, para rodar lado a lado o código anterior e o corrigido de um
 tratamento de falha:
 
 - ``SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL``: uma expressão regular; o comando que casa com ela
   recebe um erro do servidor, ``XX000``.
 - ``SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST``: qualquer valor; o ``UNLOAD ... MANIFEST`` passa sem
   gravar o manifesto.
+- ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE``: qualquer valor; na sessão encerrada, do segundo
+  comando mandado em diante, o envio falha com o ``BrokenPipeError`` do socket, que o driver não
+  converte.
 """
 
 from __future__ import annotations
 
 import collections
+import errno
 import importlib.util
 import io
 import json
@@ -432,8 +436,8 @@ class Cursor:
         args: object = None,
     ) -> Cursor:
         """Roda o comando e guarda o resultado; na sessão que ``pg_terminate_backend`` encerrou
-        antes do comando ou durante ele, o erro do driver diante do socket fechado."""
-        raise_if_terminated(self.connection)
+        antes do comando ou durante ele, o erro que o driver deixa sair diante do socket fechado."""
+        raise_if_sent_after_termination(self.connection)
         try:
             result = run_command(self.connection, operation, args, self.paramstyle)
         except (redshift_connector.Error, duckdb.Error):
@@ -492,8 +496,10 @@ class Connection:
         # no DuckDB, que o encerramento da sessão desfaz sem mudar o primeiro.
         self.in_transaction = False
         self.duckdb_transaction = False
-        # O pg_terminate_backend de outra conexão encerra esta: raise_if_terminated o lê.
+        # O pg_terminate_backend de outra conexão encerra esta: raise_if_terminated o lê, e
+        # raise_if_sent_after_termination conta os comandos mandados depois.
         self.terminated = False
+        self.sent_after_termination = 0
         # As linhas do último UNLOAD que passou, o que pg_last_unload_count() devolve.
         self.last_unload_count = 0
         # O esquema em que um CREATE TABLE sem esquema cai: o de SET search_path.
@@ -675,6 +681,27 @@ def session_command(
     return None
 
 
+def raise_if_sent_after_termination(
+    connection: Connection,
+) -> None:
+    """O erro de um comando mandado na sessão que ``pg_terminate_backend`` encerrou: o
+    ``InterfaceError`` de ``raise_if_terminated`` ou, com
+    ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE``, do segundo comando em diante, o ``BrokenPipeError``
+    do envio no socket fechado.
+
+    No ambiente alvo, na sessão encerrada durante o ``COPY`` do ``ingest``, o ``ROLLBACK`` recebeu
+    o ``InterfaceError``, e o ``DROP`` da staging e os comandos seguintes falharam no envio com o
+    ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09).
+    """
+    if not connection.terminated:
+        return
+    connection.sent_after_termination += 1
+    broken_pipe = os.environ.get("SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE")
+    if broken_pipe and connection.sent_after_termination > 1:
+        raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+    raise_if_terminated(connection)
+
+
 def raise_if_terminated(
     connection: Connection,
 ) -> None:
@@ -682,8 +709,9 @@ def raise_if_terminated(
     ``pg_terminate_backend`` encerrou, com a transação aberta desfeita, como o servidor faz.
 
     A mensagem é a de ``Connection.handle_messages`` do ``redshift_connector`` 2.1.17 diante da
-    leitura vazia do socket; o ambiente alvo não a mostrou. O ``in_transaction`` fica como
-    estava, porque o driver só o muda no ``ReadyForQuery``, que a sessão encerrada não manda.
+    leitura vazia do socket, a mesma que o ambiente alvo mostrou em 2026-10-09. O
+    ``in_transaction`` fica como estava, porque o driver só o muda no ``ReadyForQuery``, que a
+    sessão encerrada não manda.
     """
     if not connection.terminated:
         return
