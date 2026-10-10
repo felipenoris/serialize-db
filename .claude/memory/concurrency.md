@@ -377,4 +377,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   while the `INSERT` is planned, is the one DDL in the window [hypothesis]. Across the six runs of
   2026-10-05 to 2026-10-10 the 18 four-connection repetitions with unpublish fell in the two
   groups, 9 at 11.133 s to 13.813 s and 9 at 31.521 s to 36.110 s, against 26.750 s to 32.179 s
-  for the 18 serial ones. `docs/index.md` ("Multithreading")
+  for the 18 serial ones. The user chose to extend the probe (`decisions.md`, 2026-10-10): its
+  `publicacao` section publishes the four tables by its own transactions in three statement
+  orders, the publication's, the control row right after the `CREATE TABLE` and the tables
+  created before the transaction, and the next battery reads the planning of each `INSERT`.
+  `docs/index.md` ("Multithreading")

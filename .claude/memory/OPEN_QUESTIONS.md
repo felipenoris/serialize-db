@@ -181,12 +181,15 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   planejado, é o único DDL na janela [hipótese]. Na publicação da base de 2026-10-10,
   `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`, com as mesmas partições das duas
   baterias de 2026-10-09, levaram de 1,1 s a 5,5 s menos que às 20:31 e de 6,8 s a 10,4 s mais que
-  às 01:06 (`.claude/memory/redshift.md`). Espera o usuário: aceitar a espera, que só veio na
-  publicação que cria a tabela, a primeira ou a seguinte a uma despublicação, e custa cerca de
-  20 s nas transações que a sofrem; estender a sonda para separar a hipótese, criando as tabelas
-  fora da transação da carga, ou gravando a linha de controle antes do `COPY`, e medindo de novo;
-  ou mudar a publicação para criar a tabela final numa transação própria, confirmada antes da
-  carga.
+  às 01:06 (`.claude/memory/redshift.md`). O usuário escolheu estender a sonda (2026-10-10,
+  `.claude/memory/decisions.md`): a seção `publicacao` passou a publicar as quatro tabelas pela
+  própria transação, em quatro conexões, com os comandos de `publication_statements` em três
+  ordens, a da publicação, a linha de controle logo depois do `CREATE TABLE` e as tabelas criadas e
+  confirmadas antes da transação, e a bateria seguinte lê o planejamento de cada `INSERT` no
+  `sys_query_history`: com a hipótese, a linha antes do `COPY` espera enquanto nenhuma transação
+  confirmou, e as tabelas criadas antes não esperam. Depois da leitura, decidir entre aceitar a
+  espera, que custa cerca de 20 s nas transações que a sofrem, e mudar a publicação para criar a
+  tabela final numa transação própria, confirmada antes da carga.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);

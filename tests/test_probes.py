@@ -17,7 +17,8 @@ tabela Delta local, no ``operation_lib.py`` das sondas da operação, a linha de
 primeiras partições da origem fora das ignoradas, no ``probe_published_base.py``, as tabelas
 trocadas pela saída do ``serialize-db publish_redshift`` e, no ``probe_parallel_gain.py``, os
 comandos lidos no log da publicação, a linha do tempo de cada conexão, os locks lidos pela quinta
-sessão e as gravações da linha de controle no ``sys_query_history``. Um ``Report`` grava em
+sessão, as gravações da linha de controle no ``sys_query_history``, as três ordens dos comandos da
+primeira publicação pela sonda e os comandos que removem as tabelas dela. Um ``Report`` grava em
 ``probes/output/``; ``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao
 pytest no fim. Os testes que gravam, o relatório e os arquivos fabricados, são ``local``: gravam
 numa pasta nova sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do
@@ -67,6 +68,8 @@ import redshift
 import space
 from client_model import Base
 from conftest import LocalLocation
+from serialize_db import delta, publication
+from serialize_db.engine.redshift import RedshiftConfig
 
 NOW = datetime.datetime(2026, 9, 20, 3, 44, tzinfo=datetime.timezone.utc)
 MINUTE = datetime.timedelta(minutes=1)
@@ -2453,7 +2456,8 @@ def test_parallel_gain_history_keeps_the_control_writes_and_their_times() -> Non
     """A leitura do ``sys_query_history`` da sonda de paralelismo consulta os comandos que citam a
     tabela de controle e o ambiente desde o instante pedido, em UTC; ``control_writes`` guarda só o
     ``INSERT`` e o ``UPDATE`` da linha de controle, pela primeira palavra em qualquer caixa, e
-    ``history_line`` escreve os tempos em segundos, com ``-`` no tempo sem valor."""
+    ``history_line`` escreve os tempos em segundos, com ``-`` no tempo sem valor, e a execução lida
+    no texto entre parênteses, ``sem execução`` quando ele não a traz."""
     since = datetime.datetime(2026, 10, 9, 22, 0, tzinfo=datetime.UTC).timestamp()
     query = probe_parallel_gain.control_history_query(since, "poc1")
     assert "WHERE start_time >= '2026-10-09 22:00:00'" in query
@@ -2505,11 +2509,60 @@ def test_parallel_gain_history_keeps_the_control_writes_and_their_times() -> Non
     )
     assert probe_parallel_gain.control_writes([read, insert, update]) == [insert, update]
     assert probe_parallel_gain.history_line(insert) == (
-        "22:09:14.123 UTC, pid 1073741234, transação 5555, cad_paralelo_b, INSERT controle, "
-        "success: decorrido 24.870 s, fila 0.000 s, lock 24.500 s, execução 0.300 s, "
-        "compilação 0.000 s, planejamento 0.010 s"
+        "22:09:14.123 UTC, pid 1073741234, transação 5555, cad_paralelo_b, INSERT controle "
+        "(paralelo-1), success: decorrido 24.870 s, fila 0.000 s, lock 24.500 s, execução "
+        "0.300 s, compilação 0.000 s, planejamento 0.010 s"
     )
     assert probe_parallel_gain.history_line(update) == (
-        "22:09:14.123 UTC, pid 1073741299, transação 5560, cad_paralelo_c, UPDATE controle, "
-        "running: decorrido -, fila -, lock -, execução -, compilação -, planejamento -"
+        "22:09:14.123 UTC, pid 1073741299, transação 5560, cad_paralelo_c, UPDATE controle "
+        "(sem execução), running: decorrido -, fila -, lock -, execução -, compilação -, "
+        "planejamento -"
     )
+
+
+def test_parallel_gain_ordered_statements_follow_the_three_orders() -> None:
+    """``ordered_statements`` da sonda de paralelismo recebe os comandos da primeira publicação como
+    ``publication_statements`` os dá, o ``CREATE TABLE`` primeiro e o ``INSERT`` da linha de
+    controle por último: na ordem da publicação eles ficam como estão, com a linha de controle
+    antes do ``COPY`` o ``INSERT`` passa para logo depois do ``CREATE TABLE``, e com as tabelas
+    criadas antes o ``CREATE TABLE`` sai; ``ORDERINGS`` começa pela ordem da publicação."""
+    table = probe_parallel_gain.TABLES[0]
+    manifest = delta.CopyManifest(
+        "s3://bucket/poc1/publicacao/paralelo-linha-antes-1/cad_paralelo_a/2026-08-31/1.manifest",
+        ("id_lancamento", "id_conta", "data_base", "valor", "historico"),
+    )
+    statements = publication.publication_statements(
+        "esquema",
+        "poc1",
+        table,
+        ["2026-08-31"],
+        {"2026-08-31": [manifest]},
+        3,
+        None,
+        "paralelo-linha-antes-1",
+        "IAM_ROLE default",
+    )
+    create, *load, control = statements
+    assert create.startswith('CREATE TABLE "esquema"."poc1_cad_paralelo_a"')
+    assert control.startswith('INSERT INTO "esquema"."serialize_db_publications"')
+    assert "COPY" in " ".join(load)
+
+    orderings = probe_parallel_gain.ORDERINGS
+    assert list(orderings) == ["publicacao", "linha-antes", "criadas-antes"]
+    ordered = probe_parallel_gain.ordered_statements
+    assert ordered(statements, orderings["publicacao"]) == statements
+    assert ordered(statements, orderings["linha-antes"]) == [create, control, *load]
+    assert ordered(statements, orderings["criadas-antes"]) == [*load, control]
+
+
+def test_parallel_gain_removal_statements_drop_the_tables_and_their_control_rows() -> None:
+    """``removal_statements`` da sonda de paralelismo apaga as quatro tabelas publicadas do
+    ambiente, existam ou não, e depois as linhas de controle delas."""
+    config = RedshiftConfig(schema="esquema")
+    assert probe_parallel_gain.removal_statements(config, "poc1") == [
+        'DROP TABLE IF EXISTS "esquema"."poc1_cad_paralelo_a"',
+        'DROP TABLE IF EXISTS "esquema"."poc1_cad_paralelo_b"',
+        'DROP TABLE IF EXISTS "esquema"."poc1_cad_paralelo_c"',
+        'DROP TABLE IF EXISTS "esquema"."poc1_cad_paralelo_d"',
+        'DELETE FROM "esquema"."serialize_db_publications" WHERE table_name LIKE \'poc1_%\'',
+    ]

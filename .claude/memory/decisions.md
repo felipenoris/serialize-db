@@ -2132,3 +2132,29 @@ on a new pid (`redshift.md`).
 
 `src/serialize_db/engine/redshift.py` (`_run`, `execute`, `ingest`),
 `tests/test_engine_redshift.py`, `tests/emulator.py`, `README.md`, `redshift.md`
+
+## The control row's planning wait: the probe extended (2026-10-10)
+
+The battery of 2026-10-10 read the ~20 s of the parallel publication's slow repetitions as the
+server planning the control row's `INSERT` (`planning_time` of `sys_query_history`, no queue, no
+lock wait), only in publications that created the tables (`concurrency.md`). The assistant offered
+on a decision card: accept the wait; extend the probe so the next battery separates the hypothesis
+that the planner waits on the other transactions' uncommitted `CREATE TABLE` (recommended); or
+change the publication to create the final table in its own transaction, committed before the
+load. The user chose "Estender a sonda" (2026-10-10, 05:32 UTC).
+
+- `probes/operacao/probe_parallel_gain.py`, section `publicacao`, publishes the four tables by its
+  own transactions, one connection per table in four threads, with the statements of
+  `publication_statements` in three orders, measured `--repetitions` times each with the
+  timelines, the fifth session and the `sys_query_history` reading, which names the execution of
+  each control write: the publication's order (`CREATE TABLE`, the load, the control row's
+  `INSERT`), the control row right after the `CREATE TABLE`, before the staging and the `COPY`,
+  and the tables created and committed before the transaction, outside the measured time. With the
+  hypothesis, the control row before the `COPY` waits while no transaction has committed, and the
+  tables created before do not wait.
+- The package does not change until the reading: the choice between accepting the wait and
+  creating the final table in its own transaction waits on the next battery
+  (`OPEN_QUESTIONS.md`, "A espera da linha de controle na publicação em paralelo").
+
+`probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
+`OPEN_QUESTIONS.md`, `concurrency.md`
