@@ -269,6 +269,7 @@ def _add_run_parser(
         type=_engine_argument,
         choices=["duckdb", "redshift"],
         default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb",
+        help="o motor do sandbox, duckdb ou redshift; padrão SERIALIZE_DB_ENGINE, senão duckdb",
     )
     run.add_argument(
         "--partition",
@@ -276,7 +277,12 @@ def _add_run_parser(
         default=None,
         help="a partição da execução; sem ela, a execução não tem partição",
     )
-    run.add_argument("--execution-id", type=_name_argument, default=None)
+    run.add_argument(
+        "--execution-id",
+        type=_name_argument,
+        default=None,
+        help="o identificador da execução; sem ele, exec-<AAAA-MM-DD>-<uuid8>",
+    )
     run.add_argument(
         "pipeline", type=_resolve_function, help="modulo:funcao que recebe a execução aberta"
     )
@@ -333,7 +339,12 @@ def _add_publish_redshift_parser(
         default=None,
         help="as tabelas a publicar ou despublicar; sem ela, todas do modelo",
     )
-    publish.add_argument("--max-workers", type=int, default=1)
+    publish.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        help="as tabelas publicadas ao mesmo tempo, cada uma na sua conexão; padrão 1",
+    )
     publish.add_argument(
         "--execution-id",
         type=_name_argument,
@@ -408,7 +419,12 @@ def _add_operation_parsers(
         "<raiz>/<ambiente>/_serialize_db/snapshots.json",
     )
     _add_database_arguments(snapshot)
-    snapshot.add_argument("--name", required=True, type=_name_argument)
+    snapshot.add_argument(
+        "--name",
+        required=True,
+        type=_name_argument,
+        help="o nome do snapshot, inédito em snapshots e em archived do arquivo de controle",
+    )
     snapshot.set_defaults(handler=_snapshot)
 
     channel = commands.add_parser(
@@ -444,8 +460,14 @@ def _add_operation_parsers(
         "compact", help="junta os arquivos pequenos das partições"
     )
     _add_database_arguments(compact_command)
-    compact_command.add_argument("--table", required=True)
-    compact_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
+    compact_command.add_argument("--table", required=True, help="a tabela do modelo compactada")
+    compact_command.add_argument(
+        "--partitions",
+        nargs="+",
+        type=_name_argument,
+        default=None,
+        help="as partições compactadas; obrigatória numa tabela particionada",
+    )
     compact_command.set_defaults(handler=_compact)
 
     archive = commands.add_parser(
@@ -453,7 +475,12 @@ def _add_operation_parsers(
         help="copia as tabelas de um snapshot para <raiz>/<ambiente>/arquivo/<nome>/<tabela>",
     )
     _add_database_arguments(archive)
-    archive.add_argument("--name", required=True, type=_name_argument)
+    archive.add_argument(
+        "--name",
+        required=True,
+        type=_name_argument,
+        help="o snapshot arquivado, registrado em snapshots",
+    )
     archive.set_defaults(handler=_archive)
 
     export = commands.add_parser(
@@ -461,21 +488,29 @@ def _add_operation_parsers(
         help="grava uma versão da tabela Delta em pastas Parquet de --destination, sem o log",
     )
     _add_database_arguments(export)
-    export.add_argument("--table", required=True)
+    export.add_argument("--table", required=True, help="a tabela do modelo exportada")
     export.add_argument(
         "--destination",
         required=True,
         help="a URI da pasta que recebe os arquivos Parquet, vazia e sob a raiz",
     )
     export.add_argument("--version", type=int, default=None, help="a versão; padrão a atual")
-    export.add_argument("--mode", choices=["copy", "rewrite"], default="copy")
+    export.add_argument(
+        "--mode",
+        choices=["copy", "rewrite"],
+        default="copy",
+        help="copy copia os arquivos que o log da versão lista; rewrite grava um arquivo por "
+        "partição pelo COPY do DuckDB",
+    )
     export.set_defaults(handler=_export)
 
     history = commands.add_parser(
         "history", help="os commits de uma tabela com os metadados da biblioteca"
     )
     _add_database_arguments(history)
-    history.add_argument("--table", required=True)
+    history.add_argument(
+        "--table", required=True, help="a tabela do modelo cujos commits são listados"
+    )
     history.set_defaults(handler=_history)
 
 
@@ -490,10 +525,26 @@ def _add_audit_parser(
         type=_resolve_metadata,
         help="modulo:atributo com o MetaData dos modelos",
     )
-    audit_command.add_argument("--table", required=True)
-    audit_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
-    audit_command.add_argument("--foreign-keys", action="store_true")
-    audit_command.add_argument("--key-scope", choices=["partition", "table"], default=None)
+    audit_command.add_argument("--table", required=True, help="a tabela do modelo auditada")
+    audit_command.add_argument(
+        "--partitions",
+        nargs="+",
+        type=_name_argument,
+        default=None,
+        help="as partições auditadas; sem ela, a tabela inteira",
+    )
+    audit_command.add_argument(
+        "--foreign-keys",
+        action="store_true",
+        help="confere as chaves estrangeiras contra a versão atual de cada tabela referenciada",
+    )
+    audit_command.add_argument(
+        "--key-scope",
+        choices=["partition", "table"],
+        default=None,
+        help="partition suprime a verificação da chave contra a versão atual do Delta; table a "
+        "faz também na chave com a coluna de partition_source",
+    )
     audit_command.add_argument(
         "--engine",
         type=_engine_argument,
