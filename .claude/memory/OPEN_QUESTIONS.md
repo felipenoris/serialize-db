@@ -63,7 +63,8 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   perde só a tabela temporária que o pipeline tenha criado na sessão, e a carga de cada partição de
   `ingest` e de `pinned_delta` roda numa transação desde 2026-10-04, para a queda no meio do `COPY`
   subir sem repetição (`POC.md`); o alvo leu essa queda em 2026-10-09 e, em 2026-10-10, a
-  reconexão depois dela nas quatro sessões (`.claude/memory/redshift.md`).
+  reconexão depois dela nas quatro sessões (`.claude/memory/redshift.md`). A sonda está fora de
+  `suite_alvo.sh` desde 2026-10-10 e roda à mão pelo comando de `SUITE_ALVO.md` (`decisions.md`).
 - **O `create_table` do motor Redshift dentro da transação do cliente.** A recusa de 2026-10-09
   (`decisions.md`), que o alvo leu nas quatro sessões da segunda bateria do dia
   (`.claude/memory/redshift.md`), cobre o `append`, o `appender`, o `ingest` e o `pinned_delta`, que

@@ -358,8 +358,9 @@ deleted 19,289 MB under the suite root at their end, each object left as a non-c
 The battery of 2026-10-10 ran from 02:32:21 to 04:44 UTC, from `main` at `e38432f` (the squash of
 PR #151), which the log's opening line names with one change in the working copy, `suite_alvo.sh`:
 49 steps, the script's 51 without `duckdb_threads.py` and `credentials.py`, which the user skipped
-by hand (stated on 2026-10-10 at 15:49 UTC), on 8 vCPUs and 15,505 MB (28.7 GiB free on
-disk) with the versions of 2026-10-05, the log `probes/output/suite_alvo_20261010-023221.txt` and
+by hand (stated on 2026-10-10 at 15:49 UTC) and took out of the script the same day, with
+`probe_unload_parallel.py` (`decisions.md`; 48 steps since), on 8 vCPUs and 15,505 MB (28.7 GiB free
+on disk) with the versions of 2026-10-05, the log `probes/output/suite_alvo_20261010-023221.txt` and
 the reports in one archive. The same six steps exited non-zero, each as expected: `space.py`,
 `bucket.py` and `catalog.py` with 1 (Lake Formation and S3 Tables timing out in 60.8 s and 30.5 s),
 `parquet_source.py` with 2 for `PQ-3`, `audit` with 1 for the 989,852 orphans and `compact` with 2.

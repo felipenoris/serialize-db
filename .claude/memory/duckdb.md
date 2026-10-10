@@ -322,4 +322,5 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   8 and 3.8 s with 24 (2.07x). The four tables (165,759,775 rows) were fastest in series with 8
   threads (47.6 s, 6% slower with 16) and in extra sessions with 16 (39.7 s, 1.02x over 8's
   40.6 s); extra sessions beat the series by 1.13x to 1.48x, 1.17x with 8. `threads` stays at the
-  process's CPUs.
+  process's CPUs. The user took the probe out of `suite_alvo.sh` on 2026-10-10 (`decisions.md`):
+  it runs by hand, after the migration, by the `SUITE_ALVO.md` command.
