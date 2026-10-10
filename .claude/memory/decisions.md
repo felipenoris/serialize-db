@@ -2158,3 +2158,25 @@ load. The user chose "Estender a sonda" (2026-10-10, 05:32 UTC).
 
 `probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
 `OPEN_QUESTIONS.md`, `concurrency.md`
+
+## The terminated session's test asserts the reconnection (2026-10-10)
+
+`test_session_terminated_by_the_server_is_read` recorded readings until the battery of 2026-10-10:
+in the two batteries since 2026-10-09 the command inside `transaction()` and inside the client's
+`BEGIN` raised the driver's `InterfaceError` and the next command reconnected in 8 of 8 cases, the
+idle session reconnected 1 s after the `pg_terminate_backend` in 7 of 8, and in one it answered two
+commands on the same pid after a `pg_terminate_backend` that returned true (`redshift.md`). The
+assistant offered on a decision card: assert the three cases, with each command after the
+`pg_terminate_backend` repeated every second for up to 10 s until the session drops (recommended);
+assert only the two transaction cases; or keep the readings. The user chose "Asserir e esperar"
+(2026-10-10, 06:44 UTC).
+
+- The case asserts `terminated`, the `InterfaceError` first in the chain the transaction cases
+  raise, and the reconnection of the next command in the three cases. Each command after the
+  `pg_terminate_backend` repeats every `TERMINATION_WAIT` (1 s) for up to `TERMINATION_LIMIT`
+  (10 s) while the session answers on the same pid, and the report keeps the seconds waited
+  (`esperou`). On the stand-in with the termination disabled, the idle case fails after 10 s with
+  `reconnected` false and the transaction cases with `raised` none. Whether 10 s cover the late
+  termination waits on the next battery (`OPEN_QUESTIONS.md`).
+
+`tests/test_engine_redshift.py`, `redshift.md`

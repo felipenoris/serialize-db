@@ -547,7 +547,11 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and `transacao_do_cliente`) and
   during the `COPY` of `ingest` over a 300,000-row partition
   (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next command
-  reconnects and what the server kept; the second battery of 2026-10-09 ran them (below). The
+  reconnects and what the server kept; the second battery of 2026-10-09 ran them (below). Since the
+  user's decision of 2026-10-10 (`decisions.md`), `terminated_session` asserts the drop and the
+  reconnection: each command after the `pg_terminate_backend` repeats every 1 s
+  (`TERMINATION_WAIT`) for up to 10 s (`TERMINATION_LIMIT`) while the session answers on the same
+  pid, and the report keeps the seconds waited (`esperou`). The
   driver's `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop
   leaves it as it was before the failed command; the engine reads it to refuse the primitives and to
   stop the reconnect inside a client transaction, and marks the dropped connection
@@ -708,8 +712,11 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
     and the socket fails. The idle session's next command reconnected on a new pid in 3 sessions;
     in `redshift_suite_2.json` it answered both commands on the same pid after a
     `pg_terminate_backend` that returned true: the connection had not dropped, a reading the case
-    makes and does not assert [inferred: the termination had not reached the backend within the
-    probe's 1 s wait and the two commands].
+    made and did not assert [inferred: the termination had not reached the backend within the
+    probe's 1 s wait and the two commands]. The user chose "Asserir e esperar" (06:44 UTC,
+    `decisions.md`): since PR #152 the case asserts the three cases, with each command after the
+    `pg_terminate_backend` repeated every 1 s for up to 10 s; whether 10 s cover the late
+    termination waits on the next battery (`OPEN_QUESTIONS.md`).
   - `test_session_terminated_during_the_ingest_copy_is_read`: `pg_terminate_backend` ran 1.606 s to
     2.051 s after the start, right after the `COPY` was sent, which raised the `InterfaceError`
     0.32 s to 0.86 s later, and the `ROLLBACK` of `transaction()` raised it again. The staging's

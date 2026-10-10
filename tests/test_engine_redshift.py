@@ -96,8 +96,11 @@ MEASURES = sa.Table(
 )
 
 # A espera entre o pg_terminate_backend, que pede o fim da sessão e volta, e o comando seguinte
-# nela; e as linhas da partição cujo COPY a sessão encerrada interrompe.
+# nela, repetida até o limite enquanto a sessão responde no mesmo pid, porque em 2026-10-10 uma
+# sessão ociosa respondeu a dois comandos no mesmo pid 1 s depois do pg_terminate_backend
+# verdadeiro; e as linhas da partição cujo COPY a sessão encerrada interrompe.
 TERMINATION_WAIT = 1.0
+TERMINATION_LIMIT = 10.0
 COPY_ROWS = 300_000
 
 # Uma tabela com uma coluna Double, para o sinal do zero.
@@ -2132,21 +2135,57 @@ def next_command_reading(
     return {"pid": current, "reconnected": current != pid}
 
 
+def reconnection_reading(
+    session: RedshiftEngine,
+    pid: int,
+) -> dict:
+    """O comando seguinte numa sessão ociosa encerrada, repetido a cada ``TERMINATION_WAIT`` por
+    até ``TERMINATION_LIMIT`` segundos enquanto ele responde no pid ``pid``: a leitura de
+    ``next_command_reading`` do comando que reconectou, do que errou ou do último, com os segundos
+    entre o ``pg_terminate_backend`` e esse comando em ``esperou``."""
+    attempts = int(TERMINATION_LIMIT / TERMINATION_WAIT)
+    for attempt in range(1, attempts + 1):
+        time.sleep(TERMINATION_WAIT)
+        reading = next_command_reading(session, pid)
+        reading["esperou"] = attempt * TERMINATION_WAIT
+        if reading.get("reconnected") or "error" in reading:
+            return reading
+    return reading
+
+
+def command_until_the_drop(
+    session: RedshiftEngine,
+    reading: dict,
+) -> None:
+    """Um ``SELECT 1`` na sessão encerrada dentro de uma transação, repetido a cada
+    ``TERMINATION_WAIT`` por até ``TERMINATION_LIMIT`` segundos enquanto o servidor responde; o
+    erro da queda sobe daqui, e ``reading["esperou"]`` guarda os segundos entre o
+    ``pg_terminate_backend`` e o comando que o levantou, ou o último."""
+    attempts = int(TERMINATION_LIMIT / TERMINATION_WAIT)
+    for attempt in range(1, attempts + 1):
+        time.sleep(TERMINATION_WAIT)
+        reading["esperou"] = attempt * TERMINATION_WAIT
+        session.execute("SELECT 1")
+
+
 @pytest.mark.redshift
 @pytest.mark.s3
 def test_session_terminated_by_the_server_is_read(
     target: Target,
 ) -> None:
     """Uma sessão a mais do motor encerrada por ``pg_terminate_backend`` da principal, ociosa,
-    dentro de ``transaction()`` e dentro de um ``BEGIN`` do cliente: o pid que o comando seguinte
-    lê, ou o erro dele com a classe, o SQLSTATE e a mensagem, e o erro que sobe da transação são
-    leituras, porque nenhum caso tinha derrubado a sessão no ambiente alvo. A sessão ociosa recebe
-    dois comandos, e as das transações um comando depois dela, que mostram se a conexão voltou; a
-    principal, que não é encerrada, apaga as tabelas no fim. Nas quatro rodadas da segunda bateria
-    de 2026-10-09, a sessão ociosa reconectou num pid novo, e nas duas transações o comando
-    levantou o ``InterfaceError`` do driver e o seguinte reconectou. Em 2026-10-10, numa das
-    quatro rodadas, a sessão ociosa respondeu aos dois comandos no mesmo pid depois do
-    ``pg_terminate_backend`` verdadeiro: a conexão não caiu."""
+    dentro de ``transaction()`` e dentro de um ``BEGIN`` do cliente: a ociosa reconecta no comando
+    seguinte e responde ao outro no pid novo, e nas transações o comando levanta o
+    ``InterfaceError`` do driver e o seguinte, fora delas, reconecta; a principal, que não é
+    encerrada, apaga as tabelas no fim. Cada comando depois do ``pg_terminate_backend`` se repete
+    a cada ``TERMINATION_WAIT`` por até ``TERMINATION_LIMIT`` segundos enquanto a sessão responde
+    no mesmo pid, e o relatório guarda o pid lido, a cadeia de erros e os segundos esperados. Nas
+    quatro rodadas da segunda bateria de 2026-10-09 e nas quatro de 2026-10-10, os comandos nas
+    transações levantaram o ``InterfaceError`` 1 s depois do ``pg_terminate_backend`` e os
+    seguintes reconectaram; a sessão ociosa reconectou com 1 s em sete das oito rodadas e, numa de
+    2026-10-10, respondeu aos dois comandos no mesmo pid depois do ``pg_terminate_backend``
+    verdadeiro, a leitura que fez cada comando se repetir até o limite (decisão do usuário de
+    2026-10-10)."""
     engine = target.engine
     reading = {}
 
@@ -2154,10 +2193,9 @@ def test_session_terminated_by_the_server_is_read(
     with engine.new_session() as idle:
         pid = backend_pid(idle)
         terminated = terminate_session(engine, pid)
-        time.sleep(TERMINATION_WAIT)
         reading["ociosa"] = {
             "terminated": terminated,
-            "next": next_command_reading(idle, pid),
+            "next": reconnection_reading(idle, pid),
             "after": next_command_reading(idle, pid),
         }
 
@@ -2168,8 +2206,7 @@ def test_session_terminated_by_the_server_is_read(
         try:
             with inside.transaction():
                 in_transaction["terminated"] = terminate_session(engine, pid)
-                time.sleep(TERMINATION_WAIT)
-                inside.execute("SELECT 1")
+                command_until_the_drop(inside, in_transaction)
             in_transaction["raised"] = None
         except (redshift_connector.Error, OSError) as error:
             in_transaction["raised"] = error_chain(error)
@@ -2183,15 +2220,32 @@ def test_session_terminated_by_the_server_is_read(
         client_transaction = {}
         client.execute("BEGIN")
         client_transaction["terminated"] = terminate_session(engine, pid)
-        time.sleep(TERMINATION_WAIT)
         try:
-            client.execute("SELECT 1")
+            command_until_the_drop(client, client_transaction)
             client_transaction["raised"] = None
         except (redshift_connector.Error, OSError) as error:
             client_transaction["raised"] = error_chain(error)
         client_transaction["after"] = next_command_reading(client, pid)
         reading["transacao_do_cliente"] = client_transaction
     record("redshift.engine.terminated_session", reading)
+
+    # A ociosa reconecta no comando seguinte; as transações levantam a queda e reconectam fora.
+    idle_reading = reading["ociosa"]
+    assert idle_reading["terminated"] is True
+    assert idle_reading["next"].get("reconnected") is True, idle_reading["next"]
+    assert idle_reading["after"].get("reconnected") is True, idle_reading["after"]
+    for key in ("transacao", "transacao_do_cliente"):
+        transaction_reading = reading[key]
+        assert transaction_reading["terminated"] is True, key
+        assert transaction_reading["raised"] is not None, key
+        assert transaction_reading["raised"][0].startswith("InterfaceError: "), (
+            key,
+            transaction_reading["raised"],
+        )
+        assert transaction_reading["after"].get("reconnected") is True, (
+            key,
+            transaction_reading["after"],
+        )
 
 
 def terminate_at_copy(

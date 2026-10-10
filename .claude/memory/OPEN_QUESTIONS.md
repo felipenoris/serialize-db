@@ -73,6 +73,14 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   PostgreSQL e da leitura de 2026-09-21 em `lessons.md`; o alvo não leu]. Espera o usuário: recusar
   também o `create_table` na transação do cliente, conferir o nome pelo catálogo, ou deixar como
   está.
+- **A sessão encerrada que respondeu no mesmo pid.** Em 2026-10-10, numa das quatro rodadas, a
+  sessão ociosa de `test_session_terminated_by_the_server_is_read` respondeu a dois comandos no
+  mesmo pid 1 s depois do `pg_terminate_backend` verdadeiro, sem cair; nas outras sete rodadas das
+  baterias de 2026-10-09 e de 2026-10-10 ela reconectou com 1 s, e os comandos nas transações
+  levantaram o `InterfaceError` em todas (`.claude/memory/redshift.md`). Desde a decisão do usuário
+  de 2026-10-10 (`decisions.md`) o caso assere a queda e a reconexão e repete cada comando a cada
+  1 s por até 10 s enquanto a sessão responde no mesmo pid, com os segundos esperados no relatório
+  (`esperou`); a próxima bateria diz se os 10 s cobrem a terminação atrasada.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
