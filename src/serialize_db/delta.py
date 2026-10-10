@@ -457,8 +457,8 @@ def partition_label(
     value: str | None,
 ) -> str:
     """A partição nas mensagens e no log: ``partição <valor>``, ou ``tabela inteira`` sem valor,
-    na tabela sem partição e na releitura da tabela inteira; protegida, a carga e o motor
-    Redshift a usam."""
+    na tabela sem partição e na releitura da tabela inteira; protegida, a carga, o motor
+    Redshift e a linha de comando a usam."""
     if value is None:
         return "tabela inteira"
     return f"partição {value}"
@@ -2307,6 +2307,52 @@ def _schema_differences(
     return differences
 
 
+def _copy_partition(
+    source: DeltaTable,
+    uri: str,
+    destination: str,
+    value: str | None,
+    group: list,
+    storage: Storage,
+) -> None:
+    """Copia os arquivos das ações ``add`` de uma partição da versão aberta em ``source``, de
+    ``uri`` para o mesmo caminho relativo sob ``destination``, e os registra na tabela do destino
+    num commit ``overwrite`` com o esquema da versão, como ``register_files``; a partição vai ao
+    log ``serialize_db.delta`` com o número de arquivos e o tempo da cópia."""
+    source_path = storage.relative(uri)
+    target_path = storage.relative(destination)
+    metadata = source.metadata()
+    partition_columns = metadata.partition_columns
+    partition_by = partition_columns[0] if partition_columns else None
+    contract = pa.schema(source.schema())
+    started = time.perf_counter()
+    actions = []
+    for action in group:
+        storage.copy(
+            storage.join(source_path, action["path"]), storage.join(target_path, action["path"])
+        )
+        actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
+    destination_table = open_table(destination, storage)
+    # O esquema da versão no commit: o delta-rs grava o metaData novo quando ele difere do
+    # destino, criado de outra versão.
+    _commit_actions(
+        destination_table,
+        str(metadata.name),
+        partition_by,
+        actions,
+        value=value,
+        metadata={},
+        schema=source.schema(),
+    )
+    log.info(
+        "%s: %s copiada, %d arquivo(s) em %.1f s",
+        metadata.name,
+        partition_label(value),
+        len(actions),
+        time.perf_counter() - started,
+    )
+
+
 def deep_copy(
     uri: str,
     version: int,
@@ -2356,8 +2402,8 @@ def deep_copy(
     """
     # Os dois caminhos conferidos antes de gravar: a criação do destino e as cópias gravam onde
     # recebem, fora da raiz também.
-    source_path = storage.relative(uri)
-    target_path = storage.relative(destination)
+    storage.relative(uri)
+    storage.relative(destination)
     source = open_table(uri, storage, version)
     metadata = source.metadata()
     partition_columns = metadata.partition_columns
@@ -2371,36 +2417,10 @@ def deep_copy(
     for value, group in _actions_by_partition(source, partition_by).items():
         # A soma conta toda partição, a pulada inclusive: a contagem final lê a cópia inteira.
         total += sum(int(action["num_records"]) for action in group)
-        label = partition_label(value)
         if all(action["path"] in registered for action in group):
-            log.info("%s: %s já no destino", metadata.name, label)
+            log.info("%s: %s já no destino", metadata.name, partition_label(value))
             continue
-        started = time.perf_counter()
-        actions = []
-        for action in group:
-            storage.copy(
-                storage.join(source_path, action["path"]), storage.join(target_path, action["path"])
-            )
-            actions.append(_add_action(_copied_file(action), contract, partition_by, value, ()))
-        destination_table = open_table(destination, storage)
-        # O esquema da versão no commit: o delta-rs grava o metaData novo quando ele difere do
-        # destino, criado de outra versão.
-        _commit_actions(
-            destination_table,
-            str(metadata.name),
-            partition_by,
-            actions,
-            value=value,
-            metadata={},
-            schema=source.schema(),
-        )
-        log.info(
-            "%s: %s copiada, %d arquivo(s) em %.1f s",
-            metadata.name,
-            label,
-            len(actions),
-            time.perf_counter() - started,
-        )
+        _copy_partition(source, uri, destination, value, group, storage)
     # O esquema do destino contra o da versão: sem partição copiada, nenhum commit o trocou.
     copy = open_table(destination, storage)
     differences = _schema_differences(pa.schema(copy.schema()), contract)

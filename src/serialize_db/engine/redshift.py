@@ -78,8 +78,8 @@ from sqlalchemy_redshift.dialect import RedshiftDialect_redshift_connector
 from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
 from serialize_db.engine import batches_of, checked_batches, take
-from serialize_db.engine.duckdb import environment_limits
 from serialize_db.errors import ContractError, SandboxError
+from serialize_db.resources import environment_limits
 from serialize_db.schema import (
     arrow_schema,
     cast,

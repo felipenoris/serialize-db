@@ -675,8 +675,7 @@ def _print_report(
         print(f"não rodou: {reason}")
     for value, totals in report.totals.items():
         # A tabela sem partição soma numa linha só, sob None.
-        label = "tabela inteira" if value is None else f"partição {value}"
-        print(f"{label}: {totals}")
+        print(f"{delta.partition_label(value)}: {totals}")
 
 
 def _audit_engine(
@@ -1002,6 +1001,24 @@ def _print_import_report(
         print(f"  fora do padrão: {entry}")
 
 
+def _partitions_to_import(
+    args: argparse.Namespace,
+    table: sa.Table,
+) -> list[str] | None:
+    """As partições que a carga grava de uma tabela: as de ``--partitions``, ou ``None`` pela
+    origem inteira; com ``--ignore-partitions``, as da origem fora das ignoradas, cada ignorada
+    numa linha, e a tabela sem partição entra inteira."""
+    unpartitioned = schema.table_options(table).partition_by is None
+    if args.ignore_partitions is None or unpartitioned:
+        return args.partitions
+    partitions, ignored = parquet_import.split_ignored_partitions(
+        args.source, table, args.ignore_partitions
+    )
+    for value in ignored:
+        print(f"{table.name}: partição {value} ignorada, em --ignore-partitions")
+    return partitions
+
+
 def _import(
     args: argparse.Namespace,
 ) -> int:
@@ -1035,18 +1052,10 @@ def _import(
             parquet_import.check_requested_partitions(args.source, table, args.partitions)
         for table in tables:
             # A tabela sem partição fica inteira de fora do pedido por partições.
-            unpartitioned = schema.table_options(table).partition_by is None
-            if args.partitions is not None and unpartitioned:
+            if args.partitions is not None and schema.table_options(table).partition_by is None:
                 print(f"{table.name}: tabela sem partição, fora de --partitions")
                 continue
-            # As partições da tabela: as pedidas, ou as da origem fora das ignoradas.
-            partitions = args.partitions
-            if args.ignore_partitions is not None and not unpartitioned:
-                partitions, ignored = parquet_import.split_ignored_partitions(
-                    args.source, table, args.ignore_partitions
-                )
-                for value in ignored:
-                    print(f"{table.name}: partição {value} ignorada, em --ignore-partitions")
+            partitions = _partitions_to_import(args, table)
             imported = parquet_import.import_table(db, table, args.source, partitions)
             report = parquet_import.import_report(db, table, args.source, partitions)
             _print_import_report(report, imported)
