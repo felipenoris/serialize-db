@@ -2152,15 +2152,38 @@ load. The user chose "Estender a sonda" (2026-10-10, 05:32 UTC).
   and the tables created and committed before the transaction, outside the measured time. With the
   hypothesis, the control row before the `COPY` waits while no transaction has committed, and the
   tables created before do not wait.
-- The package does not change until the reading: the choice between accepting the wait and
-  creating the final table in its own transaction waits on the next battery
-  (`OPEN_QUESTIONS.md`, "A espera da linha de controle na publicação em paralelo"). The second
-  battery of 2026-10-10 read the orders (`concurrency.md`): the control row before the `COPY`
-  serializes the four transactions on the control table's write lock, the tables created before
-  never waited, the hypothesis fell, and the choice went to the user's card.
+- The package did not change until the reading: the choice between accepting the wait and
+  creating the final table in its own transaction waited on the next battery, as an
+  `OPEN_QUESTIONS.md` item. The second battery of 2026-10-10 read the orders
+  (`concurrency.md`): the control row before the `COPY` serializes the four transactions on the
+  control table's write lock, the tables created before never waited, the hypothesis fell, and
+  the user accepted the wait (the next section).
 
 `probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
 `OPEN_QUESTIONS.md`, `concurrency.md`
+
+## The control row's wait accepted (2026-10-10)
+
+The second battery of 2026-10-10 read the three orders (`concurrency.md`): the control row before
+the `COPY` serializes the four transactions on the control table's write lock, which each holds
+until its `COMMIT`; the tables created and committed before the transactions never waited; and the
+hypothesis that the planner waits on the other transactions' uncommitted `CREATE TABLE` fell, while
+what the two slow `INSERT`s wait for in the ~20 s stayed unread, with the `CREATE TABLE` inside the
+concurrent transactions the only condition that separates the slow repetitions (10 of 21 with it,
+0 of 9 without). The assistant offered on a decision card: accept the wait (recommended, because it
+costs ~20 s per affected transaction only at the first parallel publication of a new table, never
+seen on the whole base, and the table stays atomic with its first load); or create each missing
+table in its own transaction, committed before the load's, where a failed first load leaves an
+empty table without a control row, a case the next publication would have to handle. The user
+chose "Aceitar" (2026-10-10, 20:42 UTC).
+
+- The package does not change: `publish_redshift` keeps the `CREATE TABLE` inside the load's
+  transaction and the control row as its last command, the `max_workers` docstring names the wait
+  and the decision, and the runbook keeps `--max-workers 4`.
+- No reading of the cause is owed, and the three orders stay in
+  `probes/operacao/probe_parallel_gain.py`.
+
+`src/serialize_db/publication.py` (`publish_redshift`), `docs/index.md`, `concurrency.md`
 
 ## The terminated session's test asserts the reconnection (2026-10-10)
 

@@ -437,6 +437,5 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   tables created before, waited [inferred: at the slow rate of 10 in 21, nine fast repetitions in
   a row have a chance near 0.3%]. What the two waiters wait for in those ~20 s is unread. In the
   four publications of the whole base since 2026-10-09 no table paid the wait (`redshift.md`). The
-  choice between accepting the wait and creating the tables before the load transactions is the
-  user's (`OPEN_QUESTIONS.md`, "A espera da linha de controle na publicação em paralelo").
+  user accepted the wait on 2026-10-10 (`decisions.md`, "The control row's wait accepted").
   `docs/index.md` ("Multithreading"), `docs/tecnologias.md` (Redshift, "Transações concorrentes")

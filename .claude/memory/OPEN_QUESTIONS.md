@@ -172,37 +172,6 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   (`.claude/memory/concurrency.md`): no DuckDB os pools
   ganharam com 2 vCPUs a metade do que em 8, e com 4 vCPUs entre os dois, e no Redshift o ganho não
   dependeu da máquina; o ganho com mais CPUs segue sem medida e espera a sonda numa máquina maior.
-- **A espera da linha de controle na publicação em paralelo.**
-  `probes/operacao/probe_parallel_gain.py` publica quatro tabelas iguais em quatro conexões, e das
-  21 repetições de 2026-10-05 a 2026-10-10 onze levaram de 10,520 s a 13,813 s e dez de 31,302 s a
-  36,110 s, contra 24,341 s a 32,179 s das 21 uma tabela por vez (`docs/index.md`, seção
-  "Multithreading"). A diferença está no `INSERT` da linha de controle, o último comando de cada
-  transação antes do `COMMIT`: nas lentas, os `INSERT` que esperam levam cerca de 20 s cada, dois
-  dos quatro nas três publicações lentas que o `sys_query_history` leu, que ele conta como
-  planejamento do comando (`planning_time`), sem fila e com até 0,104 s de espera por lock, e os
-  dois seguem esperando depois do `COMMIT` da transação que gravava a linha quando eles começaram
-  (`.claude/memory/concurrency.md`). A bateria das 17:02 de 2026-10-10 leu a sonda nas três ordens
-  dos comandos, três repetições cada: a ordem da publicação levou de 9,427 s a 9,710 s, sem
-  espera; a linha de controle logo depois do `CREATE TABLE`, antes do `COPY`, levou de 22,798 s a
-  23,358 s nas três, porque a gravação da linha toma um lock de escrita na tabela de controle que
-  a transação segura até o `COMMIT`, e as quatro transações se serializam nele, cada `INSERT`
-  esperando o `COMMIT` da anterior (de 5,3 s a 5,8 s, de 10,8 s a 11,1 s e de 16,2 s a 16,9 s),
-  espera que o `sys_query_history` também conta como planejamento; e as tabelas criadas e
-  confirmadas antes da transação levaram de 9,135 s a 10,234 s, sem espera. A hipótese de que o
-  planejador espera o `CREATE TABLE` sem commit das outras transações caiu: o primeiro `INSERT` de
-  cada repetição da linha antes do `COPY` planejou em 0,21 s a 0,34 s com os três `CREATE TABLE`
-  das outras transações sem commit. O que separa as repetições lentas segue sendo o `CREATE
-  TABLE` dentro das transações concorrentes, dez de 21 com ele contra nenhuma das nove sem ele (as
-  seis sem despublicação, com o `UPDATE`, e as três com as tabelas criadas antes), e o que os dois
-  `INSERT` esperam nos cerca de 20 s não foi lido. Nas quatro publicações da base inteira desde
-  2026-10-09 nenhuma tabela pagou a espera (`.claude/memory/redshift.md`). Espera o usuário:
-  aceitar a espera, que custa cerca de 20 s por transação que a sofre, só na primeira publicação
-  de uma tabela com mais de um worker, ou mudar a publicação para criar cada tabela ausente numa
-  transação própria, confirmada antes da transação da carga, o que tira a criação da transação
-  atômica da primeira carga: uma primeira carga que falha deixa a tabela vazia sem linha de
-  controle, e a publicação seguinte precisa tratá-la, porque hoje o `CREATE TABLE` de uma tabela
-  que existe é `ExecutionConflict`.
-
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
   o pino fica em 2.0.54. A 2.1.3 corrigiu os valores de `params()` que saíam `NULL` sob

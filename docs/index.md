@@ -997,7 +997,9 @@ do `COPY` planejou em 0,21 s a 0,34 s com os três `CREATE TABLE` das outras sem
   planejamento do comando, sem fila nem lock (leituras de 2026-10-10); ela só veio em publicações
   que criaram as tabelas, nenhuma das nove repetições sem o `CREATE TABLE` na transação esperou, o
   que o `INSERT` espera não foi lido, e o runbook publica a base com `--max-workers 4`, cujas
-  publicações da base inteira não pagaram a espera em tabela alguma.
+  publicações da base inteira não pagaram a espera em tabela alguma. O usuário aceitou a espera
+  em 2026-10-10, e a publicação segue criando a tabela na transação da carga, com a linha de
+  controle por último.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
