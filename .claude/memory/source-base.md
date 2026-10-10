@@ -431,7 +431,13 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   kept the counts and sums of the second battery of 2026-10-09, and the same three entries stayed
   outside the model. The audit of 2026-01-31 (version 6) read the same 989,852 orphans, `history`
   listed versions 0 to 6 (03:26:42 to 03:35:10 UTC), and `archive` copied the 29 files,
-  `cad_lancamentos` in 24.7 s at 370 MB.
+  `cad_lancamentos` in 24.7 s at 370 MB. Across the eight loads of the whole base since the
+  half-memory rule (2026-09-25 to 2026-10-10, on 2, 4 and 8 vCPUs) the process peak was 1.38 to
+  1.51 times the DuckDB `memory_limit`, 69% to 76% of the available memory, always at the largest
+  `cad_lancamentos` partition (4,138 MB of 5,801 MB on 2026-10-07; 9,557 MB of 12,651 MB on
+  2026-10-09 at 19:29): the peak follows the limit, not the partition. `docs/operacao.md` states it
+  as the sizing rule and the `_MEMORY_FRACTION` comment of `resources.py` cites it (the user's
+  request of 2026-10-10).
 - The resume of a stopped load ran again on 2026-10-10 from 03:55 UTC
   (`probe_load_resume.py --ignore-partitions 2025-09-30`, 8 vCPUs, 13.1 GiB available, the source
   with 7 partitions of `cad_lancamentos`, `environments.md`): the `SIGKILL` came 11.7 s after the
