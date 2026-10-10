@@ -2199,3 +2199,23 @@ chose "Tirar" (2026-10-10, 16:03 UTC).
 
 `suite_alvo.sh`, `probes/README.md`, `serialize_db.engine.redshift` (the `_PARALLEL_OFF_ROWS`
 comment), `redshift.md`
+
+## The threads and the credentials probes leave the battery (2026-10-10)
+
+The user asked (2026-10-10, 17:14 UTC) for `probes/duckdb_threads.py` and `probes/credentials.py`
+what the UNLOAD probe got above: out of `suite_alvo.sh`, their commands in `SUITE_ALVO.md`. He had
+skipped both by hand in the batteries of 2026-10-07 and 2026-10-10. What the steps read and cost:
+`duckdb_threads.py` ran in the target six times, 2026-09-24, 2026-09-27, 2026-09-29, 2026-10-05
+and twice on 2026-10-09, every run ending with `threads` at the process's CPUs (user instruction
+of 2026-09-24, `duckdb.md`), 46 minutes on 8 vCPUs and 93 on 4 in the timed runs;
+`credentials.py` ran five times on the current code, 2026-09-26, 2026-09-27, 2026-09-29 and twice
+on 2026-10-09, with no read failing (`aws-s3.md`), about 63 minutes each.
+
+- The two `run` lines, their comments and the section "Teste credencial expirando (leva 1h)" leave
+  `suite_alvo.sh`, which has 48 steps; the probes, their tests and their commands in
+  `probes/README.md` and `README.md` stay. `SUITE_ALVO.md` gains one section per probe with the
+  command, `duckdb_threads.py` with the `PYTHONPATH=tests` the script exported, and the report's
+  path; its "Bateria" paragraph loses the credential step.
+
+`suite_alvo.sh`, `SUITE_ALVO.md`, `probes/README.md`, `duckdb.md`, `aws-s3.md`,
+`environments.md`, `OPEN_QUESTIONS.md`

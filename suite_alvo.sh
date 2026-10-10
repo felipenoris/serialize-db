@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# A bateria do ambiente alvo num comando só: os probes e as suítes, a migração, a publicação, a
-# credencial expirando, o acesso de leitura, a exportação e o compact, a sonda da base publicada,
-# as sondas de consistência e as da operação, na ordem em que estão abaixo. As variáveis que os
-# passos leem estão em SUITE_ALVO.md, seção "Lista de variáveis de ambiente", que também diz
-# como empacotar os resultados.
+# A bateria do ambiente alvo num comando só: os probes e as suítes, a migração, a publicação, o
+# acesso de leitura, a exportação e o compact, a sonda da base publicada, as sondas de
+# consistência e as da operação, na ordem em que estão abaixo. As variáveis que os passos leem
+# estão em SUITE_ALVO.md, seção "Lista de variáveis de ambiente", que também diz como empacotar
+# os resultados e traz os comandos das sondas fora da bateria.
 #
 # Uso, com as variáveis exportadas:
 #
@@ -208,9 +208,6 @@ main() {
     run .venv/bin/serialize-db archive --root "$TARGET_ROOT_PATH" --environment prd \
         --metadata client_model:Base.metadata --name carga-2026-09-24
 
-    # Benchmark threads do duckdb.
-    run .venv/bin/python probes/duckdb_threads.py "$TARGET_ROOT_PATH/prd"
-
     section "Publicação Delta -> Redshift"
 
     # 1. Uma vez por esquema: a tabela de controle serialize_db_publications.
@@ -246,11 +243,6 @@ main() {
         --metadata client_model:Base.metadata --channel current
     run .venv/bin/serialize-db publish_redshift --root "$TARGET_ROOT_PATH" --environment prd \
         --metadata client_model:Base.metadata --snapshot carga-2026-09-25 --tables cad_contas
-
-    section "Teste credencial expirando (leva 1h)"
-
-    # probe credentials: 1h de leitura
-    run .venv/bin/python probes/credentials.py "$TARGET_ROOT_PATH/prd/cad_contas"
 
     section "Acesso de leitura"
 
