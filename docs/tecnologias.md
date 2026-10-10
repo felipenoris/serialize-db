@@ -4647,7 +4647,14 @@ controle de 13 publicações de quatro tabelas, em quatro conexões ou uma por v
 `svv_transactions`, por uma quinta sessão a cada segundo, os locks delas: a espera por lock foi de
 até 0,132 s, sem fila, e o `PgXenWriteLock` na tabela de controle apareceu uma vez como pendente,
 por um segundo; os quatro `INSERT` que passaram de 3 s levaram de 20,067 s a 21,070 s no
-planejamento, todos em publicações que criaram as tabelas (`.claude/memory/concurrency.md`).
+planejamento, todos em publicações que criaram as tabelas (`.claude/memory/concurrency.md`). Às
+18:52 do mesmo dia a sonda publicou as quatro tabelas pela própria transação com a linha de
+controle logo depois do `CREATE TABLE`, antes do `COPY`: a gravação da linha toma um lock de
+escrita na tabela de controle que a transação segura até o `COMMIT`, as quatro transações se
+serializaram nele, cada `INSERT` esperando o `COMMIT` da anterior, e o `sys_query_history` contou
+a espera como planejamento, de 4,995 s a 16,481 s, com até 0,132 s de espera por lock; por isso a
+publicação grava a linha por último, e com as tabelas criadas e confirmadas antes da transação
+nenhum `INSERT` esperou.
 
 ### Ingestão de dados
 

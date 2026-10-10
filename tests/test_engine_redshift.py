@@ -2185,7 +2185,8 @@ def test_session_terminated_by_the_server_is_read(
     seguintes reconectaram; a sessão ociosa reconectou com 1 s em sete das oito rodadas e, numa de
     2026-10-10, respondeu aos dois comandos no mesmo pid depois do ``pg_terminate_backend``
     verdadeiro, a leitura que fez cada comando se repetir até o limite (decisão do usuário de
-    2026-10-10)."""
+    2026-10-10); na bateria das 17:02 de 2026-10-10, a primeira com as asserções, os 12 casos das
+    quatro rodadas caíram na primeira repetição, 1 s depois do ``pg_terminate_backend``."""
     engine = target.engine
     reading = {}
 
@@ -2279,7 +2280,8 @@ def test_session_terminated_during_the_ingest_copy_is_read(
     três, o ``DROP`` falhou no envio com ``BrokenPipeError``, que o motor ainda não lia como a
     queda, e o ``ingest`` o levantou com a staging deixada e a sessão sem reconectar; na outra, o
     ``DROP`` reabriu a conexão. Em 2026-10-10, com a conversão do ``OSError``, o ``DROP`` reabriu
-    a conexão nas quatro rodadas, a staging saiu e o comando seguinte rodou num pid novo.
+    a conexão nas oito rodadas das duas baterias, a staging saiu e o comando seguinte rodou num
+    pid novo.
     ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE`` provoca o ``BrokenPipeError`` no substituto."""
     engine = target.engine
     uri = target.uri(ENTRIES)

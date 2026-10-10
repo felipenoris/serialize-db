@@ -2154,7 +2154,10 @@ load. The user chose "Estender a sonda" (2026-10-10, 05:32 UTC).
   tables created before do not wait.
 - The package does not change until the reading: the choice between accepting the wait and
   creating the final table in its own transaction waits on the next battery
-  (`OPEN_QUESTIONS.md`, "A espera da linha de controle na publicação em paralelo").
+  (`OPEN_QUESTIONS.md`, "A espera da linha de controle na publicação em paralelo"). The second
+  battery of 2026-10-10 read the orders (`concurrency.md`): the control row before the `COPY`
+  serializes the four transactions on the control table's write lock, the tables created before
+  never waited, the hypothesis fell, and the choice went to the user's card.
 
 `probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
 `OPEN_QUESTIONS.md`, `concurrency.md`

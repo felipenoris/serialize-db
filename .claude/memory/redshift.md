@@ -748,3 +748,44 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   tables `já está publicada` both ways. `prd_cad_lancamentos` kept 424,598,150 rows and the
   `id_lancamento` sum 538,418,094,708,709,063 before the swap, after it and after the return, and
   the channel ended on `carga-2026-09-25`.
+- The second battery of 2026-10-10 (17:02 to 18:55 UTC, `environments.md`) read the version
+  `1.0.477953` again; `RS-8` read 0 of 3 tables, `RS-12`'s count returned no row, and the Data
+  API's `select 1` answered in 27 ms. The four sessions that run the engine cases read:
+  - `test_primitives_refuse_a_transaction_the_client_opened_on_the_target` and
+    `test_nonfinite_double_reaches_the_server_by_every_text_path` passed in all four, as at 02:32.
+  - `test_session_terminated_by_the_server_is_read`, asserting since PR #152: the 12 cases of the
+    four sessions resolved at the first repetition, 1 s after the `pg_terminate_backend`
+    (`esperou` 1.0 in every reading); the idle session reconnected on a new pid, and inside
+    `transaction()` and inside the client's `BEGIN` the command raised the driver's
+    `InterfaceError`, with the `KeyError` of the prepared-statement cache in its context, and the
+    next command reconnected. The late termination of 02:32, the idle session answering on the
+    same pid, did not recur, so whether the 10 s of `TERMINATION_LIMIT` cover it stays unread
+    (`OPEN_QUESTIONS.md`).
+  - `test_session_terminated_during_the_ingest_copy_is_read`: `pg_terminate_backend` ran 1.616 s
+    to 2.082 s after the start, right after the `COPY` was sent, which raised the `InterfaceError`
+    0.29 s to 0.37 s later, and the `ROLLBACK` of `transaction()` raised it again. The staging's
+    `DROP` failed in the send within 1 ms in all four, with the driver's `InterfaceError` in three
+    and, in `redshift_suite_1.json`, the engine's `InterfaceError: o socket da conexão falhou:
+    BrokenPipeError`; in all four the engine reconnected, the second `DROP` started 0.34 s to
+    0.53 s after the first and took 0.33 s to 0.47 s, `staging_left` was false, the sandbox table
+    kept 0 rows and the next command ran on a new pid.
+
+  The whole base was published by channel on 8 vCPUs after `--init` created the control table
+  again, `cad_contas` first by `--tables cad_contas` (3.1 s at 250 MB): the other unpartitioned
+  tables 3.3 s to 4.1 s, `cad_contratos` 46.8 s, `cad_operacoes` 67.9 s, `rel_contrato_operacao`
+  84.0 s and `cad_lancamentos` (6 partitions, 424,598,150 rows) 501.8 s at 287 MB, 0.85 million
+  rows per second, the command 518 s; the three mid-size tables took 7.1 s less, 1.9 s more and
+  0.3 s less than at 02:32, and no table of the four publications of the whole base since
+  2026-10-09 paid the control row's ~20 s wait (`concurrency.md`). `--status`, `--channel current`
+  and `--snapshot carga-2026-09-25 --tables cad_contas` read as on 2026-10-07.
+- `probes/operacao/probe_published_base.py` in the second battery of 2026-10-10 (18:15 UTC, 149 s,
+  every check passing), over the base just published at `carga-2026-09-25`: the `EXPLAIN` of the
+  join of `prd_cad_lancamentos` (424,598,150 rows) with `prd_cad_contas` (101) on `id_conta` read
+  `XN Hash Join DS_DIST_ALL_NONE` again. The redo of 2026-01-31 (33,239,719 rows) took 29.0 s at a
+  process peak of 8,351 MB (`ingest` 0.115 s, `audit` 5.883 s, `publish_delta` 20.173 s),
+  `cad_lancamentos` at version 7; with the channel on it, the publication by channel swapped only
+  that partition, version 7, in 43.8 s at 261 MB (47.9 s for the command), and with the channel
+  back on `carga-2026-09-25` it swapped it back, version 6, in 46.9 s at 260 MB (50.8 s), the other
+  11 tables `já está publicada` both ways. `prd_cad_lancamentos` kept 424,598,150 rows and the
+  `id_lancamento` sum 538,418,094,708,709,063 before the swap, after it and after the return, and
+  the channel ended on `carga-2026-09-25`.
