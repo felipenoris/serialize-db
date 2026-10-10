@@ -59,27 +59,16 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   perde só a tabela temporária que o pipeline tenha criado na sessão, e a carga de cada partição de
   `ingest` e de `pinned_delta` roda numa transação desde 2026-10-04, para a queda no meio do `COPY`
   subir sem repetição (`POC.md`); o alvo leu essa queda em 2026-10-09 (item "A reconexão do motor
-  Redshift").
-- **A reconexão do motor Redshift.** Duas leituras da suíte do motor derrubam a sessão por
-  `pg_terminate_backend` numa sessão a mais, e as quatro sessões da segunda bateria de 2026-10-09 as
-  rodaram no alvo (`.claude/memory/redshift.md`). Na sessão ociosa, dentro de `transaction()` e
-  dentro de um `BEGIN` do cliente
-  (`test_engine_redshift.py::test_session_terminated_by_the_server_is_read`), os 12 casos leram o
-  que a docstring de `execute` diz: fora de transação o comando reabriu a conexão num pid novo, e
-  dentro dela subiu o `InterfaceError` do driver e o comando seguinte reconectou. Logo depois do
-  `COPY` de uma partição de 300.000 linhas do `ingest`
-  (`::test_session_terminated_during_the_ingest_copy_is_read`), o `COPY` e o `ROLLBACK` de
-  `transaction()` levantaram o `InterfaceError`, e em 3 das 4 sessões o comando seguinte, o `DROP`
-  da staging, falhou no envio com `BrokenPipeError: [Errno 32] Broken pipe`, um `OSError` que o
-  `execute` não trata: o `ingest` levantou o `BrokenPipeError` em vez do `InterfaceError` da
-  docstring, a staging ficou, e todo comando seguinte falhou do mesmo jeito, a sessão presa na
-  conexão morta. Na quarta, o `DROP` recebeu o `InterfaceError`, e o motor reconectou e removeu a
-  staging. O `redshift_connector` 2.1.17 levanta o `InterfaceError` na leitura vazia do socket, e o
-  envio deixa passar o `OSError` (`BrokenPipeError`, `ConnectionResetError`), porque só converte o
-  `AttributeError` e o `ValueError` do arquivo fechado; o substituto imita só o `InterfaceError`.
-  Espera o usuário: tratar o `OSError` do envio como a queda no `execute` (reconexão fora de
-  transação; dentro dela, o `InterfaceError` da docstring), com um caso no substituto que provoque o
-  `BrokenPipeError`, ou deixar como está.
+  Redshift no alvo").
+- **A reconexão do motor Redshift no alvo.** Na segunda bateria de 2026-10-09, logo depois do
+  `COPY` derrubado de um `ingest`, o `DROP` da staging falhou no envio com `BrokenPipeError` em 3
+  das 4 sessões, e a sessão ficou presa na conexão morta (`.claude/memory/redshift.md`). Por
+  decisão do usuário do mesmo dia (`decisions.md`), o `_run` do motor converte o `OSError` do
+  socket no `InterfaceError` da queda, que o `execute` trata como a conexão derrubada;
+  `tests/test_engine_redshift.py` cobre a conversão com a conexão de mentira, e
+  `SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE` provoca o erro no substituto.
+  `test_session_terminated_during_the_ingest_copy_is_read` passou a conferir que a staging sai e
+  que a sessão segue, o que espera a próxima bateria no alvo.
 - **O `create_table` do motor Redshift dentro da transação do cliente.** A recusa de 2026-10-09
   (`decisions.md`), que o alvo leu nas quatro sessões da segunda bateria do dia
   (`.claude/memory/redshift.md`), cobre o `append`, o `appender`, o `ingest` e o `pinned_delta`, que

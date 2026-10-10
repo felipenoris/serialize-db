@@ -514,24 +514,27 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   after the `ROLLBACK` and the server discards the transaction; the appender already loaded
   inside one, and the publication's `_Connection` never retries.
 - The driver raises `InterfaceError` (`BrokenPipe: server socket closed. ...`) only when a read
-  returns no bytes; an `ErrorResponse` becomes `ProgrammingError` (`28000` `InterfaceError`,
-  `23505` `IntegrityError`); `_send_message` turns only `ValueError("write to closed file")` and
+  returns no bytes; an `ErrorResponse` becomes `ProgrammingError` (`28000` `InterfaceError`, `23505`
+  `IntegrityError`); `_send_message` turns only `ValueError("write to closed file")` and
   `AttributeError` into `InterfaceError`, and the socket `flush` that sends each command catches
   only `AttributeError`, so its `OSError` (`BrokenPipeError`, `ConnectionResetError`) passes
-  `Cursor.execute` unconverted and would reach the caller of `RedshiftEngine.execute` without the
-  reconnect (redshift_connector 2.1.17, read in its code on 2026-10-09; never seen in the target).
-  Since 2026-10-09 `tests/test_engine_redshift.py` ends an engine session with
-  `pg_terminate_backend` from the parent engine, idle, inside `transaction()` and inside a
-  client's `BEGIN` (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and
-  `transacao_do_cliente`) and during the `COPY` of `ingest` over a 300,000-row partition
-  (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next
-  command reconnects and what the server kept; no battery has run them yet. The driver's
-  `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop leaves it
-  as it was before the failed command; the engine reads it to refuse the primitives and to stop
-  the reconnect inside a client transaction, and marks the dropped connection
+  `Cursor.execute` unconverted (redshift_connector 2.1.17, read in its code on 2026-10-09). The
+  target showed it the same day, a `BrokenPipeError` on the staging's `DROP` after a dropped `COPY`
+  (below), and since then `RedshiftEngine._run` turns an `OSError` from `cursor.execute` into the
+  drop's `InterfaceError`, with the original as `__cause__` (`decisions.md`). Since 2026-10-09
+  `tests/test_engine_redshift.py` ends an engine session with `pg_terminate_backend` from the parent
+  engine, idle, inside `transaction()` and inside a client's `BEGIN`
+  (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and `transacao_do_cliente`) and
+  during the `COPY` of `ingest` over a 300,000-row partition
+  (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next command
+  reconnects and what the server kept; the second battery of 2026-10-09 ran them (below). The
+  driver's `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop
+  leaves it as it was before the failed command; the engine reads it to refuse the primitives and to
+  stop the reconnect inside a client transaction, and marks the dropped connection
   (`_connection_dropped`) so that the next command reconnects (read in the driver's code on
-  2026-10-09). The stand-in imitates the driver's `InterfaceError` with the open transaction
-  rolled back and `in_transaction` left as it was.
+  2026-10-09). The stand-in imitates the driver's `InterfaceError` with the open transaction rolled
+  back and `in_transaction` left as it was, and with `SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE` the
+  send's `BrokenPipeError` from the second command sent on a terminated session.
 - The battery of 2026-10-05 (16:38 to 20:09 UTC, `environments.md`) read the Redshift version
   `1.0.434008`, against `1.0.436211` in every battery from 2026-09-20 to 2026-09-30, a lower number
   the readings do not explain. Between the end of the battery of 2026-09-30 (15:42 UTC, the control
@@ -641,7 +644,7 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
     after it was sent, and the `ROLLBACK` of `transaction()` raised it again. In 3 of the 4
     sessions the next command, the `DROP TABLE IF EXISTS` of the staging that `ingest` runs after
     the transaction, failed in the driver's send with `BrokenPipeError: [Errno 32] Broken pipe`, an
-    `OSError` that `execute` does not catch: `ingest` raised the `BrokenPipeError`, with the
+    `OSError` that `execute` did not catch then: `ingest` raised the `BrokenPipeError`, with the
     `COPY`'s `InterfaceError` in its context, the staging stayed, and the next command on the
     session, `SELECT pg_backend_pid()`, failed the same way, the session stuck on the dead
     connection. In the fourth (`engine_redshift_2.json`) the `DROP` got the `InterfaceError`, the
@@ -649,8 +652,9 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
     table kept 0 rows in all four. What makes the send fail is unread: in `terminated_session`
     the command, the `ROLLBACK` and the next command all wrote to the closed connection and read
     its end, while after the `COPY` the second write failed in 3 of 4 sessions [inferred: a reset
-    from the server side arriving before the write, a matter of timing];
-    `.claude/memory/OPEN_QUESTIONS.md` ("A reconexão do motor Redshift").
+    from the server side arriving before the write, a matter of timing]. The user chose the fix
+    the same day (`decisions.md`), and the case now asserts that the staging leaves and the session
+    goes on; `.claude/memory/OPEN_QUESTIONS.md` ("A reconexão do motor Redshift no alvo").
 
   The whole base was published by channel on 8 vCPUs after `--init` created the control table:
   `cad_contas` 3.2 s at 251 MB, the unpartitioned tables 3.2 s to 4.3 s, `cad_contratos` 55.0 s,

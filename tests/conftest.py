@@ -36,8 +36,8 @@ Variáveis de ambiente lidas:
 - ``SERIALIZE_DB_TEST_EMULATOR``: qualquer valor troca o S3 e o Redshift pelo substituto local de
   ``emulator.py``, o moto e um DuckDB em memória, e autoriza as suítes S3 e Redshift nele: a
   sessão define as raízes delas e aponta as variáveis da AWS para o moto, em ``127.0.0.1``.
-  ``SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL`` e ``SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST`` provocam
-  falhas no substituto.
+  ``SERIALIZE_DB_TEST_EMULATOR_FAIL_SQL``, ``SERIALIZE_DB_TEST_EMULATOR_NO_MANIFEST`` e
+  ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE`` provocam falhas no substituto.
 - ``SERIALIZE_DB_TEST_KEEP``: qualquer valor mantém os objetos, as pastas e as tabelas
   ``serialize_db_poc_<id>_*`` criados; o sandbox dos motores e as tabelas publicadas pelos
   casos da publicação e do leitor saem mesmo assim.
