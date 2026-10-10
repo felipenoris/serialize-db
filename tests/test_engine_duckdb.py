@@ -874,6 +874,22 @@ def test_query_keeps_backslash_literals(
     assert engine.query(by_inline_area).column("n")[0].as_py() == 2
 
 
+def test_query_embeds_the_nan_and_the_infinities_as_float_literals(
+    setup: Setup,
+) -> None:
+    """O ``NaN`` e os infinitos de um ``bindparam`` com ``literal_execute`` chegam ao DuckDB como
+    ``'NaN'::float8``, ``'Infinity'::float8`` e ``'-Infinity'::float8``, que ele compara como no
+    ``=`` dele, o ``NaN`` igual a si; sem ``with_float_literals`` no compilador, o texto trazia
+    ``nan``, que o binder lia como coluna."""
+    engine = setup.engine
+    values = [float("nan"), float("inf"), float("-inf"), 1.5]
+    create_and_append(engine, ENTRIES, entry_rows(MONTHS[0], 1, 4, valor=values))
+    for value in values:
+        inline = sa.bindparam("valor", value, literal_execute=True)
+        statement = sa.select(sa.func.count().label("n")).where(ENTRIES.c.valor == inline)
+        assert engine.query(statement).column("n")[0].as_py() == 1, value
+
+
 # ---------------------------------------------------------------- o stream
 
 

@@ -768,7 +768,14 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
     and, in `redshift_suite_1.json`, the engine's `InterfaceError: o socket da conexão falhou:
     BrokenPipeError`; in all four the engine reconnected, the second `DROP` started 0.34 s to
     0.53 s after the first and took 0.33 s to 0.47 s, `staging_left` was false, the sandbox table
-    kept 0 rows and the next command ran on a new pid.
+    kept 0 rows and the next command ran on a new pid. Three of the four sessions closed this
+    case with a `PytestUnraisableExceptionWarning`, `ssl.SSLError: Underlying socket connection
+    gone (_ssl.c:2430)` ignored in `_io.BufferedRWPair.__del__`, and one of them printed it once
+    more under the next case, `test_two_writers_on_the_same_table_both_enter`: the driver's
+    `Connection.close()` (`redshift_connector/core.py`) writes the terminate message, its
+    `_flush()` fails on the dead socket, caught as `socket.error`, and the `finally` drops the
+    buffered pair with the message unflushed, which the garbage collector flushes later. The
+    warning is the driver's, with nothing for the engine to do.
 
   The whole base was published by channel on 8 vCPUs after `--init` created the control table
   again, `cad_contas` first by `--tables cad_contas` (3.1 s at 250 MB): the other unpartitioned

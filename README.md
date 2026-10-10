@@ -52,7 +52,9 @@ A documentação do pacote é gerada pelo `pdoc` a partir das docstrings, de
 [`docs/index.md`](docs/index.md), a página principal, com o funcionamento geral, a instalação, o
 tutorial, a retenção dos arquivos removidos e a tabela de mapeamento de tipos, e de
 [`docs/operacao.md`](docs/operacao.md), o runbook da operação e as opções de cada subcomando de
-`serialize-db`, na página de `serialize_db.cli`. Cada exemplo de docstring abre com
+`serialize-db`, na página de `serialize_db.cli`, e de [`docs/tecnologias.md`](docs/tecnologias.md),
+a revisão das tecnologias, na página de `serialize_db.technology_review`. Cada exemplo de
+docstring abre com
 `.. code-block:: python`, ou `.. code-block:: shell` no da linha de comando: o `pdoc` só destaca o
 código dessa diretiva, e um bloco apenas indentado sai sem destaque.
 Cada função e método documenta os argumentos, o retorno e as exceções nos campos `:param nome:`,
@@ -97,7 +99,7 @@ dos probes), sobre o DuckDB em memória e arquivos locais, sem AWS. É o que a e
 cada pull request e quando disparada à mão:
 
 ```
-SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py
+SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py -p no:cacheprovider
 ```
 
 A biblioteca carrega a extensão `delta` do DuckDB em toda conexão que abre, e no S3 também a
@@ -228,7 +230,9 @@ biblioteca, e as sondas que gravam sob as raízes das suítes: as de consistênc
 raiz S3 e no esquema da suíte; e as da operação, em `probes/operacao/`, que rodam `serialize-db`
 sobre as primeiras partições de `cad_lancamentos` da base de origem, sob `SERIALIZE_DB_TEST_S3_ROOT`
 ou, sem ela, sob `SERIALIZE_DB_TEST_LOCAL_ROOT`, salvo `probe_published_base.py` e
-`probe_readers.py`, que rodam depois da publicação sobre a base publicada, e a primeira grava nela.
+`probe_readers.py`, que rodam depois da publicação sobre a base publicada, e a primeira grava nela,
+e `probe_parallel_gain.py`, que gera as próprias tabelas sob a raiz S3 e pede as variáveis
+`SERIALIZE_DB_REDSHIFT_*`.
 O que cada um lê está no cabeçalho do próprio script e em `probes/README.md`. Cada um imprime o
 relatório e o grava em `probes/output/`, pasta fora do git, para ser colado na conversa com o
 assistente.
@@ -252,6 +256,7 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_vacuum_orphans.py s3://bucket/origem
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_compact_memory.py s3://bucket/origem
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_unload_parallel.py s3://bucket/origem
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_parallel_gain.py
 .venv/bin/python probes/operacao/probe_published_base.py s3://bucket/prefixo
 .venv/bin/python probes/operacao/probe_readers.py s3://bucket/prefixo
 ```
@@ -260,13 +265,16 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 mede a ingestão pelo motor DuckDB com cada valor de `threads`, da metade das CPUs do processo a
 cinco vezes elas; o modelo é `client_model:Base.metadata`, com `tests` no `PYTHONPATH`, e
 `--metadata`, `--threads`, `--partition`, `--tables` e `--repetitions` mudam o padrão. Ele roda
-depois da migração, nunca ao mesmo tempo que ela, e levou cerca de 15 minutos no ambiente alvo em
-2026-09-23, com a partição 2026-02-28 de `cad_lancamentos`; no S3, pede a região em `AWS_REGION` ou
-`AWS_DEFAULT_REGION`.
+depois da migração, nunca ao mesmo tempo que ela, e levou no ambiente alvo, nas seis rodadas de
+2026-09-24 a 2026-10-09, de 46 minutos, com 8 vCPUs, a 93, com 4; no S3, pede a região em
+`AWS_REGION` ou `AWS_DEFAULT_REGION`. Fora de `suite_alvo.sh` desde 2026-10-10, por decisão do
+usuário: roda à mão, pelo comando de `SUITE_ALVO.md`.
 
 `credentials.py` abre sobre uma tabela Delta pequena os clientes que uma execução segura e os lê de
 novo a cada 5 minutos, até passar a expiração da credencial do contêiner e a da senha do Redshift,
 mais 3 minutos; levou 63 minutos no ambiente alvo, nas baterias de 2026-09-27 e de 2026-09-28.
+Fora de `suite_alvo.sh` desde 2026-10-10, por decisão do usuário: roda à mão, pelo comando de
+`SUITE_ALVO.md`.
 
 O argumento `s3://bucket/prefixo` é a raiz que o probe fotografa; sem ele valem `SERIALIZE_DB_ROOT`
 e `SERIALIZE_DB_TEST_S3_ROOT`, nessa ordem. `redshift.py` conecta pelas variáveis

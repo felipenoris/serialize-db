@@ -2300,6 +2300,13 @@ def test_parse_arguments_reads_the_source_and_the_ignored_partitions(
         operation_lib.parse_arguments("a sonda")
     assert usage.value.code == 2
 
+    # O valor fora da regra da partição, aqui com a aspa que fecharia o literal, é erro de uso,
+    # como no serialize-db import.
+    monkeypatch.setattr(sys, "argv", ["sonda.py", "/dados", "--ignore-partitions", "2025-09-30'"])
+    with pytest.raises(SystemExit) as refused:
+        operation_lib.parse_arguments("a sonda")
+    assert refused.value.code == 2
+
 
 @pytest.mark.local
 def test_source_partitions_skips_the_ignored_partitions(
@@ -2329,6 +2336,24 @@ def test_source_partitions_skips_the_ignored_partitions(
     assert "tem 3 partição(ões) fora das ignoradas, a sonda pede 4" in capsys.readouterr().err
 
 
+def test_published_base_problems_name_the_tables_off_the_expected_versions() -> None:
+    """``published_problems`` e ``current_problems`` da sonda da base publicada nomeiam a tabela
+    cuja versão publicada, ou atual, não é a esperada, e a ausente da situação como ``None``."""
+    status = publication.PublicationStatus
+    statuses = {
+        "cad_contas": status("prd_cad_contas", 2, 2, ()),
+        "cad_lancamentos": status("prd_cad_lancamentos", 6, 7, ("2026-01-31",)),
+    }
+    expected = {"cad_contas": 2, "cad_lancamentos": 7, "cad_operacoes": 1}
+    assert probe_published_base.published_problems(statuses, expected) == [
+        "cad_lancamentos: publicada na versão 6, não 7",
+        "cad_operacoes: publicada na versão None, não 1",
+    ]
+    assert probe_published_base.current_problems(statuses, expected) == [
+        "cad_operacoes: versão atual None, não 1",
+    ]
+
+
 def test_published_tables_reads_the_swapped_tables() -> None:
     """``published_tables`` da sonda da base publicada lê a versão, as partições, o tempo e o pico
     de RSS de cada tabela trocada nas linhas do ``serialize-db publish_redshift``, e deixa de fora a
@@ -2349,6 +2374,75 @@ def test_published_tables_reads_the_swapped_tables() -> None:
             "rss": "270",
         }
     }
+
+
+def test_parallel_gain_summary_takes_the_fastest_run_of_each_variant() -> None:
+    """``summary_line`` da sonda de paralelismo: o menor tempo de cada forma, o pico dessa medida e
+    a razão do menor tempo da primeira forma sobre o dela; ``best`` é a medida mais rápida."""
+    run = probe_parallel_gain.Run
+    runs = {
+        "serie": [run(2.0, 10.0, 80), run(1.5, 12.0, 80), run(1.8, None, 80)],
+        "threads": [run(0.75, None, 80), run(0.9, 3.0, 80)],
+    }
+    assert probe_parallel_gain.best(runs["serie"]) == run(1.5, 12.0, 80)
+    assert probe_parallel_gain.summary_line("redshift 80 consultas", runs) == (
+        "redshift 80 consultas: serie 1.500 s (1.00x, pico +12 MB); threads 0.750 s (2.00x)"
+    )
+
+
+def test_parallel_gain_query_ranges_spread_the_ids_and_split_them_by_thread() -> None:
+    """``query_ranges`` dá ``count`` faixas iguais espalhadas pela tabela, de até ``QUERY_WIDTH``
+    ids, e ``chunks_of`` as reparte entre as ``WORKERS`` threads, uma a cada ``WORKERS``."""
+    ranges = probe_parallel_gain.query_ranges(5_000_000, 80)
+    assert len(ranges) == 80
+    assert ranges[0] == (0, 999)
+    assert ranges[1] == (62_500, 63_499)
+    assert ranges[79] == (4_937_500, 4_938_499)
+    assert probe_parallel_gain.query_ranges(100, 10) == [(i * 10, i * 10 + 9) for i in range(10)]
+    chunks = probe_parallel_gain.chunks_of(ranges)
+    assert len(chunks) == probe_parallel_gain.WORKERS
+    assert chunks[0][:2] == [ranges[0], ranges[4]]
+    assert chunks[3][0] == ranges[3]
+    flattened = []
+    for chunk in chunks:
+        flattened.extend(chunk)
+    assert sorted(flattened) == ranges
+
+
+def test_parallel_gain_command_kinds_count_and_summarize() -> None:
+    """``command_kind`` dá a primeira palavra, ``CREATE TEMP`` na staging e ``controle`` no que
+    cita a tabela de controle; ``count_commands`` conta os de um tipo e ``commands_line`` resume
+    cada tipo na ordem em que apareceu, com quantos, a soma e o maior tempo."""
+    kind = probe_parallel_gain.command_kind
+    control = publication.CONTROL_TABLE
+    assert kind('CREATE TEMP TABLE "x_staging" (...)') == "CREATE TEMP"
+    assert kind('CREATE TABLE "esquema"."x" (...)') == "CREATE"
+    assert kind(f'INSERT INTO "esquema"."{control}" VALUES (...)') == "INSERT controle"
+    assert kind(f'SELECT * FROM "esquema"."{control}"') == "SELECT controle"
+    assert kind("conexão") == "conexão"
+    command = probe_parallel_gain.Command
+    commands = [
+        command("conexão", None, 1, 0.0, 0.25),
+        command("COPY", "cad_paralelo_a", 1, 1.0, 2.5),
+        command("INSERT controle", "cad_paralelo_a", 1, 4.0, 20.5),
+        command("COPY", "cad_paralelo_b", 2, 1.0, 1.5),
+    ]
+    assert probe_parallel_gain.count_commands(commands, ("COPY",)) == 2
+    assert probe_parallel_gain.count_commands(commands, ("INSERT controle", "UPDATE controle")) == 1
+    assert probe_parallel_gain.commands_line(commands) == (
+        "conexão 1x, soma 0.25 s, máx 0.25 s; COPY 2x, soma 4.00 s, máx 2.50 s; "
+        "INSERT controle 1x, soma 20.50 s, máx 20.50 s"
+    )
+
+
+def test_parallel_gain_result_cache_query_counts_the_small_queries_by_cache_hit() -> None:
+    """``result_cache_query`` conta no ``sys_query_history``, por ``result_cache_hit``, as consultas
+    de contagem sobre a tabela desde o instante, em UTC."""
+    text = probe_parallel_gain.result_cache_query(1_760_000_000.5, "exec_1_cad_paralelo_a")
+    assert text.startswith("SELECT result_cache_hit, count(*) AS n FROM sys_query_history ")
+    assert "WHERE start_time >= '2025-10-09 08:53:20' AND query_type = 'SELECT' " in text
+    assert "query_text ILIKE '%count(%' AND query_text ILIKE '%exec_1_cad_paralelo_a%'" in text
+    assert text.endswith("GROUP BY result_cache_hit ORDER BY result_cache_hit")
 
 
 def test_parallel_gain_commands_keep_the_start_the_thread_and_the_table() -> None:

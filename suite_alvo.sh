@@ -19,7 +19,10 @@
 # incluída, vai também para probes/output/suite_alvo_<data-hora>.txt, ao lado dos relatórios
 # que as sondas gravam, e o arquivo termina com a tabela dos passos e o código de saída de cada
 # um. Código de saída do script: 0 quando todo passo saiu com 0, 1 quando algum não, 2 sem
-# alguma variável, 130 quando interrompido.
+# alguma variável, 130 quando interrompido. Seis passos saem com código diferente de 0 no
+# ambiente alvo por leituras esperadas, ditas no comentário de cada um (space.py, bucket.py e
+# catalog.py com 1, parquet_source.py com 2, audit com 1 e compact com 2), e o script sai com 1
+# por eles; a tabela do fim é o que se lê.
 
 cd "$(dirname "$0")" || exit 1
 
@@ -114,7 +117,7 @@ interrupt() {
     local status=$?
     echo
     echo "suite_alvo.sh: interrompido por Ctrl-C"
-    if [ "${STEP_STATUSES[-1]}" = "-" ]; then
+    if [ "${#STEP_STATUSES[@]}" -gt 0 ] && [ "${STEP_STATUSES[-1]}" = "-" ]; then
         finish_step "$status"
     fi
     summary
@@ -157,6 +160,9 @@ main() {
     section "Probes"
 
     run .venv/bin/python probes/redshift.py "$SERIALIZE_DB_TEST_S3_ROOT"
+    # space.py, bucket.py e catalog.py saem com 1 no alvo pelas chamadas que ele nega (lidas
+    # nas baterias de 2026-10-09 e de 2026-10-10): sagemaker_studio ausente, a configuração do
+    # bucket negada, o workgroup do Athena negado e Lake Formation e S3 Tables sem resposta.
     run .venv/bin/python probes/space.py
     run .venv/bin/python probes/bucket.py "$SERIALIZE_DB_TEST_S3_ROOT"
     run .venv/bin/python probes/diagnose_aws.py "$SERIALIZE_DB_TEST_S3_ROOT"
@@ -179,7 +185,8 @@ main() {
 
     section "Migração Parquet -> Delta"
 
-    # Avalia estrutura dos arquivos parquet de origem.
+    # Avalia estrutura dos arquivos parquet de origem; sai com 2 por PQ-3, as quatro tabelas com
+    # esquemas diferentes entre os arquivos (a partição 2025-09-30 sem as colunas de id).
     run .venv/bin/python probes/parquet_source.py "$SOURCE_PATH"
 
     # Efetua migração.
@@ -191,6 +198,8 @@ main() {
         --ignore-partitions 2025-09-30 \
         --report probes/output/carga_inicial_delta.json
 
+    # A auditoria de uma partição com as chaves estrangeiras; sai com 1 pelos órfãos de
+    # data_base_sistema_contrato que a base de origem tem (989.852 em 2026-10-10).
     run .venv/bin/serialize-db audit \
         --root "$TARGET_ROOT_PATH" \
         --environment prd \
@@ -258,18 +267,19 @@ main() {
     # export por cópia (o padrão): os mesmos bytes dos arquivos da versão atual, sem o log
     run .venv/bin/serialize-db export --root "$TARGET_ROOT_PATH" --environment prd \
         --metadata client_model:Base.metadata --table cad_lancamentos \
-        --destination "$TARGET_ROOT_PATH/prd/exportacao/carga-2026-09-24/cad_lancamentos"
+        --destination "${TARGET_ROOT_PATH%/}/prd/exportacao/carga-2026-09-24/cad_lancamentos"
 
     # export por reescrita: um arquivo por partição pelo COPY do DuckDB, com os limites do
     # ambiente
     run .venv/bin/serialize-db export --root "$TARGET_ROOT_PATH" --environment prd \
         --metadata client_model:Base.metadata --table cad_lancamentos \
         --destination \
-            "$TARGET_ROOT_PATH/prd/exportacao/carga-2026-09-24-reescrita/cad_lancamentos" \
+            "${TARGET_ROOT_PATH%/}/prd/exportacao/carga-2026-09-24-reescrita/cad_lancamentos" \
         --mode rewrite
 
     # compact: exige --partitions numa tabela particionada e recusa a tabela com um snapshot na
-    # versão atual; numa partição de um arquivo só, não grava nada
+    # versão atual, com a saída 2, o caso da base depois do snapshot acima; numa partição de um
+    # arquivo só, não grava nada
     run .venv/bin/serialize-db compact --root "$TARGET_ROOT_PATH" --environment prd \
         --metadata client_model:Base.metadata --table cad_lancamentos --partitions 2026-03-31
 
@@ -344,15 +354,18 @@ main() {
     run .venv/bin/python probes/operacao/probe_vacuum_orphans.py "$SOURCE_PATH" \
         --ignore-partitions 2025-09-30
 
-    # O compact da primeira partição repartida em cerca de 32 arquivos, com o tempo e o pico de
-    # RSS.
+    # O compact da primeira partição repartida em arquivos de até 1/32 do tamanho dela (64 no
+    # alvo com 8 threads, 40 com 2 e 50 com 4), com o tempo e o pico de RSS.
     run .venv/bin/python probes/operacao/probe_compact_memory.py "$SOURCE_PATH" \
         --ignore-partitions 2025-09-30
 
     # O ganho das APIs com threads sobre a execução em série no motor DuckDB, nos pools de
     # tabelas, no motor Redshift e na publicação no Redshift, três medidas de cada forma, sobre
-    # quatro tabelas de 5 milhões de linhas que a sonda gera; a publicação é medida com e sem a
-    # despublicação entre as medidas, e cada medida dela imprime o tempo de cada tipo de comando, a
+    # quatro tabelas de 5 milhões de linhas que a sonda gera; a seção do Redshift lê também
+    # quantas consultas pequenas o cache de resultados serviu; a publicação é medida com e sem a
+    # despublicação entre as medidas, e a primeira publicação das quatro pela própria sonda com
+    # os comandos em três ordens (a da publicação, a linha de controle antes do COPY e as tabelas
+    # criadas antes da transação), e cada medida dela imprime o tempo de cada tipo de comando, a
     # linha do tempo de cada conexão e os locks que uma quinta sessão leu, e o fim da seção as
     # gravações da linha de controle no sys_query_history. As tabelas exec_* do sandbox e as
     # poc<id>_* publicadas, com as linhas de controle delas, saem no fim.

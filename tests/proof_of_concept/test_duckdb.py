@@ -13,7 +13,8 @@ das threads, o ``interrupt()`` chamado de outra thread, o ``cursor()`` aberto co
 curso e a barra de progresso que o ``python -c`` liga. Sob a raiz local (marcador ``local``):
 ``COPY ... TO`` com ``RETURN_STATS`` e o esquema físico do Parquet gravado, o ``RETURN_STATS`` com
 ``NaN``, infinito e texto longo, o ``has_nan`` que só vê o último grupo de linhas, a poda do leitor
-Parquet pelo rodapé do pyarrow num grupo com ``NaN``, o stream transbordado num arquivo Arrow IPC, o
+Parquet pelo rodapé do pyarrow num grupo com ``NaN``, o esquema do glob lido do primeiro arquivo
+em ordem de nome, o stream transbordado num arquivo Arrow IPC, o
 ``COPY`` particionado por mês e um banco em arquivo com pasta de transbordo. O ``delta_scan`` está
 em ``poc_delta.py``.
 """
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import decimal
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -909,6 +911,42 @@ def test_parquet_reader_prunes_the_nan_row_group_by_the_arrow_footer(
     assert count(arrow_file, "valor + 0 > 3") == 4  # a expressão não desce ao leitor como filtro
     assert count(f"read_parquet('{duckdb_path}')") == 4
     assert count("nativa") == 4
+    con.close()
+
+
+@pytest.mark.local
+def test_read_parquet_glob_takes_the_schema_from_the_first_file_by_name(
+    local_location: LocalLocation,
+) -> None:
+    """``read_parquet`` sobre um glob lê o esquema do primeiro arquivo em ordem de nome, seja qual
+    for a ordem em que a pasta lista os arquivos; o erro de esquema nomeia o primeiro arquivo
+    divergente que a leitura abre, não o segundo em ordem de nome.
+
+    ``parquet_import._check_first_file`` confere o primeiro arquivo em ordem de nome por isso. A
+    ordem da pasta é uma leitura: neste contêiner ela difere da ordem de nome, noutro sistema de
+    arquivos pode coincidir.
+    """
+    folder = Path(local_location.child("duckdb/glob"))
+    folder.mkdir(parents=True)
+    names = [f"f{index:02d}.parquet" for index in range(40)]
+    # Cada arquivo tem uma coluna com o nome dele: o esquema lido diz qual arquivo o deu.
+    creation = names[::-1]
+    for name in creation:
+        pq.write_table(pa.table({f"c_{name[:3]}": [1]}), folder / name)
+    assert sorted(path.name for path in folder.iterdir()) == names
+    record(
+        "duckdb.glob_folder_lists_in_name_order",
+        [entry.name for entry in os.scandir(folder)] == names,
+    )
+
+    con = duckdb.connect()
+    glob = f"read_parquet('{folder}/*.parquet', hive_partitioning = false)"
+    columns = con.execute(f"DESCRIBE SELECT * FROM {glob}").fetchall()
+    assert [column[0] for column in columns] == ["c_f00"]
+    with pytest.raises(duckdb.InvalidInputException, match="schema mismatch in glob") as raised:
+        con.execute(f"SELECT * FROM {glob}").fetchall()
+    assert 'column "c_f00" was read from the original file' in str(raised.value)
+    assert "f00.parquet" in str(raised.value)
     con.close()
 
 

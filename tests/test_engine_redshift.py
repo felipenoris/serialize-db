@@ -1328,7 +1328,7 @@ def test_ingest_partition_load_raises_on_a_dropped_connection_without_retry(
         engine.ingest(ENTRIES, uri, 1, partitions=[MONTHS[0]])
     texts = connection.texts()
     staging = f'"esquema"."{PREFIX}cad_lancamentos_staging"'
-    assert texts[-5:-2] == ["BEGIN", f"DELETE FROM {staging}", texts[-3]]
+    assert texts[-5:-3] == ["BEGIN", f"DELETE FROM {staging}"]
     assert texts[-3].startswith("COPY")
     assert texts[-2:] == ["ROLLBACK", f"DROP TABLE IF EXISTS {staging}"]
     # Nenhuma conexão nova: o USE e o search_path rodaram só na abertura.
@@ -1884,7 +1884,8 @@ def test_appender_refuses_a_batch_without_a_not_null_column(
     target: Target,
 ) -> None:
     """Um lote sem uma coluna ``NOT NULL`` da tabela faz a carga falhar sem deixar linha, pelo
-    ``COPY`` direto e pela staging da tabela com JSON; o comando recusado, o SQLSTATE e a mensagem
+    ``COPY`` direto e pela staging da tabela com JSON: o ``COPY`` direto é o comando recusado, e
+    pela staging é o ``INSERT`` dela, com a coluna na mensagem; o SQLSTATE e o resto da mensagem
     do servidor são leituras. No ambiente alvo, nas quatro rodadas de 2026-10-06: o ``COPY``
     direto recusado com ``42601 NOT NULL column without DEFAULT must be included in column
     list``, e o ``INSERT`` da staging com ``XX000 Cannot insert a NULL value into column
@@ -1904,9 +1905,9 @@ def test_appender_refuses_a_batch_without_a_not_null_column(
     # coluna codigo.
     engine.create_table(PROJECTED)
     rows = entry_rows(MONTHS[0], 1, 3, PROJECTED)
-    with pytest.raises(redshift_connector.Error) as staged:
+    with pytest.raises(redshift_connector.Error, match="codigo") as staged:
         engine.append(PROJECTED, rows.drop_columns(["codigo"]))
-    assert staged.value.__notes__[0].startswith(("comando: COPY", "comando: INSERT"))
+    assert staged.value.__notes__[0].startswith("comando: INSERT")
     record("redshift.engine.appender_without_not_null_staging", refusal_reading(staged.value))
     assert count_of(engine, f"{engine.prefix}cad_lancamentos_projetados") == 0
 
@@ -1945,6 +1946,31 @@ def test_primitives_refuse_a_transaction_the_client_opened_on_the_target(
     # Fora do bloco do cliente, o append entra pela transação do motor.
     assert engine.append(MEASURES, pa.table({"id_medida": [4]})) == 1
     assert count_of(engine, name) == 1
+
+
+@pytest.mark.redshift
+@pytest.mark.s3
+def test_audit_refuses_a_transaction_the_client_opened_when_a_check_loads_the_staging(
+    target: Target,
+) -> None:
+    """Dentro de um ``BEGIN`` que o cliente abriu em ``session()``, o ``audit`` com a versão
+    fixada levanta ``SandboxError`` na primeira verificação que carrega a staging ``_versao``, a
+    da chave ``codigo`` de ``cad_lancamentos_projetados`` com a versão fixada vazia, depois das
+    verificações que só leem; o ``ROLLBACK`` do cliente fecha a transação, e fora dela o mesmo
+    ``audit`` passa."""
+    engine = target.engine
+    engine.create_table(PROJECTED)
+    assert engine.append(PROJECTED, entry_rows(MONTHS[1], 1, 5, PROJECTED)) == 5
+    projected_uri = target.uri(PROJECTED)
+    delta.create_table(projected_uri, PROJECTED, target.storage)
+    with engine.session():
+        engine.execute("BEGIN")
+        with pytest.raises(SandboxError, match="transação aberta"):
+            engine.audit(PROJECTED, [MONTHS[1]], projected_uri, 0)
+        engine.execute("ROLLBACK")
+    report = engine.audit(PROJECTED, [MONTHS[1]], projected_uri, 0)
+    assert report.passed, report.results
+    assert report.rows(MONTHS[1]) == 5
 
 
 @pytest.mark.redshift
@@ -2024,9 +2050,10 @@ def test_ingest_refuses_a_delta_column_outside_the_model(
 ) -> None:
     """Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado: o ``COPY`` da
     partição, cuja lista de colunas do rodapé a nomeia, é recusado, porque a staging criada do
-    modelo não a tem, e a tabela do sandbox fica criada e vazia; o SQLSTATE e a mensagem do
-    servidor são leituras. No ambiente alvo, nas quatro rodadas de 2026-10-06:
-    ``42703 column "extra" of relation ... does not exist``, com o nome interno da staging."""
+    modelo não a tem, e a tabela do sandbox fica criada e vazia; a mensagem do servidor nomeia a
+    coluna, e o SQLSTATE e o resto dela são leituras. No ambiente alvo, nas quatro rodadas de
+    2026-10-06: ``42703 column "extra" of relation ... does not exist``, com o nome interno da
+    staging."""
     storage = target.storage
     wider = text_columns_table("a", "extra")
     model = text_columns_table("a")
@@ -2036,7 +2063,7 @@ def test_ingest_refuses_a_delta_column_outside_the_model(
         uri, wider, "p1", text_columns_rows(wider, "p1", [1, 2]), METADATA, storage
     )
     engine = target.engine
-    with pytest.raises(redshift_connector.Error) as refused:
+    with pytest.raises(redshift_connector.Error, match='"extra"') as refused:
         engine.ingest(model, uri, version)
     note = refused.value.__notes__[0]
     assert note.startswith("comando: COPY")
@@ -2282,6 +2309,10 @@ def test_session_terminated_during_the_ingest_copy_is_read(
     ``DROP`` reabriu a conexão. Em 2026-10-10, com a conversão do ``OSError``, o ``DROP`` reabriu
     a conexão nas oito rodadas das duas baterias, a staging saiu e o comando seguinte rodou num
     pid novo.
+    O ``PytestUnraisableExceptionWarning`` com ``ssl.SSLError: Underlying socket connection gone``
+    que a sessão imprime neste caso, em três das quatro sessões das 17:02 de 2026-10-10, vem do
+    ``__del__`` do par de buffers do socket morto, que o ``close()`` do driver deixa com a
+    mensagem de término por descarregar (``.claude/memory/redshift.md``).
     ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE`` provoca o ``BrokenPipeError`` no substituto."""
     engine = target.engine
     uri = target.uri(ENTRIES)
@@ -2334,7 +2365,7 @@ def test_session_terminated_during_the_ingest_copy_is_read(
 
     # A sessão mandou o COPY pela cópia de _run, e a thread a encerrou.
     assert "COPY" in [command["command"] for command in commands]
-    assert "terminated" in reading
+    assert reading["terminated"] is True
     # A staging saiu pelo DROP do fim, e o comando seguinte rodou na sessão.
     assert reading["staging_left"] is False
     assert "error" not in reading["after"]

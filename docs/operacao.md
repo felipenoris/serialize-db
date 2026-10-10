@@ -220,9 +220,14 @@ serialize-db export --root s3://bucket/projeto/delta --environment prd \
     --version 143 --mode copy
 ```
 
-Antes: o destino vazio e sob a raiz. Depois: em `copy`, os mesmos bytes dos arquivos que o log da
-versão lista; em `rewrite`, um arquivo por partição pelo `COPY` do DuckDB, com o esquema da versão
-em todos; o tempo e o pico de RSS do processo impressos; `--version` ausente é a versão atual.
+Antes: o destino vazio e sob a raiz; em `rewrite`, a memória da máquina, porque o `COPY` roda com
+o `memory_limit` do DuckDB e o pico do processo o passa, como na carga: no ambiente alvo, em
+2026-10-10, com 8 vCPUs e 6.315 MiB de limite, `cad_lancamentos` inteira (424.598.150 linhas em
+6 partições) levou 80,8 s com o pico em 7.898 MB, contra 21,1 s com 258 MB em `copy`, e em
+2026-10-07, com 2 vCPUs e 2.900 MiB de limite, a tabela sem a partição 2026-08-31 levou 278,0 s
+com 3.507 MB. Depois: em `copy`, os mesmos bytes dos arquivos que o log da versão lista; em
+`rewrite`, um arquivo por partição pelo `COPY` do DuckDB, com o esquema da versão em todos; o
+tempo e o pico de RSS do processo impressos; `--version` ausente é a versão atual.
 
 ### Auditoria avulsa
 

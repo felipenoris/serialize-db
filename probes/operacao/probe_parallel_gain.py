@@ -23,8 +23,10 @@ anteriores. Cada seção de ``--only`` compara a forma em série, a primeira, co
 - ``redshift``: no motor Redshift, ``run.ingest`` das quatro contra uma chamada por tabela; o
   ``stream`` lido todo antes do trabalho contra o trabalho em cada lote do ``stream``, porque o
   ``query`` do Redshift passa pelo cursor; o ``appender`` e os dois juntos, como no DuckDB; 80
-  consultas pequenas, como no DuckDB, com a abertura de cada sessão a mais no tempo; e
-  ``run.publish_delta`` com ``max_workers=4`` contra 1;
+  consultas pequenas, como no DuckDB, com a abertura de cada sessão a mais no tempo, e, depois
+  delas, quantas o ``sys_query_history`` marca como servidas pelo cache de resultados do
+  Redshift (``result_cache_hit``), porque as repetições repetem o texto e os valores sobre uma
+  tabela que não muda; e ``run.publish_delta`` com ``max_workers=4`` contra 1;
 - ``publicacao``: ``publication.publish_redshift`` das quatro com ``max_workers=4`` contra 1,
   primeiro com a despublicação depois de cada medida, fora do tempo, e depois sem ela, cada medida
   trocando a versão publicada pela outra de duas versões do Delta com as mesmas linhas: a da
@@ -507,6 +509,52 @@ def chunks_of(
     return chunks
 
 
+def result_cache_query(
+    since: float,
+    table: str,
+) -> str:
+    """A consulta que conta no ``sys_query_history``, por ``result_cache_hit``, as consultas de
+    contagem sobre ``table`` desde ``since``, em segundos desde a época."""
+    moment = datetime.datetime.fromtimestamp(since, datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        "SELECT result_cache_hit, count(*) AS n FROM sys_query_history "
+        f"WHERE start_time >= '{moment}' AND query_type = 'SELECT' "
+        f"AND query_text ILIKE '%count(%' AND query_text ILIKE '%{table}%' "
+        "GROUP BY result_cache_hit ORDER BY result_cache_hit"
+    )
+
+
+def print_result_cache_reading(
+    engine: Engine,
+    since: float,
+    table: str,
+    expected: int,
+) -> None:
+    """Imprime quantas das ``expected`` consultas pequenas sobre ``table`` o ``sys_query_history``
+    marca como servidas pelo cache de resultados do Redshift (``result_cache_hit``), esperando a
+    vista até 60 s, em passos de 5 s; a recusa da consulta sai como leitura. O cache ligado
+    (``enable_result_cache_for_session``, o padrão) serve a repetição de um texto com os mesmos
+    valores sobre uma tabela que não mudou, e a leitura diz se as repetições mediram o cache."""
+    deadline = time.monotonic() + 60
+    counts: dict[bool, int] = {}
+    while True:
+        try:
+            rows = engine.query(result_cache_query(since, table)).to_pylist()
+        except redshift_connector.Error as error:
+            print(f"cache de resultados nas consultas pequenas: sem leitura ({error})")
+            return
+        counts = {bool(row["result_cache_hit"]): row["n"] for row in rows}
+        if sum(counts.values()) >= expected or time.monotonic() >= deadline:
+            break
+        time.sleep(5)
+    hits = counts.get(True, 0)
+    misses = counts.get(False, 0)
+    print(
+        f"cache de resultados nas consultas pequenas: {hits} servida(s) pelo cache e {misses} "
+        f"não, de {expected} esperadas no sys_query_history"
+    )
+
+
 def count_in_threads(
     engine: Engine,
     ranges: list[tuple[int, int]],
@@ -746,15 +794,21 @@ def redshift_section(
     repetitions: int,
 ) -> None:
     """O motor Redshift: a ingestão das quatro tabelas, as medidas do motor sobre
-    ``cad_paralelo_a`` e a publicação no Delta."""
+    ``cad_paralelo_a``, a leitura do cache de resultados nas consultas pequenas e a publicação no
+    Delta."""
     count = len(TABLES)
     measure("redshift ingest", ingest_variants(db, "redshift", rows), repetitions, count)
     with Execution(db, "redshift", PARTITION) as run:
         run.ingest(SOURCE)
         run.sandbox.create_table(OUTPUT)
+        since = time.time()
         engine_measures(
             run.sandbox, "redshift", whole_by_stream, rows, repetitions, REDSHIFT_QUERIES
         )
+        # As consultas pequenas em três formas, série, threads na sessão e sessões a mais.
+        expected = REDSHIFT_QUERIES * 3 * repetitions
+        source_name = f"{run.sandbox.prefix}{SOURCE.name}"
+        print_result_cache_reading(run.sandbox, since, source_name, expected)
     publish = workers_variants(publish_variant, db, "redshift")
     measure("redshift publish_delta", publish, repetitions, count)
 

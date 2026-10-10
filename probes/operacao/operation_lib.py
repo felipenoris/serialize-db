@@ -42,7 +42,8 @@ TESTS_DIR = Path(__file__).resolve().parents[2] / "tests"
 sys.path.insert(0, str(TESTS_DIR))
 from client_model import Base  # noqa: E402
 
-from serialize_db import delta, parquet_import  # noqa: E402
+from serialize_db import delta, parquet_import, schema  # noqa: E402
+from serialize_db.errors import ContractError  # noqa: E402
 from serialize_db.execution import Database  # noqa: E402
 from serialize_db.resources import available_cpus, available_memory  # noqa: E402
 from serialize_db.resources import environment_limits  # noqa: E402
@@ -162,18 +163,30 @@ def open_report(
     return output
 
 
+def partition_argument(
+    text: str,
+) -> str:
+    """Um valor de ``--ignore-partitions`` pela regra da partição, como o do ``serialize-db
+    import`` e o do script de migração; o valor fora dela é erro de uso, com o código 2."""
+    try:
+        return schema.check_partition_value(text)
+    except ContractError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
 def parse_arguments(
     description: str,
 ) -> argparse.Namespace:
     """A linha de comando das sondas que leem a origem: ``source``, a raiz da base Parquet de
     origem, local ou ``s3://``, e ``ignore_partitions``, os valores de partição que a sonda não
-    toma, vazio sem ``--ignore-partitions``, como o do ``serialize-db import``; o uso errado sai
-    com o código 2."""
+    toma, pela regra da partição, vazio sem ``--ignore-partitions``, como o do ``serialize-db
+    import``; o uso errado sai com o código 2."""
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("source", metavar="origem", help="a raiz da base Parquet de origem")
     parser.add_argument(
         "--ignore-partitions",
         nargs="+",
+        type=partition_argument,
         metavar="AAAA-MM-DD",
         default=(),
         help="deixa estas partições fora das primeiras que a sonda toma de cad_lancamentos",
