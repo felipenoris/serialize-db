@@ -131,6 +131,12 @@ Read before `serialize_db.parquet_import`, `tests/source_db_projetado.py`, `test
   as at 19:23, and the load of 03:23 read every partition with the counts and sums of 19:29 ("The
   early migration in the target"). The partition 2025-09-30 reads as on 2026-10-07, with `PQ-3`
   failing on the four tables (exit code 2), and `meta_update_status` has 29 rows.
+- `probes/parquet_source.py` again at 17:45 UTC on 2026-10-10, in the second battery of that day
+  (`environments.md`; the report stays out of git): 14 tables, 2,116 files, 10,895,492,847 bytes,
+  every footer read, `cad_lancamentos` with 1,616 files, 9,026,006,951 bytes and 472,111,733 rows,
+  as at 03:19, and the load of 17:49 read every partition with the counts and sums of 19:29 ("The
+  early migration in the target"). The partition 2025-09-30 reads as on 2026-10-07, with `PQ-3`
+  failing on the four tables (exit code 2), and `meta_update_status` has 29 rows.
 
 ## The fixture
 
@@ -447,3 +453,24 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   (18.7 s) and 2026-03-31 (52.8 s), checked the three equal and exited 0 in 98.1 s (107.5 s at
   21:50 on 2026-10-09, with 8 vCPUs too); the only file outside the log was the killed execution's.
   Every check passed.
+- The load of the second battery of 2026-10-10 (`started_at` 17:49:48 UTC, from `main` at
+  `f8eba34`, on 8 vCPUs, 12,631 MB available, 8 threads and 6,315 MiB, a fresh root,
+  `--ignore-partitions 2025-09-30`) loaded 29 partitions, 519,808,535 rows, every table matching,
+  696.1 s summed (801 s for the step), the process peak at 2,479 MB after `cad_operacoes`,
+  3,359 MB after `rel_contrato_operacao` and 9,548 MB at `cad_lancamentos` 2026-07-31;
+  `cad_lancamentos` took 29.1 s, 20.4 s, 51.0 s, 29.9 s, 213.7 s and 220.2 s (2026-07-31 at 0.66
+  million rows per second, as at 03:23). The source had not changed since 19:23 of 2026-10-09:
+  every partition kept the counts and sums of the second battery of that day, and the same three
+  entries stayed outside the model. The audit of 2026-01-31 (version 6) read the same 989,852
+  orphans, `history` listed versions 0 to 6 (17:52:24 to 18:00:53 UTC), and `archive` copied the
+  29 files, `cad_lancamentos` in 25.7 s at 371 MB. The ninth load since the half-memory rule kept
+  the ratios of the eight: the peak was 1.51 times the `memory_limit` (9,548 MB over 6,315 MiB)
+  and 76% of the available memory, at `cad_lancamentos` 2026-07-31 (`docs/operacao.md`).
+- The resume of a stopped load ran again in the second battery of 2026-10-10, from 18:20 UTC
+  (`probe_load_resume.py --ignore-partitions 2025-09-30`, 8 vCPUs, 13.1 GiB available, the source
+  with 7 partitions of `cad_lancamentos`, `environments.md`): the `SIGKILL` came 11.3 s after the
+  second partition's file appeared, 41.3 s from the start (2026-01-31 in 28.4 s), with 2026-01-31
+  in the log and 2026-02-28 out of it, and left the engine's temporary folder behind (0.0 MB,
+  deleted by the probe). The same command found one partition in the Delta, wrote 2026-02-28
+  (18.5 s) and 2026-03-31 (49.9 s), checked the three equal and exited 0 in 94.4 s (98.1 s at
+  03:55); the only file outside the log was the killed execution's. Every check passed.

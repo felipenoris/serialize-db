@@ -1307,10 +1307,11 @@ class Ordering:
     control_first: bool
 
 
-# As ordens medidas, pelo nome que entra no execution_id, a da publicação primeiro. Elas separam a
-# hipótese de 2026-10-10, de que o planejamento do INSERT da linha de controle espera o CREATE
-# TABLE sem commit das outras transações: com ela, a linha antes do COPY espera enquanto nenhuma
-# transação confirmou, e as tabelas criadas antes não esperam.
+# As ordens medidas, pelo nome que entra no execution_id, a da publicação primeiro. A bateria de
+# 2026-10-10 às 18:52 as leu: a linha antes do COPY serializa as quatro transações no lock de
+# escrita da tabela de controle, que cada uma segura até o COMMIT (22,8 s a 23,4 s contra 9,1 s a
+# 10,2 s das outras duas ordens), e as tabelas criadas antes nunca esperaram
+# (.claude/memory/concurrency.md).
 ORDERINGS = {
     "publicacao": Ordering("ordem da publicação", created_before=False, control_first=False),
     "linha-antes": Ordering(

@@ -382,3 +382,60 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   orders, the publication's, the control row right after the `CREATE TABLE` and the tables
   created before the transaction, and the next battery reads the planning of each `INSERT`.
   `docs/index.md` ("Multithreading")
+- The same probe in the second battery of 2026-10-10, from 18:26 UTC (8 vCPUs, 13.1 GiB
+  available, DuckDB limits 8 threads and 6,683 MiB, the tables prepared in 23.1 s, `main` at
+  `f8eba34`). DuckDB: `stream` 1.34x with no work (0.323 s, +3 MB, against 0.432 s, +311 MB) and
+  2.06x with pandas (0.348 s against 0.717 s), `appender` 1.06x and 1.08x, both 1.22x and 1.19x,
+  200 small queries 0.507 s serial, 0.519 s on the main session and 0.337 s with one
+  `new_session()` each (1.50x), `run.ingest` 2.50x (3.783 s, +1,104 MB, against 9.473 s, +901 MB),
+  `materialize` 2.49x (3.756 s against 9.343 s) and `publish_delta(max_workers=4)` 2.03x (7.995 s
+  against 16.219 s). Redshift: `run.ingest` 2.50x (11.933 s against 29.840 s), `stream`, `appender`
+  and both 1.01x, 1.04x and 1.07x with no work and 1.03x, 0.98x and 1.14x with pandas, 80 small
+  queries 3.720 s serial, 3.748 s on the main session and 1.798 s with one extra session each
+  (2.07x), `publish_delta(max_workers=4)` 1.32x (18.585 s against 24.611 s) and `publish_redshift`
+  with four workers 2.31x (10.520 s against 24.341 s), its other two repetitions at 10.759 s and
+  31.302 s against 27.373 s and 25.616 s serial; without the unpublish between the measures the
+  three four-worker repetitions took 10.965 s, 11.083 s and 10.768 s against 30.732 s, 27.386 s
+  and 30.820 s serial (2.54x, best against best). In the slow repetition the control `INSERT`s of
+  `cad_paralelo_a` and `cad_paralelo_d` started at 9.373 s and 9.553 s, while `cad_paralelo_b`'s
+  ran (from 9.125 s, 0.413 s long) and its `COMMIT` followed (from 9.538 s, 0.529 s long), and
+  took 21.536 s and 20.395 s: `planning_time` 20.959 s and 20.061 s, `lock_wait_time` 0.104 s and
+  0.000 s, no queue, `execution_time` 0.011 s and 0.012 s; both ran on past `cad_paralelo_b`'s
+  `COMMIT`, ended within 1 s of each other, and `cad_paralelo_a`'s ended 0.36 s after
+  `cad_paralelo_d`'s `COMMIT`. `sys_query_history` answered for 88 of 88 control writes, and the
+  fifth session saw no pending lock in the slow repetition (29 readings over 31 s).
+  The `publicacao` section's first publication of the four tables by the probe's own transactions
+  (the user's choice of 2026-10-10, `decisions.md`), three repetitions per order:
+  - the publication's order (`CREATE TABLE`, the load, the control row's `INSERT`): 9.461 s,
+    9.710 s and 9.427 s, the 12 `INSERT`s 0.200 s to 1.310 s long, no wait [3 repetitions];
+  - the control row right after the `CREATE TABLE`, before the staging and the `COPY`: 23.069 s,
+    22.798 s and 23.358 s, 2.4 times the publication's order, in every repetition. The four
+    transactions serialized on the control table: the first `INSERT` of each repetition took
+    0.210 s to 0.344 s and the other three waited for the previous transaction's `COMMIT`, 5.340 s
+    to 5.804 s, 10.785 s to 11.147 s and 16.232 s to 16.870 s, each ending 0.14 s to 0.34 s after
+    the `COMMIT` before it; `sys_query_history` booked the waits as `planning_time` (4.995 s to
+    16.481 s) with `lock_wait_time` 0.086 s to 0.132 s, and the fifth session saw, in the second
+    repetition only, the `PgXenWriteLock` on relation `738123` held by one pid after the other
+    (+2.1 s to +6.5 s, +7.5 s to +11.8 s, +12.9 s to +17.2 s, +18.3 s to +22.6 s) and pending for
+    one reading, and `nenhum lock pendente` in the other two, whose timelines show the same
+    serialization;
+  - the tables created and committed before the transactions: 10.234 s, 9.741 s and 9.135 s, the
+    12 `INSERT`s 0.204 s to 1.416 s long, no wait [3 repetitions].
+  So the control row's write takes a write lock on the control table that the transaction holds
+  until its `COMMIT`; `sys_query_history` counts the wait for it as `planning_time`, and
+  `svv_transactions` shows it in some readings only. The publication's order, with the control
+  row last, holds the lock from the `INSERT` to the end of the `COMMIT`, 0.5 s to 1.7 s in the
+  probe's repetitions, and the ~20 s wait is not that lock: the two waiters ran on past the
+  holder's `COMMIT`, and the first `INSERT` of each repetition with the control row before the
+  `COPY` planned in 0.21 s to 0.34 s with the other three transactions' `CREATE TABLE`
+  uncommitted, which refutes the hypothesis that the planner waits on those as such. What
+  separates the slow repetitions is still the `CREATE TABLE` inside the concurrent transactions:
+  across the seven runs of 2026-10-05 to 2026-10-10, 10 of the 21 four-connection repetitions of
+  the library's publication with unpublish, a `CREATE TABLE` per transaction, took 31.302 s to
+  36.110 s and 11 took 10.520 s to 13.813 s, against 24.341 s to 32.179 s for the 21 serial ones,
+  and none of the 9 without it, the 6 no-unpublish repetitions (`UPDATE`) and the 3 with the
+  tables created before, waited [inferred: at the slow rate of 10 in 21, nine fast repetitions in
+  a row have a chance near 0.3%]. What the two waiters wait for in those ~20 s is unread. In the
+  four publications of the whole base since 2026-10-09 no table paid the wait (`redshift.md`). The
+  user accepted the wait on 2026-10-10 (`decisions.md`, "The control row's wait accepted").
+  `docs/index.md` ("Multithreading"), `docs/tecnologias.md` (Redshift, "Transações concorrentes")

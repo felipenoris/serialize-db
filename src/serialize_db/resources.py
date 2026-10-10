@@ -56,7 +56,7 @@ _MEMORY_FILES = {
 # A fração da memória disponível que vai para o memory_limit. A documentação do DuckDB pede de 50%
 # a 60% da memória quando o sistema mata o processo, porque parte das alocações foge do limite: no
 # COPY ordenado, o RSS do processo passou do limite em 13% a 21% (2026-09-24). A outra metade fica
-# para o PyArrow, o delta-rs e o código do cliente: nas oito cargas da base de 2026-09-25 a
+# para o PyArrow, o delta-rs e o código do cliente: nas nove cargas da base de 2026-09-25 a
 # 2026-10-10, em 2, 4 e 8 vCPUs, o pico do processo ficou entre 1,38 e 1,51 vez o limite, 69% a
 # 76% da memória disponível (docs/operacao.md).
 _MEMORY_FRACTION = 0.5

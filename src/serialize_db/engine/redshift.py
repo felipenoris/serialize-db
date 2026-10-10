@@ -1393,7 +1393,7 @@ class RedshiftEngine:
         leitura do socket fechado, e no ``OSError`` do socket, que o driver deixa sair: depois do
         ``COPY`` derrubado de um ``ingest``, o envio do ``DROP`` da staging recebeu
         ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09), e com a conversão o ``DROP``
-        reabriu a conexão nas 4 rodadas de 2026-10-10. A reconexão perde a tabela
+        reabriu a conexão nas 8 rodadas de 2026-10-10. A reconexão perde a tabela
         temporária que o pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift``
         avisa da perda. O driver não diz se o servidor aplicou o comando derrubado: um comando que
         não pode entrar duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda em

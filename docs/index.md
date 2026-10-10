@@ -924,6 +924,27 @@ planejaram em 0,040 s a 2,053 s. Os quatro foram `INSERT` de publicações que c
 nenhum dos 24 `UPDATE` das publicações sem despublicação esperou. A quinta sessão, lendo
 `svv_transactions` a cada segundo, não viu lock pendente na repetição lenta.
 
+Às 18:26 UTC de 2026-10-10 a sonda rodou de novo na máquina de 8 vCPUs, com os ganhos de
+2026-10-05. No DuckDB: `run.ingest` das quatro 2,50 vezes (3,783 s contra 9,473 s), `materialize`
+das quatro 2,49 vezes e `publish_delta` com `max_workers=4` 2,03 vezes (7,995 s contra 16,219 s).
+No Redshift: `run.ingest` das quatro 2,50 vezes (11,933 s contra 29,840 s), as 80 consultas
+pequenas 2,07 vezes na sessão a mais e `publish_delta` com `max_workers=4` 1,32 vez.
+`publish_redshift` com `max_workers=4` levou 10,759 s e 10,520 s em duas repetições e 31,302 s na
+terceira, contra 24,341 s a 27,373 s uma tabela por vez, e sem a despublicação entre as medidas de
+10,768 s a 11,083 s. A sonda fez ainda a primeira publicação das quatro tabelas pela própria
+transação, em quatro conexões, com os comandos em três ordens, três repetições cada: a ordem da
+publicação levou de 9,427 s a 9,710 s; a linha de controle logo depois do `CREATE TABLE`, antes do
+`COPY`, de 22,798 s a 23,358 s, porque a gravação da linha toma um lock de escrita na tabela de
+controle que a transação segura até o `COMMIT`, e as quatro transações se serializam nele, cada
+`INSERT` esperando o `COMMIT` da anterior; e as tabelas criadas e confirmadas antes da transação de
+9,135 s a 10,234 s. O `sys_query_history` conta a espera por esse lock como planejamento do
+comando, de 4,995 s a 16,481 s, com a espera por lock em até 0,132 s, e o `svv_transactions` só a
+mostrou numa das três repetições. Na repetição lenta de `publish_redshift`, os dois `INSERT` que
+levaram 21,536 s e 20,395 s começaram enquanto outra transação gravava a sua linha e seguiram
+esperando depois do `COMMIT` dela: o que esperam não é esse lock, e a hipótese do `CREATE TABLE`
+sem commit das outras transações caiu, porque o primeiro `INSERT` de cada repetição da linha antes
+do `COPY` planejou em 0,21 s a 0,34 s com os três `CREATE TABLE` das outras sem commit.
+
 ### Como usar as threads
 
 - **Leia o resultado grande por `stream`, com o trabalho dentro do laço.** A consulta segue enquanto
@@ -967,14 +988,18 @@ nenhum dos 24 `UPDATE` das publicações sem despublicação esperou. A quinta s
   conferências, o commit e a releitura de cada tabela esperam a rede. Na pasta local ele não ganhou,
   porque o arquivo de cada partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada
   tabela em curso soma a memória da sua escrita.
-- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo**: das 18 repetições
-  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-10, nove
-  levaram de 11,133 s a 13,813 s e nove de 31,521 s a 36,110 s, nenhuma entre os dois grupos,
-  contra 26,750 s a 32,179 s das 18 repetições uma tabela por vez. Nas lentas, as transações
-  esperam no `INSERT` da linha de controle, que cada uma grava no fim, e o servidor conta a espera,
-  cerca de 20 s, como planejamento do comando, sem fila nem lock (leitura de 2026-10-10); ela só
-  veio em publicações que criaram as tabelas, a causa do planejamento longo não foi lida, e o
-  runbook publica a base com `--max-workers 4`.
+- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo**: das 21 repetições
+  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-10, onze
+  levaram de 10,520 s a 13,813 s e dez de 31,302 s a 36,110 s, nenhuma entre os dois grupos,
+  contra 24,341 s a 32,179 s das 21 repetições uma tabela por vez. Nas lentas, duas das quatro
+  transações, nas três publicações lentas que o `sys_query_history` leu, esperam no `INSERT` da
+  linha de controle, que cada uma grava no fim, e o servidor conta a espera, cerca de 20 s, como
+  planejamento do comando, sem fila nem lock (leituras de 2026-10-10); ela só veio em publicações
+  que criaram as tabelas, nenhuma das nove repetições sem o `CREATE TABLE` na transação esperou, o
+  que o `INSERT` espera não foi lido, e o runbook publica a base com `--max-workers 4`, cujas
+  publicações da base inteira não pagaram a espera em tabela alguma. O usuário aceitou a espera
+  em 2026-10-10, e a publicação segue criando a tabela na transação da carga, com a linha de
+  controle por último.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor
