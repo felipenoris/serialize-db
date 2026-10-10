@@ -93,8 +93,9 @@ __all__ = ["DuckDBConfig", "DuckDBEngine", "environment_limits"]
 log = logging.getLogger("serialize_db.engine.duckdb")
 
 # O compilador dos statements Core: o estilo qmark é o do driver do DuckDB, e a lista posicional sai
-# na ordem de positiontup, sem reescrever marcador algum.
-_QMARK = duckdb_engine.Dialect(paramstyle="qmark")
+# na ordem de positiontup, sem reescrever marcador algum; o NaN e os infinitos que um bindparam com
+# literal_execute embute no texto saem como 'NaN'::float8, que o DuckDB lê, e não como nan.
+_QMARK = sql.with_float_literals(duckdb_engine.Dialect(paramstyle="qmark"))
 # O DuckDB lê a contrabarra como caractere, e o dialeto, herdado do PostgreSQL, a dobraria nas
 # constantes que o texto embute, como o ESCAPE do LIKE.
 _QMARK._backslash_escapes = False

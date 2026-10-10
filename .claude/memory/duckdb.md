@@ -324,3 +324,12 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   40.6 s); extra sessions beat the series by 1.13x to 1.48x, 1.17x with 8. `threads` stays at the
   process's CPUs. The user took the probe out of `suite_alvo.sh` on 2026-10-10 (`decisions.md`):
   it runs by hand, after the migration, by the `SUITE_ALVO.md` command.
+- The glob's schema file (local folder, DuckDB 1.5.5, 2026-10-10, the cloud container):
+  40 one-column files, each column named after its file, written in shuffled order into a
+  folder whose `os.listdir` order was not the name order; `DESCRIBE SELECT * FROM
+  read_parquet('<folder>/*.parquet', hive_partitioning = false)` gave the column of `f00`,
+  the first file by name, the schema-mismatch error named `f03`, the first mismatching file
+  read, and `parquet_file_metadata` listed the files in a third order. The first file by
+  name gives the schema whatever the directory order, as the docstring of
+  `parquet_import._check_first_file` says; the case is
+  `test_duckdb.py::test_read_parquet_glob_takes_the_schema_from_the_first_file_by_name`.

@@ -4654,7 +4654,10 @@ escrita na tabela de controle que a transação segura até o `COMMIT`, as quatr
 serializaram nele, cada `INSERT` esperando o `COMMIT` da anterior, e o `sys_query_history` contou
 a espera como planejamento, de 4,995 s a 16,481 s, com até 0,132 s de espera por lock; por isso a
 publicação grava a linha por último, e com as tabelas criadas e confirmadas antes da transação
-nenhum `INSERT` esperou.
+nenhum `INSERT` esperou. As três ordens levaram de 9,427 s a 9,710 s (a da publicação), de
+22,798 s a 23,358 s (a linha de controle antes do `COPY`) e de 9,135 s a 10,234 s (as tabelas
+criadas antes), e o usuário aceitou em 2026-10-10 a espera de cerca de 20 s da primeira publicação
+paralela de uma tabela nova (`docs/index.md`, seção "Multithreading").
 
 ### Ingestão de dados
 
@@ -5809,8 +5812,8 @@ Todo comando do SQLAlchemy, DDL ou DML, vira texto por `compile()`, sem abrir co
 `compiled.positiontup` a ordem deles nos dialetos posicionais. É assim que esta página mostra
 comandos do Redshift sem cluster e que uma depuração confere o texto que o DuckDB recebe. Os
 exemplos desta seção são autocontidos e rodaram com SQLAlchemy 2.0.54, duckdb_engine 0.17.0,
-sqlalchemy-redshift 1.0.0, redshift_connector 2.1.16 e DuckDB 1.5.5, por
-`uv run --no-project --python 3.13 --with ...`.
+sqlalchemy-redshift 1.0.0, redshift_connector 2.1.16 (a versão de então; o pacote fixa a 2.1.17
+desde 2026-10-01) e DuckDB 1.5.5, por `uv run --no-project --python 3.13 --with ...`.
 
 #### Dialetos e estilos de parâmetro
 

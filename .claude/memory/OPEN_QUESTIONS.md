@@ -60,8 +60,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   mais longo que a credencial que ele leva; e a sessão ociosa e a transação inativa do serverless,
   encerradas depois de 3.600 s e 21.600 s
   ([`docs/tecnologias.md`, Redshift](../../docs/tecnologias.md#redshift)). A cláusula do `COPY` e do
-  `UNLOAD` é montada a cada comando, no motor da etapa 5 e, desde a decisão do usuário de
-  2026-09-26, na publicação da etapa 8, que passou assim no alvo em 2026-09-27, e leva uma chave com
+  `UNLOAD` é montada a cada comando, no motor `engine.redshift` e, desde a decisão do usuário de
+  2026-09-26, na publicação (`publication`), que passou assim no alvo em 2026-09-27, e leva uma
+  chave com
   cerca de 29 minutos ou mais pela frente; o motor reconecta uma vez por comando fora de transação e
   perde só a tabela temporária que o pipeline tenha criado na sessão, e a carga de cada partição de
   `ingest` e de `pinned_delta` roda numa transação desde 2026-10-04, para a queda no meio do `COPY`
@@ -143,26 +144,27 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   vez, a origem é descartada, e a revisão de uma partição antiga passa a ser refeita no Delta pela
   API do pacote (declaração do usuário de 2026-10-09, `decisions.md`). Espera o usuário: a troca
   de `valor`, se vier, antes da carga da produção.
-- **O acesso de leitura no ambiente alvo.** A etapa 10 rodou no alvo nas baterias de 2026-09-25, de
+- **O acesso de leitura no ambiente alvo.** O `reader` e os canais rodaram no alvo nas baterias
+  de 2026-09-25, de
   2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05, de 2026-10-07, nas duas de
-  2026-10-09 e na de 2026-10-10 (`POC.md`, `.claude/memory/environments.md`): o leitor Delta abriu
-  as 12 views da raiz carregada em 0,645 s, em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s, com
-  2 vCPUs em 1,440 s, com 4 vCPUs em 0,844 s e com 8 vCPUs em 0,647 s e em 0,617 s; as suítes
-  passaram a publicação por canal e por snapshot, com a volta a um snapshot anterior, e a
-  comparação dos dois leitores, com o `stream` do
-  leitor Redshift pelo `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a
-  volta pelo canal; e em 2026-09-26 a base inteira foi publicada por `--channel default`,
-  `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s
-  com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s com 285 MB, em
-  2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB, e em 2026-10-09, com 4 vCPUs, em 320,9 s com
-  280 MB e, às 20:31, com 8 vCPUs e a partição 2026-08-31 a mais (424.598.150 linhas), em 487,8 s
-  com 286 MB, e em 2026-10-10, com 8 vCPUs, em 504,0 s com 287 MB. Nas duas baterias de 2026-10-09
-  e na de 2026-10-10, `probes/operacao/probe_published_base.py` voltou a base publicada a um
-  snapshot anterior: a partição 2026-01-31 de `cad_lancamentos`, refeita num snapshot novo, foi
-  publicada pelo canal em 42,8 s, em 44,3 s e em 45,0 s, com o pico do processo em 261 MB, em
-  262 MB e em 262 MB, e a volta ao snapshot de antes a trocou de novo em 44,3 s com 258 MB, em
-  46,7 s com 262 MB e em 48,2 s com 262 MB (`.claude/memory/redshift.md`). Espera o `UNLOAD` de
-  um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
+  2026-10-09 e nas duas de 2026-10-10 (`POC.md`, `.claude/memory/environments.md`): o leitor Delta
+  abriu as 12 views da raiz carregada em 0,645 s, em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s,
+  com 2 vCPUs em 1,440 s, com 4 vCPUs em 0,844 s e com 8 vCPUs em 0,647 s, em 0,617 s e em 0,558 s;
+  as suítes passaram a publicação por canal e por snapshot, com a volta a um snapshot anterior, e a
+  comparação dos dois leitores, com o `stream` do leitor Redshift pelo `UNLOAD`, e na bateria de
+  2026-09-30 o runbook de refazer um snapshot, com a volta pelo canal; e em 2026-09-26 a base
+  inteira foi publicada por `--channel default`, `cad_lancamentos` em 295,1 s com o pico do processo
+  em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, em 2026-09-29, em 335,2 s com 286 MB,
+  em 2026-10-05, em 324,9 s com 285 MB, em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB, e em
+  2026-10-09, com 4 vCPUs, em 320,9 s com 280 MB e, às 20:31, com 8 vCPUs e a partição 2026-08-31 a
+  mais (424.598.150 linhas), em 487,8 s com 286 MB, e em 2026-10-10, com 8 vCPUs, em 504,0 s com 287
+  MB e, às 17:02, em 501,8 s com 287 MB. Nas duas baterias de 2026-10-09 e nas duas de 2026-10-10,
+  `probes/operacao/probe_published_base.py` voltou a base publicada a um snapshot anterior: a
+  partição 2026-01-31 de `cad_lancamentos`, refeita num snapshot novo, foi publicada pelo canal em
+  42,8 s, em 44,3 s, em 45,0 s e em 43,8 s, com o pico do processo em 261 MB, em 262 MB, em 262 MB e
+  em 261 MB, e a volta ao snapshot de antes a trocou de novo em 44,3 s com 258 MB, em 46,7 s com 262
+  MB, em 48,2 s com 262 MB e em 46,9 s com 260 MB (`.claude/memory/redshift.md`). Espera o `UNLOAD`
+  de um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
   serve a ele, que precisa de um papel de cliente no alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
@@ -173,6 +175,19 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   (`.claude/memory/concurrency.md`): no DuckDB os pools
   ganharam com 2 vCPUs a metade do que em 8, e com 4 vCPUs entre os dois, e no Redshift o ganho não
   dependeu da máquina; o ganho com mais CPUs segue sem medida e espera a sonda numa máquina maior.
+- **O cache de resultados do Redshift nas consultas pequenas da sonda de paralelismo.** As 80
+  consultas pequenas de `probes/operacao/probe_parallel_gain.py` no motor Redshift repetem o mesmo
+  texto com os mesmos valores sobre uma tabela que não muda, em três formas e três repetições, e o
+  cache de resultados do Redshift (`enable_result_cache_for_session`, ligado por padrão) pode ter
+  servido as repetições: às 17:02 de 2026-10-10, a série levou 5,327 s na primeira repetição e
+  3,720 s e 3,752 s nas seguintes, as threads na sessão principal 3,881 s, 3,952 s e 3,748 s, e as
+  sessões a mais 1,954 s, 1,798 s e 2,043 s; o menor tempo de cada forma entra no resumo, e um
+  cache servindo as repetições mediria o cache, não o motor (regra de 2026-09-24 em `CLAUDE.md`).
+  Desde o PR desta revisão a sonda imprime, depois das consultas pequenas, quantas delas o
+  `sys_query_history` marca como servidas pelo cache (`result_cache_hit`); a próxima bateria lê o
+  número, e com o cache servindo as repetições a medida passa a desligá-lo na sessão (`SET
+  enable_result_cache_for_session TO off`) ou a variar os valores, por decisão do usuário.
+
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
   o pino fica em 2.0.54. A 2.1.3 corrigiu os valores de `params()` que saíam `NULL` sob
@@ -218,17 +233,18 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   desenvolve.
 - **O caso de estudo do GIL.** `test_gil_reacquisition_waits_the_switch_interval`, em
   `tests/proof_of_concept/test_concurrency.py`, reprovou em sessões locais da suíte inteira em
-  2026-09-25, em 2026-10-03 e em 2026-10-07 e passou isolado e nas demais: a asserção pede que os
-  200 `os.stat` ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de
-  troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra
-  0,006 s (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão
-  `-m "not redshift"` do `suite_alvo.sh` roda o caso, e ele passou nas 16 sessões com relatório, de
-  2026-09-24 a 2026-10-10, com 0,381 s a 0,899 s ao lado do laço contra 0,012 s a 0,086 s com o
-  intervalo menor (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s contra
-  0,012 s, as duas de 2026-10-09, com 4 e 8 vCPUs, 0,773 s contra 0,086 s e 0,899 s contra
-  0,052 s, e a de 2026-10-10, com 8 vCPUs, 0,868 s contra 0,061 s. A esteira não roda
-  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o
-  usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
+  2026-09-25, em 2026-10-03, em 2026-10-07 e em 2026-10-10 e passou isolado e nas demais: a asserção
+  pede que os 200 `os.stat` ao lado do laço Python levem mais que o dobro do tempo que levam com o
+  intervalo de troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s, 0,005
+  s contra 0,006 s e, em 2026-10-10, com 4 vCPUs, 0,026 s contra 0,020 s (isolado em 2026-10-07,
+  0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão `-m "not redshift"` do
+  `suite_alvo.sh` roda o caso, e ele passou nas 17 sessões com relatório, de 2026-09-24 a
+  2026-10-10, com 0,381 s a 0,899 s ao lado do laço contra 0,012 s a 0,086 s com o intervalo menor
+  (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s contra 0,012 s, as duas
+  de 2026-10-09, com 4 e 8 vCPUs, 0,773 s contra 0,086 s e 0,899 s contra 0,052 s, e as duas de
+  2026-10-10, com 8 vCPUs, 0,868 s contra 0,061 s e 0,634 s contra 0,045 s. A esteira não roda
+  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o usuário:
+  tornar a medida robusta ou aceitar a reprovação ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   (`POC.md`), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
@@ -295,7 +311,7 @@ paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas 
   execução na mesma partição entre a conferência e essa abertura, durante o `reconcile` e o `COPY`
   de `export_partition`, passa sem `ExecutionConflict`, e o commit seguinte substitui a partição da
   outra execução sem aviso, quando a docstring de `publish_delta`, `docs/index.md` (seção "Rodar
-  uma execução") e a etapa 6 prometem `ExecutionConflict`. A sonda da execução reproduz a janela
+  uma execução") e `execution` prometem `ExecutionConflict`. A sonda da execução reproduz a janela
   na seção D (`exec-e` parada em `export_partition` enquanto `exec-f` publica) e a viu na disputa
   da seção C sob carga. No delta-rs
   1.6.6, `create_write_transaction(mode="overwrite", partition_filters=...)` sobre um `DeltaTable`
@@ -312,7 +328,7 @@ paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas 
 
 A revisão de `src/serialize_db` na `main` de 2026-10-04, a pedido do usuário, com atenção à
 consistência das leituras, das escritas e da publicação, corrigiu no mesmo PR o `COPY` repetido
-pela reconexão do motor Redshift (`POC.md`, etapa 5) e deixa a decisão que segue:
+pela reconexão do motor Redshift (`POC.md`, `engine.redshift`) e deixa a decisão que segue:
 
 - **A ordem do `Execution.__exit__`.** O `__exit__` roda `sandbox.cleanup()` antes de
   `_write_snapshot()`: um descarte que falha, por uma conexão derrubada ou um `DROP` recusado,

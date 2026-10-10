@@ -33,6 +33,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import sqlalchemy as sa
+from deltalake import DeltaTable
 
 import source_db_projetado as source
 from client_model import Base
@@ -782,6 +783,16 @@ def source_with_float_partition(
     return str(origin)
 
 
+def test_common_conversions_break_a_tie_by_the_first_value() -> None:
+    """``_common_conversions`` dá as conversões da maior parte das partições e, no empate, as da
+    primeira em ordem de valor; vazio sem partição."""
+    assert parquet_import._common_conversions({}) == ()
+    tied = {"2026-02-28": ("b: int32 -> int64",), "2026-01-31": ("a: int32 -> int64",)}
+    assert parquet_import._common_conversions(tied) == ("a: int32 -> int64",)
+    majority = {"2026-01-31": ("a: int32 -> int64",), "2026-02-28": (), "2026-03-31": ()}
+    assert parquet_import._common_conversions(majority) == ()
+
+
 @pytest.mark.parametrize("value", ["2026-01-31", "2026-06-30"])
 def test_import_report_lists_the_conversions_of_each_partition(
     base: source.SourceBase,
@@ -1255,6 +1266,20 @@ def test_cli_import_ignores_the_listed_partitions(
     assert written in printed
     assert "3 partição(ões) conferida(s), contagens e somas iguais" in printed
     assert "2 tabela(s) conferida(s), contagens e somas iguais" in printed
+
+    # Todas as partições de cad_operacoes ignoradas, numa raiz nova: a tabela fica criada no Delta
+    # sem partição, com 0 gravada e 0 conferida, e a saída é 0.
+    everything = [*common, "--ignore-partitions", *PARTITION_VALUES]
+    everything[common.index("--root") + 1] = str(folder / "delta_vazia")
+    assert cli.main(everything) == 0
+    printed = capsys.readouterr().out
+    for ignored in PARTITION_VALUES:
+        assert f"cad_operacoes: partição {ignored} ignorada, em --ignore-partitions" in printed
+    assert "cad_operacoes: 0 partição(ões) gravada(s)\n" in printed
+    assert "  0 partição(ões) conferida(s), contagens e somas iguais" in printed
+    operations = DeltaTable(str(folder / "delta_vazia" / "prd" / "cad_operacoes"))
+    assert operations.version() == 0
+    assert operations.file_uris() == []
 
     # As duas opções de partição juntas são erro de uso do argparse.
     with pytest.raises(SystemExit) as refusal:

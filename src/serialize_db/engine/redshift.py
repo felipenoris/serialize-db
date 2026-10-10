@@ -1939,6 +1939,10 @@ class RedshiftEngine:
             ``close`` e os carrega por ``COPY ... MANIFEST``.
         :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
             comando; ou a tabela que não existe no sandbox.
+        :raises redshift_connector.InterfaceError: a conexão derrubada na transação do
+            ``close``, o ``COPY`` e o ``INSERT`` da staging, que o servidor desfaz, ou no
+            ``COMMIT`` dela, cujo resultado fica desconhecido; o Parquet e o manifesto do
+            ``staging/`` saem no ``finally``.
         """
         self._refuse_inside_transaction(table.name)
         return RedshiftAppender(self, table, queue_depth)
@@ -1968,6 +1972,10 @@ class RedshiftEngine:
         :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
             comando; a tabela que não existe no sandbox; ou, sem ``iam_role``, a sessão ``boto3``
             sem credenciais para o ``COPY``.
+        :raises redshift_connector.InterfaceError: a conexão derrubada na transação do
+            ``close`` do ``appender``, o ``COPY`` e o ``INSERT`` da staging, que o servidor
+            desfaz, ou no ``COMMIT`` dela, cujo resultado fica desconhecido; o Parquet e o
+            manifesto do ``staging/`` saem no ``finally``.
         """
         batches = batches_of(data)
         with self.appender(table) as appender:

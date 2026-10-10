@@ -22,11 +22,10 @@ falha.
 Checagens:
 
 - o plano do join com algum rótulo ``DS_*``; a recusa do ``EXPLAIN`` a reprova, e a sonda segue;
-- a ida com cada tabela publicada na versão do snapshot novo, e só a partição refeita trocada;
-- a volta com cada tabela publicada na versão do snapshot de antes, e só a partição refeita
-  trocada;
-- ``prd_cad_lancamentos`` com as linhas e a soma de ``id_lancamento`` de antes, depois da ida e
-  depois da volta;
+- a ida com cada tabela publicada na versão do snapshot novo, só a partição refeita trocada e
+  ``prd_cad_lancamentos`` com as linhas e a soma de ``id_lancamento`` de antes;
+- a volta com cada tabela publicada na versão do snapshot de antes, só a partição refeita
+  trocada e ``prd_cad_lancamentos`` com as linhas e a soma de antes;
 - o canal ``default`` no snapshot de antes, no fim.
 
 Leituras: o plano e os rótulos ``DS_*``; as linhas da partição e o tempo da execução que a refaz;
@@ -343,12 +342,20 @@ def main() -> None:
         forward = publish_channel(db, redone)
         problems = publication_problems(db, config, forward, redone_versions, value, "ida")
         problems.extend(totals_problems(config, before, "ida"))
-        lib.check("a ida no snapshot novo, só com a partição refeita trocada", problems)
+        lib.check(
+            "a ida no snapshot novo, só com a partição refeita trocada e as linhas e a soma de "
+            "antes",
+            problems,
+        )
     finally:
         back = publish_channel(db, snapshot)
     problems = publication_problems(db, config, back, versions, value, "volta")
     problems.extend(totals_problems(config, before, "volta"))
-    lib.check("a volta ao snapshot de antes, só com a partição refeita trocada", problems)
+    lib.check(
+        "a volta ao snapshot de antes, só com a partição refeita trocada e as linhas e a soma de "
+        "antes",
+        problems,
+    )
 
     # O canal no snapshot de antes.
     control, _ = delta.read_snapshots(db.storage, db.environment)

@@ -1,8 +1,8 @@
 """``serialize_db.sql``: parâmetro, prefixo, texto por motor, ``bind``, tabelas referenciadas e
 arquivos.
 
-Os testes correm sobre o statement da seção SQLAlchemy de ``docs/tecnologias.md`` (o parâmetro,
-um ``%`` e um ``:`` em literais, duas tabelas do contrato), sobre constantes com contrabarra nas
+Os testes correm sobre o statement de teste deste módulo, ``DRAFT_STATEMENT`` (o parâmetro, um
+``%`` e um ``:`` em literais, duas tabelas do contrato), sobre constantes com contrabarra nas
 mesmas tabelas, sobre
 os quatro statements do pipeline fictício de ``tests/client_model/statements.py``, com os arquivos
 versionados em ``tests/client_model/sql/``, sobre uma tabela cujos identificadores carregam ``:`` e
@@ -33,8 +33,7 @@ from serialize_db.errors import SqlError
 SQL_DIRECTORY = Path(__file__).parent / "client_model" / "sql"
 PARTITION_PARAMS = {"data_base_str": "2026-08-31"}
 
-# O statement da seção SQLAlchemy de docs/tecnologias.md: o parâmetro, o % e o : em literais, duas
-# tabelas do contrato.
+# O statement de teste do módulo: o parâmetro, o % e o : em literais, duas tabelas do contrato.
 DRAFT_METADATA = sa.MetaData()
 DRAFT_ENTRIES = sa.Table(
     "cad_lancamentos",

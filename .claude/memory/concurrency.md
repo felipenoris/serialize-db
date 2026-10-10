@@ -438,4 +438,9 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   a row have a chance near 0.3%]. What the two waiters wait for in those ~20 s is unread. In the
   four publications of the whole base since 2026-10-09 no table paid the wait (`redshift.md`). The
   user accepted the wait on 2026-10-10 (`decisions.md`, "The control row's wait accepted").
+  The 80 Redshift small queries repeat the same text and values over an unchanged table in
+  every repetition, and whether the result cache (`enable_result_cache_for_session`, on by
+  default) served them is unread (`OPEN_QUESTIONS.md`, "O cache de resultados do Redshift");
+  since 2026-10-10 the probe prints, after the measures, how many of those queries
+  `sys_query_history` booked with `result_cache_hit` true and false.
   `docs/index.md` ("Multithreading"), `docs/tecnologias.md` (Redshift, "Transações concorrentes")
