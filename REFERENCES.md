@@ -340,12 +340,14 @@ documentação:
 - <https://www.repost.aws/knowledge-center/query-billing-redshift-serverless> (respondeu 403 em 2026-10-07)
 
 As visões de sistema que leem os locks, as transações e os tempos de cada comando, consultadas em
-2026-10-10 para estender `probes/operacao/probe_parallel_gain.py`, pela busca na web por `Redshift
+2026-10-10 para estender `probes/operacao/probe_parallel_gain.py` e ler o relatório dela no mesmo
+dia, pela busca na web por `Redshift
 Serverless SVV_TRANSACTIONS lock wait "serverless" system views not supported STV`, que não achou
 página da AWS que diga se as visões STV respondem no Serverless, e pelas páginas da documentação:
 
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_SVV_TRANSACTIONS.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/SYS_QUERY_HISTORY.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/considerations-datashare-reads-writes.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/r_STV_LOCKS.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_Concurrent_writes.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_write_readwrite.html>

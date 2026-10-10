@@ -612,7 +612,8 @@ the role may run `EXPLAIN` on the datashare. On 2026-10-09 `probes/operacao/prob
 read the plan over the published base, `prd_cad_lancamentos` (283,835,836 rows) with
 `prd_cad_contas` (101 rows) on `id_conta`: `XN Hash Join DS_DIST_ALL_NONE`, with neither label that
 asks for the key, so the published tables stay `DISTSTYLE AUTO` with no `DISTKEY`; the second
-battery of the same day read the same plan with 424,598,150 rows. `redshift.md`
+battery of the same day and the battery of 2026-10-10 read the same plan with 424,598,150 rows.
+`redshift.md`
 
 ## The readings folder
 
@@ -2125,6 +2126,9 @@ with a stand-in case that provokes it (recommended), or leave it. The user chose
   only `redshift_connector.Error`, so a `BrokenPipeError` there would replace the drop's error as
   the table's failure; the table fails either way.
 
+The battery of 2026-10-10 read the assertions in the target, in all four sessions: the staging's
+`DROP` failed in the send, the engine reconnected, the second `DROP` ran, and the next command ran
+on a new pid (`redshift.md`).
+
 `src/serialize_db/engine/redshift.py` (`_run`, `execute`, `ingest`),
-`tests/test_engine_redshift.py`, `tests/emulator.py`, `README.md`,
-`.claude/memory/OPEN_QUESTIONS.md` ("A reconexão do motor Redshift no alvo")
+`tests/test_engine_redshift.py`, `tests/emulator.py`, `README.md`, `redshift.md`

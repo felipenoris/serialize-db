@@ -2144,7 +2144,9 @@ def test_session_terminated_by_the_server_is_read(
     dois comandos, e as das transações um comando depois dela, que mostram se a conexão voltou; a
     principal, que não é encerrada, apaga as tabelas no fim. Nas quatro rodadas da segunda bateria
     de 2026-10-09, a sessão ociosa reconectou num pid novo, e nas duas transações o comando
-    levantou o ``InterfaceError`` do driver e o seguinte reconectou."""
+    levantou o ``InterfaceError`` do driver e o seguinte reconectou. Em 2026-10-10, numa das
+    quatro rodadas, a sessão ociosa respondeu aos dois comandos no mesmo pid depois do
+    ``pg_terminate_backend`` verdadeiro: a conexão não caiu."""
     engine = target.engine
     reading = {}
 
@@ -2222,8 +2224,9 @@ def test_session_terminated_during_the_ingest_copy_is_read(
     segunda bateria de 2026-10-09, o ``COPY`` e o ``ROLLBACK`` levantaram o ``InterfaceError``; em
     três, o ``DROP`` falhou no envio com ``BrokenPipeError``, que o motor ainda não lia como a
     queda, e o ``ingest`` o levantou com a staging deixada e a sessão sem reconectar; na outra, o
-    ``DROP`` reabriu a conexão. ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE`` provoca o
-    ``BrokenPipeError`` no substituto."""
+    ``DROP`` reabriu a conexão. Em 2026-10-10, com a conversão do ``OSError``, o ``DROP`` reabriu
+    a conexão nas quatro rodadas, a staging saiu e o comando seguinte rodou num pid novo.
+    ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE`` provoca o ``BrokenPipeError`` no substituto."""
     engine = target.engine
     uri = target.uri(ENTRIES)
     version = published_table(target, ENTRIES, MONTHS[:1], rows=COPY_ROWS)

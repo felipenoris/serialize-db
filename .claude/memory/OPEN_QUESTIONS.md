@@ -23,8 +23,10 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
   20.000 entradas, `POC.md`; e, com a listagem no mesmo limite, ao menos 10.419 versões,
   26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:04, ao menos 10.248 versões,
-  62.094.316.073 bytes, com 9.751 marcadores em 2026-10-09 às 01:07, e ao menos 10.110 versões,
-  88.588.140.425 bytes, com 9.889 marcadores às 18:35, `.claude/memory/environments.md`), e a regra
+  62.094.316.073 bytes, com 9.751 marcadores em 2026-10-09 às 01:07, ao menos 10.110 versões,
+  88.588.140.425 bytes, com 9.889 marcadores às 18:35, e ao menos 9.990 versões,
+  115.006.714.004 bytes, com 10.009 marcadores em 2026-10-10 às 02:32,
+  `.claude/memory/environments.md`), e a regra
   `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
@@ -32,12 +34,14 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   "Arquivo", espera na pasta `arquivo/`: a passagem dos arquivos dela à classe de armazenamento mais
   barata. As sondas da operação também apagam a pasta delas sob a raiz da suíte no fim de cada
   rodada: 19.293 MB em 2026-10-05, 19.284 MB na segunda rodada de 2026-10-07, 19.293 MB em
-  2026-10-09 às 05:18 e 19.289 MB às 21:50, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos
-  relatórios. Cada rodada deixa ao menos isso em versões não correntes, cerca de três quartos do
-  salto de `BK-14` de 249.621.376 bytes em 2026-10-05 para 26.705.708.023 em 2026-10-06, e os
-  23.015 MB das duas rodadas de 2026-10-07 cerca de dois terços do salto de 26.705.558.141 bytes
-  para 62.094.316.073 em 2026-10-09, e os 19.293 MB da rodada das 05:18 cerca de três quartos do
-  salto para 88.588.140.425 bytes às 18:35 [inferido].
+  2026-10-09 às 05:18, 19.289 MB às 21:50 e 19.612 MB em 2026-10-10, em MB de 2^20 bytes, pelas
+  linhas `raiz apagada` dos relatórios. Cada rodada deixa ao menos isso em versões não correntes,
+  cerca de três quartos do salto de `BK-14` de 249.621.376 bytes em 2026-10-05 para
+  26.705.708.023 em 2026-10-06, e os 23.015 MB das duas rodadas de 2026-10-07 cerca de dois terços
+  do salto de 26.705.558.141 bytes para 62.094.316.073 em 2026-10-09, os 19.293 MB da rodada das
+  05:18 cerca de três quartos do salto para 88.588.140.425 bytes às 18:35, e os 19.289 MB da
+  rodada das 21:50 cerca de três quartos do salto para 115.006.714.004 bytes em 2026-10-10
+  [inferido].
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
   2026-09-27, em 2026-09-29 (`POC.md`) e duas vezes em 2026-10-09 (`.claude/memory/aws-s3.md`), o
   delta-rs, o `S3FileSystem` e o `boto3` renovando a credencial do contêiner, que troca de chave a
@@ -58,17 +62,8 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   cerca de 29 minutos ou mais pela frente; o motor reconecta uma vez por comando fora de transação e
   perde só a tabela temporária que o pipeline tenha criado na sessão, e a carga de cada partição de
   `ingest` e de `pinned_delta` roda numa transação desde 2026-10-04, para a queda no meio do `COPY`
-  subir sem repetição (`POC.md`); o alvo leu essa queda em 2026-10-09 (item "A reconexão do motor
-  Redshift no alvo").
-- **A reconexão do motor Redshift no alvo.** Na segunda bateria de 2026-10-09, logo depois do
-  `COPY` derrubado de um `ingest`, o `DROP` da staging falhou no envio com `BrokenPipeError` em 3
-  das 4 sessões, e a sessão ficou presa na conexão morta (`.claude/memory/redshift.md`). Por
-  decisão do usuário do mesmo dia (`decisions.md`), o `_run` do motor converte o `OSError` do
-  socket no `InterfaceError` da queda, que o `execute` trata como a conexão derrubada;
-  `tests/test_engine_redshift.py` cobre a conversão com a conexão de mentira, e
-  `SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE` provoca o erro no substituto.
-  `test_session_terminated_during_the_ingest_copy_is_read` passou a conferir que a staging sai e
-  que a sessão segue, o que espera a próxima bateria no alvo.
+  subir sem repetição (`POC.md`); o alvo leu essa queda em 2026-10-09 e, em 2026-10-10, a
+  reconexão depois dela nas quatro sessões (`.claude/memory/redshift.md`).
 - **O `create_table` do motor Redshift dentro da transação do cliente.** A recusa de 2026-10-09
   (`decisions.md`), que o alvo leu nas quatro sessões da segunda bateria do dia
   (`.claude/memory/redshift.md`), cobre o `append`, o `appender`, o `ingest` e o `pinned_delta`, que
@@ -134,54 +129,64 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   API do pacote (declaração do usuário de 2026-10-09, `decisions.md`). Espera o usuário: a troca
   de `valor`, se vier, antes da carga da produção.
 - **O acesso de leitura no ambiente alvo.** A etapa 10 rodou no alvo nas baterias de 2026-09-25, de
-  2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05, de 2026-10-07 e nas duas de
-  2026-10-09 (`POC.md`, `.claude/memory/environments.md`): o leitor Delta abriu as 12 views da raiz
-  carregada em 0,645 s, em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s, com 2 vCPUs em 1,440 s, com
-  4 vCPUs em 0,844 s e com 8 vCPUs em 0,647 s; as suítes passaram a publicação por canal e por
-  snapshot, com a volta a um snapshot anterior, e a comparação dos dois leitores, com o `stream` do
+  2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05, de 2026-10-07, nas duas de
+  2026-10-09 e na de 2026-10-10 (`POC.md`, `.claude/memory/environments.md`): o leitor Delta abriu
+  as 12 views da raiz carregada em 0,645 s, em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s, com
+  2 vCPUs em 1,440 s, com 4 vCPUs em 0,844 s e com 8 vCPUs em 0,647 s e em 0,617 s; as suítes
+  passaram a publicação por canal e por snapshot, com a volta a um snapshot anterior, e a
+  comparação dos dois leitores, com o `stream` do
   leitor Redshift pelo `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um snapshot, com a
   volta pelo canal; e em 2026-09-26 a base inteira foi publicada por `--channel default`,
   `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27, em 328,5 s
   com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s com 285 MB, em
   2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB, e em 2026-10-09, com 4 vCPUs, em 320,9 s com
   280 MB e, às 20:31, com 8 vCPUs e a partição 2026-08-31 a mais (424.598.150 linhas), em 487,8 s
-  com 286 MB. Nas duas baterias de 2026-10-09, `probes/operacao/probe_published_base.py` voltou a
-  base publicada a um snapshot anterior: a partição 2026-01-31 de `cad_lancamentos`, refeita num
-  snapshot novo, foi publicada pelo canal em 42,8 s e em 44,3 s, com o pico do processo em 261 MB e
-  em 262 MB, e a volta ao snapshot de antes a trocou de novo em 44,3 s com 258 MB e em 46,7 s com
-  262 MB (`.claude/memory/redshift.md`). Espera o `UNLOAD` de um cliente com usuário só de leitura
-  para um bucket próprio, com o caminho de credencial que serve a ele, que precisa de um papel de
-  cliente no alvo.
+  com 286 MB, e em 2026-10-10, com 8 vCPUs, em 504,0 s com 287 MB. Nas duas baterias de 2026-10-09
+  e na de 2026-10-10, `probes/operacao/probe_published_base.py` voltou a base publicada a um
+  snapshot anterior: a partição 2026-01-31 de `cad_lancamentos`, refeita num snapshot novo, foi
+  publicada pelo canal em 42,8 s, em 44,3 s e em 45,0 s, com o pico do processo em 261 MB, em
+  262 MB e em 262 MB, e a volta ao snapshot de antes a trocou de novo em 44,3 s com 258 MB, em
+  46,7 s com 262 MB e em 48,2 s com 262 MB (`.claude/memory/redshift.md`). Espera o `UNLOAD` de
+  um cliente com usuário só de leitura para um bucket próprio, com o caminho de credencial que
+  serve a ele, que precisa de um papel de cliente no alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
   de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"), e em
-  2026-10-07, duas vezes, numa de 2 vCPUs, e em 2026-10-09 numa de 4 vCPUs e, às 22:09, de novo numa
-  de 8 vCPUs, com os ganhos de 2026-10-05 (`.claude/memory/concurrency.md`): no DuckDB os pools
+  2026-10-07, duas vezes, numa de 2 vCPUs, e em 2026-10-09 numa de 4 vCPUs e, às 22:09 e em
+  2026-10-10, de novo numa de 8 vCPUs, com os ganhos de 2026-10-05
+  (`.claude/memory/concurrency.md`): no DuckDB os pools
   ganharam com 2 vCPUs a metade do que em 8, e com 4 vCPUs entre os dois, e no Redshift o ganho não
   dependeu da máquina; o ganho com mais CPUs segue sem medida e espera a sonda numa máquina maior.
 - **A espera da linha de controle na publicação em paralelo.**
   `probes/operacao/probe_parallel_gain.py` publica quatro tabelas iguais em quatro conexões, e das
-  15 repetições de 2026-10-05 a 2026-10-09 sete levaram de 11,133 s a 13,813 s e oito de 31,521 s a
-  36,110 s, contra 26,750 s a 32,179 s das 15 uma tabela por vez (`docs/index.md`, seção
-  "Multithreading"). O tempo de cada comando, lido às 22:09 de 2026-10-09
-  (`.claude/memory/concurrency.md`), põe a diferença no `INSERT` da linha de controle, o último
-  comando de cada transação antes do `COMMIT`: os quatro somaram 5,42 s na repetição rápida e
-  70,03 s e 65,94 s nas lentas, até 24,87 s num só, e ao menos três passaram de 9 s em cada lenta,
-  enquanto o `COPY`, o `INSERT` dos dados e o `COMMIT`, de até 1,49 s, levaram o mesmo nas três.
-  Cada transação segura o lock de escrita da tabela de controle do `INSERT` ao `COMMIT`
-  (`docs/tecnologias.md`, Redshift, "Transações concorrentes"), e uma fila nesse lock esperaria a
-  soma dos `COMMIT`s, poucos segundos; a causa da espera de cerca de 20 s não foi lida. Na
-  publicação da base às 20:31 do mesmo dia, `cad_contratos`, `cad_operacoes` e
-  `rel_contrato_operacao`, com as partições da bateria de 01:06, levaram de 10,8 s a 13,3 s a mais
-  que nela, talvez pela mesma espera [inferido], e o comando não imprime o tempo de cada comando
-  (`.claude/memory/redshift.md`). O usuário escolheu em 2026-10-10 estender a sonda, que desde o
-  PR #151 imprime em cada medida da publicação a linha do tempo de cada conexão, com o início e a
-  duração de cada comando, e os locks que uma quinta sessão lê em `svv_transactions` a cada
-  segundo; mede a publicação também sem a despublicação entre as medidas, trocando a versão
-  publicada; e lê no fim da seção, no `sys_query_history`, o tempo de fila, de espera por lock e de
-  execução de cada gravação da linha de controle. Espera a próxima bateria no alvo, que diz se a
-  espera é de lock e de quem, e se ela some sem a despublicação.
+  18 repetições de 2026-10-05 a 2026-10-10 nove levaram de 11,133 s a 13,813 s e nove de 31,521 s a
+  36,110 s, contra 26,750 s a 32,179 s das 18 uma tabela por vez (`docs/index.md`, seção
+  "Multithreading"). A diferença está no `INSERT` da linha de controle, o último comando de cada
+  transação antes do `COMMIT`, e a bateria de 2026-10-10 leu de onde ela vem
+  (`.claude/memory/concurrency.md`): o `sys_query_history` respondeu pelas 52 gravações da linha
+  de controle, e os quatro `INSERT` que passaram de 3 s levaram de 20,067 s a 21,070 s no
+  planejamento do comando (`planning_time`), com 0 s de fila, até 0,061 s de espera por lock e
+  0,011 s a 0,012 s de execução; as outras 48 gravações planejaram em 0,040 s a 2,053 s e
+  esperaram por lock até 0,132 s. A quinta sessão, lendo `svv_transactions` a cada segundo, não
+  viu lock pendente na repetição lenta, e viu um só na rodada, por um segundo, numa medida rápida.
+  Os quatro `INSERT` lentos vieram de publicações que criaram as tabelas, dois numa repetição
+  medida e dois na publicação que preparou as medidas sem despublicação; sem a despublicação entre
+  as medidas, com o `UPDATE` da linha de controle no lugar do `INSERT` e sem `CREATE TABLE`, as
+  três repetições em quatro conexões levaram de 11,380 s a 12,658 s, e nenhuma das 24 gravações
+  planejou acima de 1,630 s [três repetições]. O que o planejador espera não foi lido: a página da
+  AWS sobre a escrita por datashare (`REFERENCES.md`) diz que o Redshift não aceita o acesso a um
+  objeto do datashare que teve um DDL concorrente entre o `Prepare` e o `Execute` do acesso, e o
+  `CREATE TABLE` das outras três transações, sem commit no mesmo esquema enquanto o `INSERT` é
+  planejado, é o único DDL na janela [hipótese]. Na publicação da base de 2026-10-10,
+  `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`, com as mesmas partições das duas
+  baterias de 2026-10-09, levaram de 1,1 s a 5,5 s menos que às 20:31 e de 6,8 s a 10,4 s mais que
+  às 01:06 (`.claude/memory/redshift.md`). Espera o usuário: aceitar a espera, que só veio na
+  publicação que cria a tabela, a primeira ou a seguinte a uma despublicação, e custa cerca de
+  20 s nas transações que a sofrem; estender a sonda para separar a hipótese, criando as tabelas
+  fora da transação da carga, ou gravando a linha de controle antes do `COPY`, e medindo de novo;
+  ou mudar a publicação para criar a tabela final numa transação própria, confirmada antes da
+  carga.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
@@ -232,12 +237,13 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   200 `os.stat` ao lado do laço Python levem mais que o dobro do tempo que levam com o intervalo de
   troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s e 0,005 s contra
   0,006 s (isolado em 2026-10-07, 0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão
-  `-m "not redshift"` do `suite_alvo.sh` roda o caso, e ele passou nas 15 sessões com relatório, de
-  2026-09-24 a 2026-10-09, com 0,381 s a 0,899 s ao lado do laço contra 0,012 s a 0,086 s com o
+  `-m "not redshift"` do `suite_alvo.sh` roda o caso, e ele passou nas 16 sessões com relatório, de
+  2026-09-24 a 2026-10-10, com 0,381 s a 0,899 s ao lado do laço contra 0,012 s a 0,086 s com o
   intervalo menor (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s contra
-  0,012 s, e as duas de 2026-10-09, com 4 e 8 vCPUs, 0,773 s contra 0,086 s e 0,899 s contra
-  0,052 s. A esteira não roda `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes
-  do commit. Espera o usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
+  0,012 s, as duas de 2026-10-09, com 4 e 8 vCPUs, 0,773 s contra 0,086 s e 0,899 s contra
+  0,052 s, e a de 2026-10-10, com 8 vCPUs, 0,868 s contra 0,061 s. A esteira não roda
+  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o
+  usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   (`POC.md`), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
@@ -261,7 +267,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
   `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
   tabela Iceberg no Glue ou um table bucket no S3 Tables: nas leituras das baterias de 2026-10-05 a
-  2026-10-09, a última às 18:35 de 2026-10-09, o Glue seguia com um banco e uma tabela Parquet, e o
+  2026-10-10, a última às 02:33 de 2026-10-10, o Glue seguia com um banco e uma tabela Parquet, e o
   Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
 
@@ -270,9 +276,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
 As sondas de 2026-09-25 (`POC.md`, seção "O que as sondas de consistência de leitura e escrita
 mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e trabalho
 paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas no ambiente alvo, em
-2026-09-26, em 2026-09-27, em 2026-09-29, em 2026-10-05, em 2026-10-07 e em 2026-10-09,
-repetiram os achados sem reprovar checagem (`POC.md`, `.claude/memory/environments.md`). Cada
-item espera o usuário: corrigir, ou aceitar como está.
+2026-09-26, em 2026-09-27, em 2026-09-29, em 2026-10-05, em 2026-10-07, em 2026-10-09 e em
+2026-10-10, repetiram os achados sem reprovar checagem (`POC.md`,
+`.claude/memory/environments.md`). Cada item espera o usuário: corrigir, ou aceitar como está.
 
 - **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
   `DECIMAL(38, 6)` (`_totals` de `serialize_db.audit`): um valor finito de magnitude 1e32 ou mais
@@ -285,7 +291,7 @@ item espera o usuário: corrigir, ou aceitar como está.
 - **A escrita condicional do arquivo de controle entre threads.** Na pasta local,
   `Storage.write_text(if_match=...)` confere a impressão digital e faz o `os.replace` fora de um
   lock: oito threads somando 50 cada perderam 293 de 400 atualizações, e de 312 a 335 nas rodadas do
-  alvo, de 2026-09-26 a 2026-10-09. A docstring diz que a escrita não é atômica entre processos;
+  alvo, de 2026-09-26 a 2026-10-10. A docstring diz que a escrita não é atômica entre processos;
   entre threads do mesmo processo ela também não é, e `snapshot`, `archive_snapshot` e `set_channel`
   chamados em paralelo numa raiz local (duas `Execution` com `snapshot` encerrando ao mesmo tempo,
   por exemplo) podem perder uma entrada. No S3 o `IfMatch` é do servidor. Opções: um

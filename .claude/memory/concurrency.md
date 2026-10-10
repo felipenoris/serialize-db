@@ -333,3 +333,48 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   four-connection repetitions fell in the two groups, 7 at 11.133 s to 13.813 s and 8 at 31.521 s
   to 36.110 s, against 26.750 s to 32.179 s for the 15 serial ones. `docs/index.md`
   ("Multithreading")
+- The same probe in the battery of 2026-10-10, from 04:14 UTC (8 vCPUs, 13.1 GiB available, DuckDB
+  limits 8 threads and 6,695 MiB, the tables prepared in 25.6 s, `main` at `e38432f`). DuckDB:
+  `stream` 1.30x with no work (0.373 s, +3 MB, against 0.484 s, +314 MB) and 1.89x with pandas
+  (0.410 s against 0.774 s), `appender` 1.01x and 1.07x, both 1.14x and 1.22x, 200 small queries
+  0.575 s serial, 0.597 s on the main session and 0.390 s with one `new_session()` each (1.48x),
+  `run.ingest` 2.61x (3.923 s, +1,115 MB, against 10.255 s, +909 MB), `materialize` 2.33x
+  (4.117 s against 9.612 s) and `publish_delta(max_workers=4)` 2.04x (8.140 s against 16.585 s).
+  Redshift: `run.ingest` 2.68x (13.780 s against 36.866 s), `stream`, `appender` and both 1.01x,
+  1.09x and 1.05x with no work and 1.01x, 1.14x and 1.03x with pandas, 80 small queries 4.153 s
+  serial, 4.116 s on the main session and 1.789 s with one extra session each (2.32x),
+  `publish_delta(max_workers=4)` 1.36x (18.305 s against 24.864 s) and `publish_redshift` with
+  four workers 2.46x (12.033 s against 29.561 s), its other two repetitions at 12.537 s and
+  33.214 s against 30.266 s and 29.722 s serial; without the unpublish between the measures, each
+  measure swapping the published version (the `UPDATE` of the control row, no `CREATE TABLE`), the
+  three four-worker repetitions took 11.380 s, 11.970 s and 12.658 s against 35.471 s, 27.579 s
+  and 33.607 s serial (2.42x, best against best). The readings PR #151 added place the wait: in the
+  33.214 s repetition the control `INSERT`s of `cad_paralelo_c` and `cad_paralelo_d` started at
+  11.674 s and 11.799 s, while `cad_paralelo_a`'s ran (from 9.552 s, 3.214 s long) and as
+  `cad_paralelo_b`'s `COMMIT` (2.260 s long) ended, and took 21.228 s and 20.251 s, their
+  `COMMIT`s 0.311 s and 0.344 s, the data `INSERT`s before them 4.892 s and 4.894 s against 2.5 s
+  to 3.6 s in the other transactions of the run. `sys_query_history` answered for 52 of 52 control
+  writes: those two `INSERT`s had `planning_time` 21.070 s and 20.073 s, `lock_wait_time` 0.000 s,
+  `queue_time` 0.000 s and `execution_time` 0.012 s and 0.011 s (`elapsed_time` 21.224 s and
+  20.247 s), and the `INSERT`s of the same two tables in the publication that prepared the
+  no-unpublish measures (outside the measures, 31.3 s for the four tables) had 20.067 s and
+  21.020 s of planning with 0.000 s and 0.061 s of lock wait; the other 24 `INSERT`s and the 24
+  `UPDATE`s planned in 0.040 s to 2.053 s, waited for a lock 0.000 s to 0.132 s, queued 0.000 s
+  and executed in 0.011 s to 0.800 s. The fifth session's `svv_transactions` answered every poll
+  (11 to 33 readings per measure) and saw no pending lock in any measure with unpublish, the slow
+  one included (31 readings over 32.5 s); the one pending lock of the run was in the third
+  no-unpublish four-worker repetition, at +12.0 s: `cad_paralelo_b` waiting for the
+  `PgXenWriteLock` on relation `723112` that `cad_paralelo_c` held, after `cad_paralelo_a` held it
+  at +10.9 s [inferred: the control table, the one relation the four share], its `UPDATE` 2.086 s
+  long with 0.108 s of lock wait. So the ~20 s is the server planning the control row's `INSERT`,
+  not a lock wait nor a queue, and the lock on the control table costs about 0.1 s; the four long
+  plannings came in publications that created the tables (the `CREATE` before the `COPY`, the
+  `INSERT` of the control row), in two of the four transactions each time, and none of the 48
+  other writes planned over 2.1 s [3 repetitions per variant]. What the planner waits for is
+  unread; the page on datashare writes (`REFERENCES.md`) says Redshift does not support accessing
+  a datashare object that had a concurrent DDL between the `Prepare` and the `Execute` of the
+  access, and the `CREATE TABLE` of the other three transactions, uncommitted in the same schema
+  while the `INSERT` is planned, is the one DDL in the window [hypothesis]. Across the six runs of
+  2026-10-05 to 2026-10-10 the 18 four-connection repetitions with unpublish fell in the two
+  groups, 9 at 11.133 s to 13.813 s and 9 at 31.521 s to 36.110 s, against 26.750 s to 32.179 s
+  for the 18 serial ones. `docs/index.md` ("Multithreading")
