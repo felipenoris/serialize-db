@@ -294,6 +294,17 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   first and writes it last, by `INSERT` or by the `UPDATE` conditioned on the version read, and the
   unpublish flow deletes it with the published table (user decision of 2026-09-23,
   `decisions.md`). `docs/tecnologias.md` (Redshift)
+- The system views that read locks and each statement's times, from the AWS docs read on
+  2026-10-10 (`REFERENCES.md`): `svv_transactions` is visible to all users, a regular user seeing
+  only their own rows, and lists each lock held or requested, by `pid`, `xid`, `lock_mode`,
+  `lockable_object_type` (`relation` or `transactionid`), `relation` and `granted` (false while
+  pending); `stv_locks` is visible only to superusers; `sys_query_history` holds running and
+  finished statements, with `session_id` (the process id) and, in microseconds, `elapsed_time`,
+  `queue_time`, `execution_time`, `compile_time`, `planning_time` and `lock_wait_time` (the wait
+  for a relation lock). A transaction releases all its table locks at once, at `COMMIT` or
+  `ROLLBACK`. Whether `svv_transactions` answers on the target's Serverless, and whether it shows
+  the locks of a write through the datashare, is unread; `probes/operacao/probe_parallel_gain.py`
+  reads both views since PR #151.
 - An extra session (`new_session()`, 2026-09-23) is another connection with its own temporary
   credential and `USE`: it sees the `exec_<id>_*` tables the main session committed and not its
   temporary tables; `run.ingest` of more than one table opens one per table. The suite's two

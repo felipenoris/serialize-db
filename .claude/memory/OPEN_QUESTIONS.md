@@ -171,15 +171,17 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   enquanto o `COPY`, o `INSERT` dos dados e o `COMMIT`, de até 1,49 s, levaram o mesmo nas três.
   Cada transação segura o lock de escrita da tabela de controle do `INSERT` ao `COMMIT`
   (`docs/tecnologias.md`, Redshift, "Transações concorrentes"), e uma fila nesse lock esperaria a
-  soma dos `COMMIT`s, poucos segundos; a causa da espera de cerca de 20 s não foi lida. Três
-  leituras a separariam: o instante e a conexão de cada comando, que o log
-  `serialize_db.publication.commands` não registra, para ver se as esperas correm juntas e acabam
-  juntas; os locks e as transações da tabela de controle lidos de uma quinta sessão durante a
-  espera; e repetições sem a despublicação entre elas. Na publicação da base às 20:31 do mesmo dia,
-  `cad_contratos`, `cad_operacoes` e `rel_contrato_operacao`, com as partições da bateria de 01:06,
-  levaram de 10,8 s a 13,3 s a mais que nela, talvez pela mesma espera [inferido], e o comando não
-  imprime o tempo de cada comando (`.claude/memory/redshift.md`). Espera o usuário: estender a sonda
-  com essas leituras, ou deixar como está, com o `--max-workers 4` do runbook.
+  soma dos `COMMIT`s, poucos segundos; a causa da espera de cerca de 20 s não foi lida. Na
+  publicação da base às 20:31 do mesmo dia, `cad_contratos`, `cad_operacoes` e
+  `rel_contrato_operacao`, com as partições da bateria de 01:06, levaram de 10,8 s a 13,3 s a mais
+  que nela, talvez pela mesma espera [inferido], e o comando não imprime o tempo de cada comando
+  (`.claude/memory/redshift.md`). O usuário escolheu em 2026-10-10 estender a sonda, que desde o
+  PR #151 imprime em cada medida da publicação a linha do tempo de cada conexão, com o início e a
+  duração de cada comando, e os locks que uma quinta sessão lê em `svv_transactions` a cada
+  segundo; mede a publicação também sem a despublicação entre as medidas, trocando a versão
+  publicada; e lê no fim da seção, no `sys_query_history`, o tempo de fila, de espera por lock e de
+  execução de cada gravação da linha de controle. Espera a próxima bateria no alvo, que diz se a
+  espera é de lock e de quem, e se ela some sem a despublicação.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);

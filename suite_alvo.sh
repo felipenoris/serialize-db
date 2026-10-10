@@ -364,9 +364,11 @@ main() {
 
     # O ganho das APIs com threads sobre a execução em série no motor DuckDB, nos pools de
     # tabelas, no motor Redshift e na publicação no Redshift, três medidas de cada forma, sobre
-    # quatro tabelas de 5 milhões de linhas que a sonda gera, com o tempo de cada tipo de comando
-    # em cada medida da publicação; as tabelas exec_* do sandbox e as poc<id>_* publicadas, com
-    # as linhas de controle delas, saem no fim.
+    # quatro tabelas de 5 milhões de linhas que a sonda gera; a publicação é medida com e sem a
+    # despublicação entre as medidas, e cada medida dela imprime o tempo de cada tipo de comando, a
+    # linha do tempo de cada conexão e os locks que uma quinta sessão leu, e o fim da seção as
+    # gravações da linha de controle no sys_query_history. As tabelas exec_* do sandbox e as
+    # poc<id>_* publicadas, com as linhas de controle delas, saem no fim.
     run .venv/bin/python probes/operacao/probe_parallel_gain.py
 
     summary
