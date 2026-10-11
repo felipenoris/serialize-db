@@ -2321,3 +2321,25 @@ the load and the query. The appenders keep their 80 identical lines (`rows`, `er
 `_converted`, `write`, `__enter__`, `__exit__`, `__del__`), because sharing them needs a base class.
 
 `engine/__init__.py`, `engine/duckdb.py`, `engine/redshift.py`, `CLAUDE.md` ("Repository index").
+
+## The properties, the long functions and the private names the tests read (2026-10-11)
+
+Three more cards of the "Não aplicado" items of PR #156, each answered with the recommended option.
+
+- The nine properties without `:return:` (02:18 UTC, "Deixar"): `AuditReport.passed`,
+  `SchemaDiff.changes`, `rows` and `error` of the two appenders, `PartitionReport.matches`,
+  `ImportReport.matches` and `Storage.is_s3` stay as they are, and the field standard says a
+  property has no `:return:`, because pdoc shows it as an attribute whose summary says what it
+  holds (probe of 2026-10-11: pdoc 16 renders the field as a "Returns" block under the attribute,
+  repeating the summary).
+- The three functions the review called long (02:23 UTC, "Deixar"): `import_table`,
+  `import_report` and `publication_statements` have 75, 69 and 81 lines, 38, 40 and 36 of them
+  docstring, and 30, 21 and 34 of code, one responsibility each, and stay whole; the package's
+  longest functions are the argparse declarations of `cli.py` (`_add_operation_parsers`, 111
+  lines of code), which no card asked about.
+- The private names the tests read (02:35 UTC, "Regra"): a test may read and replace the private
+  names of the module it tests (`stream._spool` in `test_engine_duckdb`, `engine._connection`,
+  `redshift._write_file_manifest` and `session._run` in `test_engine_redshift`); the rule is in
+  `CLAUDE.md`, "Naming conventions", and no protected seam is added for a test.
+
+`CLAUDE.md` ("Docstrings", "Naming conventions").

@@ -206,12 +206,13 @@ The standard every public function, method and class follows (user decision of 2
   `src/serialize_db/`.
 - **Fields.** `:param name:` for every parameter pdoc shows, in signature order, except `self` and
   `cls` (`*parts` is `:param parts:`); `:return:` when the annotation is not `None`, and for a
-  context manager what `with` gives; one `:raises Exc:` per exception the function raises
-  deliberately, directly or through the package's own helpers, named as the module imports it. A
-  third-party exception that only propagates stays out, unless the reader acts on it (`duckdb.Error`
-  in `import_table`, `Storage.duckdb_connect` and `DuckDBEngine`, `redshift_connector.Error` in
-  `RedshiftEngine.execute` and `create_publications_table`). pdoc reads only `param`, `return` and
-  `raises`, and ignores `:returns:` and `:raise:`.
+  context manager what `with` gives, and never on a property, which pdoc shows as an attribute whose
+  summary says what it holds (user decision of 2026-10-11); one `:raises Exc:` per exception the
+  function raises deliberately, directly or through the package's own helpers, named as the module
+  imports it. A third-party exception that only propagates stays out, unless the reader acts on it
+  (`duckdb.Error` in `import_table`, `Storage.duckdb_connect` and `DuckDBEngine`,
+  `redshift_connector.Error` in `RedshiftEngine.execute` and `create_publications_table`). pdoc
+  reads only `param`, `return` and `raises`, and ignores `:returns:` and `:raise:`.
 - **Field text.** pt-BR, starting lowercase and ending with a period: what the argument is, its
   unit, its accepted values and what `None` or the default means; continuation lines indent four
   spaces. The first line of a `:param` or `:raises` field holds no other colon, a quoted `s3://` or
@@ -696,6 +697,11 @@ inferred from the space's project. Data tables and columns stay Portuguese, incl
 `id_execucao` column of the `Rastreio` mixin in the SQLAlchemy section of `docs/tecnologias.md`.
 SQL placeholders in prose (`COPY (consulta) TO ...`) and staging table names (`staging_<tabela>`)
 count as database identifiers.
+
+A test may read and replace the private names of the module it tests: the private state
+(`stream._spool`, `engine._connection`) and the seams a double replaces
+(`redshift._write_file_manifest`, `session._run`) are what the interface hides on purpose, and a
+protected name added only for a test would widen the library (user decision of 2026-10-11).
 
 A Python example in the documentation is checked against the identifier convention by tokenizing
 it: only `NAME` tokens are candidates, and strings, attribute access after `.`,
