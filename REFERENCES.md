@@ -1153,6 +1153,15 @@ regras que a versão 0.16.9 liga por padrão e o formatador, com a vírgula fina
 de código em Markdown): <https://docs.astral.sh/ruff/default-rules/> e
 <https://docs.astral.sh/ruff/formatter/>.
 
+As versões do Python e as rodas de cada uma, consultadas em 2026-10-11 para o `requires-python`
+`>=3.12` e a matriz de `tests.yml`: <https://endoflife.date/api/python.json> (o 3.15.0 de
+2026-10-09), <https://pypi.org/pypi/duckdb/json> (sem rodas `cp315` até a 1.5.6 e nas 2.0.0.dev),
+<https://pypi.org/pypi/pyarrow/json> (rodas `cp315` desde a 26.0.0, de 2026-10-09),
+<https://pypi.org/pypi/pyyaml/json>, <https://pypi.org/pypi/duckdb-extension-delta/json> e
+<https://pypi.org/pypi/duckdb-extension-httpfs/json>; e o guia do uv no GitHub Actions, em que o
+`python-version` do `setup-uv` vale por cima do `.python-version`:
+<https://docs.astral.sh/uv/guides/integration/github/>.
+
 ## Delta Lake
 
 Documentação do delta-rs e repositórios:

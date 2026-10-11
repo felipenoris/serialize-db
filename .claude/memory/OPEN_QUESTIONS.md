@@ -222,6 +222,12 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `duckdb-extension-delta` e `duckdb-extension-httpfs` do PyPI, que exigem o `duckdb` da mesma
   versão e paravam na 1.5.5 em 2026-10-04 (`POC.md`); o pino fica em 1.5.5. A troca
   para a 1.5.6, que passou os testes do pacote em 2026-10-03, espera os wheels da 1.5.6 no PyPI.
+- **O Python 3.15.** O `requires-python` aceita o 3.15, e a esteira testa o 3.12 e o 3.13
+  (`.github/workflows/tests.yml`, `decisions.md`). O 3.15.0 saiu em 2026-10-09, e o DuckDB não
+  tem rodas `cp315` no PyPI em nenhuma versão, nem a 1.5.5 fixada nem a 1.5.6, enquanto o PyArrow
+  as tem desde a 26.0.0, acima da 25.0.1 fixada (leitura de 2026-10-11): num projeto em 3.15, o
+  `uv sync` tenta compilar os dois. O item fecha quando o DuckDB publicar as rodas, com o PyArrow
+  numa versão que as tenha e os wheels `duckdb-extension-*` na versão do DuckDB.
 - **O pacote no Windows.** A esteira roda os testes do pacote num runner Windows desde 2026-10-01
   (`POC.md`), com a pasta local e o DuckDB em memória, e a suíte inteira, com os testes
   dos probes e as provas de conceito, passou no runner em 2026-10-04; o S3, o Redshift, os próprios

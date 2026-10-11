@@ -110,9 +110,11 @@ uv add git+https://github.com/felipenoris/serialize-db   # ou o endereço git
 uv sync
 ```
 
-O projeto cliente pede o Python 3.13 ou mais novo, como o pacote (`uv init --python 3.13`); com um
-`requires-python` que aceita versões anteriores, o `uv add` recusa o pacote. As dependências que o
-`uv sync` instala são as de execução, nas versões fixadas em `pyproject.toml`:
+O projeto cliente pede o Python 3.12 ou mais novo, como o pacote (`uv init --python 3.12`); com um
+`requires-python` que aceita versões anteriores, o `uv add` recusa o pacote. A esteira testa o
+pacote no 3.12 e no 3.13; no 3.15, o DuckDB 1.5.5 e o PyArrow 25.0.1 não têm rodas no PyPI
+(leitura de 2026-10-11), e o `uv sync` tenta compilá-los. As dependências que o `uv sync`
+instala são as de execução, nas versões fixadas em `pyproject.toml`:
 
 - `sqlalchemy`, `pyarrow`, `deltalake` e `duckdb`;
 - `boto3`, que no S3 faz a escrita condicional do arquivo de controle e a cópia dos arquivos do

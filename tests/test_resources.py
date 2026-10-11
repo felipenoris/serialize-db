@@ -9,7 +9,8 @@ que a folga não devolve, no v2 e no v1, a memória abaixo de 2 MiB ou negativa 
 ``environment_limits`` recusa, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do
 Python. No Windows, a memória sem ``/proc`` é a disponível que a API do sistema informa, e a física
 dessa leitura é conferida contra a do WMI. O pico de memória residente é lido de um
-``/proc/self/status`` fabricado, sem ele, e num processo filho que toca 64 MiB. As folgas
+``/proc/self/status`` fabricado, sem ele, e num processo filho que toca 64 MiB. No Linux, um
+processo filho preso a uma CPU pela afinidade lê 1 em ``available_cpus``. As folgas
 fabricadas, de 1,25 a 3,5 GiB, valem numa máquina com mais memória física que elas, porque
 ``available_memory`` toma o mínimo com a física.
 """
@@ -61,7 +62,7 @@ def machine(
     (folder / "cgroup").mkdir()
     monkeypatch.setattr(resources, "_PROC", folder / "proc")
     monkeypatch.setattr(resources, "_CGROUP_ROOT", folder / "cgroup")
-    monkeypatch.setattr(os, "process_cpu_count", lambda: 8)
+    monkeypatch.setattr(resources, "_process_cpus", lambda: 8)
     return folder
 
 
@@ -281,3 +282,22 @@ def test_peak_rss_mb_is_the_peak_of_the_process_itself() -> None:
     before = float(printed[0])
     after = float(printed[1])
     assert after - before >= 48
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="a afinidade se fixa por sched_setaffinity")
+def test_available_cpus_reads_the_process_affinity() -> None:
+    """Num processo novo preso a uma das CPUs da afinidade, as CPUs que ele pode usar são 1, em
+    toda versão do Python que o pacote aceita: a leitura é a da afinidade, não a das CPUs da
+    máquina."""
+    if len(os.sched_getaffinity(0)) < 2:
+        pytest.skip("a afinidade deste processo já tem uma CPU só")
+    program = textwrap.dedent("""
+        import os
+        from serialize_db.resources import available_cpus
+        os.sched_setaffinity(0, {min(os.sched_getaffinity(0))})
+        print(available_cpus())
+    """)
+    completed = subprocess.run(
+        [sys.executable, "-c", program], check=True, capture_output=True, text=True
+    )
+    assert completed.stdout.strip() == "1"

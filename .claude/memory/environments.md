@@ -462,6 +462,9 @@ to every document on 2026-09-19 ran under the same pinned versions.
   repository tags major versions only up to `v7`), the second passed the 105 package tests in
   about a minute with `@v10.2.0`. The corporate index left `pyproject.toml` the same day, and the
   `UV_CONFIG_FILE` workaround left the workflows with it. `README.md`
+- Since 2026-10-11, `tests.yml` runs a matrix of Python 3.12 and 3.13 on both systems, four jobs,
+  with the `python-version` of `setup-uv` over the repository's `.python-version`, as the uv guide
+  for GitHub Actions says; `docs.yml` stays on 3.13 (`decisions.md`).
 
 The battery of 2026-09-23 at 22:49 to 23:36 UTC ran on the same kind of machine (4 vCPUs, 15,786 MB,
 DuckDB `memory_limit` 12.3 GiB) with the venv without the `emulator` group (`SP-9`) and new roots
