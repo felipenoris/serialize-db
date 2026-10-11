@@ -2708,7 +2708,8 @@ Delta é o DuckDB ou o Redshift, cada um com o dialeto de [SQLAlchemy](#sqlalche
   e o `select()` Core compilado pelo `duckdb_engine` roda sem mudança; o resultado sai em Arrow pela
   conexão DuckDB (`to_arrow_table()` ou `to_arrow_reader()`), preservando `decimal128` e `date32`. No
   Redshift, a tabela do sandbox carregada por `COPY` é uma tabela comum.
-- Escrita: o `select()` que produz a partição é compilado com `literal_binds` e vai dentro de
+- Escrita: o `SELECT` da partição, montado em texto com cada coluna do contrato em `CAST` para o
+  tipo dela, sem a coluna de partição e na ordem da `sort_key`, vai dentro de
   `COPY (...) TO '<coluna>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`,
   e `serialize_db.delta.register_files` põe o arquivo no log (`DuckDBEngine.export_partition`);
   nenhuma linha passa por `executemany` nem pela memória do processo. `write_deltalake` entra só em
@@ -3069,8 +3070,8 @@ Variantes documentadas:
 O DDL do sandbox sai do contrato SQLAlchemy pelo texto de `serialize_db.schema.ddl(table, "duckdb")`,
 sem chaves pela política de restrições e com os tipos de `sql_type`, executado na conexão DuckDB; a
 biblioteca não compila o DDL pelo dialeto, e o `duckdb_engine` entra só na compilação dos statements
-Core (`serialize_db.sql.render`). O esboço abaixo obtém um DDL equivalente pelo `CreateTable` do
-dialeto:
+Core (`serialize_db.sql.render` e o `query` e o `stream` do motor DuckDB). O esboço abaixo obtém um
+DDL equivalente pelo `CreateTable` do dialeto:
 
 ```python
 # Esboço: DDL sem chaves e com comentários pelo CreateTable do duckdb_engine; a biblioteca escreve o
@@ -3787,7 +3788,7 @@ interessam ao contrato, o DDL, a manipulação de dados com pandas e Arrow, a in
 exportação para Parquet, as recomendações de performance e o suporte a SQLAlchemy. As afirmações vêm
 da documentação oficial, consultada em 2026-09-18 e, na seção de conectividade, em 2026-09-20, e do
 código dos pacotes `redshift_connector` 2.1.16 (lido em 2026-09-18; o projeto fixa 2.1.17 desde
-2026-10-01), `sqlalchemy-redshift` 1.0.0 e `awswrangler` 3.17.1.
+2026-09-24), `sqlalchemy-redshift` 1.0.0 e `awswrangler` 3.17.1.
 Os dois caminhos de conexão rodaram no ambiente alvo em 2026-09-20, e `probes/redshift.py` repete
 as mesmas chamadas; os exemplos de SQLAlchemy foram compilados sem conexão a um cluster.
 
@@ -4312,8 +4313,8 @@ Pontos da referência:
   recebem codificação `RAW` por padrão, salvo `ENCODE` por coluna; `svv_table_info` não as lista. Um
   nome iniciado por `#` cria uma tabela temporária. A biblioteca as usa como staging: a do `COPY`
   da publicação e a do acréscimo em lotes numa tabela com coluna JSON
-  (`staging_ddl(..., temporary=True)`), que o fim da sessão apaga; o pipeline pode criá-las na
-  sessão única do motor.
+  (`staging_ddl(..., temporary=True)`), que um `DROP TABLE` apaga depois do `INSERT`, ou o fim
+  da sessão, numa falha; o pipeline pode criá-las na sessão única do motor.
 - Limites: 127 bytes por nome, 1.600 colunas, cota de tabelas por tipo de nó.
 
 As tabelas do sandbox recebem o prefixo da execução no nome, dentro do único esquema. O `Table` do
@@ -4970,8 +4971,8 @@ Os 32 arquivos saíram de um `UNLOAD ... PARTITION BY` sem `ORDER BY`, de uma ta
 de 0,97 a 1,00 às 21:56 de 2026-10-09), sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e cópias
 dela por
 `CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
-distribuição. Desde 2026-10-05, o `UNLOAD` da exportação da biblioteca grava em série, num arquivo
-só (`PARALLEL OFF`), a partição de até 5.000.000 linhas, contadas antes no sandbox, e em paralelo
+distribuição. O `UNLOAD` da exportação da biblioteca grava em série, num arquivo só
+(`PARALLEL OFF`), a partição de até 5.000.000 linhas, contadas antes no sandbox, e em paralelo
 acima disso (`_PARALLEL_OFF_ROWS`, `serialize_db.engine.redshift`).
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
@@ -5305,6 +5306,7 @@ CREATE TABLE operacoes (
 	id_cliente BIGINT NOT NULL,
 	valor NUMERIC(18, 2) NOT NULL,
 	descricao VARCHAR(200) ENCODE zstd,
+	mes VARCHAR(7) NOT NULL,
 	PRIMARY KEY (id_operacao, data_ref)
 ) DISTSTYLE KEY DISTKEY (id_cliente) SORTKEY (data_ref, id_operacao)
 ```
@@ -5381,7 +5383,7 @@ O comando compilado, com os valores embutidos:
 
 ```sql
 UNLOAD ('SELECT operacoes.id_operacao, operacoes.data_ref, operacoes.id_cliente, operacoes.valor,
-operacoes.descricao FROM operacoes WHERE operacoes.data_ref >= ''2026-08-01'' AND
+operacoes.descricao, operacoes.mes FROM operacoes WHERE operacoes.data_ref >= ''2026-08-01'' AND
 operacoes.data_ref < ''2026-09-01'' ORDER BY operacoes.data_ref, operacoes.id_operacao')
 TO 's3://bucket/operacoes/data/2026-08/abc123_'
 CREDENTIALS 'aws_iam_role=arn:aws:iam::123456789012:role/papel' MANIFEST FORMAT AS PARQUET MAXFILESIZE 256.0 MB
@@ -5881,7 +5883,7 @@ Todo comando do SQLAlchemy, DDL ou DML, vira texto por `compile()`, sem abrir co
 comandos do Redshift sem cluster e que uma depuração confere o texto que o DuckDB recebe. Os
 exemplos desta seção são autocontidos e rodaram com SQLAlchemy 2.0.54, duckdb_engine 0.17.0,
 sqlalchemy-redshift 1.0.0, redshift_connector 2.1.16 (a versão de então; o pacote fixa a 2.1.17
-desde 2026-10-01) e DuckDB 1.5.5, por `uv run --no-project --python 3.13 --with ...`.
+desde 2026-09-24) e DuckDB 1.5.5, por `uv run --no-project --python 3.13 --with ...`.
 
 #### Dialetos e estilos de parâmetro
 

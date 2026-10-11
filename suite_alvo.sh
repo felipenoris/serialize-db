@@ -186,7 +186,8 @@ main() {
     section "Migração Parquet -> Delta"
 
     # Avalia estrutura dos arquivos parquet de origem; sai com 2 por PQ-3, as quatro tabelas com
-    # esquemas diferentes entre os arquivos (a partição 2025-09-30 sem as colunas de id).
+    # esquemas diferentes entre os arquivos (na partição 2025-09-30, as colunas de id anuláveis e
+    # nulas e, em cad_lancamentos, o timestamp em INT64).
     run .venv/bin/python probes/parquet_source.py "$SOURCE_PATH"
 
     # Efetua migração.
