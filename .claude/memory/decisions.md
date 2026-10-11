@@ -2306,3 +2306,18 @@ cases went to him as decision cards, one at a time.
 `engine/redshift.py`, `resources.py`, `reader.py`, `scripts/migrate_parquet_to_delta.py`,
 `probes/duckdb_threads.py`, `docs/tecnologias.md`, `CLAUDE.md` ("Repository index"),
 `OPEN_QUESTIONS.md`
+
+## The audit shared by the engines (2026-10-11)
+
+The "Não aplicado" items of PR #156 reach the user as decision cards, one at a time, after the API
+cards. The first card, the appender and audit scaffolding duplicated in the two engines (02:12 UTC,
+"Só o audit", the recommended option): the audit's body and its helpers (`_pinned_max_key`,
+`_referenced_sources`, `_text`, `_rows_result`, `_rows_sample`, `_check_result`), identical in the
+two engines but for the pinned source (`pinned_delta` in DuckDB, the pending staging in Redshift),
+the dialect, the prefix, the storage and the staging load before a check runs, move to
+`serialize_db.engine` as the protected `audit_report` over an `AuditSupport`, a frozen dataclass
+each engine's `audit` fills with its own methods; Redshift's `_load_cited` becomes `_run_check`,
+the load and the query. The appenders keep their 80 identical lines (`rows`, `error`, `_put`,
+`_converted`, `write`, `__enter__`, `__exit__`, `__del__`), because sharing them needs a base class.
+
+`engine/__init__.py`, `engine/duckdb.py`, `engine/redshift.py`, `CLAUDE.md` ("Repository index").

@@ -31,17 +31,21 @@ Exemplo, com o motor DuckDB:
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import itertools
 import queue
 import threading
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
 import pyarrow as pa
 import sqlalchemy as sa
 
-from serialize_db.audit import AuditReport, KeyScope
+from serialize_db import audit, delta, sql
+from serialize_db.audit import AuditReport, CheckResult, KeyScope
 from serialize_db.errors import ContractError
+from serialize_db.schema import Dialect, sequential_key
+from serialize_db.storage import Storage
 
 __all__ = ["Appender", "BatchStream", "Engine", "duckdb", "redshift"]
 
@@ -568,3 +572,169 @@ def take(
             pass
         if stop.is_set():
             return None
+
+
+# -------------------------------------------------------------------- a auditoria dos dois motores
+
+
+@dataclasses.dataclass(frozen=True)
+class AuditSupport:
+    """[protected] O que ``audit_report`` pede ao motor que roda a auditoria; para o ``audit`` dos
+    dois motores, que o montam com os seus próprios métodos."""
+
+    dialect: Dialect
+    """[protected] O dialeto em que ``serialize_db.sql.render`` escreve o texto das verificações."""
+    prefix: str
+    """[protected] O prefixo das tabelas do sandbox, no texto das verificações e nos nomes que
+    ``name_in_use`` confere; vazio no DuckDB."""
+    storage: Storage
+    """[protected] O armazenamento onde o log da versão fixada é lido, para o ``max_key``."""
+    query: Callable[[str], pa.Table]
+    """[protected] A consulta do motor: a ``pa.Table`` de um texto SQL."""
+    run_check: Callable[[str], pa.Table]
+    """[protected] A consulta de uma verificação de chave ou de órfão, com o que o texto cita
+    carregado antes: a staging ``_versao`` no Redshift; no DuckDB, a própria ``query``."""
+    name_in_use: Callable[[str], bool]
+    """[protected] Se o nome, já com o prefixo, está ocupado no sandbox."""
+    pinned_source: Callable[[sa.Table, str, int], sa.FromClause]
+    """[protected] A versão fixada da tabela como origem de consulta das verificações."""
+
+
+def audit_report(
+    support: AuditSupport,
+    table: sa.Table,
+    partitions: list[str] | None,
+    uri: str | None,
+    version: int | None,
+    foreign_keys: bool,
+    key_scope: KeyScope | None,
+    referenced: Mapping[str, tuple[str, int]] | None,
+) -> AuditReport:
+    """[protected] Roda as verificações do contrato sobre a tabela do sandbox e monta o
+    ``AuditReport``; para o ``audit`` dos dois motores, que recebem os mesmos argumentos e dizem
+    nas suas docstrings o que cada um levanta. Com ``uri`` e ``version``, a versão fixada entra
+    pelo ``pinned_source`` de ``support``, e o seu ``max_key`` dispensa a verificação da chave da
+    tabela quando o menor valor da execução passa dele; um valor de ``partitions`` fora da regra da
+    partição é ``ContractError``."""
+    pinned = None
+    pinned_max_key = None
+    if uri is not None and version is not None:
+        pinned = support.pinned_source(table, uri, version)
+        pinned_max_key = _pinned_max_key(support, table, uri, version)
+    sources = _referenced_sources(support, table, foreign_keys, referenced)
+    found, not_run = audit.checks_and_not_run(
+        table, partitions, foreign_keys, key_scope, pinned, sources, pinned_max_key
+    )
+    results = []
+    totals: dict = {}
+    nonfinite: dict = {}
+    for check in found:
+        if check.name == "linhas":
+            result, totals, nonfinite = _rows_result(support, table, check, partitions)
+        else:
+            result = _check_result(support, table, check)
+        results.append(result)
+    return AuditReport(
+        table=table.name,
+        partitions=tuple(partitions) if partitions is not None else None,
+        results=tuple(results),
+        not_run=tuple(not_run),
+        nonfinite_columns=nonfinite,
+        totals=totals,
+    )
+
+
+def _pinned_max_key(
+    support: AuditSupport,
+    table: sa.Table,
+    uri: str,
+    version: int,
+) -> int | None:
+    """[private] O ``max_key`` da versão fixada na chave sequencial, sem ler dados; ``None`` numa
+    tabela sem ela."""
+    key = sequential_key(table)
+    if key is None:
+        return None
+    return delta.max_key(delta.open_table(uri, support.storage, version), key.name)
+
+
+def _referenced_sources(
+    support: AuditSupport,
+    table: sa.Table,
+    foreign_keys: bool,
+    referenced: Mapping[str, tuple[str, int]] | None,
+) -> dict[str, sa.FromClause]:
+    """[private] A origem da linha referenciada de cada chave estrangeira: a tabela do sandbox com
+    o nome do modelo, ou a versão fixada informada em ``referenced``."""
+    sources: dict[str, sa.FromClause] = {}
+    if not foreign_keys:
+        return sources
+    for constraint in table.foreign_key_constraints:
+        target = constraint.referred_table
+        if support.name_in_use(support.prefix + target.name):
+            sources[target.name] = target
+        elif referenced is not None and target.name in referenced:
+            uri, version = referenced[target.name]
+            sources[target.name] = support.pinned_source(target, uri, version)
+    return sources
+
+
+def _check_text(
+    support: AuditSupport,
+    statement: sa.sql.ClauseElement,
+    table: sa.Table,
+) -> str:
+    """[private] O texto de uma verificação no dialeto do motor, sobre as tabelas do sandbox."""
+    return sql.render(statement, support.dialect, table.metadata, prefix=support.prefix)
+
+
+def _rows_result(
+    support: AuditSupport,
+    table: sa.Table,
+    check: audit.Check,
+    partitions: Sequence[str] | None,
+) -> tuple[CheckResult, dict, dict]:
+    """[private] A verificação de linhas: o resultado, as leituras por partição e os não finitos."""
+    text = _check_text(support, check.statement, table)
+    rows = support.query(text).to_pylist()
+    totals, nonfinite = audit.readings_by_partition(rows, table)
+    defects, failing = audit.failing_counters(check.counters, totals)
+    sample = _rows_sample(support, table, check, partitions, failing)
+    return CheckResult(check.name, text, defects, sample, defects == 0), totals, nonfinite
+
+
+def _rows_sample(
+    support: AuditSupport,
+    table: sa.Table,
+    check: audit.Check,
+    partitions: Sequence[str] | None,
+    failing: list[str],
+) -> pa.Table:
+    """[private] Até 20 linhas inteiras dos contadores reprovados, uma consulta por contador."""
+    samples = []
+    for label in failing:
+        statement = audit.sample_statement(table, partitions, check.counters[label])
+        samples.append(support.query(_check_text(support, statement, table)))
+    if not samples:
+        return pa.table({})
+    return pa.concat_tables(samples).slice(0, audit.SAMPLE_ROWS)
+
+
+def _check_result(
+    support: AuditSupport,
+    table: sa.Table,
+    check: audit.Check,
+) -> CheckResult:
+    """[private] Uma verificação de chave ou de órfão; o ``skip_when`` verdadeiro a aprova sem
+    rodá-la, e ``run_check`` carrega o que ela cita só quando ela roda."""
+    text = _check_text(support, check.statement, table)
+    if check.skip_when is not None:
+        skip_text = _check_text(support, check.skip_when, table)
+        skipped = support.query(skip_text).column(0)[0].as_py()
+        if skipped is True:
+            reason = "dispensada: o menor valor da execução passa do maior da versão fixada"
+            return CheckResult(check.name, text, 0, pa.table({}), True, reason)
+    found = support.run_check(text)
+    return CheckResult(
+        check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS), found.num_rows == 0
+    )

@@ -72,9 +72,9 @@ import pyarrow as pa
 import sqlalchemy as sa
 from sqlalchemy.sql import quoted_name
 
-from serialize_db import audit, delta, sql
-from serialize_db.audit import AuditReport, CheckResult, KeyScope
-from serialize_db.engine import batches_of, checked_batches, take
+from serialize_db import delta, sql
+from serialize_db.audit import AuditReport, KeyScope
+from serialize_db.engine import AuditSupport, audit_report, batches_of, checked_batches, take
 from serialize_db.errors import ContractError, SandboxError
 from serialize_db.resources import available_cpus, memory_limit_setting
 from serialize_db.schema import (
@@ -83,7 +83,6 @@ from serialize_db.schema import (
     ddl,
     literal,
     quoted,
-    sequential_key,
     sql_type,
     table_options,
 )
@@ -1341,96 +1340,6 @@ class DuckDBEngine:
 
     # ------------------------------------------------------------ a auditoria
 
-    def _pinned_max_key(
-        self,
-        table: sa.Table,
-        uri: str,
-        version: int,
-    ) -> int | None:
-        """[private] O ``max_key`` da versão fixada na chave sequencial, sem ler dados; ``None``
-        numa tabela sem ela."""
-        key = sequential_key(table)
-        if key is None:
-            return None
-        return delta.max_key(delta.open_table(uri, self._storage, version), key.name)
-
-    def _referenced_sources(
-        self,
-        table: sa.Table,
-        foreign_keys: bool,
-        referenced: Mapping[str, tuple[str, int]] | None,
-    ) -> dict[str, sa.FromClause]:
-        """[private] A origem da linha referenciada de cada chave estrangeira: a tabela do sandbox
-        com o nome do modelo, ou a versão fixada informada em ``referenced``."""
-        sources: dict[str, sa.FromClause] = {}
-        if not foreign_keys:
-            return sources
-        for constraint in table.foreign_key_constraints:
-            target = constraint.referred_table
-            if self.name_in_use(target.name):
-                sources[target.name] = target
-            elif referenced is not None and target.name in referenced:
-                uri, version = referenced[target.name]
-                sources[target.name] = self.pinned_delta(target, uri, version)
-        return sources
-
-    def _text(
-        self,
-        statement: sa.sql.ClauseElement,
-        table: sa.Table,
-    ) -> str:
-        """[private] O texto do DuckDB de uma verificação, sobre as tabelas do contrato."""
-        return sql.render(statement, "duckdb", table.metadata, prefix="")
-
-    def _rows_result(
-        self,
-        table: sa.Table,
-        check: audit.Check,
-        partitions: Sequence[str] | None,
-    ) -> tuple[CheckResult, dict, dict]:
-        """[private] A verificação de linhas: o resultado, as leituras por partição e os não
-        finitos."""
-        text = self._text(check.statement, table)
-        rows = self.query(text).to_pylist()
-        totals, nonfinite = audit.readings_by_partition(rows, table)
-        defects, failing = audit.failing_counters(check.counters, totals)
-        sample = self._rows_sample(table, check, partitions, failing)
-        return CheckResult(check.name, text, defects, sample, defects == 0), totals, nonfinite
-
-    def _rows_sample(
-        self,
-        table: sa.Table,
-        check: audit.Check,
-        partitions: Sequence[str] | None,
-        failing: list[str],
-    ) -> pa.Table:
-        """[private] Até 20 linhas inteiras dos contadores reprovados, uma consulta por contador."""
-        samples = []
-        for label in failing:
-            statement = audit.sample_statement(table, partitions, check.counters[label])
-            samples.append(self.query(self._text(statement, table)))
-        if not samples:
-            return pa.table({})
-        return pa.concat_tables(samples).slice(0, audit.SAMPLE_ROWS)
-
-    def _check_result(
-        self,
-        table: sa.Table,
-        check: audit.Check,
-    ) -> CheckResult:
-        """[private] Uma verificação de chave ou de órfão; o ``skip_when`` verdadeiro a aprova sem
-        rodá-la."""
-        text = self._text(check.statement, table)
-        if check.skip_when is not None:
-            skipped = self.query(self._text(check.skip_when, table)).column(0)[0].as_py()
-            if skipped is True:
-                reason = "dispensada: o menor valor da execução passa do maior da versão fixada"
-                return CheckResult(check.name, text, 0, pa.table({}), True, reason)
-        found = self.query(text)
-        return CheckResult(
-            check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS), found.num_rows == 0
-        )
-
     def audit(
         self,
         table: sa.Table,
@@ -1470,31 +1379,18 @@ class DuckDBEngine:
             ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição.
         """
-        pinned = None
-        pinned_max_key = None
-        if uri is not None and version is not None:
-            pinned = self.pinned_delta(table, uri, version)
-            pinned_max_key = self._pinned_max_key(table, uri, version)
-        sources = self._referenced_sources(table, foreign_keys, referenced)
-        found, not_run = audit.checks_and_not_run(
-            table, partitions, foreign_keys, key_scope, pinned, sources, pinned_max_key
+        # Sem staging a carregar, a consulta de uma verificação é a própria query.
+        support = AuditSupport(
+            dialect="duckdb",
+            prefix="",
+            storage=self._storage,
+            query=self.query,
+            run_check=self.query,
+            name_in_use=self.name_in_use,
+            pinned_source=self.pinned_delta,
         )
-        results = []
-        totals: dict = {}
-        nonfinite: dict = {}
-        for check in found:
-            if check.name == "linhas":
-                result, totals, nonfinite = self._rows_result(table, check, partitions)
-            else:
-                result = self._check_result(table, check)
-            results.append(result)
-        return AuditReport(
-            table=table.name,
-            partitions=tuple(partitions) if partitions is not None else None,
-            results=tuple(results),
-            not_run=tuple(not_run),
-            nonfinite_columns=nonfinite,
-            totals=totals,
+        return audit_report(
+            support, table, partitions, uri, version, foreign_keys, key_scope, referenced
         )
 
     # ------------------------------------------------------------ a exportação
