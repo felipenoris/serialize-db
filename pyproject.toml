@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Felipe Noronha", email = "felipenoris@gmail.com" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 # As dependências de execução, nas versões fixadas pelos documentos e pelas suítes de estudo, são
 # tudo o que a interface pública usa: o uv sync do projeto cliente as instala sem grupo nem extra.
 # Os dialetos duckdb-engine e sqlalchemy-redshift são os compiladores de serialize_db.sql.render,

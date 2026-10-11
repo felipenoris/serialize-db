@@ -42,6 +42,7 @@ import re
 import stat
 import sys
 import urllib.parse
+import urllib.request
 import uuid
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
@@ -890,12 +891,23 @@ def _local_storage(
     uri: str,
 ) -> Storage:
     """[private] O armazenamento numa pasta local, com o caminho absoluto resolvido e escrito com
-    ``/``; o de uma URI ``file://`` sai de ``Path.from_uri``, que decodifica o ``%XX``."""
-    local_path = Path.from_uri(uri) if uri.startswith("file://") else Path(uri)
+    ``/``; o de uma URI ``file://`` sai de ``_path_from_file_uri``, que decodifica o ``%XX``."""
+    local_path = _path_from_file_uri(uri) if uri.startswith("file://") else Path(uri)
     # O as_posix troca o \ do Windows por /, o separador dos caminhos que o PyArrow lista e que
     # join e relative montam; no Linux e no macOS, o texto não muda.
     resolved = local_path.expanduser().resolve().as_posix()
     return Storage(resolved, pafs.LocalFileSystem(), resolved)
+
+
+def _path_from_file_uri(
+    uri: str,
+) -> Path:
+    """[private] O caminho local de uma URI ``file://``, com o ``%XX`` decodificado:
+    ``Path.from_uri`` desde o Python 3.13; no 3.12, que não o tem, o ``url2pathname`` do caminho
+    da URI, que no Windows lê a unidade de ``file:///D:/dados``."""
+    if sys.version_info >= (3, 13):
+        return Path.from_uri(uri)
+    return Path(urllib.request.url2pathname(urllib.parse.urlsplit(uri).path))
 
 
 def prepare_environment(

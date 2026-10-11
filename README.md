@@ -95,11 +95,19 @@ uv run python -m pytest
 
 Os testes de `tests/`, sem `tests/proof_of_concept/` nem `tests/test_probes.py` (as funções puras
 dos probes), sobre o DuckDB em memória e arquivos locais, sem AWS. É o que a esteira
-[`tests.yml`](.github/workflows/tests.yml) roda no Ubuntu e no Windows a cada push no `main`, a
-cada pull request e quando disparada à mão:
+[`tests.yml`](.github/workflows/tests.yml) roda no Ubuntu e no Windows, nos Pythons 3.12 e 3.13,
+a cada push no `main`, a cada pull request e quando disparada à mão:
 
 ```
 SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py -p no:cacheprovider
+```
+
+O `.venv/` usa o Python 3.13 do `.python-version`. Em outra versão, o `--isolated` roda os testes
+num ambiente temporário, sem trocar o `.venv/`; como esse ambiente fica fora do repositório, as
+extensões do DuckDB vêm de `SERIALIZE_DB_DUCKDB_EXTENSIONS`:
+
+```
+SERIALIZE_DB_DUCKDB_EXTENSIONS=.duckdb SERIALIZE_DB_TEST_LOCAL_ROOT=/pasta/existente uv run --isolated --python 3.12 pytest tests --ignore=tests/proof_of_concept --ignore=tests/test_probes.py -p no:cacheprovider
 ```
 
 A biblioteca carrega a extensão `delta` do DuckDB em toda conexão que abre, e no S3 também a

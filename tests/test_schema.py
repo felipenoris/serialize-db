@@ -467,7 +467,7 @@ def test_ddl_temporary_table() -> None:
         temporary = schema.ddl(TUDO, dialect, prefix="exec_42_", temporary=True)
         assert temporary.startswith('CREATE TEMP TABLE "exec_42_tudo" (')
         permanent = schema.ddl(TUDO, dialect, prefix="exec_42_")
-        assert temporary.replace("CREATE TEMP TABLE", "CREATE TABLE", count=1) == permanent
+        assert temporary.replace("CREATE TEMP TABLE", "CREATE TABLE", 1) == permanent
     connection = duckdb.connect()
     connection.execute(schema.ddl(TUDO, "duckdb", temporary=True))
     listed = connection.execute(

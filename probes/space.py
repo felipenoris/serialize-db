@@ -510,8 +510,8 @@ def python_packages(
 ) -> None:
     """Seção 5, Python e pacotes: ``SP-8`` e ``SP-9``.
 
-    ``SP-8`` confere o Python 3.13; ``SP-9``, as dependências de execução e o grupo ``dev`` de
-    ``pyproject.toml``.
+    ``SP-8`` confere o Python 3.12 ou mais novo, o mínimo do ``requires-python``; ``SP-9``, as
+    dependências de execução e o grupo ``dev`` de ``pyproject.toml``.
     """
     report.h1("Python e pacotes")
 
@@ -544,12 +544,14 @@ def python_packages(
         rows.append([name, *[data.get(name) or "ausente" for _, data in columns]])
     report.table(rows)
 
-    # SP-8: o projeto fixa Python 3.13.
-    if here["version"].startswith("3.13."):
-        report.ok("SP-8", "Python 3.13 neste interpretador", str(here["version"]))
+    # SP-8: o requires-python de pyproject.toml pede o Python 3.12 ou mais novo.
+    if sys.version_info >= (3, 12):
+        report.ok("SP-8", "Python 3.12 ou mais novo neste interpretador", str(here["version"]))
     else:
         report.fail(
-            "SP-8", "Python 3.13 neste interpretador", f"{here['version']}: o projeto fixa 3.13"
+            "SP-8",
+            "Python 3.12 ou mais novo neste interpretador",
+            f"{here['version']}: o pacote pede 3.12 ou mais novo",
         )
 
     # SP-9: as dependências de execução e o grupo dev de pyproject.toml são a referência: cada

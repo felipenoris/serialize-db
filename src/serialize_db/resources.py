@@ -71,15 +71,27 @@ def available_cpus() -> int:
 
         available_cpus()   # 4 numa máquina de 4 vCPUs sem cota; 2 num contêiner com cota de 1,5
 
-    :return: as CPUs da afinidade do processo (``os.process_cpu_count``, que a variável
-        ``PYTHON_CPU_COUNT`` sobrepõe), limitadas pela menor cota de CPU do cgroup, arredondada
-        para cima como o DuckDB arredonda; ao menos 1.
+    :return: as CPUs da afinidade do processo, limitadas pela menor cota de CPU do cgroup,
+        arredondada para cima como o DuckDB arredonda; ao menos 1. A afinidade é a de
+        ``os.process_cpu_count`` desde o Python 3.13, que a variável ``PYTHON_CPU_COUNT``
+        sobrepõe; no 3.12, a de ``os.sched_getaffinity`` no Linux e a de ``os.cpu_count`` nos
+        outros sistemas.
     """
-    cpus = os.process_cpu_count() or 1
+    cpus = _process_cpus() or 1
     quota = _cgroup_cpu_quota()
     if quota is None:
         return cpus
     return max(1, min(cpus, math.ceil(quota)))
+
+
+def _process_cpus() -> int | None:
+    """[private] As CPUs da afinidade do processo, para ``available_cpus``; ``None`` quando o
+    Python não as lê. O ``os.process_cpu_count`` só existe desde o Python 3.13."""
+    if sys.version_info >= (3, 13):
+        return os.process_cpu_count()
+    if sys.platform == "linux":
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count()
 
 
 def available_memory() -> int:
