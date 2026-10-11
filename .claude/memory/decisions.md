@@ -2422,7 +2422,15 @@ The cards of PR #157, asked one at a time, each with its case before the options
   six in `engine.redshift`, the six SQL functions of `audit` and `required_parameters` in `sql`.
   The card's reason: the names had already left the public API, and the rule of 2026-10-11 lets
   the tests read private names.
+- The rules of the lessons of PRs #126, #128 and #149 (06:22 UTC, "Levar", the recommended
+  option): the three rules enter the working rules of `CLAUDE.md` (the DuckDB version bump waits
+  for the PyPI extension wheels; a command repeated after a connection drop is read with the
+  command applied before the drop; a driver's state is read on the failure path before a guard
+  relies on it), and the clause "the rule lives here because `CLAUDE.md` is at its size budget"
+  leaves the three lessons. The reason held at #126 and #128, with `CLAUDE.md` at 76,799 bytes,
+  and not at #149, at 64,099; `CLAUDE.md` went from 67,974 to 69,192 bytes.
 
-`CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24 and of the shallow
-clone), `src/serialize_db/delta.py`, `src/serialize_db/engine/redshift.py`,
-`tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md` (the rename of the 24 names).
+`CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24, of the shallow clone and of
+the lessons of #126, #128 and #149), `lessons.md`, `src/serialize_db/delta.py`,
+`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md` (the
+rename of the 24 names).
