@@ -265,16 +265,16 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 mede a ingestão pelo motor DuckDB com cada valor de `threads`, da metade das CPUs do processo a
 cinco vezes elas; o modelo é `client_model:Base.metadata`, com `tests` no `PYTHONPATH`, e
 `--metadata`, `--threads`, `--partition`, `--tables` e `--repetitions` mudam o padrão. Ele roda
-depois da migração, nunca ao mesmo tempo que ela, e levou no ambiente alvo, nas seis rodadas de
-2026-09-24 a 2026-10-09, de 46 minutos, com 8 vCPUs, a 93, com 4; no S3, pede a região em
-`AWS_REGION` ou `AWS_DEFAULT_REGION`. Fora de `suite_alvo.sh` desde 2026-10-10, por decisão do
-usuário: roda à mão, pelo comando de `SUITE_ALVO.md`.
+depois da migração, nunca ao mesmo tempo que ela, e levou no ambiente alvo, nas rodadas
+cronometradas de 2026-10-05 a 2026-10-09, de 46 minutos, com 8 vCPUs, a 93, com 4; no S3, pede a
+região em `AWS_REGION` ou `AWS_DEFAULT_REGION`. A sonda roda à mão, pelo comando de
+`SUITE_ALVO.md`, fora de `suite_alvo.sh` desde 2026-10-10, por decisão do usuário.
 
 `credentials.py` abre sobre uma tabela Delta pequena os clientes que uma execução segura e os lê de
 novo a cada 5 minutos, até passar a expiração da credencial do contêiner e a da senha do Redshift,
 mais 3 minutos; levou 63 minutos no ambiente alvo, nas baterias de 2026-09-27 e de 2026-09-28.
-Fora de `suite_alvo.sh` desde 2026-10-10, por decisão do usuário: roda à mão, pelo comando de
-`SUITE_ALVO.md`.
+A sonda roda à mão, pelo comando de `SUITE_ALVO.md`, fora de `suite_alvo.sh` desde 2026-10-10,
+por decisão do usuário.
 
 O argumento `s3://bucket/prefixo` é a raiz que o probe fotografa; sem ele valem `SERIALIZE_DB_ROOT`
 e `SERIALIZE_DB_TEST_S3_ROOT`, nessa ordem. `redshift.py` conecta pelas variáveis

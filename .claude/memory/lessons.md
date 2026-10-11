@@ -695,8 +695,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   repository; after the merge, the user pointed out that the clients install `delta` and `httpfs`
   from the wheels `duckdb-extension-delta` and `duckdb-extension-httpfs`, each version requiring the
   exact `duckdb`, and the newest was 1.5.5. With `duckdb==1.5.6` the resolver picked the 1.0.3
-  wheels without an error. Before bumping DuckDB, read those wheels' versions on PyPI; the rule
-  lives here because `CLAUDE.md` is at its size budget.
+  wheels without an error. Before bumping DuckDB, read those wheels' versions on PyPI.
 - **A command repeated after a connection drop is read with the command applied before the
   drop** (2026-10-04). `RedshiftEngine.execute` reopened a dropped connection and repeated the
   command, and the bug review of 2026-10-04 read the case the design never had: the driver's
@@ -706,30 +705,52 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   DDL with `IF`, the `DELETE` of a staging, a `SELECT`) stays outside a transaction, and one that
   adds rows runs inside one, where the drop rises and the server rolls back. The test double
   drops the connection on a named command after passing it to the stand-in
-  (`FakeConnection.drop_on`), so the repeat is measured, not assumed; the rule lives here
-  because `CLAUDE.md` is at its size budget.
+  (`FakeConnection.drop_on`), so the repeat is measured, not assumed.
 - **A driver's state is read on the failure path before a guard relies on it** (2026-10-09). The
   answer to the user at 16:46 UTC proposed refusing the Redshift engine's primitives by the
   driver's `in_transaction` and said the same reading would stop `execute` from repeating a
   command inside a client transaction. The driver sets `in_transaction` only in
-  `handle_READY_FOR_QUERY`, and a dropped connection sends none, so after a `COMMIT` dropped
-  inside `transaction()` the value stays `True`: the reading alone refused the next
-  `transaction()`, and on a dead socket every later command would have raised without the
-  reconnect. The engine marks the dropped connection, the local fake and the stand-in keep the
-  stale value as the driver does, and a variant without the mark fails two local tests. Before a
-  guard reads a library's state, trace what sets it on the error path; the rule lives here
-  because `CLAUDE.md` is at its size budget.
-- **A claim that a lock is released is asserted from a second thread** (2026-10-10). The Redshift
-  engine's lock is a `threading.RLock`, and the suite's check "a command runs while a `stream` still
-  reads the files" called `engine.query` on the same thread as the stream: a re-entrant lock lets
-  the owning thread in whether or not the stream holds it, so the assertion passed in both states.
-  The review of 2026-10-10 moved the command to a worker thread with a timeout on `result()`, the
-  only reading that fails when the lock is held; the rule lives here because `CLAUDE.md` is at its
-  size budget.
+  `handle_READY_FOR_QUERY`, the handler of the server's ReadyForQuery message, and a dropped
+  connection delivers none, so after a `COMMIT` dropped inside `transaction()` the value stays
+  `True`: the reading alone refused the next `transaction()`, and on a dead socket every later
+  command would have raised without the reconnect. The engine marks the dropped connection, the
+  local fake and the stand-in keep the stale value as the driver does, and a variant without the
+  mark fails two local tests. Before a guard reads a library's state, trace what sets it on the
+  error path.
+- **A claim that a lock is released is asserted from a second thread, with a bounded wait**
+  (2026-10-10, 2026-10-11). The Redshift engine's lock is a `threading.RLock`, and the suite's
+  check "a command runs while a `stream` still reads the files" called `engine.query` on the same
+  thread as the stream: a re-entrant lock lets the owning thread in whether or not the stream
+  holds it, so the assertion passed in both states. The review of 2026-10-10 moved the command to
+  a worker thread, the only reading that fails when the lock is held, but waited on `result()`
+  without a timeout. The final review of 2026-10-11 held the lock in the test: the run hung until
+  `timeout` killed it at 45 s, since the project has no `pytest-timeout`, and `result(timeout=5)`
+  alone still hung, because the exit of the pool's `with` waits for the blocked worker. With the
+  pool created outside a `with`, `result(timeout=5)` and `shutdown(wait=False)` in a `finally`,
+  the test failed with `TimeoutError` in 6.6 s, but the process still hung: the interpreter
+  joins the pool's worker at exit, and `timeout 30` killed the run with exit 124. A daemon
+  `threading.Thread` joined with `join(timeout=5)` failed the test in 6.5 s and let pytest exit
+  with code 1 in 7 s.
 - **`monkeypatch.undo()` in a test body undoes the suite fixtures' patches too** (2026-10-10). The
   `redshift_driver` fixture replaces `driver_connect` through the same `monkeypatch` instance the
   test receives, so an `undo()` that meant to retire one double restored the real driver for the
-  rest of the test (`tests/test_engine_redshift.py`), and the same call in
-  `tests/test_parquet_import.py` retired every patch of the test's fixtures. Nothing after the two
-  calls opened a connection, so both stayed green. A double that leaves before the test ends enters
-  through `monkeypatch.context()`; the rule lives here because `CLAUDE.md` is at its size budget.
+  rest of the test (`tests/test_engine_redshift.py`); nothing after it opened a connection, so
+  the test stayed green. The same call in `tests/test_parquet_import.py` took out only its double,
+  because the fixtures of that test patch nothing. A double that leaves before the test ends
+  enters through `monkeypatch.context()`.
+- **A field pdoc misreads can render as literal asterisks, not a bold name** (2026-10-11). The
+  review of 2026-10-10 rewrapped the `:param version:` field of `DuckDBEngine.ingest` so that
+  ``delta_scan(uri, version := v)`` landed on its first line; pdoc 16 took the name up to the
+  colon of `:=`, and the bold it opened around a code span stayed as text:
+  `<li>**version: a versão fixada da tabela, lida por <code>delta_scan(uri, version**: = v)</code>`.
+  The documented grep, `<strong>[^<]*:[^<]*</strong>`, found nothing, and the final review of
+  2026-10-11 found it by `grep -rn '<li>\*\*'` over the built site; a correct field renders as
+  `<li><strong>version</strong>: ...`.
+- **A date read from git history is checked for a shallow clone** (2026-10-11). PRs #155 and #156
+  wrote in `docs/tecnologias.md` that the project pins `redshift_connector` 2.1.17 "desde
+  2026-10-01", while the `redshift` extra pinned it on 2026-09-24 and the runtime dependencies on
+  2026-09-25 (PR #95, `decisions.md`). The cloud session's clone is shallow, the last 50 commits
+  of `main`: its history starts at 02cf590, of 2026-10-01, and `git log -S` names that commit as
+  the origin of every older line, `pyproject.toml` included.
+  `git rev-parse --is-shallow-repository` says so, `.git/shallow` lists the first commits, and
+  the dated entries of the memory date what came before.

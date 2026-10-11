@@ -21,8 +21,8 @@ ordem:
   igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum
   texto passa do limite da coluna em bytes, o de ``cast`` e da auditoria, e a contagem dos valores
   não finitos de cada coluna ``Double``;
-- - a gravação da partição na ordem da ``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo
-  da pasta dela na tabela Delta, e o registro por ``serialize_db.delta.register_files``, com as
+- a gravação da partição na ordem da ``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo da
+  pasta dela na tabela Delta, e o registro por ``serialize_db.delta.register_files``, com as
   conferências do rodapé, a releitura e as colunas não finitas sem mínimo e máximo (issue #59 do
   serialize-db).
 
@@ -315,7 +315,7 @@ def partition_query(
     value: str | None,
 ) -> str:
     """[protected] O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato; só
-    ``import_table`` a chama.
+    ``import_table`` a usa, por ``_import_partition``.
 
     A pasta inteira por ``read_parquet`` sem ``hive_partitioning`` e cada coluna em ``CAST`` para
     o tipo de ``sql_type`` no dialeto do DuckDB; todo identificador entre aspas, porque ``to`` é

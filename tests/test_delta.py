@@ -55,7 +55,7 @@ from serialize_db.errors import (
     SandboxError,
     SchemaDiffRefused,
 )
-from serialize_db.resources import available_cpus
+from serialize_db.resources import available_cpus, environment_limits
 from serialize_db.storage import Storage
 
 
@@ -1496,7 +1496,7 @@ def test_duckdb_connections_take_the_environment_limits(
         return original(self, *args, **options)
 
     monkeypatch.setattr(Storage, "duckdb_connect", recording)
-    delta.read_back(uri, OPERACOES, "2026-07-31", 10, storage)
+    delta.read_back(uri, OPERACOES, "2026-07-31", 10, storage, environment_limits())
     delta.rewrite(uri, OPERACOES, storage)
     exported = storage.uri_of("prd/exportacao/cad_operacoes")
     delta.export_parquet(uri, OPERACOES, exported, storage, mode="rewrite")

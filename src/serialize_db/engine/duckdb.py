@@ -418,11 +418,19 @@ class DuckDBStream:
         return self._file_reader.read_next_batch()
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """[public] O próximo lote, na ordem da consulta; o erro que ela encontra depois do último
-        lote entregue sobe aqui, como ``OSError`` do leitor Arrow com a mensagem do DuckDB.
+        """[public] O próximo lote, na ordem da consulta.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.stream(sa.select(Lancamento.__table__)) as stream:
+                first = stream.read_next_batch()
 
         :return: o lote, no esquema ``schema``, lido da memória ou do arquivo de transbordo.
         :raises StopIteration: no fim dos lotes.
+        :raises OSError: o erro que a consulta encontra depois do último lote entregue, do leitor
+            Arrow com a mensagem do DuckDB.
         """
         batch = self._next_batch()
         if batch is not None:
@@ -441,7 +449,16 @@ class DuckDBStream:
     def read_all(self) -> pa.Table:
         """[public] Os lotes que faltam numa ``pa.Table``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.stream(sa.select(Lancamento.__table__)) as stream:
+                table = stream.read_all()
+
         :return: a tabela, no esquema ``schema``; vazia depois do último lote.
+        :raises OSError: o erro que a consulta encontra depois do último lote entregue, do leitor
+            Arrow com a mensagem do DuckDB.
         """
         return pa.Table.from_batches(list(self), schema=self.schema)
 
@@ -454,7 +471,18 @@ class DuckDBStream:
 
     def close(self) -> None:
         """[public] Cancela a consulta que ainda roda e apaga o arquivo; a sessão continua
-        usável."""
+        usável.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            stream = engine.stream(sa.select(Lancamento.__table__))
+            try:
+                first = stream.read_next_batch()
+            finally:
+                stream.close()   # o with do stream chama close na saída
+        """
         self._stop.set()
         # Sob a condition, a thread não marca o fim, e o interrupt alcança só a consulta deste
         # stream.
@@ -637,10 +665,23 @@ class DuckDBAppender:
         """[public] Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote
         recusado faz o appender não inserir nada.
 
+        Depois de um ``close`` com erro, ou com a thread de gravação encerrada por um erro, o
+        ``write`` levanta esse erro de novo: a exceção que o ``close`` recebeu do ``with``, o
+        lote recusado ou o erro da gravação.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.appender(Projetado.__table__) as appender:
+                for batch in batches:
+                    appender.write(batch)
+
         :param data: um ``RecordBatch`` ou uma ``pa.Table`` nas colunas do contrato; cada lote traz
             o conjunto de colunas do primeiro.
         :raises serialize_db.errors.ContractError: outro tipo de dado, um valor fora do contrato ou
             um conjunto de colunas diferente do primeiro lote.
+        :raises RuntimeError: o ``write`` depois de um ``close`` que terminou sem erro.
         """
         for batch in checked_batches(data):
             try:
@@ -676,8 +717,20 @@ class DuckDBAppender:
         Sem a exceção do ``with``, o erro que a propriedade ``error`` guarda sobe depois do arquivo
         apagado.
 
-        :param error: a exceção que saiu do bloco ``with``, passada pelo ``__exit__``; com ela nada
-            é inserido, e ela segue pelo ``with``; ``None`` insere.
+        Exemplo:
+
+        .. code-block:: python
+
+            appender = engine.appender(Projetado.__table__)
+            try:
+                appender.write(batch)
+            except BaseException as error:
+                appender.close(error)   # só apaga o arquivo, como a saída do with com exceção
+                raise
+            appender.close()   # insere os lotes
+
+        :param error: a exceção do cliente, que o ``__exit__`` passa na saída do ``with``; com ela
+            nada é inserido, e o ``close`` não a levanta; ``None`` insere.
         :raises serialize_db.errors.ContractError: o lote que o ``write`` recusou, de novo, no
             ``close`` sem ``error``.
         :raises duckdb.Error: o ``INSERT ... BY NAME`` que o DuckDB recusa.
@@ -739,8 +792,8 @@ class DuckDBConfig:
     (``serialize_db.resources.available_cpus``)."""
     memory_limit: str | None = None
     """[public] Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode
-    usar na abertura (``environment_limits``), recusada com ``SandboxError`` quando não dá 1 MiB. O
-    valor aplicado vai ao log ``serialize_db.engine.duckdb``."""
+    usar na abertura (``serialize_db.resources.environment_limits``), recusada com ``SandboxError``
+    quando não dá 1 MiB. O valor aplicado vai ao log ``serialize_db.engine.duckdb``."""
     temp_directory: str | None = None
     """[public] A pasta do banco, do transbordo do DuckDB e da subpasta
     ``<execution_id>_transbordo`` dos arquivos de ``stream`` e ``appender``, apagada em ``cleanup``
@@ -1097,8 +1150,9 @@ class DuckDBEngine:
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da pasta da tabela Delta de origem.
-        :param version: a versão fixada da tabela, lida por ``delta_scan(uri, version := v)``;
-            ``None`` diz que a tabela ainda não existe no Delta, e a ingestão a recusa.
+        :param version: a versão fixada da tabela, lida por
+            ``delta_scan(uri, version := v)``; ``None`` diz que a tabela ainda não existe no Delta,
+            e a ingestão a recusa.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
             ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: ``True`` copia os dados para a tabela do modelo no sandbox; com
@@ -1234,8 +1288,7 @@ class DuckDBEngine:
         :param batch_size: o máximo de linhas de cada lote, passado ao leitor Arrow do DuckDB
             (``to_arrow_reader``).
         :return: o ``serialize_db.engine.BatchStream`` dos lotes, gerenciador de contexto; o
-            ``close`` cancela a
-            consulta que ainda roda e apaga o arquivo de transbordo.
+            ``close`` cancela a consulta que ainda roda e apaga o arquivo de transbordo.
         :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
             statement ou do texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
@@ -1304,8 +1357,8 @@ class DuckDBEngine:
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
         :return: o ``serialize_db.engine.Appender`` da tabela, que guarda os lotes num arquivo
-            Arrow IPC da pasta de
-            transbordo até o ``close`` e os insere num único ``INSERT ... BY NAME``.
+            Arrow IPC da pasta de transbordo até o ``close`` e os insere num único
+            ``INSERT ... BY NAME``.
         :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
             uma view do ``ingest`` ocupa.
         """
@@ -1470,16 +1523,18 @@ class DuckDBEngine:
         :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
             tabela particionada, ou um valor numa tabela sem partição.
         :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
-            commit, e o arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
-            ``full=True``; ou a releitura desfez o commit.
+            commit, e o arquivo do ``COPY`` fica órfão na pasta da partição até um
+            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção; ou a
+            releitura desfez o commit.
         :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
             mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, antes do ``COPY``, sem arquivo
             gravado.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-            2 MiB, ou negativa, lida no registro antes do commit (``environment_limits``); sem
-            commit, o arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
-            ``full=True``.
+            2 MiB, ou negativa, lida no registro antes do commit
+            (``serialize_db.resources.environment_limits``); sem commit, o arquivo do ``COPY`` fica
+            órfão na pasta da partição até um
+            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção.
         """
         # O valor conferido antes do COPY: o arquivo de um valor recusado no registro ficaria
         # na pasta da tabela, fora do log.

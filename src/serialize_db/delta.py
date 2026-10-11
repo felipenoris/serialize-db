@@ -18,7 +18,8 @@ cada arquivo, e ``read_back`` relê a versão pelos dois leitores depois do comm
 ``publish_partition`` grava os dados pelo escritor do delta-rs, que confere tudo e paga a memória;
 é o caminho do motor Redshift para a partição com ``Double`` não finito, cujo rodapé do ``UNLOAD``
 deixa o ``NaN`` fora do máximo. ``commit_metadata`` monta os metadados que cada commit leva, e
-``max_key`` lê o maior valor de uma chave sem ler dados.
+``max_key`` lê o maior valor de uma chave no log, varrendo a coluna só quando um arquivo não tem a
+estatística.
 
 O log e os snapshots: ``version_diff`` lê no log as partições alteradas entre duas versões,
 ``history`` lista os commits com os metadados da biblioteca, e ``copy_manifest`` monta os
@@ -185,8 +186,8 @@ class SchemaDiff:
 
     .. code-block:: python
 
-        diff = schema_diff(Operacao.__table__, open_table(uri, storage))
-        diff.destructive   # () quando reconcile pode aplicar o resto
+        diff = reconcile(uri, Operacao.__table__, storage)
+        diff.add   # os campos acrescentados; o diff destrutivo sobe como SchemaDiffRefused
     """
 
     add: tuple[pa.Field, ...]
@@ -215,7 +216,8 @@ class SchemaDiff:
 @dataclasses.dataclass(frozen=True)
 class CopyManifest:
     """[protected] Um manifesto do ``COPY ... MANIFEST`` do Redshift e as colunas que cada arquivo
-    dele tem, o retorno de ``copy_manifest``; para a publicação.
+    dele tem, o retorno de ``copy_manifest``; para a publicação e para a carga das partições do
+    motor Redshift.
 
     Exemplo:
 
@@ -302,8 +304,8 @@ def open_table(
 ) -> DeltaTable:
     """[public] A tabela Delta carregada numa versão.
 
-    ``serialize_db.execution.Execution`` a chama uma vez por tabela na abertura e guarda o objeto
-    e a versão; as primitivas que recebem ``dt`` (``max_key``, ``schema_diff``) leem esse objeto.
+    ``serialize_db.execution.Execution`` a chama na abertura de cada tabela e guarda o objeto e a
+    versão.
 
     Exemplo:
 
@@ -1055,8 +1057,9 @@ def register_files(
         numa tabela sem partição ou fora da regra.
     :raises ValueError: ``uri`` fora da raiz de ``storage``.
     :raises serialize_db.errors.RegistrationRefused: uma conferência reprovou, sem commit, e o
-        arquivo fica órfão na pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)``
-        (``serialize-db vacuum --full``); ou a releitura reprovou e desfez o commit.
+        arquivo fica órfão na pasta da tabela até um
+        ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção
+        (``serialize-db vacuum --full --apply``); ou a releitura reprovou e desfez o commit.
     :raises serialize_db.errors.ExecutionConflict: um segundo registro da mesma partição a partir da
         mesma versão.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
@@ -1084,7 +1087,7 @@ def register_files(
     # create_write_transaction não atualiza o objeto: a versão vem de uma leitura nova do log, que
     # com uma execução por ambiente é a do próprio commit.
     version = open_table(uri, storage).version()
-    _read_back(uri, table, value, total, storage, config)
+    read_back(uri, table, value, total, storage, config)
     return version
 
 
@@ -1252,10 +1255,11 @@ def read_back(
     value: str | None,
     expected_rows: int,
     storage: Storage,
+    config: Mapping[str, object],
 ) -> None:
     """[protected] Relê a versão recém-commitada pelos dois leitores e a desfaz quando eles
     discordam; para o motor Redshift, que a chama depois de trocar os arquivos da partição com
-    ``Double`` não finito.
+    ``Double`` não finito, e para ``register_files`` e ``rewrite``.
 
     O delta-rs, pelo dataset Arrow, e o ``delta_scan`` do DuckDB, numa conexão própria, contam as
     linhas e leem o menor e o maior valor de cada coluna da primeira chave do modelo na partição.
@@ -1268,32 +1272,21 @@ def read_back(
 
     .. code-block:: python
 
-        read_back(uri, Operacao.__table__, "2026-08-31", 1000, storage)   # None quando concordam
+        # Os limites lidos antes do commit; None quando os leitores concordam.
+        config = environment_limits()
+        read_back(uri, Operacao.__table__, "2026-08-31", 1000, storage, config)
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param table: a tabela do modelo.
     :param value: o valor da partição relida; ``value=None`` relê a tabela inteira.
     :param expected_rows: as linhas que o log e os dois leitores têm de contar.
     :param storage: o armazenamento da raiz do banco.
+    :param config: os limites da conexão do DuckDB, de
+        ``serialize_db.resources.environment_limits``, lidos pelo chamador antes do commit, para a
+        recusa do ambiente cair sem nada gravado.
     :raises serialize_db.errors.RegistrationRefused: uma diferença entre os leitores, o log e
         ``expected_rows``, depois de ``restore(version - 1)``; a mensagem traz as leituras.
-    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-        2 MiB, ou negativa, lida por ``environment_limits`` no início da chamada, antes de qualquer
-        leitura.
     """
-    _read_back(uri, table, value, expected_rows, storage, environment_limits())
-
-
-def _read_back(
-    uri: str,
-    table: sa.Table,
-    value: str | None,
-    expected_rows: int,
-    storage: Storage,
-    config: Mapping[str, object],
-) -> None:
-    """[private] ``read_back`` com os limites do DuckDB já lidos, que ``register_files`` e
-    ``rewrite`` leem antes do commit, para a recusa do ambiente cair sem nada gravado."""
     dt = open_table(uri, storage)
     version = dt.version()
     keys = table_options(table).keys[0]
@@ -1451,8 +1444,7 @@ def reconcile(
     :return: o diff aplicado.
     :raises serialize_db.errors.SchemaDiffRefused: o diff destrutivo, sem alteração; a mensagem traz
         a lista e a instrução de ``rewrite``.
-    :raises serialize_db.errors.ContractError: uma ``CheckConstraint`` do modelo sem nome, como em
-        ``schema_diff``.
+    :raises serialize_db.errors.ContractError: uma ``CheckConstraint`` do modelo sem nome.
     """
     dt = open_table(uri, storage)
     diff = schema_diff(table, dt)
@@ -1659,7 +1651,7 @@ def rewrite(
         dt, table.name, partition_by, actions, value=None, metadata={}, schema=delta_schema(table)
     )
     version = open_table(uri, storage).version()
-    _read_back(uri, table, None, total, storage, config)
+    read_back(uri, table, None, total, storage, config)
     return version
 
 
@@ -2021,9 +2013,8 @@ def set_channel(
 
     :param storage: o armazenamento da raiz do banco.
     :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
-    :param name: o nome do canal, pela regra da partição
-        (``serialize_db.schema.PARTITION_VALUE``); o canal
-        ``current`` é reservado, a versão atual de cada tabela, e não fica no arquivo.
+    :param name: o nome do canal, pela regra da partição (``serialize_db.schema.PARTITION_VALUE``);
+        o canal ``current`` é reservado, a versão atual de cada tabela, e não fica no arquivo.
     :param snapshot: o nome do snapshot, presente em ``snapshots``.
     :return: o controle novo.
     :raises serialize_db.errors.ContractError: o nome do canal fora da regra da partição, ou o nome

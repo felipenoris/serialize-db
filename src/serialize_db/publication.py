@@ -233,8 +233,9 @@ def control_read(
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[protected] O ``select`` da linha de controle da tabela, o primeiro comando da transação;
-    para ``publish_redshift``, ``unpublish_redshift`` e ``publication_status``.
+    """[protected] O ``select`` da linha de controle da tabela; para ``publish_redshift`` e
+    ``unpublish_redshift``, que o rodam como o primeiro comando da transação, e para
+    ``publication_status``, que o roda fora de transação.
 
     Exemplo:
 
@@ -402,7 +403,8 @@ def unpublication_statements(
 ) -> list[str]:
     """[protected] Os comandos da despublicação depois da leitura da linha de controle: o
     ``DROP TABLE`` da tabela publicada e o ``DELETE`` da linha, condicionado à versão lida; para
-    ``unpublish_redshift``.
+    ``unpublish_redshift`` e para ``publish_redshift``, que despublica a tabela publicada num diff
+    destrutivo antes de recriá-la.
 
     Exemplo:
 

@@ -376,7 +376,7 @@ a string vazia para as tabelas do contrato ou `exec_<id>_` para o sandbox de uma
 `serialize_db.storage.Storage` é a raiz do banco, uma pasta local ou um prefixo `s3://`, e cada
 primitiva de `serialize_db.delta` recebe a URI da pasta da tabela e o `Storage`. A tabela nasce do
 modelo, e cada partição entra num commit que a substitui, com os metadados da execução (`batch` é
-o lote convertido na seção anterior):
+o lote da seção "Converter um lote de dados"):
 
 ```python
 from serialize_db import delta, schema
@@ -1156,7 +1156,7 @@ Arrow pelo delta-rs, com os comentários preservados e sem o `PARQUET:field_id`:
 Delta, o `delta_scan` do DuckDB lê toda coluna como nula.
 
 Uma coluna do contrato volta de `query` e de `stream` no tipo Arrow da tabela. No motor Redshift,
-`serialize_db.engine.redshift.schema_from_row_description` dá o tipo de cada coluna do resultado
-pelo driver, com o `SUPER` em `string` e o `NUMERIC` com a precisão e a escala do `type_modifier`,
-e recusa com `serialize_db.errors.SandboxError` o tipo que não lista, como `TIME`; o motor DuckDB
-devolve o `TIMESTAMPTZ` com o fuso da sessão (`TimeZone`), que `cast` leva a UTC no mesmo instante.
+o tipo de cada coluna do resultado vem da descrição de linhas do driver, com o `SUPER` em `string`
+e o `NUMERIC` com a precisão e a escala do `type_modifier`; um tipo sem correspondente Arrow no
+motor, como `TIME`, é recusado com `serialize_db.errors.SandboxError`. O motor DuckDB devolve o
+`TIMESTAMPTZ` com o fuso da sessão (`TimeZone`), que `cast` leva a UTC no mesmo instante.

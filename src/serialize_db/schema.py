@@ -409,7 +409,8 @@ def sequential_key(
     table: sa.Table,
 ) -> sa.Column | None:
     """[protected] A chave primária inteira de uma coluna, a chave sequencial que ``next_ids``
-    preenche; ``None`` quando a chave primária é outra. Para a auditoria e os motores."""
+    preenche; ``None`` quando a chave primária é outra. Para a auditoria, os motores e o
+    ``next_ids`` de ``serialize_db.execution``."""
     primary = list(table.primary_key.columns)
     if len(primary) != 1 or not isinstance(primary[0].type, sa.Integer):
         return None
@@ -420,7 +421,8 @@ def double_columns(
     table: sa.Table,
 ) -> list[str]:
     """[protected] Os nomes das colunas ``Double``, as que podem guardar ``NaN`` e infinito, que
-    ficam sem mínimo e máximo no Delta (issue #59 do serialize-db). Para a auditoria e a carga de
+    ficam sem mínimo e máximo no Delta (issue #59 do serialize-db). Para a auditoria,
+    ``serialize_db.delta``, ``serialize_db.execution`` e a carga de
     ``serialize_db.parquet_import``."""
     names = []
     for column in table.columns:
@@ -547,7 +549,8 @@ def literal(
     value: str,
 ) -> str:
     """[protected] O literal SQL de um texto, entre aspas simples e com a aspa simples dobrada; para
-    ``serialize_db.storage``, os motores e a carga de ``serialize_db.parquet_import``.
+    ``serialize_db.storage``, ``serialize_db.delta``, ``serialize_db.publication``, os motores e a
+    carga de ``serialize_db.parquet_import``.
 
     Exemplo:
 

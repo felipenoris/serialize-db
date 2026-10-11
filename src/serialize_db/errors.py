@@ -105,9 +105,9 @@ class RegistrationRefused(Exception):
     reprovou depois dele e ``restore`` voltou a versão anterior.
 
     A mensagem nomeia a conferência e, nas de cada arquivo, o arquivo; os arquivos ficam órfãos na
-    pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)``
-    (``serialize-db vacuum --full --apply``). ``deep_copy`` também a levanta, no destino que
-    registra um arquivo fora da versão copiada, no destino cujo esquema difere do da versão sem
+    pasta da tabela até um ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da
+    retenção (``serialize-db vacuum --full --apply``). ``deep_copy`` também a levanta, no destino
+    que registra um arquivo fora da versão copiada, no destino cujo esquema difere do da versão sem
     partição copiada que o trocasse, e na contagem da cópia diferente da soma das ações.
 
     Exemplo:
@@ -155,16 +155,16 @@ class SandboxError(ValueError):
     lida do ambiente que não dá 1 MiB de ``memory_limit`` ao DuckDB.
 
     A mensagem nomeia o objeto: o nome que ``create_table`` achou ocupado, a tabela que o
-    ``appender`` não achou no sandbox, ou a view do ``ingest``, que não recebe lotes; o cliente lê
-    a versão fixada por ``run.pinned_delta(table)`` sem ocupar nome. No resultado de ``query`` e
-    de ``stream`` do motor Redshift, a mensagem nomeia a coluna de outro OID, ou de ``NUMERIC``
-    sem modificador, que o contrato não tem. O ``append``, o ``appender``,
-    o ``ingest`` e o ``pinned_delta`` do motor Redshift recusam a sessão numa transação do
-    cliente, que o ``COMMIT`` deles confirmaria junto, e a mensagem pede o ``COMMIT`` ou o
-    ``ROLLBACK`` dela antes. Sem ``iam_role`` na configuração, as credenciais vêm da sessão
-    ``boto3``, e a mensagem diz onde ela procurou. A memória é a que o processo ainda pode usar, de
-    ``serialize_db.resources``, abaixo de 2 MiB ou negativa, quando a configuração do DuckDB não
-    informa o ``memory_limit``; a mensagem traz a leitura.
+    ``appender`` não achou no sandbox, ou a view do ``ingest``, que não recebe lotes; o cliente lê a
+    versão fixada por ``run.pinned_delta(table)`` sem ocupar nome. No resultado de ``query`` e de
+    ``stream`` do motor Redshift, a mensagem nomeia a coluna de outro OID, ou de ``NUMERIC`` sem
+    modificador, que o contrato não tem. O ``append``, o ``appender``, o ``ingest`` e o
+    ``pinned_delta`` do motor Redshift recusam a sessão numa transação do cliente, que o ``COMMIT``
+    deles confirmaria junto, e a mensagem pede o ``COMMIT`` ou o ``ROLLBACK`` dela antes. Sem
+    ``iam_role`` na configuração, as credenciais vêm da sessão ``boto3``, e a mensagem diz onde ela
+    procurou. A memória é a que o processo ainda pode usar, de ``serialize_db.resources``, abaixo de
+    2 MiB ou negativa, quando a configuração do DuckDB não informa o ``memory_limit``; a mensagem
+    traz a leitura.
 
     Exemplo:
 

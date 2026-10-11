@@ -35,6 +35,7 @@ from pathlib import Path
 
 import botocore.credentials
 import botocore.exceptions
+import duckdb
 import pyarrow as pa
 import pytest
 import sqlalchemy as sa
@@ -2265,6 +2266,10 @@ def test_credentials_probe_reads_a_local_table_in_every_round(
     assert list(folder.glob("serialize_db_*")) == []
 
 
+# --------------------------------------------------------------------------------------------------
+# operation_lib.py: os argumentos e as partições da fonte fora das ignoradas
+
+
 def test_parse_arguments_reads_the_source_and_the_ignored_partitions(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
@@ -2325,6 +2330,10 @@ def test_source_partitions_skips_the_ignored_partitions(
     assert "tem 3 partição(ões) fora das ignoradas, a sonda pede 4" in capsys.readouterr().err
 
 
+# --------------------------------------------------------------------------------------------------
+# probe_published_base.py: as versões fora das esperadas e as tabelas trocadas
+
+
 def test_published_base_problems_name_the_tables_off_the_expected_versions() -> None:
     """``published_problems`` e ``current_problems`` da sonda da base publicada nomeiam a tabela
     cuja versão publicada, ou atual, não é a esperada, e a ausente da situação como ``None``."""
@@ -2363,6 +2372,11 @@ def test_published_tables_reads_the_swapped_tables() -> None:
             "rss": "270",
         }
     }
+
+
+# --------------------------------------------------------------------------------------------------
+# probe_parallel_gain.py: o resumo, as faixas de ids, os comandos, o cache de resultados, a
+# linha do tempo, as travas, as escritas de controle, as ordens dos comandos e a remoção
 
 
 def test_parallel_gain_summary_takes_the_fastest_run_of_each_variant() -> None:
@@ -2426,12 +2440,40 @@ def test_parallel_gain_command_kinds_count_and_summarize() -> None:
 
 def test_parallel_gain_result_cache_query_counts_the_small_queries_by_cache_hit() -> None:
     """``result_cache_query`` conta no ``sys_query_history``, por ``result_cache_hit``, as consultas
-    de contagem sobre a tabela desde o instante, em UTC."""
+    de contagem sobre a tabela desde o instante, em UTC, sem a própria leitura, que a vista lista e
+    cujo texto cita ``count(`` e a tabela: numa vista fabricada no DuckDB com duas contagens, uma
+    leitura anterior e uma consulta de antes do instante, sobram as duas contagens."""
     text = probe_parallel_gain.result_cache_query(1_760_000_000.5, "exec_1_cad_paralelo_a")
     assert text.startswith("SELECT result_cache_hit, count(*) AS n FROM sys_query_history ")
     assert "WHERE start_time >= '2025-10-09 08:53:20' AND query_type = 'SELECT' " in text
     assert "query_text ILIKE '%count(%' AND query_text ILIKE '%exec_1_cad_paralelo_a%'" in text
     assert text.endswith("GROUP BY result_cache_hit ORDER BY result_cache_hit")
+
+    # A vista fabricada: as linhas que a consulta conta e as que ela deixa de fora.
+    count = "SELECT count(*) FROM exec_1_cad_paralelo_a WHERE id BETWEEN 0 AND 999"
+    history = pa.table(
+        {
+            "start_time": pa.array(
+                [
+                    datetime.datetime(2025, 10, 9, 8, 54),
+                    datetime.datetime(2025, 10, 9, 8, 55),
+                    datetime.datetime(2025, 10, 9, 8, 56),
+                    datetime.datetime(2025, 10, 9, 8, 50),
+                ],
+                pa.timestamp("us"),
+            ),
+            "query_type": ["SELECT", "SELECT", "SELECT", "SELECT"],
+            "query_text": [count, count, text, count],
+            "result_cache_hit": [False, True, False, False],
+        }
+    )
+    connection = duckdb.connect()
+    try:
+        connection.register("sys_query_history", history)
+        rows = connection.execute(text).fetchall()
+    finally:
+        connection.close()
+    assert rows == [(False, 1), (True, 1)]
 
 
 def test_parallel_gain_commands_keep_the_start_the_thread_and_the_table() -> None:

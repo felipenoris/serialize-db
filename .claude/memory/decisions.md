@@ -1603,11 +1603,14 @@ refusal after it, the user chose "Recusar antes" (01:07 UTC): `register_files` a
 `environment_limits()` before opening the table and committing, `deep_copy` before creating the
 destination and `_export_by_rewrite` before creating the folder, the private `_read_back` and
 `_duckdb_reading` take the limits as `config` while the public `read_back` keeps reading them
-itself, the callers' fields (`export_partition` of both engines, `publish_delta`, `initial_load`)
-say the refusal comes with nothing written, and `test_the_memory_is_read_before_the_commit`
-asserts the version, the archive and the exported folder untouched, failing on the previous code
-(`assert 2 == 1`). `src/serialize_db/delta.py`, `src/serialize_db/engine/duckdb.py`,
-`src/serialize_db/engine/redshift.py`, `src/serialize_db/execution.py`, `src/serialize_db/load.py`
+itself (the Redshift swap's `read_back` read them again after the commit until 2026-10-11, when
+`read_back` took them as `config` too; "The rules and the open items of the final review of
+PRs #155 and #156 (2026-10-11)"), the callers' fields (`export_partition` of both engines,
+`publish_delta`, `initial_load`) say the refusal comes with nothing written, and
+`test_the_memory_is_read_before_the_commit` asserts the version, the archive and the exported folder
+untouched, failing on the previous code (`assert 2 == 1`). `src/serialize_db/delta.py`,
+`src/serialize_db/engine/duckdb.py`, `src/serialize_db/engine/redshift.py`,
+`src/serialize_db/execution.py`, `src/serialize_db/load.py`
 
 ## The unpartitioned table under `partitions` (2026-10-02)
 
@@ -2280,10 +2283,13 @@ cases went to him as decision cards, one at a time.
   `max_key`, `read_back` and `schema_diff`; in `publication`, `PublishedColumn`, `control_ddl`,
   `control_read`, `publication_statements`, `published_ddl`, `reconcile_published` and
   `unpublication_statements`; in `schema`, `column_ddl`; in `parquet_import`, `partition_query`; in
-  `engine.redshift`, `sandbox_prefix` and `schema_from_row_description`. They are protected by the
-  level rule, each docstring naming who calls it, `partition_query` and `sandbox_prefix` included,
-  which only their own module calls; whether those two take the `_` prefix is in
-  `OPEN_QUESTIONS.md`.
+  `engine.redshift`, `sandbox_prefix` and `schema_from_row_description`. They keep no prefix and
+  open with `[protected]`, each docstring naming who calls it. Another module calls five of them
+  (`CopyManifest`, `copy_manifest`, `max_key`, `read_back`, `column_ddl`), protected by the level
+  rule; only their own module calls the other eleven, which the rule makes private, and the
+  evaluation had counted only `partition_query` and `sandbox_prefix` among them. The eleven take
+  the `_` prefix in a new PR after PR #157 ("Prefixar", in "The rules and the open items of the
+  final review of PRs #155 and #156 (2026-10-11)").
 - Case 2 (23:57 UTC, "Públicas", against the recommendation of private classes behind the
   protocols): `DuckDBStream`, `DuckDBAppender`, `RedshiftStream` and `RedshiftAppender` enter the
   `__all__` of their engine modules, with the constructor, `read_next_batch`, `read_all`, `write`
@@ -2382,3 +2388,56 @@ The last cards of the "Não aplicado" items of PR #156.
 
 `tests/`, `CLAUDE.md` ("Docstrings"), `src/serialize_db/` (the `:raises` fields and the issue
 citations).
+
+## The rules and the open items of the final review of PRs #155 and #156 (2026-10-11)
+
+The cards of PR #157, asked one at a time, each with its case before the options.
+
+- The search for a misread pdoc field (05:37 UTC, "Adotar", the recommended option): the built
+  site is read with `grep -o '<strong>[^<]*:[^<]*</strong>'` and with `grep -rn '<li>\*\*'`. In
+  PR #156 the first line of the `:param version:` field of `DuckDBEngine.ingest` held the `:=` of
+  `delta_scan(uri, version := v)`, and pdoc 16 rendered
+  `**version: a versão fixada da tabela, lida por delta_scan(uri, version**: = v)` with the
+  asterisks visible; the first search found nothing, the second found the field.
+- The shallow clone before a date read from git (05:41 UTC, "Adotar", the recommended option):
+  a date read from git history first reads `git rev-parse --is-shallow-repository` and
+  `.git/shallow`, and the older facts are dated by the memory. This session's clone held the
+  last 50 commits of `main`, from 02cf590 of 2026-10-01, and PRs #155 and #156 dated the
+  `redshift-connector` 2.1.17 pin on that commit instead of 2026-09-24 (the `redshift` extra)
+  and 2026-09-25 (the runtime dependencies).
+- The swap's re-read after the commit (05:44 UTC, "Corrigir", the recommended option): the
+  Redshift engine's `_swap` reads `environment_limits()` once, after the `UNLOAD` and before
+  `publish_partition` commits, and hands the reading to the DuckDB connection and to
+  `delta.read_back`, which takes the limits as `config` from every caller (`register_files`,
+  `rewrite` and the swap); the private `_read_back` left. Before, the swap's `read_back` read
+  the limits again after the commit, and a reading under 2 MiB raised `SandboxError` with the
+  version written and not re-read, against the decision of 2026-10-02 ("Recusar antes"),
+  which the card asked again. `test_export_swap_reads_the_memory_once_before_the_commit`
+  fails on the previous code.
+- The `_` prefix of the names only their own module calls (06:13 UTC, "Prefixar", the
+  recommended option): the 24 names the item of `OPEN_QUESTIONS.md` lists take the `_` prefix of
+  the level rule and open with `[private]`, in a new PR after PR #157 merges; an import from
+  outside the package breaks. They are 11 of the 16 names that left `__all__` on 2026-10-10,
+  where the evaluation's prefix question had named 2, and 13 that were never in `__all__`: six in
+  `engine.redshift`, the six SQL functions of `audit`, which the evaluation's case 2 had already
+  called private, and `required_parameters` in `sql`. The card's reason: none of the 24 is in the
+  public API, and the rule of 2026-10-11 lets the tests read private names. `physical_memory` of
+  `resources`, left out of the card's count, had a card of its own (below).
+- The rules of the lessons of PRs #126, #128 and #149 (06:22 UTC, "Levar", the recommended
+  option): the three rules enter the working rules of `CLAUDE.md` (the DuckDB version bump waits
+  for the PyPI extension wheels; a command repeated after a connection drop is read with the
+  command applied before the drop; a driver's state is read on the failure path before a guard
+  relies on it), and the clause "the rule lives here because `CLAUDE.md` is at its size budget"
+  leaves the three lessons. The reason held at #126 and #128, with `CLAUDE.md` at 76,799 bytes,
+  and not at #149, at 64,099; `CLAUDE.md` went from 67,974 to 69,192 bytes.
+- The `_` prefix of `physical_memory` of `resources` (16:39 UTC, "Prefixar", the recommended
+  option): it meets the criterion of the 24 names, with a `[protected]` docstring and only its
+  own module calling it in `src/`, and was left out of that card's count; it takes the prefix and
+  opens with `[private]` in the same PR, and the migration script, which writes
+  `memory_total_mb` of its report with it, and `tests/test_resources.py` import the new name. The
+  card's reason: it is the case of the 24, among which are names the probes use.
+
+`CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24, of the shallow clone and of
+the lessons of #126, #128 and #149), `lessons.md`, `src/serialize_db/delta.py`,
+`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md` (the
+rename of the 24 names and of `physical_memory`).

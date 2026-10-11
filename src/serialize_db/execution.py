@@ -712,7 +712,9 @@ class Execution:
 
         :param table: a tabela do modelo.
         :return: o ``FromClause`` com as colunas do contrato.
-        :raises serialize_db.errors.SandboxError: a tabela sem versão fixada, que ainda não existe.
+        :raises serialize_db.errors.SandboxError: a tabela sem versão fixada, que ainda não existe;
+            no motor Redshift, também a sessão numa transação que o cliente abriu e, sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         """
         return self.sandbox.pinned_delta(table, self._uri(table), self._version(table))
 
@@ -814,6 +816,9 @@ class Execution:
         :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
             partição, ou a lista vazia, que aprovaria sem auditar.
         :raises serialize_db.errors.AuditFailed: a reprovação.
+        :raises serialize_db.errors.SandboxError: no motor Redshift, quando uma verificação carrega
+            a staging ``_versao``: a sessão numa transação que o cliente abriu, ou, sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         """
         checked = _checked_partitions(partitions)
         # A lista vazia é recusada: o IN () falso aprovaria sem auditar.
@@ -1013,10 +1018,15 @@ class Execution:
         :raises serialize_db.errors.LogUnavailable: um arquivo do log entre a versão fixada e a
             atual não existe.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-            2 MiB, ou negativa, lida por ``environment_limits`` no registro de cada partição, antes
-            do commit: nada entra no log, e o arquivo que o motor gravou fica órfão na pasta da
-            partição até um ``vacuum`` com ``full=True``; no motor Redshift, também sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
+            2 MiB, ou negativa (``serialize_db.resources.environment_limits``), lida em cada
+            partição antes do commit: nada entra no log, e os arquivos que o motor gravou ficam
+            órfãos na pasta da partição até um
+            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção, ou, na
+            troca do motor Redshift pelo ``Double`` não finito, no ``staging_prefix`` até o
+            ``cleanup``; no motor Redshift, também sem ``iam_role``, a sessão ``boto3`` sem
+            credenciais para o ``UNLOAD``.
+        :raises FileNotFoundError: no motor Redshift, a falta do manifesto depois de um ``UNLOAD``
+            de alguma linha.
         """
         checked = _checked_partitions(partitions)
         tasks = []

@@ -46,6 +46,7 @@ import uuid
 from collections.abc import Collection, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
+import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -66,6 +67,7 @@ from serialize_db.engine.redshift import (
     schema_from_row_description,
 )
 from serialize_db.errors import ContractError, RegistrationRefused, SandboxError, SqlError
+from serialize_db.resources import environment_limits
 from serialize_db.storage import Storage
 
 
@@ -844,7 +846,7 @@ def test_statements_serialize_on_the_single_session(
     monkeypatch: pytest.MonkeyPatch,
     local_location: LocalLocation,
 ) -> None:
-    """Dois comandos de duas threads não se sobrepõem; um comando roda enquanto um ``stream`` ainda
+    """Três comandos de três threads não se sobrepõem; um comando roda enquanto um ``stream`` ainda
     lê os arquivos, porque o lock solta no fim do ``UNLOAD``; um ``stream`` aberto dentro de
     ``session()``, na mesma thread, não trava; e ``new_session`` abre outra conexão."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
@@ -860,11 +862,21 @@ def test_statements_serialize_on_the_single_session(
         assert previous[1] <= following[0]
 
     # Um comando de outra thread enquanto o stream ainda lê os arquivos: o lock é reentrante, e
-    # só outra thread prova que ele soltou.
+    # só outra thread prova que ele soltou. A thread é daemon e a espera tem limite: um lock preso
+    # falha o teste em vez de travá-lo, e o processo do pytest ainda termina.
     with engine.stream(sa.select(ENTRIES), batch_size=10) as stream:
         first = stream.read_next_batch()
         started = time.perf_counter()
-        run_together((engine.query, "SELECT 1"))
+        results = []
+
+        def query_from_another_thread() -> None:
+            results.append(engine.query("SELECT 1"))
+
+        command = threading.Thread(target=query_from_another_thread, daemon=True)
+        command.start()
+        command.join(timeout=5)
+        assert not command.is_alive()
+        assert len(results) == 1
         assert time.perf_counter() - started < 1.0
         assert first.num_rows == 10
         assert sum(batch.num_rows for batch in stream) == 290
@@ -1026,8 +1038,9 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     grava ao lado dele o manifesto com o arquivo como a única entrada, obrigatória e com o
     tamanho gravado, roda ``BEGIN``, a staging temporária com o ``COPY ... MANIFEST`` e o
     ``INSERT`` com ``JSON_PARSE``, e ``COMMIT``, e apaga o arquivo e o manifesto; o appender sem
-    lote roda só a conferência da tabela; uma exceção no ``with`` não roda comando algum; um lote
-    recusado pelo ``cast`` também não."""
+    lote roda só a conferência da tabela; uma exceção no ``with`` não roda comando algum e sobe de
+    novo num ``write`` depois do ``close``; o ``close`` que recebe a exceção sem o ``with`` também
+    não roda comando e não a levanta; um lote recusado pelo ``cast`` também não roda comando."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     connection = FakeConnection(storage, existing={f"{PREFIX}cad_lancamentos"})
     engine = fake_engine(monkeypatch, connection, storage)
@@ -1119,6 +1132,19 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
         f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0'
     ]
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+    # O write depois do close com a exceção do cliente levanta essa exceção de novo.
+    with pytest.raises(RuntimeError, match="erro plantado"):
+        appender.write(entry_rows(MONTHS[0], 11, 10, PROJECTED))
+
+    # O close com a exceção do cliente, sem o with, apaga o arquivo sem comando e não a levanta.
+    before = len(connection.commands)
+    appender = engine.appender(PROJECTED)
+    appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+    appender.close(RuntimeError("erro plantado"))
+    assert connection.texts()[before:] == [
+        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0'
+    ]
+    assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
 
     # O lote recusado pelo cast.
     with pytest.raises(ContractError, match="id_lancamento"):
@@ -1173,7 +1199,7 @@ def test_appender_second_close_does_nothing(
     local_location: LocalLocation,
 ) -> None:
     """O ``close`` explícito dentro do ``with``: a saída do ``with`` chama o ``close`` de novo, e
-    ele não roda outro ``COPY``."""
+    ele não roda outro ``COPY``; o ``write`` depois do ``close`` levanta ``RuntimeError``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     connection = FakeConnection(storage, existing={f"{PREFIX}cad_contas"})
     engine = fake_engine(monkeypatch, connection, storage)
@@ -1184,6 +1210,8 @@ def test_appender_second_close_does_nothing(
     assert len([text for text in connection.texts() if text.startswith("COPY")]) == 1
     assert connection.texts().count("COMMIT") == 1
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+    with pytest.raises(RuntimeError, match="terminou antes do fim da fila"):
+        appender.write(account_rows(["C"]))
 
 
 @pytest.mark.local
@@ -1416,8 +1444,8 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     as linhas conferidas; dois destinos distintos para a mesma partição. A troca: com
     ``columns_without_min_max``, o destino no ``staging/`` e a partição por ``publish_partition``,
     com o aviso no log e a releitura, que desfaz o commit na contagem diferente; a partição vazia
-    entra por um arquivo sem linha; o valor numa tabela sem partição recusa antes do
-    ``UNLOAD``."""
+    entra por um arquivo sem linha; o valor numa tabela sem partição e a URI fora da raiz, nos dois
+    caminhos, recusam antes do ``UNLOAD``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos_projetados")
     delta.create_table(uri, PROJECTED, storage)
@@ -1517,7 +1545,101 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
     with pytest.raises(ContractError, match="tabela sem partição recebeu o valor"):
         engine.export_partition(ACCOUNTS, storage.uri_of("prd/cad_contas"), MONTHS[1], METADATA)
     assert len(connection.commands) == commands
+
+    # A URI fora da raiz recusa antes de qualquer comando, no registro e na troca.
+    outside = local_location.child(f"fora/{uuid.uuid4().hex[:8]}/cad_lancamentos_projetados")
+    for columns_without_min_max in [(), ["valor"]]:
+        with pytest.raises(ValueError, match="fora da raiz"):
+            engine.export_partition(
+                PROJECTED,
+                outside,
+                MONTHS[1],
+                METADATA,
+                columns_without_min_max=columns_without_min_max,
+            )
+        assert len(connection.commands) == commands
     engine.cleanup()
+
+
+@pytest.mark.local
+def test_export_swap_reads_the_memory_once_before_the_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
+    """A troca lê a memória uma vez, antes do commit, e a releitura usa essa leitura: a conexão do
+    DuckDB da troca e a da releitura recebem os mesmos limites, e uma segunda leitura, que
+    recusaria depois do commit, não acontece. A recusa na leitura sobe sem versão nova, com os
+    arquivos do ``UNLOAD`` no ``staging_prefix`` até o ``cleanup``."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    uri = storage.uri_of("prd/cad_lancamentos_projetados")
+    delta.create_table(uri, PROJECTED, storage)
+    rows = entry_rows(MONTHS[1], 1, 1000, PROJECTED)
+    values = [float("nan")] + [number / 4 for number in range(2, 1001)]
+    with_nan = rows.set_column(rows.schema.get_field_index("valor"), "valor", pa.array(values))
+    connection = FakeConnection(storage, unload_rows=with_nan.drop_columns(["data_base_str"]))
+    engine = fake_engine(monkeypatch, connection, storage)
+
+    # A primeira leitura dá os limites do ambiente; outra recusaria, como a memória esgotada entre
+    # o commit e a releitura.
+    readings = []
+
+    def limits_once() -> dict[str, object]:
+        if readings:
+            raise SandboxError("memória disponível de 1.5 MiB: o DuckDB não abre com memory_limit")
+        readings.append(environment_limits())
+        return readings[0]
+
+    # Cada conexão do DuckDB guarda os limites que recebeu.
+    configs = []
+    original = Storage.duckdb_connect
+
+    def recording(
+        self: Storage,
+        *args: object,
+        **options: object,
+    ) -> duckdb.DuckDBPyConnection:
+        configs.append(options.get("config"))
+        return original(self, *args, **options)
+
+    monkeypatch.setattr(redshift, "environment_limits", limits_once)
+    monkeypatch.setattr(delta, "environment_limits", limits_once)
+    monkeypatch.setattr(Storage, "duckdb_connect", recording)
+    version = engine.export_partition(
+        PROJECTED,
+        uri,
+        MONTHS[1],
+        METADATA,
+        expected_rows=1000,
+        columns_without_min_max=["valor"],
+    )
+    assert version == 1
+    assert len(readings) == 1
+    # A conexão da troca e a da releitura recebem a única leitura.
+    assert len(configs) == 2
+    for config in configs:
+        assert config is readings[0]
+    assert delta.open_table(uri, storage).to_pyarrow_table().num_rows == 1000
+
+    # A recusa na leitura antes do commit: a versão fica, e o UNLOAD fica no staging_prefix.
+    def refusing() -> dict[str, object]:
+        raise SandboxError("memória disponível de 1.5 MiB: o DuckDB não abre com memory_limit")
+
+    monkeypatch.setattr(redshift, "environment_limits", refusing)
+    staged_before = storage.list_files(engine.staging_prefix, ".parquet")
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        engine.export_partition(
+            PROJECTED,
+            uri,
+            MONTHS[1],
+            METADATA,
+            expected_rows=1000,
+            columns_without_min_max=["valor"],
+        )
+    assert delta.open_table(uri, storage).version() == 1
+    staged_after = storage.list_files(engine.staging_prefix, ".parquet")
+    assert len(staged_after) > len(staged_before)
+    engine.cleanup()
+    assert storage.list_files(engine.staging_prefix) == []
 
 
 # ---------------------------------------------------------------- no esquema autorizado
@@ -1925,7 +2047,10 @@ def test_appender_refuses_a_batch_without_a_not_null_column(
     with pytest.raises(redshift_connector.Error, match="codigo") as staged:
         engine.append(PROJECTED, rows.drop_columns(["codigo"]))
     assert staged.value.__notes__[0].startswith("comando: INSERT")
-    record("redshift.engine.appender_without_not_null_staging", refusal_reading(staged.value))
+    # A nota do motor também cita a coluna, no INSERT: a mensagem lida é a do servidor.
+    staged_reading = refusal_reading(staged.value)
+    assert "codigo" in staged_reading["message"]
+    record("redshift.engine.appender_without_not_null_staging", staged_reading)
     assert count_of(engine, f"{engine.prefix}cad_lancamentos_projetados") == 0
 
 
@@ -1982,9 +2107,11 @@ def test_audit_refuses_a_transaction_the_client_opened_when_a_check_loads_the_st
     delta.create_table(projected_uri, PROJECTED, target.storage)
     with engine.session():
         engine.execute("BEGIN")
-        with pytest.raises(SandboxError, match="transação aberta"):
+        with pytest.raises(SandboxError, match="transação aberta") as refusal:
             engine.audit(PROJECTED, [MONTHS[1]], projected_uri, 0)
         engine.execute("ROLLBACK")
+    # A recusa vem da carga da staging, não da entrada do audit.
+    assert any(entry.name == "_ensure_loaded" for entry in refusal.traceback)
     report = engine.audit(PROJECTED, [MONTHS[1]], projected_uri, 0)
     assert report.passed, report.results
     assert report.rows(MONTHS[1]) == 5
@@ -2085,7 +2212,10 @@ def test_ingest_refuses_a_delta_column_outside_the_model(
     note = refused.value.__notes__[0]
     assert note.startswith("comando: COPY")
     assert '"extra"' in note
-    record("redshift.engine.ingest_column_outside_the_model", refusal_reading(refused.value))
+    # A nota do motor também cita a coluna, no COPY: a mensagem lida é a do servidor.
+    refused_reading = refusal_reading(refused.value)
+    assert '"extra"' in refused_reading["message"]
+    record("redshift.engine.ingest_column_outside_the_model", refused_reading)
     assert count_of(engine, f"{engine.prefix}cad_colunas") == 0
 
 
@@ -2182,7 +2312,7 @@ def reconnection_reading(
     """O comando seguinte numa sessão ociosa encerrada, repetido a cada ``TERMINATION_WAIT`` por
     até ``TERMINATION_LIMIT`` segundos enquanto ele responde no pid ``pid``: a leitura de
     ``next_command_reading`` do comando que reconectou, do que errou ou do último, com os segundos
-    entre o ``pg_terminate_backend`` e esse comando em ``esperou``."""
+    entre o ``pg_terminate_backend`` e esse comando em ``waited``."""
     attempts = int(TERMINATION_LIMIT / TERMINATION_WAIT)
     for attempt in range(1, attempts + 1):
         time.sleep(TERMINATION_WAIT)

@@ -11,12 +11,12 @@ O leitor Delta lê, sem argumento, o snapshot do canal ``default`` do ambiente, 
 ``serialize-db channel`` move; ``snapshot=`` lê um snapshot pelo nome, o arquivado pela cópia em
 ``<raiz>/<ambiente>/arquivo/<nome>/``; ``channel="current"`` lê a versão atual de cada tabela.
 Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é consistente num
-snapshot. O ``delta_scan`` poda as partições por ``=`` e por intervalo, e abre todos os arquivos
-com um ``IN`` de mais de um valor sozinho; por isso o filtro das partições é ``BETWEEN`` o menor e
-o maior valor ``AND`` o ``IN`` da lista, como no ``ingest`` dos motores. ``materialize`` copia uma
-tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas
-que ``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas
-tabelas durante uma publicação pode ler versões diferentes.
+snapshot. O ``delta_scan`` poda as partições por ``=`` e por intervalo, e abre todos os arquivos com
+um ``IN`` de mais de um valor sozinho; por isso o filtro das partições é ``BETWEEN`` o menor e o
+maior valor ``AND`` o ``IN`` da lista, como no ``ingest`` do motor DuckDB. ``materialize`` copia uma
+tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas que
+``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas tabelas
+durante uma publicação pode ler versões diferentes.
 
 Exemplo:
 
@@ -217,11 +217,19 @@ class ReaderStream:
         self.schema = stream.schema
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """[public] O próximo lote, na ordem da consulta; o erro que ela encontra depois do último
-        lote entregue sobe aqui, como no ``DuckDBStream``.
+        """[public] O próximo lote, na ordem da consulta.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with reader.stream(sa.select(Lancamento.__table__)) as stream:
+                first = stream.read_next_batch()
 
         :return: o lote, no esquema ``schema``.
         :raises StopIteration: no fim dos lotes.
+        :raises OSError: o erro que a consulta encontra depois do último lote entregue, do leitor
+            Arrow com a mensagem do DuckDB.
         """
         return self._stream.read_next_batch()
 
@@ -232,7 +240,16 @@ class ReaderStream:
     def read_all(self) -> pa.Table:
         """[public] Os lotes que faltam numa ``pa.Table``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with reader.stream(sa.select(Lancamento.__table__)) as stream:
+                table = stream.read_all()
+
         :return: a tabela, no esquema ``schema``; vazia depois do último lote.
+        :raises OSError: o erro que a consulta encontra depois do último lote entregue, do leitor
+            Arrow com a mensagem do DuckDB.
         """
         return self._stream.read_all()
 
@@ -246,7 +263,18 @@ class ReaderStream:
 
     def close(self) -> None:
         """[public] Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
-        segura."""
+        segura.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            stream = reader.stream(sa.select(Lancamento.__table__))
+            try:
+                first = stream.read_next_batch()
+            finally:
+                stream.close()   # o with do stream chama close na saída
+        """
         self._stream.close()
         self._reader = None
 
@@ -408,10 +436,10 @@ class DeltaReader:
         tabela com os dados da versão lida, ou só das partições pedidas.
 
         Cada tabela troca numa transação, e as tabelas correm em paralelo, cada uma numa sessão a
-        mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do
-        ``ingest`` do motor: ``BETWEEN`` o menor e o maior valor, que o ``delta_scan`` poda,
-        ``AND`` o ``IN`` da lista. A cópia é o ``SELECT *`` da versão:
-        uma coluna da versão que o modelo não tem entra na tabela, como na view.
+        mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do ``ingest``
+        do motor DuckDB: ``BETWEEN`` o menor e o maior valor, que o ``delta_scan`` poda, ``AND`` o
+        ``IN`` da lista. A cópia é o ``SELECT *`` da versão: uma coluna da versão que o modelo não
+        tem entra na tabela, como na view.
 
         Exemplo:
 
