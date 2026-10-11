@@ -1086,7 +1086,7 @@ def register_files(
     # create_write_transaction não atualiza o objeto: a versão vem de uma leitura nova do log, que
     # com uma execução por ambiente é a do próprio commit.
     version = open_table(uri, storage).version()
-    _read_back(uri, table, value, total, storage, config)
+    read_back(uri, table, value, total, storage, config)
     return version
 
 
@@ -1254,10 +1254,11 @@ def read_back(
     value: str | None,
     expected_rows: int,
     storage: Storage,
+    config: Mapping[str, object],
 ) -> None:
     """[protected] Relê a versão recém-commitada pelos dois leitores e a desfaz quando eles
     discordam; para o motor Redshift, que a chama depois de trocar os arquivos da partição com
-    ``Double`` não finito.
+    ``Double`` não finito, e para ``register_files`` e ``rewrite``.
 
     O delta-rs, pelo dataset Arrow, e o ``delta_scan`` do DuckDB, numa conexão própria, contam as
     linhas e leem o menor e o maior valor de cada coluna da primeira chave do modelo na partição.
@@ -1270,32 +1271,21 @@ def read_back(
 
     .. code-block:: python
 
-        read_back(uri, Operacao.__table__, "2026-08-31", 1000, storage)   # None quando concordam
+        # Os limites lidos antes do commit; None quando os leitores concordam.
+        config = environment_limits()
+        read_back(uri, Operacao.__table__, "2026-08-31", 1000, storage, config)
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param table: a tabela do modelo.
     :param value: o valor da partição relida; ``value=None`` relê a tabela inteira.
     :param expected_rows: as linhas que o log e os dois leitores têm de contar.
     :param storage: o armazenamento da raiz do banco.
+    :param config: os limites da conexão do DuckDB, de
+        ``serialize_db.resources.environment_limits``, lidos pelo chamador antes do commit, para a
+        recusa do ambiente cair sem nada gravado.
     :raises serialize_db.errors.RegistrationRefused: uma diferença entre os leitores, o log e
         ``expected_rows``, depois de ``restore(version - 1)``; a mensagem traz as leituras.
-    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-        2 MiB, ou negativa, lida por ``environment_limits`` no início da chamada, antes de qualquer
-        leitura.
     """
-    _read_back(uri, table, value, expected_rows, storage, environment_limits())
-
-
-def _read_back(
-    uri: str,
-    table: sa.Table,
-    value: str | None,
-    expected_rows: int,
-    storage: Storage,
-    config: Mapping[str, object],
-) -> None:
-    """[private] ``read_back`` com os limites do DuckDB já lidos, que ``register_files`` e
-    ``rewrite`` leem antes do commit, para a recusa do ambiente cair sem nada gravado."""
     dt = open_table(uri, storage)
     version = dt.version()
     keys = table_options(table).keys[0]
@@ -1660,7 +1650,7 @@ def rewrite(
         dt, table.name, partition_by, actions, value=None, metadata={}, schema=delta_schema(table)
     )
     version = open_table(uri, storage).version()
-    _read_back(uri, table, None, total, storage, config)
+    read_back(uri, table, None, total, storage, config)
     return version
 
 

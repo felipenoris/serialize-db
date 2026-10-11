@@ -1603,11 +1603,14 @@ refusal after it, the user chose "Recusar antes" (01:07 UTC): `register_files` a
 `environment_limits()` before opening the table and committing, `deep_copy` before creating the
 destination and `_export_by_rewrite` before creating the folder, the private `_read_back` and
 `_duckdb_reading` take the limits as `config` while the public `read_back` keeps reading them
-itself, the callers' fields (`export_partition` of both engines, `publish_delta`, `initial_load`)
-say the refusal comes with nothing written, and `test_the_memory_is_read_before_the_commit`
-asserts the version, the archive and the exported folder untouched, failing on the previous code
-(`assert 2 == 1`). `src/serialize_db/delta.py`, `src/serialize_db/engine/duckdb.py`,
-`src/serialize_db/engine/redshift.py`, `src/serialize_db/execution.py`, `src/serialize_db/load.py`
+itself (the Redshift swap's `read_back` read them again after the commit until 2026-10-11, when
+`read_back` took them as `config` too; "The rules and the open items of the final review of
+PRs #155 and #156"), the callers' fields (`export_partition` of both engines, `publish_delta`,
+`initial_load`) say the refusal comes with nothing written, and
+`test_the_memory_is_read_before_the_commit` asserts the version, the archive and the exported folder
+untouched, failing on the previous code (`assert 2 == 1`). `src/serialize_db/delta.py`,
+`src/serialize_db/engine/duckdb.py`, `src/serialize_db/engine/redshift.py`,
+`src/serialize_db/execution.py`, `src/serialize_db/load.py`
 
 ## The unpartitioned table under `partitions` (2026-10-02)
 
@@ -2395,5 +2398,22 @@ The cards of PR #157, asked one at a time, each with its case before the options
   `delta_scan(uri, version := v)`, and pdoc 16 rendered
   `**version: a versão fixada da tabela, lida por delta_scan(uri, version**: = v)` with the
   asterisks visible; the first search found nothing, the second found the field.
+- The shallow clone before a date read from git (05:41 UTC, "Adotar", the recommended option):
+  a date read from git history first reads `git rev-parse --is-shallow-repository` and
+  `.git/shallow`, and the older facts are dated by the memory. This session's clone held the
+  last 50 commits of `main`, from 02cf590 of 2026-10-01, and PRs #155 and #156 dated the
+  `redshift-connector` 2.1.17 pin on that commit instead of 2026-09-24 (the `redshift` extra)
+  and 2026-09-25 (the runtime dependencies).
+- The swap's re-read after the commit (05:44 UTC, "Corrigir", the recommended option): the
+  Redshift engine's `_swap` reads `environment_limits()` once, after the `UNLOAD` and before
+  `publish_partition` commits, and hands the reading to the DuckDB connection and to
+  `delta.read_back`, which takes the limits as `config` from every caller (`register_files`,
+  `rewrite` and the swap); the private `_read_back` left. Before, the swap's `read_back` read
+  the limits again after the commit, and a reading under 2 MiB raised `SandboxError` with the
+  version written and not re-read, against the decision of 2026-10-02 ("Recusar antes"),
+  which the card asked again. `test_export_swap_reads_the_memory_once_before_the_commit`
+  fails on the previous code.
 
-`CLAUDE.md` ("Docstrings", "Checks", and the working rule of 2026-09-24).
+`CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24 and of the shallow
+clone), `src/serialize_db/delta.py`, `src/serialize_db/engine/redshift.py`,
+`tests/test_engine_redshift.py`.

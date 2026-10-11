@@ -2351,8 +2351,11 @@ class RedshiftEngine:
             sorted(columns_without_min_max),
         )
         paths = self._unload(table, value, prefix, count)
+        # Os limites lidos uma vez, antes do commit, servem à conexão e à releitura: a memória que
+        # o ambiente recusa não deixa uma versão gravada sem releitura.
+        config = environment_limits()
         # Uma conexão do DuckDB por partição, nos limites do ambiente: o close devolve a memória.
-        connection = self.storage.duckdb_connect(config=environment_limits())
+        connection = self.storage.duckdb_connect(config=config)
         try:
             reader = self._swap_reader(connection, table, value, paths)
             version = delta.publish_partition(
@@ -2368,7 +2371,7 @@ class RedshiftEngine:
             connection.close()
         # O log e os dois leitores contam as linhas da partição; a diferença desfaz o commit.
         expected = expected_rows if expected_rows is not None else count
-        delta.read_back(uri, table, value, expected, self.storage)
+        delta.read_back(uri, table, value, expected, self.storage, config)
         return version
 
     def export_partition(
@@ -2423,10 +2426,10 @@ class RedshiftEngine:
             gravado.
         :raises serialize_db.errors.SandboxError: sem ``iam_role``, a sessão ``boto3`` sem
             credenciais para o ``UNLOAD``; ou a memória que o processo ainda pode usar abaixo de 2
-            MiB, ou negativa, lida no registro antes do commit (sem commit, os arquivos do
-            ``UNLOAD`` ficam órfãos na pasta da partição até
-            ``vacuum_keeping_snapshots(..., full=True)``) e na troca dos arquivos pelo ``Double``
-            não finito, na abertura do DuckDB (``serialize_db.resources.environment_limits``).
+            MiB, ou negativa (``serialize_db.resources.environment_limits``), lida uma vez antes do
+            commit, que não acontece: no registro, os arquivos do ``UNLOAD`` ficam órfãos na pasta
+            da partição até ``vacuum_keeping_snapshots(..., full=True)``; na troca dos arquivos
+            pelo ``Double`` não finito, ficam no ``staging_prefix`` até o ``cleanup``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         # O valor e a raiz conferidos antes do primeiro comando: um valor recusado no registro

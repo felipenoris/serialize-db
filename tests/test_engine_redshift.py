@@ -66,6 +66,7 @@ from serialize_db.engine.redshift import (
     schema_from_row_description,
 )
 from serialize_db.errors import ContractError, RegistrationRefused, SandboxError, SqlError
+from serialize_db.resources import environment_limits
 from serialize_db.storage import Storage
 
 
@@ -1536,6 +1537,69 @@ def test_export_registers_the_unloaded_files_and_swaps_on_nonfinite(
             )
         assert len(connection.commands) == commands
     engine.cleanup()
+
+
+@pytest.mark.local
+def test_export_swap_reads_the_memory_once_before_the_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    local_location: LocalLocation,
+) -> None:
+    """A troca lê a memória uma vez, antes do commit, e a releitura usa essa leitura: uma segunda
+    leitura, que recusaria depois do commit, não acontece. A recusa na leitura sobe sem versão
+    nova, com os arquivos do ``UNLOAD`` no ``staging_prefix`` até o ``cleanup``."""
+    storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
+    uri = storage.uri_of("prd/cad_lancamentos_projetados")
+    delta.create_table(uri, PROJECTED, storage)
+    rows = entry_rows(MONTHS[1], 1, 1000, PROJECTED)
+    values = [float("nan")] + [number / 4 for number in range(2, 1001)]
+    with_nan = rows.set_column(rows.schema.get_field_index("valor"), "valor", pa.array(values))
+    connection = FakeConnection(storage, unload_rows=with_nan.drop_columns(["data_base_str"]))
+    engine = fake_engine(monkeypatch, connection, storage)
+
+    # A primeira leitura dá os limites do ambiente; outra recusaria, como a memória esgotada entre
+    # o commit e a releitura.
+    readings = []
+
+    def limits_once() -> dict[str, object]:
+        readings.append("leitura")
+        if len(readings) > 1:
+            raise SandboxError("memória disponível de 1.5 MiB: o DuckDB não abre com memory_limit")
+        return environment_limits()
+
+    monkeypatch.setattr(redshift, "environment_limits", limits_once)
+    monkeypatch.setattr(delta, "environment_limits", limits_once)
+    version = engine.export_partition(
+        PROJECTED,
+        uri,
+        MONTHS[1],
+        METADATA,
+        expected_rows=1000,
+        columns_without_min_max=["valor"],
+    )
+    assert version == 1
+    assert readings == ["leitura"]
+    assert delta.open_table(uri, storage).to_pyarrow_table().num_rows == 1000
+
+    # A recusa na leitura antes do commit: a versão fica, e o UNLOAD fica no staging_prefix.
+    def refusing() -> dict[str, object]:
+        raise SandboxError("memória disponível de 1.5 MiB: o DuckDB não abre com memory_limit")
+
+    monkeypatch.setattr(redshift, "environment_limits", refusing)
+    staged_before = storage.list_files(engine.staging_prefix, ".parquet")
+    with pytest.raises(SandboxError, match=r"1\.5 MiB"):
+        engine.export_partition(
+            PROJECTED,
+            uri,
+            MONTHS[1],
+            METADATA,
+            expected_rows=1000,
+            columns_without_min_max=["valor"],
+        )
+    assert delta.open_table(uri, storage).version() == 1
+    staged_after = storage.list_files(engine.staging_prefix, ".parquet")
+    assert len(staged_after) > len(staged_before)
+    engine.cleanup()
+    assert storage.list_files(engine.staging_prefix) == []
 
 
 # ---------------------------------------------------------------- no esquema autorizado

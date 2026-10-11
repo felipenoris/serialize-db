@@ -39,6 +39,7 @@ from consistency_lib import (
 from serialize_db import delta, schema
 from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import ConflictError, RegistrationRefused
+from serialize_db.resources import environment_limits
 from serialize_db.storage import Storage
 
 MONTHS = ["2026-06-30", "2026-07-31", "2026-08-31"]
@@ -362,13 +363,13 @@ def check_read_back(
     problems = []
     before = delta.open_table(copy_uri, storage).version()
     try:
-        delta.read_back(copy_uri, TUDO, MONTHS[0], 3000, storage)
+        delta.read_back(copy_uri, TUDO, MONTHS[0], 3000, storage, environment_limits())
     except RegistrationRefused as error:
         problems.append(f"read_back recusou a contagem certa: {error}")
     if delta.open_table(copy_uri, storage).version() != before:
         problems.append("read_back com a contagem certa mudou a versão")
     try:
-        delta.read_back(copy_uri, TUDO, MONTHS[0], 2999, storage)
+        delta.read_back(copy_uri, TUDO, MONTHS[0], 2999, storage, environment_limits())
         problems.append("read_back aceitou a contagem errada")
     except RegistrationRefused as error:
         print(f"   read_back recusou como esperado: {str(error)[:120]}...")
