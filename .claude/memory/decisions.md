@@ -2288,8 +2288,8 @@ cases went to him as decision cards, one at a time.
   protocols): `DuckDBStream`, `DuckDBAppender`, `RedshiftStream` and `RedshiftAppender` enter the
   `__all__` of their engine modules, with the constructor, `read_next_batch`, `read_all`, `write`
   and `close` documented by the field standard. The user's rule (23:57 UTC): "Os tipos que
-  retornam de funções públicas entendo que são públicos também"; whether it makes
-  `reader._ReaderStream` public is in `OPEN_QUESTIONS.md`.
+  retornam de funções públicas entendo que são públicos também"; it makes
+  `reader._ReaderStream` public too (the last bullet).
 - Case 3 (2026-10-11, 00:02 UTC): the twelve protected methods of public classes stay in pdoc, and
   the level tag opens every docstring instead ("The level tag opens every docstring").
 - Case 4 (2026-10-11, 01:08 UTC, "Só em resources"): `environment_limits` is public in
@@ -2297,8 +2297,12 @@ cases went to him as decision cards, one at a time.
   leaves the `__all__` and the imports of `serialize_db.engine.duckdb`; the migration script,
   `probes/duckdb_threads.py` and `docs/tecnologias.md` import it from `resources`, with no alias,
   the one import path the evaluation changes.
+- The follow-up of case 2 (2026-10-11, 01:51 UTC, "Pública" on the card): `reader._ReaderStream`
+  becomes `ReaderStream`, in `reader.__all__`, documented by the field standard, and
+  `DeltaReader.stream` is annotated with it; `RedshiftReader.stream` keeps `-> BatchStream`,
+  because it returns the engine's public `RedshiftStream`.
 
 `delta.py`, `publication.py`, `schema.py`, `parquet_import.py`, `engine/duckdb.py`,
-`engine/redshift.py`, `resources.py`, `scripts/migrate_parquet_to_delta.py`,
+`engine/redshift.py`, `resources.py`, `reader.py`, `scripts/migrate_parquet_to_delta.py`,
 `probes/duckdb_threads.py`, `docs/tecnologias.md`, `CLAUDE.md` ("Repository index"),
 `OPEN_QUESTIONS.md`

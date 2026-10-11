@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     from serialize_db.engine.redshift import RedshiftConfig
     from serialize_db.execution import Database
 
-__all__ = ["DeltaReader", "RedshiftReader", "open_redshift"]
+__all__ = ["DeltaReader", "ReaderStream", "RedshiftReader", "open_redshift"]
 
 log = logging.getLogger("serialize_db.reader")
 
@@ -181,23 +181,48 @@ def _resolve_source(
 # ---------------------------------------------------------------- o stream do leitor Delta
 
 
-class _ReaderStream:
-    """[private] O ``BatchStream`` do motor com o leitor Delta preso até o ``close``: o leitor fora
-    de uma variável, como em ``db.open_delta().stream(...)``, não é coletado enquanto o stream está
-    aberto, e o finalizador dele não fecha o motor debaixo da consulta."""
+class ReaderStream:
+    """[public] Os lotes de uma consulta do leitor Delta: o ``BatchStream`` do motor com o leitor
+    preso até o ``close``.
+
+    O leitor fora de uma variável, como em ``db.open_delta().stream(...)``, não é coletado
+    enquanto o stream está aberto, e o finalizador dele não fecha o motor debaixo da consulta. Os
+    lotes, o esquema, o ``for``, o ``with`` e ``__arrow_c_stream__`` são os do stream do motor
+    (``DuckDBStream``); ``DeltaReader.stream`` o devolve.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with reader.stream(sa.select(Lancamento.__table__)) as stream:
+            first = stream.read_next_batch()
+            rest = stream.read_all()
+    """
+
+    schema: pa.Schema
+    """[public] O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
 
     def __init__(
         self,
         reader: DeltaReader,
         stream: BatchStream,
     ) -> None:
+        """[public] Embrulha o stream do motor e segura o leitor até o ``close``.
+
+        :param reader: o leitor Delta que abriu a consulta, solto no ``close``.
+        :param stream: o stream do motor DuckDB do leitor, aberto por ``DuckDBEngine.stream``.
+        """
         self._reader: DeltaReader | None = reader
         self._stream = stream
         self.schema = stream.schema
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """[private] O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último
-        lote."""
+        """[public] O próximo lote, na ordem da consulta; o erro que ela encontra depois do último
+        lote entregue sobe aqui, como no ``DuckDBStream``.
+
+        :return: o lote, no esquema ``schema``.
+        :raises StopIteration: no fim dos lotes.
+        """
         return self._stream.read_next_batch()
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
@@ -205,7 +230,10 @@ class _ReaderStream:
         yield from self._stream
 
     def read_all(self) -> pa.Table:
-        """[private] Os lotes que faltam numa ``pa.Table``."""
+        """[public] Os lotes que faltam numa ``pa.Table``.
+
+        :return: a tabela, no esquema ``schema``; vazia depois do último lote.
+        """
         return self._stream.read_all()
 
     def __arrow_c_stream__(
@@ -217,12 +245,12 @@ class _ReaderStream:
         return batches.__arrow_c_stream__(requested_schema)
 
     def close(self) -> None:
-        """[private] Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
+        """[public] Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
         segura."""
         self._stream.close()
         self._reader = None
 
-    def __enter__(self) -> _ReaderStream:
+    def __enter__(self) -> ReaderStream:
         return self
 
     def __exit__(
@@ -462,7 +490,7 @@ class DeltaReader:
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
-    ) -> BatchStream:
+    ) -> ReaderStream:
         """[public] Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a
         memória limitada a 64 MiB de lotes.
 
@@ -480,9 +508,9 @@ class DeltaReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote.
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto, que segura o leitor até o
-            ``close``; o ``BatchStream.close`` cancela a consulta que ainda roda e apaga o arquivo
-            de transbordo.
+        :return: o ``ReaderStream`` dos lotes, um ``BatchStream`` gerenciador de contexto, que
+            segura o leitor até o ``close``; o ``close`` cancela a consulta que ainda roda e apaga
+            o arquivo de transbordo.
         :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
             modelo sem view no leitor, sem chamar o motor.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
@@ -493,7 +521,7 @@ class DeltaReader:
             descreve o ``DuckDBEngine.stream``.
         """
         self._check_readable(statement_or_sql)
-        return _ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))
+        return ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))
 
     @contextlib.contextmanager
     def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
