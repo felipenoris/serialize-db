@@ -105,9 +105,9 @@ class RegistrationRefused(Exception):
     reprovou depois dele e ``restore`` voltou a versão anterior.
 
     A mensagem nomeia a conferência e, nas de cada arquivo, o arquivo; os arquivos ficam órfãos na
-    pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)``
-    (``serialize-db vacuum --full --apply``). ``deep_copy`` também a levanta, no destino que
-    registra um arquivo fora da versão copiada, no destino cujo esquema difere do da versão sem
+    pasta da tabela até um ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da
+    retenção (``serialize-db vacuum --full --apply``). ``deep_copy`` também a levanta, no destino
+    que registra um arquivo fora da versão copiada, no destino cujo esquema difere do da versão sem
     partição copiada que o trocasse, e na contagem da cópia diferente da soma das ações.
 
     Exemplo:

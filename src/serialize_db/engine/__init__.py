@@ -153,6 +153,10 @@ class Appender(Protocol):
         """[public] Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
         gravação, que bloqueia quando está cheia.
 
+        Depois de um ``close`` com erro, ou com a thread de gravação encerrada por um erro, o
+        ``write`` levanta esse erro de novo: a exceção que saiu do ``with``, o lote recusado ou
+        o erro da gravação.
+
         Exemplo:
 
         .. code-block:: python
@@ -163,8 +167,7 @@ class Appender(Protocol):
         :raises serialize_db.errors.ContractError: ``data`` de outro tipo, recusado sem afetar o
             appender, que segue recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas
             diferentes das do primeiro lote, e então o ``close`` não insere nada.
-        :raises RuntimeError: o ``write`` depois do ``close``, ou com a thread de gravação já
-            encerrada; quando ela terminou por um erro, sobe esse erro.
+        :raises RuntimeError: o ``write`` depois de um ``close`` que terminou sem erro.
         """
 
     def close(self) -> None:
@@ -505,15 +508,17 @@ class Engine(Protocol):
         :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
             tabela particionada, ou um valor numa tabela sem partição.
         :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
-            commit, e os arquivos gravados ficam órfãos na pasta da partição; ou a releitura desfez
-            o commit.
+            commit, e os arquivos gravados ficam órfãos na pasta da partição até um
+            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção; ou a
+            releitura desfez o commit.
         :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
             mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-            2 MiB, ou negativa, lida no registro antes do commit
-            (``serialize_db.resources.environment_limits``), sem commit; os arquivos gravados ficam
-            órfãos na pasta da partição.
+            2 MiB, ou negativa (``serialize_db.resources.environment_limits``), lida antes do
+            commit, que não acontece: os arquivos gravados ficam órfãos na pasta da partição até
+            um ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção, ou, na
+            troca do motor Redshift, no ``staging_prefix`` até o ``cleanup``.
         """
 
     def cleanup(self) -> None:

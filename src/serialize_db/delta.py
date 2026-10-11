@@ -1057,7 +1057,8 @@ def register_files(
         numa tabela sem partição ou fora da regra.
     :raises ValueError: ``uri`` fora da raiz de ``storage``.
     :raises serialize_db.errors.RegistrationRefused: uma conferência reprovou, sem commit, e o
-        arquivo fica órfão na pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)``
+        arquivo fica órfão na pasta da tabela até um
+        ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção
         (``serialize-db vacuum --full --apply``); ou a releitura reprovou e desfez o commit.
     :raises serialize_db.errors.ExecutionConflict: um segundo registro da mesma partição a partir da
         mesma versão.

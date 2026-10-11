@@ -1141,8 +1141,10 @@ def test_appender_inserts_in_one_statement_on_close(
     setup: Setup,
 ) -> None:
     """A tabela não muda antes do ``close``; a exceção do cliente, o lote recusado pelo ``cast`` e
-    o erro do ``INSERT`` não deixam linha; ``rows`` conta as linhas; o appender sem lote não muda a
-    tabela, e o segundo appender acrescenta ao que o primeiro inseriu."""
+    o erro do ``INSERT`` não deixam linha, e a exceção do cliente sobe de novo num ``write`` depois
+    do ``close``; o ``close`` que recebe a exceção sem o ``with`` não a levanta; ``rows`` conta as
+    linhas; o appender sem lote não muda a tabela, e o segundo appender acrescenta ao que o
+    primeiro inseriu."""
     engine = setup.engine
     engine.create_table(PROJECTED)
     seen = []
@@ -1162,6 +1164,15 @@ def test_appender_inserts_in_one_statement_on_close(
         with engine.appender(other) as appender:
             appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
             raise ValueError("falha do cliente")
+    assert count_of(engine, "cad_segunda") == 0
+    with pytest.raises(ValueError, match="falha do cliente"):
+        appender.write(entry_rows(MONTHS[0], 11, 10, PROJECTED))
+
+    # O close com a exceção do cliente, sem o with, apaga o arquivo sem inserir e não a levanta.
+    appender = engine.appender(other)
+    appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+    appender.close(ValueError("falha do cliente"))
+    assert spool_files(engine) == []
     assert count_of(engine, "cad_segunda") == 0
 
     # O lote recusado pelo cast não deixa linha, nem as do lote aceito antes dele.
@@ -1203,7 +1214,8 @@ def test_appender_second_close_does_nothing(
     setup: Setup,
 ) -> None:
     """O ``close`` explícito dentro do ``with`` insere os lotes, e o ``close`` da saída do ``with``
-    não faz nada: as linhas entram uma vez, sem erro."""
+    não faz nada: as linhas entram uma vez, sem erro; o ``write`` depois do ``close`` levanta
+    ``RuntimeError``."""
     engine = setup.engine
     engine.create_table(PROJECTED)
     with engine.appender(PROJECTED) as appender:
@@ -1213,6 +1225,8 @@ def test_appender_second_close_does_nothing(
     assert count_of(engine, PROJECTED.name) == 10
     assert appender.rows == 10
     assert spool_files(engine) == []
+    with pytest.raises(RuntimeError, match="terminou antes do fim da fila"):
+        appender.write(entry_rows(MONTHS[0], 11, 10, PROJECTED))
 
 
 def test_appender_write_refusals(

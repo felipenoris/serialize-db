@@ -46,6 +46,7 @@ import uuid
 from collections.abc import Collection, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
+import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -861,16 +862,21 @@ def test_statements_serialize_on_the_single_session(
         assert previous[1] <= following[0]
 
     # Um comando de outra thread enquanto o stream ainda lê os arquivos: o lock é reentrante, e
-    # só outra thread prova que ele soltou. O pool sai sem esperar a thread, para que um lock
-    # preso falhe o teste pelo timeout em vez de travá-lo.
+    # só outra thread prova que ele soltou. A thread é daemon e a espera tem limite: um lock preso
+    # falha o teste em vez de travá-lo, e o processo do pytest ainda termina.
     with engine.stream(sa.select(ENTRIES), batch_size=10) as stream:
         first = stream.read_next_batch()
         started = time.perf_counter()
-        pool = ThreadPoolExecutor(max_workers=1)
-        try:
-            pool.submit(engine.query, "SELECT 1").result(timeout=5)
-        finally:
-            pool.shutdown(wait=False)
+        results = []
+
+        def query_from_another_thread() -> None:
+            results.append(engine.query("SELECT 1"))
+
+        command = threading.Thread(target=query_from_another_thread, daemon=True)
+        command.start()
+        command.join(timeout=5)
+        assert not command.is_alive()
+        assert len(results) == 1
         assert time.perf_counter() - started < 1.0
         assert first.num_rows == 10
         assert sum(batch.num_rows for batch in stream) == 290
@@ -1032,8 +1038,9 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
     grava ao lado dele o manifesto com o arquivo como a única entrada, obrigatória e com o
     tamanho gravado, roda ``BEGIN``, a staging temporária com o ``COPY ... MANIFEST`` e o
     ``INSERT`` com ``JSON_PARSE``, e ``COMMIT``, e apaga o arquivo e o manifesto; o appender sem
-    lote roda só a conferência da tabela; uma exceção no ``with`` não roda comando algum; um lote
-    recusado pelo ``cast`` também não."""
+    lote roda só a conferência da tabela; uma exceção no ``with`` não roda comando algum e sobe de
+    novo num ``write`` depois do ``close``; o ``close`` que recebe a exceção sem o ``with`` também
+    não roda comando e não a levanta; um lote recusado pelo ``cast`` também não roda comando."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     connection = FakeConnection(storage, existing={f"{PREFIX}cad_lancamentos"})
     engine = fake_engine(monkeypatch, connection, storage)
@@ -1125,6 +1132,19 @@ def test_create_table_and_appender_write_the_file_and_copy_in_a_transaction(
         f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0'
     ]
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+    # O write depois do close com a exceção do cliente levanta essa exceção de novo.
+    with pytest.raises(RuntimeError, match="erro plantado"):
+        appender.write(entry_rows(MONTHS[0], 11, 10, PROJECTED))
+
+    # O close com a exceção do cliente, sem o with, apaga o arquivo sem comando e não a levanta.
+    before = len(connection.commands)
+    appender = engine.appender(PROJECTED)
+    appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED))
+    appender.close(RuntimeError("erro plantado"))
+    assert connection.texts()[before:] == [
+        f'SELECT 1 FROM "esquema"."{PREFIX}cad_lancamentos_projetados" LIMIT 0'
+    ]
+    assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
 
     # O lote recusado pelo cast.
     with pytest.raises(ContractError, match="id_lancamento"):
@@ -1179,7 +1199,7 @@ def test_appender_second_close_does_nothing(
     local_location: LocalLocation,
 ) -> None:
     """O ``close`` explícito dentro do ``with``: a saída do ``with`` chama o ``close`` de novo, e
-    ele não roda outro ``COPY``."""
+    ele não roda outro ``COPY``; o ``write`` depois do ``close`` levanta ``RuntimeError``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     connection = FakeConnection(storage, existing={f"{PREFIX}cad_contas"})
     engine = fake_engine(monkeypatch, connection, storage)
@@ -1190,6 +1210,8 @@ def test_appender_second_close_does_nothing(
     assert len([text for text in connection.texts() if text.startswith("COPY")]) == 1
     assert connection.texts().count("COMMIT") == 1
     assert storage.list_files(f"prd/staging/{EXECUTION_ID}") == []
+    with pytest.raises(RuntimeError, match="terminou antes do fim da fila"):
+        appender.write(account_rows(["C"]))
 
 
 @pytest.mark.local
@@ -1544,9 +1566,10 @@ def test_export_swap_reads_the_memory_once_before_the_commit(
     monkeypatch: pytest.MonkeyPatch,
     local_location: LocalLocation,
 ) -> None:
-    """A troca lê a memória uma vez, antes do commit, e a releitura usa essa leitura: uma segunda
-    leitura, que recusaria depois do commit, não acontece. A recusa na leitura sobe sem versão
-    nova, com os arquivos do ``UNLOAD`` no ``staging_prefix`` até o ``cleanup``."""
+    """A troca lê a memória uma vez, antes do commit, e a releitura usa essa leitura: a conexão do
+    DuckDB da troca e a da releitura recebem os mesmos limites, e uma segunda leitura, que
+    recusaria depois do commit, não acontece. A recusa na leitura sobe sem versão nova, com os
+    arquivos do ``UNLOAD`` no ``staging_prefix`` até o ``cleanup``."""
     storage = Storage.for_uri(local_location.child(f"redshift/{uuid.uuid4().hex[:8]}"))
     uri = storage.uri_of("prd/cad_lancamentos_projetados")
     delta.create_table(uri, PROJECTED, storage)
@@ -1561,13 +1584,26 @@ def test_export_swap_reads_the_memory_once_before_the_commit(
     readings = []
 
     def limits_once() -> dict[str, object]:
-        readings.append("leitura")
-        if len(readings) > 1:
+        if readings:
             raise SandboxError("memória disponível de 1.5 MiB: o DuckDB não abre com memory_limit")
-        return environment_limits()
+        readings.append(environment_limits())
+        return readings[0]
+
+    # Cada conexão do DuckDB guarda os limites que recebeu.
+    configs = []
+    original = Storage.duckdb_connect
+
+    def recording(
+        self: Storage,
+        *args: object,
+        **options: object,
+    ) -> duckdb.DuckDBPyConnection:
+        configs.append(options.get("config"))
+        return original(self, *args, **options)
 
     monkeypatch.setattr(redshift, "environment_limits", limits_once)
     monkeypatch.setattr(delta, "environment_limits", limits_once)
+    monkeypatch.setattr(Storage, "duckdb_connect", recording)
     version = engine.export_partition(
         PROJECTED,
         uri,
@@ -1577,7 +1613,11 @@ def test_export_swap_reads_the_memory_once_before_the_commit(
         columns_without_min_max=["valor"],
     )
     assert version == 1
-    assert readings == ["leitura"]
+    assert len(readings) == 1
+    # A conexão da troca e a da releitura recebem a única leitura.
+    assert len(configs) == 2
+    for config in configs:
+        assert config is readings[0]
     assert delta.open_table(uri, storage).to_pyarrow_table().num_rows == 1000
 
     # A recusa na leitura antes do commit: a versão fica, e o UNLOAD fica no staging_prefix.

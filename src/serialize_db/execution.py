@@ -1018,10 +1018,13 @@ class Execution:
         :raises serialize_db.errors.LogUnavailable: um arquivo do log entre a versão fixada e a
             atual não existe.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-            2 MiB, ou negativa, lida por ``environment_limits`` no registro de cada partição, antes
-            do commit: nada entra no log, e o arquivo que o motor gravou fica órfão na pasta da
-            partição até ``vacuum_keeping_snapshots(..., full=True)``; no motor Redshift, também sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
+            2 MiB, ou negativa (``serialize_db.resources.environment_limits``), lida em cada
+            partição antes do commit: nada entra no log, e os arquivos que o motor gravou ficam
+            órfãos na pasta da partição até um
+            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção, ou, na
+            troca do motor Redshift pelo ``Double`` não finito, no ``staging_prefix`` até o
+            ``cleanup``; no motor Redshift, também sem ``iam_role``, a sessão ``boto3`` sem
+            credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: no motor Redshift, a falta do manifesto depois de um ``UNLOAD``
             de alguma linha.
         """

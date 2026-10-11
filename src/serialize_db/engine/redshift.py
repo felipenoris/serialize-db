@@ -1172,6 +1172,10 @@ class RedshiftAppender:
         """[public] Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote
         recusado faz o appender não inserir nada.
 
+        Depois de um ``close`` com erro, ou com a thread de gravação encerrada por um erro, o
+        ``write`` levanta esse erro de novo: a exceção que o ``close`` recebeu do ``with``, o
+        lote recusado ou o erro da gravação.
+
         Exemplo:
 
         .. code-block:: python
@@ -1184,8 +1188,7 @@ class RedshiftAppender:
             o conjunto de colunas do primeiro.
         :raises serialize_db.errors.ContractError: outro tipo de dado, um valor fora do contrato ou
             um conjunto de colunas diferente do primeiro lote.
-        :raises RuntimeError: o ``write`` depois do ``close``, ou com a thread de gravação já
-            encerrada; quando ela terminou por um erro, sobe esse erro.
+        :raises RuntimeError: o ``write`` depois de um ``close`` que terminou sem erro.
         """
         for batch in checked_batches(data):
             try:
@@ -1236,11 +1239,15 @@ class RedshiftAppender:
         .. code-block:: python
 
             appender = engine.appender(Projetado.__table__)
-            appender.write(batch)
-            appender.close()   # o with do appender chama close na saída
+            try:
+                appender.write(batch)
+            except BaseException as error:
+                appender.close(error)   # só apaga o arquivo, como a saída do with com exceção
+                raise
+            appender.close()   # carrega os lotes
 
-        :param error: a exceção que saiu do bloco ``with``, passada pelo ``__exit__``; com ela nada
-            é carregado, e ela segue pelo ``with``; ``None`` carrega.
+        :param error: a exceção do cliente, que o ``__exit__`` passa na saída do ``with``; com ela
+            nada é carregado, e o ``close`` não a levanta; ``None`` carrega.
         :raises serialize_db.errors.ContractError: o lote que o ``write`` recusou, de novo, no
             ``close`` sem ``error``.
         :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu depois
@@ -2459,8 +2466,9 @@ class RedshiftEngine:
         :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
             tabela particionada, ou um valor numa tabela sem partição.
         :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
-            commit, e os arquivos do ``UNLOAD`` ficam órfãos na pasta da partição até
-            ``vacuum_keeping_snapshots(..., full=True)``; ou a releitura desfez o commit.
+            commit, e os arquivos do ``UNLOAD`` ficam órfãos na pasta da partição até um
+            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção; ou a
+            releitura desfez o commit.
         :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
             mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, antes do ``UNLOAD``, sem arquivo
@@ -2469,8 +2477,9 @@ class RedshiftEngine:
             credenciais para o ``UNLOAD``; ou a memória que o processo ainda pode usar abaixo de 2
             MiB, ou negativa (``serialize_db.resources.environment_limits``), lida uma vez antes do
             commit, que não acontece: no registro, os arquivos do ``UNLOAD`` ficam órfãos na pasta
-            da partição até ``vacuum_keeping_snapshots(..., full=True)``; na troca dos arquivos
-            pelo ``Double`` não finito, ficam no ``staging_prefix`` até o ``cleanup``.
+            da partição até um ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da
+            retenção; na troca dos arquivos pelo ``Double`` não finito, ficam no
+            ``staging_prefix`` até o ``cleanup``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         # O valor e a raiz conferidos antes do primeiro comando: um valor recusado no registro
