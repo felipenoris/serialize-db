@@ -514,12 +514,15 @@ def result_cache_query(
     table: str,
 ) -> str:
     """A consulta que conta no ``sys_query_history``, por ``result_cache_hit``, as consultas de
-    contagem sobre ``table`` desde ``since``, em segundos desde a época."""
+    contagem sobre ``table`` desde ``since``, em segundos desde a época. A vista lista também a
+    consulta em curso e as leituras anteriores, cujo texto cita ``count(`` e ``table``; o texto que
+    cita ``sys_query_history`` fica de fora."""
     moment = datetime.datetime.fromtimestamp(since, datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
     return (
         "SELECT result_cache_hit, count(*) AS n FROM sys_query_history "
         f"WHERE start_time >= '{moment}' AND query_type = 'SELECT' "
         f"AND query_text ILIKE '%count(%' AND query_text ILIKE '%{table}%' "
+        "AND query_text NOT ILIKE '%sys_query_history%' "
         "GROUP BY result_cache_hit ORDER BY result_cache_hit"
     )
 
