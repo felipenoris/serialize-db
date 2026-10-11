@@ -280,6 +280,12 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `RETENTION` (`delta`, que `tests/test_parquet_import.py` também lê) e `ARROW_ONLY` (`engine`),
   o alias `Task` (`_pool`) e os loggers `log` (seis módulos) e `command_log` (`publication`).
   Espera a palavra do usuário.
+- **O nível de `_schema_diff` pela intenção de uso.** A avaliação de 2026-10-11
+  (`api-publica/avaliacao-nomes-nao-publicos.md`, na biblioteca do projeto Claude) achou dois nomes
+  não públicos que um pipeline cliente usa. `delta.partition_values` ficou pública
+  (`decisions.md`, "The public `partition_values` (2026-10-11)"); `delta._schema_diff`, o diff
+  entre o modelo e a tabela Delta sem gravar nada, diria antes da execução se `publish_delta`
+  recusa a mudança do modelo. Espera o cartão do usuário: `schema_diff` pública ou privada.
 
 ## Achados das sondas de consistência de leitura e escrita
 

@@ -202,8 +202,9 @@ The standard every public function, method and class follows (user decision of 2
   package's `__all__` and the `_` prefix, a module-level name by the module's `__all__` and the
   prefix, a class member or attribute by its own prefix bounded by the class's level (a dunder takes
   the class's level, a nested function is private). A protected docstring names who uses it ("para
-  o motor Redshift") and no longer says "protegida". `tests/test_package.py` checks every file of
-  `src/serialize_db/`.
+  o motor Redshift") and no longer says "protegida". A name public by the evaluation of its
+  intended use opens with `[public] [uso do cliente]` ("Naming conventions").
+  `tests/test_package.py` checks every file of `src/serialize_db/`, the mark only after `[public]`.
 - **Fields.** `:param name:` for every parameter pdoc shows, in signature order, except `self` and
   `cls` (`*parts` is `:param parts:`); `:return:` when the annotation is not `None`, and for a
   context manager what `with` gives, and never on a property, which pdoc shows as an attribute whose
@@ -703,8 +704,11 @@ the interface client code imports, which `pdoc` documents; protected, used by an
 library; private, used only inside its module. A name, a function, a class or a constant, is public
 when the evaluation of its intended use finds that the package's users call, build or read it to
 write their pipelines, whether or not another module of the library also uses it; a type a public
-function returns is public too (user decisions of 2026-10-10 and 2026-10-11). Protected and private
-hold the names with no use intended for them, by who calls each inside the library. The module's
+function returns is public too (user decisions of 2026-10-10 and 2026-10-11). A name that
+evaluation made public, which the code that calls it would leave protected or private, carries the
+mark `[uso do cliente]` right after its level tag, and its docstring says that use, so the reason
+it is public stays beside it (user decision of 2026-10-11). Protected and private hold the names
+with no use intended for them, by who calls each inside the library. The module's
 `__all__` lists the public names and only those, so a module with a protected name declares
 `__all__` and `pdoc` leaves the protected one out; protected is unprefixed all the same, and private
 carries the `_` prefix; every docstring opens with its level's tag ("Docstrings"). A package's

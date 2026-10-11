@@ -8,9 +8,9 @@ o valor de uma partição, ``None`` numa tabela sem partição; o valor segue
 pasta.
 
 O ciclo de uma tabela começa no modelo: ``table_exists`` diz se há tabela na pasta,
-``create_table`` a cria na versão 0 e ``open_table`` a abre numa versão; ``_schema_diff`` lê o diff
-entre o modelo e o esquema dela, ``reconcile`` aplica o diff aditivo e recusa o destrutivo, que só
-``rewrite`` resolve, num commit.
+``create_table`` a cria na versão 0, ``open_table`` a abre numa versão e ``partition_values`` lista
+as partições com arquivo nela; ``_schema_diff`` lê o diff entre o modelo e o esquema dela,
+``reconcile`` aplica o diff aditivo e recusa o destrutivo, que só ``rewrite`` resolve, num commit.
 
 Uma partição entra por um de dois caminhos. ``register_files``, o caminho dos motores, registra no
 log os arquivos que outro escritor gravou na pasta da tabela, depois das conferências do rodapé de
@@ -119,6 +119,7 @@ __all__ = [
     "export_parquet",
     "history",
     "open_table",
+    "partition_values",
     "publish_partition",
     "read_snapshots",
     "reconcile",
@@ -1741,10 +1742,27 @@ def partition_values(
     dt: DeltaTable,
     partition_by: str | None,
 ) -> list[str | None]:
-    """[protected] Os valores de partição com algum arquivo na versão carregada, em ordem de texto;
-    numa tabela sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Para o
-    motor Redshift, a publicação e a carga de ``serialize_db.parquet_import``, que carregam uma
-    partição por vez."""
+    """[public] [uso do cliente] Os valores de partição com algum arquivo na versão carregada, em
+    ordem de texto.
+
+    O pipeline a usa para saber que partições uma tabela tem, como as da entrada que ainda faltam
+    na saída; ``serialize_db.execution.Execution.previous_partitions`` dá só os valores até a
+    partição da execução. A leitura é a das ações ``add`` da versão, sem abrir arquivo de dados: a
+    partição cujos arquivos um ``delete`` tirou do log fica de fora.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        partition_values(open_table(uri, storage), "data_str")      # ["2026-07-31", "2026-08-31"]
+        partition_values(open_table(uri, storage, 1), "data_str")   # ["2026-08-31"]
+
+    :param dt: a tabela aberta por ``open_table``, na versão lida.
+    :param partition_by: a coluna de partição, ``table_options(table).partition_by``; ``None`` numa
+        tabela sem partição.
+    :return: os valores em ordem de texto, cada um uma vez; numa tabela sem partição, ``[None]``
+        quando ela tem arquivo e ``[]`` quando não tem.
+    """
     actions = pa.table(dt.get_add_actions(flatten=True))
     if actions.num_rows == 0:
         return []

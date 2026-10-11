@@ -2499,3 +2499,39 @@ request came while the evaluation the user asked at 17:41 UTC ran: whether a cli
 any name marked private or protected, functions, names and constants alike.
 
 `CLAUDE.md` ("Naming conventions").
+
+## The public `partition_values` (2026-10-11)
+
+The evaluation the user asked at 17:41 UTC, `api-publica/avaliacao-nomes-nao-publicos.md` in the
+Claude project's library, read every protected and private name against what a client pipeline does
+by the public API (the tutorial of `docs/index.md`, `docs/operacao.md`, `tests/test_pipeline.py` and
+`tests/client_model/`) and found two names with a client use the public API lacks:
+`delta.partition_values` and `delta._schema_diff`. Asked on a card whether `partition_values`
+becomes public ("Pública", recommended, or "Protegida"), the user chose "Pública" (18:05 UTC): the
+function lists the partition values with a file in a loaded version of a Delta table, which an
+incremental pipeline compares between its input and its output and a pipeline reads to check its
+output after `run.publish_delta`, and `run.previous_partitions` gives only the values up to the
+run's partition and refuses a run without one. The name enters the `__all__` of `delta` with the
+public docstring, the module docstring names it in the table's cycle, and `docs/index.md` beside
+`run.previous_partitions`; no import path changes.
+`tests/test_delta.py::test_partition_values_lists_the_partitions_with_files` fails without the
+`sorted` of the set.
+
+`src/serialize_db/delta.py`, `docs/index.md`, `tests/test_delta.py`.
+
+## The mark of a name public by its intended use (2026-10-11)
+
+The user asked (2026-10-11, 18:06 UTC), right after choosing the public `partition_values`: "Crie
+uma marca na docstring dos nomes que estamos decidindo como públicas considerando a intenção por
+uso de clientes. Coloque esta regra nos nossos critérios. Assim poderemos saber futuramente o
+motivo de determinados nomes terem sido marcados como públicos." The mark is `[uso do cliente]`,
+right after the level tag, a wording the user did not name: a docstring opens with
+`[public] [uso do cliente]` when the evaluation of the name's intended use made it public and the
+code that calls it would leave it protected or private, and its prose says the client's use.
+`partition_values` is the first.
+`tests/test_package.py::test_the_client_use_mark_follows_only_the_public_tag` refuses the mark
+anywhere but right after `[public]`, and the tag test refuses `[public]` on a name that is not
+public.
+
+`CLAUDE.md` ("Naming conventions", "Docstrings"), `src/serialize_db/delta.py`,
+`tests/test_package.py`.

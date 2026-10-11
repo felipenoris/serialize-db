@@ -499,7 +499,8 @@ cada tabela em cada chamada, e a página de cada motor traz o exemplo.
 O terceiro argumento do `Execution`, opcional, é a partição da execução, `run.partition`:
 `run.previous_partitions` devolve as partições até ela, e o log `serialize_db.execution` a registra
 na abertura e no fim da execução. `run.audit` e `run.publish_delta` recebem as partições por
-argumento.
+argumento. `serialize_db.delta.partition_values` lista as partições com arquivo numa versão da
+tabela, sem o limite da partição da execução, como as da entrada que ainda faltam na saída.
 
 `run.publish_delta` exige a auditoria aprovada das partições na própria execução, salvo com
 `audit=False`, que dispensa a exigência com um aviso no log, e recusa com
