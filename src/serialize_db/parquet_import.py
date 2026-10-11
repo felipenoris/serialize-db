@@ -99,7 +99,6 @@ __all__ = [
     "import_order",
     "import_report",
     "import_table",
-    "partition_query",
 ]
 
 log = logging.getLogger("serialize_db.parquet_import")
@@ -314,7 +313,8 @@ def partition_query(
     table: sa.Table,
     value: str | None,
 ) -> str:
-    """[public] O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato.
+    """[protected] O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato; só
+    ``import_table`` a chama.
 
     A pasta inteira por ``read_parquet`` sem ``hive_partitioning`` e cada coluna em ``CAST`` para
     o tipo de ``sql_type`` no dialeto do DuckDB; todo identificador entre aspas, porque ``to`` é

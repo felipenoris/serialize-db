@@ -64,11 +64,16 @@ import pyarrow as pa
 import sqlalchemy as sa
 
 from serialize_db import delta, parquet_import, schema
-from serialize_db.engine.duckdb import environment_limits
 from serialize_db.errors import ContractError
 from serialize_db.execution import Database
 from serialize_db.parquet_import import ImportReport
-from serialize_db.resources import available_cpus, available_memory, peak_rss_mb, physical_memory
+from serialize_db.resources import (
+    available_cpus,
+    available_memory,
+    environment_limits,
+    peak_rss_mb,
+    physical_memory,
+)
 
 # ---------------------------------------------------------------- o relatório
 

@@ -3543,17 +3543,17 @@ aceito dentro da consulta do `COPY`. É o `COPY` de
 
 Os limites entram na abertura da conexão ou por `SET`. A máquina muda de tamanho, então o pacote os
 lê do ambiente na abertura, nunca de um valor fixo (instrução do usuário de 2026-09-24).
-`environment_limits()`, de `serialize_db.resources`, que `serialize_db.engine.duckdb` publica, dá
-`threads` igual às CPUs que o processo pode usar e `memory_limit` igual a metade da memória que ele
-ainda pode usar; o motor e as conexões DuckDB de `serialize_db.delta` a aplicam. A memória lida
-abaixo de 2 MiB, ou negativa, é recusada com `SandboxError`: o DuckDB 1.5.5 não abre com `0MiB` e
-lê um valor negativo como o padrão dele, 80% da memória da máquina (sonda de 2026-10-01). Num
-contêiner Linux de 4 vCPUs com limite de cgroup de 13,4 GiB (2026-09-24):
+`environment_limits()`, de `serialize_db.resources`, dá `threads` igual às CPUs que o processo pode
+usar e `memory_limit` igual a metade da memória que ele ainda pode usar; o motor e as conexões
+DuckDB de `serialize_db.delta` a aplicam. A memória lida abaixo de 2 MiB, ou negativa, é recusada
+com `SandboxError`: o DuckDB 1.5.5 não abre com `0MiB` e lê um valor negativo como o padrão dele,
+80% da memória da máquina (sonda de 2026-10-01). Num contêiner Linux de 4 vCPUs com limite de
+cgroup de 13,4 GiB (2026-09-24):
 
 ```python
 # Memória, threads e pasta de transbordo definidos na abertura da conexão e conferidos no catálogo.
 import duckdb
-from serialize_db.engine.duckdb import environment_limits
+from serialize_db.resources import environment_limits
 
 limits = environment_limits()   # as CPUs do processo e metade da memória que ele ainda pode usar
 # {'threads': 4, 'memory_limit': '6771MiB'}

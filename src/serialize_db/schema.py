@@ -80,7 +80,6 @@ __all__ = [
     "check_models",
     "check_partition_value",
     "check_schema_files",
-    "column_ddl",
     "ddl",
     "delta_schema",
     "quoted",
@@ -566,7 +565,8 @@ def column_ddl(
     column: sa.Column,
     dialect: Dialect,
 ) -> str:
-    """[public] A linha da coluna no ``CREATE TABLE``: nome entre aspas, tipo e ``NOT NULL``.
+    """[protected] A linha da coluna no ``CREATE TABLE``: nome entre aspas, tipo e ``NOT NULL``;
+    para ``ddl`` e para a publicação.
 
     Exemplo:
 

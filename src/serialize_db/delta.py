@@ -107,27 +107,22 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 __all__ = [
-    "CopyManifest",
     "RegisteredFile",
     "SchemaDiff",
     "archive_snapshot",
     "channel_snapshot",
     "commit_metadata",
     "compact",
-    "copy_manifest",
     "create_table",
     "deep_copy",
     "export_parquet",
     "history",
-    "max_key",
     "open_table",
     "publish_partition",
-    "read_back",
     "read_snapshots",
     "reconcile",
     "register_files",
     "rewrite",
-    "schema_diff",
     "set_channel",
     "snapshot",
     "snapshot_versions",
@@ -219,8 +214,8 @@ class SchemaDiff:
 
 @dataclasses.dataclass(frozen=True)
 class CopyManifest:
-    """[public] Um manifesto do ``COPY ... MANIFEST`` do Redshift e as colunas que cada arquivo dele
-    tem.
+    """[protected] Um manifesto do ``COPY ... MANIFEST`` do Redshift e as colunas que cada arquivo
+    dele tem, o retorno de ``copy_manifest``; para a publicação.
 
     Exemplo:
 
@@ -231,9 +226,9 @@ class CopyManifest:
     """
 
     uri: str
-    """[public] A URI do manifesto."""
+    """[protected] A URI do manifesto."""
     columns: tuple[str, ...]
-    """[public] Os nomes das colunas de cada arquivo do manifesto, na ordem do rodapé: a lista do
+    """[protected] Os nomes das colunas de cada arquivo do manifesto, na ordem do rodapé: a lista do
     ``COPY``, que leva cada coluna do arquivo à de mesmo nome da tabela."""
 
 
@@ -362,8 +357,9 @@ def max_key(
     dt: DeltaTable,
     column: str,
 ) -> int:
-    """[public] O maior valor de ``column`` na versão carregada, de que
-    ``serialize_db.execution.Execution.next_ids`` parte para a chave sequencial.
+    """[protected] O maior valor de ``column`` na versão carregada; para
+    ``serialize_db.execution.Execution.next_ids``, que parte dele para a chave sequencial, e para os
+    motores, que o leem na versão fixada.
 
     O máximo de ``max.<coluna>`` das ações ``add``, sem ler dados; a varredura da coluna quando um
     arquivo não tem a estatística, porque a estatística registrada é verdadeira ou omitida, nunca
@@ -1254,7 +1250,9 @@ def read_back(
     expected_rows: int,
     storage: Storage,
 ) -> None:
-    """[public] Relê a versão recém-commitada pelos dois leitores e a desfaz quando eles discordam.
+    """[protected] Relê a versão recém-commitada pelos dois leitores e a desfaz quando eles
+    discordam; para o motor Redshift, que a chama depois de trocar os arquivos da partição com
+    ``Double`` não finito.
 
     O delta-rs, pelo dataset Arrow, e o ``delta_scan`` do DuckDB, numa conexão própria, contam as
     linhas e leem o menor e o maior valor de cada coluna da primeira chave do modelo na partição.
@@ -1350,7 +1348,8 @@ def schema_diff(
     table: sa.Table,
     dt: DeltaTable,
 ) -> SchemaDiff:
-    """[public] O diff entre o esquema do contrato e o da versão carregada, sem alterar nada.
+    """[protected] O diff entre o esquema do contrato e o da versão carregada, sem alterar nada;
+    para ``reconcile``.
 
     Aditivos: coluna nova anulável (ou ``NOT NULL`` numa tabela ainda sem dados), ``NOT NULL``
     relaxado, ``CheckConstraint`` nova, comentário de tabela ou de coluna divergente. Destrutivos:
@@ -1786,8 +1785,9 @@ def copy_manifest(
     destination: str,
     storage: Storage,
 ) -> list[CopyManifest]:
-    """[public] Grava os manifestos do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão
-    nas partições pedidas, um manifesto por lista de colunas dos arquivos.
+    """[protected] Grava os manifestos do ``COPY ... MANIFEST`` do Redshift com os arquivos da
+    versão nas partições pedidas, um manifesto por lista de colunas dos arquivos; para a publicação
+    e para a carga de cada partição de ``ingest`` e ``pinned_delta`` do motor Redshift.
 
     O ``COPY`` de Parquet leva as colunas do arquivo às da tabela pela posição, e os arquivos de
     uma tabela Delta nem sempre têm as mesmas colunas na mesma ordem: o arquivo anterior a uma

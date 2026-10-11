@@ -87,8 +87,8 @@ import sqlalchemy as sa
 from deltalake.exceptions import DeltaError
 
 from serialize_db import delta
-from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine, environment_limits
-from serialize_db.resources import available_memory
+from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
+from serialize_db.resources import available_memory, environment_limits
 from serialize_db.schema import quoted, table_options
 from serialize_db.storage import Storage, prepare_environment
 

@@ -272,6 +272,17 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-10-10, a última às 02:33 de 2026-10-10, o Glue seguia com um banco e uma tabela Parquet, e o
   Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
+- **Nomes da API que esperam o usuário.** A avaliação da API pública de 2026-10-10
+  (`api-publica/avaliacao-api-publica.md`, na biblioteca do projeto Claude) deixou duas perguntas
+  depois das quatro decisões (`decisions.md`, "The public API after the evaluation of 2026-10-10").
+  Se `reader._ReaderStream`, o tipo que `DeltaReader.stream` e `RedshiftReader.stream` devolvem
+  anotado como `BatchStream`, vira pública (`ReaderStream`) pela regra do usuário de que o tipo
+  devolvido por uma função pública é público, perguntada em 2026-10-10 às 23:58 UTC. E se
+  `partition_query`, de `parquet_import`, e `sandbox_prefix`, de `engine.redshift`, que só o
+  próprio módulo chama, ganham o prefixo `_` da regra de níveis, o que muda
+  `tests/test_parquet_import.py`, `tests/test_engine_redshift.py` e a docstring de
+  `tests/proof_of_concept/test_stdlib.py`, ou ficam protegidas sem prefixo, como o cartão do caso 1
+  prometeu ("nenhuma importação muda").
 
 ## Achados das sondas de consistência de leitura e escrita
 

@@ -76,7 +76,7 @@ from serialize_db import audit, delta, sql
 from serialize_db.audit import AuditReport, CheckResult, KeyScope
 from serialize_db.engine import batches_of, checked_batches, take
 from serialize_db.errors import ContractError, SandboxError
-from serialize_db.resources import available_cpus, environment_limits, memory_limit_setting
+from serialize_db.resources import available_cpus, memory_limit_setting
 from serialize_db.schema import (
     cast,
     check_partition_value,
@@ -89,7 +89,7 @@ from serialize_db.schema import (
 )
 from serialize_db.storage import Storage, aws_credentials, renew_duckdb_secret
 
-__all__ = ["DuckDBConfig", "DuckDBEngine", "environment_limits"]
+__all__ = ["DuckDBAppender", "DuckDBConfig", "DuckDBEngine", "DuckDBStream"]
 
 log = logging.getLogger("serialize_db.engine.duckdb")
 
@@ -304,7 +304,7 @@ def _finish(
 
 
 class DuckDBStream:
-    """[protected] Os lotes de uma consulta do motor DuckDB, lidos enquanto ela roda.
+    """[public] Os lotes de uma consulta do motor DuckDB, lidos enquanto ela roda.
 
     Uma thread roda a consulta na sessão, sob o lock, e entrega cada lote à memória enquanto os
     lotes guardados cabem no orçamento, e ao arquivo de transbordo o lote que não cabe e os
@@ -316,7 +316,18 @@ class DuckDBStream:
     ``RecordBatchReader.from_stream``, não ao ``register`` do DuckDB, cujo ``arrow_scan`` puxaria o
     gerador Python numa thread que o motor não controla; para levar lotes ao sandbox existe
     ``appender``.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with engine.stream(sa.select(Lancamento.__table__)) as stream:
+            first = stream.read_next_batch()
+            rest = stream.read_all()
     """
+
+    schema: pa.Schema
+    """[public] O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
 
     def __init__(
         self,
@@ -326,6 +337,19 @@ class DuckDBStream:
         batch_size: int = 100_000,
         budget: int = _MEMORY_BUDGET,
     ) -> None:
+        """[public] Abre o stream: roda a consulta numa thread auxiliar, ou na thread de quem chama
+        dentro de ``session()``, e espera o primeiro lote ou o fim.
+
+        :param engine: o motor cuja sessão roda a consulta.
+        :param text: a consulta no SQL do DuckDB, já compilada para o sandbox.
+        :param arguments: a lista na ordem dos ``?`` de um statement compilado, ou o dicionário por
+            nome dos marcadores de um texto.
+        :param batch_size: o máximo de linhas de cada lote, passado ao leitor Arrow do DuckDB
+            (``to_arrow_reader``).
+        :param budget: os bytes de lotes guardados em memória; o lote que não cabe e os seguintes
+            vão ao arquivo de transbordo; o padrão é 64 MiB.
+        :raises duckdb.Error: a consulta que falha antes do primeiro lote.
+        """
         # O stop e o caminho vêm antes de tudo: o __del__ de uma construção que falhou os usa.
         self._stop = threading.Event()
         self._path = engine.spool_path("stream")
@@ -395,8 +419,12 @@ class DuckDBStream:
         return self._file_reader.read_next_batch()
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """[protected] O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do
-        último lote."""
+        """[public] O próximo lote, na ordem da consulta; o erro que ela encontra depois do último
+        lote entregue sobe aqui, como ``OSError`` do leitor Arrow com a mensagem do DuckDB.
+
+        :return: o lote, no esquema ``schema``, lido da memória ou do arquivo de transbordo.
+        :raises StopIteration: no fim dos lotes.
+        """
         batch = self._next_batch()
         if batch is not None:
             return batch
@@ -412,7 +440,10 @@ class DuckDBStream:
                 return
 
     def read_all(self) -> pa.Table:
-        """[protected] Os lotes que faltam numa ``pa.Table``."""
+        """[public] Os lotes que faltam numa ``pa.Table``.
+
+        :return: a tabela, no esquema ``schema``; vazia depois do último lote.
+        """
         return pa.Table.from_batches(list(self), schema=self.schema)
 
     def __arrow_c_stream__(
@@ -423,7 +454,7 @@ class DuckDBStream:
         return reader.__arrow_c_stream__(requested_schema)
 
     def close(self) -> None:
-        """[protected] Cancela a consulta que ainda roda e apaga o arquivo; a sessão continua
+        """[public] Cancela a consulta que ainda roda e apaga o arquivo; a sessão continua
         usável."""
         self._stop.set()
         # Sob a condition, a thread não marca o fim, e o interrupt alcança só a consulta deste
@@ -496,7 +527,7 @@ def _write_spool(
 
 
 class DuckDBAppender:
-    """[protected] O acréscimo em lotes a uma tabela do sandbox do motor DuckDB.
+    """[public] O acréscimo em lotes a uma tabela do sandbox do motor DuckDB.
 
     A abertura confere a tabela num cursor à parte, sem o lock da sessão, e recusa com
     ``SandboxError`` o nome livre, que ``create_table`` ou o ``ingest`` com ``materialize=True``
@@ -507,6 +538,14 @@ class DuckDBAppender:
     sobre o leitor do arquivo: a tabela não muda antes dele, e um erro não deixa linha. Uma
     exceção dentro do ``with``, um lote recusado pelo ``cast`` ou um appender abandonado apagam o
     arquivo sem inserir nada.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with engine.appender(Projetado.__table__) as appender:
+            appender.write(batch)
+        appender.rows   # as linhas acrescentadas
     """
 
     def __init__(
@@ -515,6 +554,17 @@ class DuckDBAppender:
         table: sa.Table,
         queue_depth: int = 2,
     ) -> None:
+        """[public] Abre o appender: confere a tabela no sandbox, num cursor à parte, e começa a
+        thread que grava o arquivo Arrow IPC.
+
+        :param engine: o motor cuja sessão recebe o ``INSERT`` do ``close``.
+        :param table: a tabela do modelo, já criada no sandbox pelo ``ingest`` com
+            ``materialize=True`` ou por ``create_table``.
+        :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
+            cheia, o ``write`` bloqueia.
+        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
+            ``ingest`` ocupa.
+        """
         # O closed vem antes de tudo: o __del__ de uma abertura recusada o usa.
         self._closed = threading.Event()
         kind = engine.object_kind(table.name)
@@ -544,12 +594,12 @@ class DuckDBAppender:
 
     @property
     def rows(self) -> int:
-        """[protected] As linhas gravadas até agora."""
+        """[public] As linhas gravadas até agora."""
         return self._outcome["rows"]
 
     @property
     def error(self) -> BaseException | None:
-        """[protected] O erro da thread auxiliar ou o do lote recusado, quando houve."""
+        """[public] O erro da thread auxiliar ou o do lote recusado, quando houve."""
         return self._refused or self._outcome["error"]
 
     def _put(
@@ -585,8 +635,14 @@ class DuckDBAppender:
         self,
         data: pa.RecordBatch | pa.Table,
     ) -> None:
-        """[protected] Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um
-        lote recusado faz o appender não inserir nada."""
+        """[public] Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote
+        recusado faz o appender não inserir nada.
+
+        :param data: um ``RecordBatch`` ou uma ``pa.Table`` nas colunas do contrato; cada lote traz
+            o conjunto de colunas do primeiro.
+        :raises ContractError: outro tipo de dado, um valor fora do contrato ou um conjunto de
+            colunas diferente do primeiro lote.
+        """
         for batch in checked_batches(data):
             try:
                 converted = self._converted(batch)
@@ -615,8 +671,17 @@ class DuckDBAppender:
         self,
         error: BaseException | None = None,
     ) -> None:
-        """[protected] Insere os lotes na tabela; com ``error`` ou um lote recusado, só apaga o
-        arquivo. A segunda chamada não faz nada."""
+        """[public] Insere os lotes na tabela; com ``error`` ou um lote recusado, só apaga o
+        arquivo. A segunda chamada não faz nada.
+
+        Sem a exceção do ``with``, o erro que a propriedade ``error`` guarda sobe depois do arquivo
+        apagado.
+
+        :param error: a exceção que saiu do bloco ``with``, passada pelo ``__exit__``; com ela nada
+            é inserido, e ela segue pelo ``with``; ``None`` insere.
+        :raises ContractError: o lote que o ``write`` recusou, de novo, no ``close`` sem ``error``.
+        :raises duckdb.Error: o ``INSERT ... BY NAME`` que o DuckDB recusa.
+        """
         # O close explícito dentro do with: a saída do with chama close de novo, depois do INSERT
         # e do arquivo apagado.
         if self._closed.is_set():

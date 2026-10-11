@@ -101,11 +101,11 @@ from serialize_db.schema import (
 from serialize_db.storage import Storage
 
 __all__ = [
+    "RedshiftAppender",
     "RedshiftConfig",
     "RedshiftEngine",
+    "RedshiftStream",
     "mask",
-    "sandbox_prefix",
-    "schema_from_row_description",
 ]
 
 log = logging.getLogger("serialize_db.engine.redshift")
@@ -395,8 +395,8 @@ def mask(
 def sandbox_prefix(
     execution_id: str,
 ) -> str:
-    """[public] O prefixo das tabelas do sandbox: ``exec_<id>_``, com o identificador em
-    ``[a-z0-9_]``.
+    """[protected] O prefixo das tabelas do sandbox: ``exec_<id>_``, com o identificador em
+    ``[a-z0-9_]``; só ``RedshiftEngine`` o chama.
 
     O prefixo deixa 63 bytes ao nome da tabela e aos sufixos, dentro dos 127 bytes de um
     identificador do Redshift.
@@ -606,7 +606,8 @@ def _numeric_type(
 def schema_from_row_description(
     row_desc: Sequence[Mapping[str, object]],
 ) -> pa.Schema:
-    """[public] O esquema Arrow de um resultado pelo ``row_desc`` do cursor.
+    """[protected] O esquema Arrow de um resultado pelo ``row_desc`` do cursor; para
+    ``RedshiftEngine.query`` e ``RedshiftEngine.result_schema``.
 
     ``BOOLEAN`` em ``bool``; ``SMALLINT``, ``INTEGER`` e ``BIGINT`` em ``int16``, ``int32`` e
     ``int64``; ``REAL`` e ``FLOAT`` em ``float32`` e ``float64``; ``NUMERIC`` em
@@ -796,7 +797,7 @@ def _read_unloaded(
 
 
 class RedshiftStream:
-    """[protected] Os lotes de uma consulta do motor Redshift, lidos dos arquivos do ``UNLOAD``
+    """[public] Os lotes de uma consulta do motor Redshift, lidos dos arquivos do ``UNLOAD``
     dela.
 
     A construção roda, sob o lock e na thread de quem chama, a leitura do esquema do resultado
@@ -807,7 +808,18 @@ class RedshiftStream:
     de dois lotes, enquanto o cliente trabalha no anterior. ``close`` apaga o prefixo do stream.
     ``__arrow_c_stream__`` entrega os lotes a ``write_deltalake`` e a
     ``RecordBatchReader.from_stream``.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with engine.stream(sa.select(Lancamento.__table__)) as stream:
+            first = stream.read_next_batch()
+            rest = stream.read_all()
     """
+
+    schema: pa.Schema
+    """[public] O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
 
     def __init__(
         self,
@@ -815,6 +827,17 @@ class RedshiftStream:
         text: str,
         batch_size: int = 100_000,
     ) -> None:
+        """[public] Abre o stream: lê o esquema do resultado e roda o ``UNLOAD ... PARALLEL OFF``
+        sob o lock, na thread de quem chama, e começa a thread que lê os arquivos.
+
+        :param engine: o motor cuja sessão roda o ``UNLOAD`` e cujo ``Storage`` lê os arquivos.
+        :param text: a consulta no SQL do Redshift, com os valores do cliente já como literais.
+        :param batch_size: o máximo de linhas de cada lote lido de cada arquivo; o último lote de
+            cada arquivo pode ser menor.
+        :raises SandboxError: uma coluna do resultado num tipo fora do contrato; ou, sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
+        :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
+        """
         # O stop vem antes de tudo: o __del__ de uma construção que falhou o usa.
         self._stop = threading.Event()
         self._engine = engine
@@ -841,8 +864,12 @@ class RedshiftStream:
         self._thread.start()
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """[protected] O próximo lote; ``StopIteration`` no fim, e o erro da leitura no lugar do
-        lote em que ele aconteceu."""
+        """[public] O próximo lote, na ordem dos arquivos do ``UNLOAD``; o erro da leitura de um
+        arquivo sobe no lugar do lote em que ele aconteceu.
+
+        :return: o lote, no esquema ``schema``.
+        :raises StopIteration: no fim dos lotes.
+        """
         if self._finished:
             raise StopIteration
         item = take(self._queue, self._stop)
@@ -862,7 +889,10 @@ class RedshiftStream:
                 return
 
     def read_all(self) -> pa.Table:
-        """[protected] Os lotes que faltam numa ``pa.Table``."""
+        """[public] Os lotes que faltam numa ``pa.Table``.
+
+        :return: a tabela, no esquema ``schema``; vazia depois do último lote.
+        """
         return pa.Table.from_batches(list(self), schema=self.schema)
 
     def __arrow_c_stream__(
@@ -873,7 +903,7 @@ class RedshiftStream:
         return reader.__arrow_c_stream__(requested_schema)
 
     def close(self) -> None:
-        """[protected] Para a leitura e apaga os arquivos do ``UNLOAD`` deste stream."""
+        """[public] Para a leitura e apaga os arquivos do ``UNLOAD`` deste stream."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=10)
@@ -991,7 +1021,7 @@ def _json_columns(
 
 
 class RedshiftAppender:
-    """[protected] O acréscimo em lotes a uma tabela do sandbox do motor Redshift.
+    """[public] O acréscimo em lotes a uma tabela do sandbox do motor Redshift.
 
     A abertura confere a tabela, sob o lock, por ``select 1 from <esquema>.<nome> limit 0``, e
     recusa com ``SandboxError`` o nome livre, que ``create_table`` ou o ``ingest`` ocupam.
@@ -1012,6 +1042,14 @@ class RedshiftAppender:
     o arquivo sem inserir nada, e a segunda chamada de ``close`` não faz nada. O ``close`` na
     sessão numa transação que o cliente abriu depois da abertura levanta o ``SandboxError`` da
     transação do motor e também só apaga o arquivo.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with engine.appender(Projetado.__table__) as appender:
+            appender.write(batch)
+        appender.rows   # as linhas acrescentadas
     """
 
     def __init__(
@@ -1020,6 +1058,16 @@ class RedshiftAppender:
         table: sa.Table,
         queue_depth: int = 2,
     ) -> None:
+        """[public] Abre o appender: confere a tabela no sandbox, sob o lock, e começa a thread que
+        grava o Parquet da carga pelo ``Storage``.
+
+        :param engine: o motor cuja sessão confere a tabela e roda o ``COPY`` do ``close``.
+        :param table: a tabela do modelo, já criada no sandbox pelo ``ingest`` ou por
+            ``create_table``.
+        :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
+            cheia, o ``write`` bloqueia.
+        :raises SandboxError: a tabela que não existe no sandbox.
+        """
         # O closed vem antes de tudo: o __del__ de uma abertura recusada o usa.
         self._closed = threading.Event()
         self._name = engine.prefix + table.name
@@ -1048,12 +1096,12 @@ class RedshiftAppender:
 
     @property
     def rows(self) -> int:
-        """[protected] As linhas gravadas até agora."""
+        """[public] As linhas gravadas até agora."""
         return self._outcome["rows"]
 
     @property
     def error(self) -> BaseException | None:
-        """[protected] O erro da thread auxiliar ou o lote recusado, quando houve."""
+        """[public] O erro da thread auxiliar ou o lote recusado, quando houve."""
         return self._refused or self._outcome["error"]
 
     def _put(
@@ -1089,8 +1137,14 @@ class RedshiftAppender:
         self,
         data: pa.RecordBatch | pa.Table,
     ) -> None:
-        """[protected] Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um
-        lote recusado faz o appender não inserir nada."""
+        """[public] Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote
+        recusado faz o appender não inserir nada.
+
+        :param data: um ``RecordBatch`` ou uma ``pa.Table`` nas colunas do contrato; cada lote traz
+            o conjunto de colunas do primeiro.
+        :raises ContractError: outro tipo de dado, um valor fora do contrato ou um conjunto de
+            colunas diferente do primeiro lote.
+        """
         for batch in checked_batches(data):
             try:
                 converted = self._converted(batch)
@@ -1129,8 +1183,21 @@ class RedshiftAppender:
         self,
         error: BaseException | None = None,
     ) -> None:
-        """[protected] Carrega os lotes na tabela, numa transação sob o lock; com ``error`` ou um
-        lote recusado, só apaga o arquivo. A segunda chamada não faz nada."""
+        """[public] Carrega os lotes na tabela, numa transação sob o lock; com ``error`` ou um lote
+        recusado, só apaga o arquivo. A segunda chamada não faz nada.
+
+        Sem a exceção do ``with``, o erro que a propriedade ``error`` guarda sobe depois do arquivo
+        apagado.
+
+        :param error: a exceção que saiu do bloco ``with``, passada pelo ``__exit__``; com ela nada
+            é carregado, e ela segue pelo ``with``; ``None`` carrega.
+        :raises ContractError: o lote que o ``write`` recusou, de novo, no ``close`` sem ``error``.
+        :raises SandboxError: a sessão numa transação que o cliente abriu depois da abertura
+            (``transaction``); ou, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
+            ``COPY``.
+        :raises redshift_connector.Error: o ``COPY`` que o servidor recusa, a coluna ``NOT NULL``
+            ausente do arquivo incluída.
+        """
         # O close explícito dentro do with é seguido pelo do __exit__, que não roda outro COPY.
         if self._closed.is_set():
             return

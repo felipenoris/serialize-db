@@ -2268,3 +2268,37 @@ docstring, and every docstring the assistant classifies.
 
 `CLAUDE.md` ("Docstrings", "Naming conventions"), `tests/test_package.py`, every module of
 `src/serialize_db/`
+
+## The public API after the evaluation of 2026-10-10 (2026-10-10, 2026-10-11)
+
+The user asked (2026-10-10, 22:34 UTC) for an evaluation of what could leave the public API; the
+evaluation is `api-publica/avaliacao-api-publica.md` in the Claude project's library, and its four
+cases went to him as decision cards, one at a time.
+
+- Case 1 (23:42 UTC, "Tirar os 16"): the 16 names only the package calls leave `__all__`, with no
+  import path changed, as the card promised: in `delta`, `CopyManifest`, `copy_manifest`,
+  `max_key`, `read_back` and `schema_diff`; in `publication`, `PublishedColumn`, `control_ddl`,
+  `control_read`, `publication_statements`, `published_ddl`, `reconcile_published` and
+  `unpublication_statements`; in `schema`, `column_ddl`; in `parquet_import`, `partition_query`; in
+  `engine.redshift`, `sandbox_prefix` and `schema_from_row_description`. They are protected by the
+  level rule, each docstring naming who calls it, `partition_query` and `sandbox_prefix` included,
+  which only their own module calls; whether those two take the `_` prefix is in
+  `OPEN_QUESTIONS.md`.
+- Case 2 (23:57 UTC, "Públicas", against the recommendation of private classes behind the
+  protocols): `DuckDBStream`, `DuckDBAppender`, `RedshiftStream` and `RedshiftAppender` enter the
+  `__all__` of their engine modules, with the constructor, `read_next_batch`, `read_all`, `write`
+  and `close` documented by the field standard. The user's rule (23:57 UTC): "Os tipos que
+  retornam de funções públicas entendo que são públicos também"; whether it makes
+  `reader._ReaderStream` public is in `OPEN_QUESTIONS.md`.
+- Case 3 (2026-10-11, 00:02 UTC): the twelve protected methods of public classes stay in pdoc, and
+  the level tag opens every docstring instead ("The level tag opens every docstring").
+- Case 4 (2026-10-11, 01:08 UTC, "Só em resources"): `environment_limits` is public in
+  `serialize_db.resources`, beside `available_cpus`, `available_memory` and `peak_rss_mb`, and
+  leaves the `__all__` and the imports of `serialize_db.engine.duckdb`; the migration script,
+  `probes/duckdb_threads.py` and `docs/tecnologias.md` import it from `resources`, with no alias,
+  the one import path the evaluation changes.
+
+`delta.py`, `publication.py`, `schema.py`, `parquet_import.py`, `engine/duckdb.py`,
+`engine/redshift.py`, `resources.py`, `scripts/migrate_parquet_to_delta.py`,
+`probes/duckdb_threads.py`, `docs/tecnologias.md`, `CLAUDE.md` ("Repository index"),
+`OPEN_QUESTIONS.md`

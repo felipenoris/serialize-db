@@ -88,16 +88,9 @@ if TYPE_CHECKING:
 __all__ = [
     "CONTROL_TABLE",
     "PublicationStatus",
-    "PublishedColumn",
-    "control_ddl",
-    "control_read",
     "create_publications_table",
-    "publication_statements",
     "publication_status",
     "publish_redshift",
-    "published_ddl",
-    "reconcile_published",
-    "unpublication_statements",
     "unpublish_redshift",
 ]
 
@@ -168,7 +161,8 @@ class PublicationStatus:
 
 @dataclasses.dataclass(frozen=True)
 class PublishedColumn:
-    """[public] Uma coluna de uma tabela publicada, como ``svv_all_columns`` a lista.
+    """[protected] Uma coluna de uma tabela publicada, como ``svv_all_columns`` a lista; para
+    ``reconcile_published``.
 
     Exemplo:
 
@@ -178,18 +172,18 @@ class PublishedColumn:
     """
 
     name: str
-    """[public] O nome da coluna, o ``column_name`` do catálogo."""
+    """[protected] O nome da coluna, o ``column_name`` do catálogo."""
     data_type: str
-    """[public] O tipo, o ``data_type`` do catálogo, como ``bigint``, ``numeric`` ou
+    """[protected] O tipo, o ``data_type`` do catálogo, como ``bigint``, ``numeric`` ou
     ``character varying``."""
     length: int | None
-    """[public] A largura do texto, o ``character_maximum_length``; ``None`` quando o catálogo não a
-    traz."""
+    """[protected] A largura do texto, o ``character_maximum_length``; ``None`` quando o catálogo
+    não a traz."""
     precision: int | None
-    """[public] A precisão numérica, o ``numeric_precision``; ``None`` quando o catálogo não a
+    """[protected] A precisão numérica, o ``numeric_precision``; ``None`` quando o catálogo não a
     traz."""
     scale: int | None
-    """[public] A escala numérica, o ``numeric_scale``; ``None`` quando o catálogo não a traz."""
+    """[protected] A escala numérica, o ``numeric_scale``; ``None`` quando o catálogo não a traz."""
 
 
 # ---------------------------------------------------------------- o texto dos comandos
@@ -214,8 +208,9 @@ def _qualified(
 def control_ddl(
     schema: str,
 ) -> str:
-    """[public] O ``CREATE TABLE`` da tabela de controle, sem ``IF NOT EXISTS``: só o usuário o
-    roda, uma vez, e a segunda chamada falha com a mensagem do servidor.
+    """[protected] O ``CREATE TABLE`` da tabela de controle, sem ``IF NOT EXISTS``: só o usuário o
+    roda, uma vez, e a segunda chamada falha com a mensagem do servidor; para
+    ``create_publications_table``.
 
     Exemplo:
 
@@ -238,7 +233,8 @@ def control_read(
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[public] O ``select`` da linha de controle da tabela, o primeiro comando da transação.
+    """[protected] O ``select`` da linha de controle da tabela, o primeiro comando da transação;
+    para ``publish_redshift``, ``unpublish_redshift`` e ``publication_status``.
 
     Exemplo:
 
@@ -266,8 +262,8 @@ def published_ddl(
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[public] O ``CREATE TABLE`` da tabela publicada: o DDL do contrato com a chave primária
-    informativa e as cláusulas físicas do modelo.
+    """[protected] O ``CREATE TABLE`` da tabela publicada: o DDL do contrato com a chave primária
+    informativa e as cláusulas físicas do modelo; para ``publication_statements``.
 
     Exemplo:
 
@@ -326,13 +322,13 @@ def publication_statements(
     execution_id: str,
     credentials: str,
 ) -> list[str]:
-    """[public] Os comandos da transação depois da leitura da linha de controle, um por ``execute``,
-    sem ``BEGIN`` e ``COMMIT``: na primeira publicação o ``CREATE TABLE`` da tabela publicada; a
-    staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e, quando ela tem
-    manifestos, o ``DELETE`` da staging, um ``COPY ... MANIFEST FILLRECORD`` por manifesto, com a
-    lista das colunas dos arquivos dele, e o ``INSERT ... SELECT`` com o valor e ``JSON_PARSE``; o
-    ``DROP`` da staging; e por último a linha de controle, pelo ``INSERT`` ou pelo ``UPDATE``
-    condicionado à versão lida.
+    """[protected] Os comandos da transação depois da leitura da linha de controle, um por
+    ``execute``, sem ``BEGIN`` e ``COMMIT``: na primeira publicação o ``CREATE TABLE`` da tabela
+    publicada; a staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e,
+    quando ela tem manifestos, o ``DELETE`` da staging, um ``COPY ... MANIFEST FILLRECORD`` por
+    manifesto, com a lista das colunas dos arquivos dele, e o ``INSERT ... SELECT`` com o valor e
+    ``JSON_PARSE``; o ``DROP`` da staging; e por último a linha de controle, pelo ``INSERT`` ou pelo
+    ``UPDATE`` condicionado à versão lida; para ``publish_redshift``.
 
     Exemplo:
 
@@ -404,8 +400,9 @@ def unpublication_statements(
     table: sa.Table,
     published_version: int,
 ) -> list[str]:
-    """[public] Os comandos da despublicação depois da leitura da linha de controle: o
-    ``DROP TABLE`` da tabela publicada e o ``DELETE`` da linha, condicionado à versão lida.
+    """[protected] Os comandos da despublicação depois da leitura da linha de controle: o
+    ``DROP TABLE`` da tabela publicada e o ``DELETE`` da linha, condicionado à versão lida; para
+    ``unpublish_redshift``.
 
     Exemplo:
 
@@ -478,7 +475,7 @@ def reconcile_published(
     table: sa.Table,
     columns: Sequence[PublishedColumn],
 ) -> tuple[list[str], list[str]]:
-    """[public] O diff entre o contrato e a tabela publicada.
+    """[protected] O diff entre o contrato e a tabela publicada; para ``publish_redshift``.
 
     Aditivo: a coluna anulável nova. Destrutivo: a coluna removida, a coluna ``NOT NULL`` nova, o
     tipo que mudou e a largura de ``VARCHAR(n)``, a precisão ou a escala que mudaram, porque o
