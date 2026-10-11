@@ -700,10 +700,14 @@ modules, the API (`Database`, `Execution`, `ingest`, `audit`, `publish_delta`) a
 `Table.info["serialize_db"]` (`partition_by`, `partition_source`, `sort_key`, `redshift`) are
 English. The library's own metadata is English. Each module separates three levels of name: public,
 the interface client code imports, which `pdoc` documents; protected, used by another module of the
-library; private, used only inside its module. The module's `__all__` lists the public names and
-only those, so a module with a protected name declares `__all__` and `pdoc` leaves the protected
-one out; protected is unprefixed all the same, and private carries the `_` prefix; every
-docstring opens with its level's tag ("Docstrings"). A package's
+library; private, used only inside its module. A name, a function, a class or a constant, is public
+when the evaluation of its intended use finds that the package's users call, build or read it to
+write their pipelines, whether or not another module of the library also uses it; a type a public
+function returns is public too (user decisions of 2026-10-10 and 2026-10-11). Protected and private
+hold the names with no use intended for them, by who calls each inside the library. The module's
+`__all__` lists the public names and only those, so a module with a protected name declares
+`__all__` and `pdoc` leaves the protected one out; protected is unprefixed all the same, and private
+carries the `_` prefix; every docstring opens with its level's tag ("Docstrings"). A package's
 `__all__` also lists its public submodules, the only ones `pdoc` documents (`serialize_db.engine`
 lists `duckdb` and `redshift`; `tests/test_package.py` checks every package). A key under
 `_serialize_db/` carries no prefix (`snapshots` in `_serialize_db/snapshots.json`); everything else

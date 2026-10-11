@@ -2482,3 +2482,20 @@ alias and the loggers only their own module uses stay unprefixed (`OPEN_QUESTION
 
 `src/serialize_db/`, `tests/`, `probes/operacao/`, `scripts/migrate_parquet_to_delta.py`,
 `docs/tecnologias.md`, `probes/README.md`, `CLAUDE.md`, `OPEN_QUESTIONS.md`.
+
+## The intended use as a criterion of the public level (2026-10-11)
+
+The user asked (2026-10-11, 17:45 UTC), in the thread of the final review of PRs #155 and #156,
+for the criterion in the rule of the levels: "Marque nos critérios de escolha entre
+public/protected/private que um dos critérios para marcar público envolve avaliação da intenção de
+uso do nome (função, classe, etc.) pelos usuários do pacote." The rule of 2026-09-21 read only who
+calls a name: client code, another module of the library, or only its own module. With the
+criterion, a function, a class or a constant that the evaluation of its intended use finds the
+package's users call, build or read to write their pipelines is public, whether or not another
+module of the library also uses it, and protected and private keep the names with no use intended
+for them. The other criterion of the public level is the rule of 2026-10-10, a type a public
+function returns is public (the section "The public API after the evaluation of 2026-10-10"). The
+request came while the evaluation the user asked at 17:41 UTC ran: whether a client pipeline needs
+any name marked private or protected, functions, names and constants alike.
+
+`CLAUDE.md` ("Naming conventions").
