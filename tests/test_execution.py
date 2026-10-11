@@ -123,6 +123,25 @@ def folder(
 
 
 @pytest.fixture
+def cli_environment(
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """O ambiente dos testes da linha de comando: a pasta do teste como a temporária do processo,
+    onde o DuckDB da execução grava, e sem ``SERIALIZE_DB_ROOT``, para a raiz vir só de
+    ``--root``."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+
+
+def base_arguments(
+    db: Database,
+) -> list[str]:
+    """Os argumentos que todo comando da suíte recebe: a raiz do banco, o ambiente e o modelo."""
+    return ["--root", db.root, "--environment", "prd", "--metadata", "test_execution:Base.metadata"]
+
+
+@pytest.fixture
 def db(
     folder: Path,
 ) -> Database:
@@ -978,24 +997,14 @@ def exit_code(
 
 def test_cli_run_parses_and_exits_by_result(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db run`` sai com 0 no pipeline que publica, 1 na auditoria reprovada e 2 no
     conflito na tabela e no arquivo de controle, na partição e no ``execution_id`` fora da regra,
     sem ``--metadata`` e com o ``--export-mode`` que saiu da linha de comando, sem traceback."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    common = [
-        "run",
-        "--root",
-        db.root,
-        "--environment",
-        "prd",
-        "--metadata",
-        "test_execution:Base.metadata",
-    ]
+    common = ["run", *base_arguments(db)]
     projected = "test_execution:projected_pipeline"
 
     # O resultado do pipeline no código de saída.
@@ -1045,24 +1054,14 @@ def test_cli_run_parses_and_exits_by_result(
 
 def test_cli_run_without_partition(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db run`` sem ``--partition`` abre a execução sem partição: sai com 0 no pipeline
     que publica a tabela sem partição e com 2 no que pede as partições anteriores, sem
     traceback."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    common = [
-        "run",
-        "--root",
-        db.root,
-        "--environment",
-        "prd",
-        "--metadata",
-        "test_execution:Base.metadata",
-    ]
+    common = ["run", *base_arguments(db)]
     assert cli.main([*common, "test_execution:composite_pipeline"]) == 0
     published = delta.open_table(db.uri(Composta.__table__), db.storage)
     assert published.to_pyarrow_dataset().to_table().num_rows == 2
@@ -1074,25 +1073,15 @@ def test_cli_run_without_partition(
 
 def test_cli_run_exits_with_2_on_a_used_snapshot_name(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db run`` sai com 2, sem traceback, no pipeline que marca um nome de snapshot já
     usado, em ``snapshots`` ou em ``archived``, antes de qualquer commit e com o
     ``serialize-db channel`` na mensagem; e também quando outro escritor grava o nome entre a
     marcação e a saída da execução."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
-    common = [
-        "run",
-        "--root",
-        db.root,
-        "--environment",
-        "prd",
-        "--metadata",
-        "test_execution:Base.metadata",
-    ]
+    common = ["run", *base_arguments(db)]
     marked = "test_execution:marked_pipeline"
     assert cli.main([*common, "--partition", "2026-08-31", marked]) == 0
     projected_version = delta.open_table(db.uri(PROJECTED), db.storage).version()
@@ -1117,8 +1106,8 @@ def test_cli_run_exits_with_2_on_a_used_snapshot_name(
 
 def test_cli_run_hands_the_redshift_config_to_the_execution(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
 ) -> None:
     """``--engine redshift`` constrói o motor Redshift com as variáveis ``SERIALIZE_DB_REDSHIFT_*``
     e dá a configuração à execução; no motor DuckDB a execução não tem a configuração, e a
@@ -1126,7 +1115,6 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
     from serialize_db.engine import redshift
 
     monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     for name, value in (
         ("HOST", "host"),
         ("USER", "usuario"),
@@ -1135,17 +1123,7 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
         ("SHARE_DATABASE", "compartilhado"),
     ):
         monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", value)
-    common = [
-        "run",
-        "--root",
-        db.root,
-        "--environment",
-        "prd",
-        "--partition",
-        "2026-08-31",
-        "--metadata",
-        "test_execution:Base.metadata",
-    ]
+    common = ["run", *base_arguments(db), "--partition", "2026-08-31"]
     redshift_engine = [*common, "--engine", "redshift", "test_execution:redshift_engine_pipeline"]
     assert cli.main(redshift_engine) == 0
     assert exit_code([*common, "--redshift", "test_execution:projected_pipeline"]) == 2
@@ -1158,8 +1136,8 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
 
 def test_cli_exits_with_2_on_the_redshift_config_without_connection(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``run`` e ``audit`` com ``--engine redshift`` e ``publish_redshift --init`` saem com 2,
@@ -1169,17 +1147,9 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
     from serialize_db.engine import redshift
 
     monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     for name in ("WORKGROUP", "HOST", "USER", "PASSWORD", "PORT"):
         monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
-    common = [
-        "--root",
-        db.root,
-        "--environment",
-        "prd",
-        "--metadata",
-        "test_execution:Base.metadata",
-    ]
+    common = base_arguments(db)
     run = ["run", *common, "--partition", "2026-08-31", "--engine", "redshift"]
     assert cli.main([*run, "test_execution:redshift_engine_pipeline"]) == 2
     audit = ["audit", *common, "--table", "cad_lancamentos", "--engine", "redshift"]
@@ -1211,13 +1181,12 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
 
 def test_cli_audit_prints_the_sql_and_audits_the_current_version(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db audit --sql`` imprime o texto das verificações no dialeto, sem armazenamento;
     sem ``--sql``, audita a versão atual do Delta e sai com 0 na aprovação."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     audit_command = ["audit", "--metadata", "test_execution:Base.metadata"]
     entries_audit = [*audit_command, "--table", "cad_lancamentos", "--partitions", "2026-08-31"]
     assert cli.main([*entries_audit, "--engine", "redshift", "--sql"]) == 0
@@ -1239,14 +1208,13 @@ def test_cli_audit_prints_the_sql_and_audits_the_current_version(
 
 def test_cli_audit_of_a_table_without_partition(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db audit`` de uma tabela sem partição imprime os totais da ``tabela inteira``;
     com ``--partitions``, com ou sem ``--sql``, sai com 2 antes de abrir um motor, sem
     traceback."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     composite = Composta.__table__
     uri = db.uri(composite)
     delta.create_table(uri, composite, db.storage)
@@ -1318,12 +1286,12 @@ def defects_audit(
 def test_cli_audit_prints_the_refused_ingest_as_a_failed_audit(
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """A auditoria da partição com um nulo numa coluna ``NOT NULL`` e a da partição com JSON
     malformado, que o ``ingest`` pelo DDL do modelo recusa, saem com 1 e imprimem o erro do banco
     como a reprovação da ingestão, sem as outras contagens e sem traceback."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     db = Database(str(folder / "delta"), "prd", lancamentos_model.Base.metadata)
     version = publish_defects(db)
     null_month, json_month = lancamentos_model.MONTHS
@@ -1352,12 +1320,12 @@ def test_cli_audit_prints_the_refused_ingest_as_a_failed_audit(
 def test_cli_audit_lets_an_access_error_of_the_ingest_propagate(
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """Um erro do banco que não é a recusa de um valor, como o acesso negado a um arquivo da
     tabela, sobe do ``ingest`` da auditoria e de ``cli.main`` sem a ingestão reprovada impressa, e
     o script de console sai com o traceback."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     db = Database(str(folder / "delta"), "prd", lancamentos_model.Base.metadata)
     publish_defects(db)
 
@@ -1380,8 +1348,8 @@ def test_cli_audit_lets_an_access_error_of_the_ingest_propagate(
 def test_cli_audit_on_redshift_prints_the_refused_ingest(
     s3_location: S3Location,
     redshift_driver: None,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """Com ``--engine redshift``, o ``INSERT`` da staging na tabela do modelo recusa o nulo na
@@ -1400,7 +1368,6 @@ def test_cli_audit_on_redshift_prints_the_refused_ingest(
             monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
         else:
             monkeypatch.setenv(f"SERIALIZE_DB_REDSHIFT_{name}", str(value))
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     root = s3_location.child(f"auditoria/{uuid.uuid4().hex[:8]}")
     db = Database(root, "prd", lancamentos_model.Base.metadata)
     version = publish_defects(db)
@@ -1419,23 +1386,15 @@ def test_cli_audit_on_redshift_prints_the_refused_ingest(
 
 def test_cli_refuses_an_unknown_engine(
     db: Database,
-    folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``SERIALIZE_DB_ENGINE`` fora de ``duckdb`` e ``redshift`` é erro de uso em ``run`` e em
     ``audit``, com e sem ``--sql``, como o mesmo valor em ``--engine``; o motor da auditoria
     recusa o nome desconhecido em vez de abrir o DuckDB."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
     monkeypatch.setenv("SERIALIZE_DB_ENGINE", "Redshift")
-    common = [
-        "--root",
-        db.root,
-        "--environment",
-        "prd",
-        "--metadata",
-        "test_execution:Base.metadata",
-    ]
+    common = base_arguments(db)
     audit = ["audit", *common, "--table", "cad_lancamentos"]
     assert exit_code(audit) == 2
     assert exit_code([*audit, "--sql"]) == 2

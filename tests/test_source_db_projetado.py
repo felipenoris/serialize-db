@@ -276,8 +276,8 @@ def read_partitioned(
 def connect_with_views(
     base: source.SourceBase,
 ) -> duckdb.DuckDBPyConnection:
-    """Uma conexão em memória com uma view por tabela sobre os arquivos gravados; a coluna de
-    partição vem do caminho como texto."""
+    """Uma conexão em memória com uma view por tabela sobre os arquivos gravados, fechada pelo
+    ``with`` de quem a abre; a coluna de partição vem do caminho como texto."""
     connection = duckdb.connect()
     for table in OBSERVED_TABLES:
         if table in OBSERVED_PARTITION_COLUMNS:
@@ -566,39 +566,42 @@ def test_the_base_satisfies_the_reference_model(
 ) -> None:
     """Toda chave do modelo é única, toda chave estrangeira tem a linha referenciada, e as colunas
     NOT NULL do modelo não têm nulo."""
-    connection = connect_with_views(base)
-    for table, keys in source.UNIQUE_KEYS.items():
-        for columns in keys:
-            key = ", ".join(f'"{column}"' for column in columns)
-            duplicated = connection.execute(
-                "WITH chaves_repetidas AS "
-                f"(SELECT {key} FROM {table} GROUP BY ALL HAVING count(*) > 1) "
-                "SELECT count(*) FROM chaves_repetidas"
-            ).fetchone()[0]
-            assert duplicated == 0, (table, columns)
+    with connect_with_views(base) as connection:
+        for table, keys in source.UNIQUE_KEYS.items():
+            for columns in keys:
+                key = ", ".join(f'"{column}"' for column in columns)
+                duplicated = connection.execute(
+                    "WITH chaves_repetidas AS "
+                    f"(SELECT {key} FROM {table} GROUP BY ALL HAVING count(*) > 1) "
+                    "SELECT count(*) FROM chaves_repetidas"
+                ).fetchone()[0]
+                assert duplicated == 0, (table, columns)
 
-    # Anti-join por chave estrangeira; uma linha com componente nulo não é conferida, como no SQL.
-    for child, columns, parent, referenced in source.FOREIGN_KEYS:
-        column_pairs = zip(columns, referenced, strict=True)
-        condition = " AND ".join(
-            f'filha."{child_column}" = referenciada."{parent_column}"'
-            for child_column, parent_column in column_pairs
-        )
-        not_null = " AND ".join(f'filha."{child_column}" IS NOT NULL' for child_column in columns)
-        orphans = connection.execute(
-            f"SELECT count(*) FROM {child} filha WHERE {not_null} "
-            f"AND NOT EXISTS (SELECT 1 FROM {parent} referenciada WHERE {condition})"
-        ).fetchone()[0]
-        assert orphans == 0, (child, columns, parent)
-
-    # As sete colunas de ``cad_contratos`` anuláveis nos arquivos e ``NOT NULL`` no modelo não têm
-    # nulo.
-    for table, columns in source.MODEL_NOT_NULL_DECLARED_NULLABLE.items():
-        for column in columns:
-            nulls = connection.execute(
-                f'SELECT count(*) FILTER (WHERE "{column}" IS NULL) FROM {table}'
+        # Anti-join por chave estrangeira; uma linha com componente nulo não é conferida, como no
+        # SQL.
+        for child, columns, parent, referenced in source.FOREIGN_KEYS:
+            column_pairs = zip(columns, referenced, strict=True)
+            condition = " AND ".join(
+                f'filha."{child_column}" = referenciada."{parent_column}"'
+                for child_column, parent_column in column_pairs
+            )
+            not_null = " AND ".join(
+                f'filha."{child_column}" IS NOT NULL' for child_column in columns
+            )
+            orphans = connection.execute(
+                f"SELECT count(*) FROM {child} filha WHERE {not_null} "
+                f"AND NOT EXISTS (SELECT 1 FROM {parent} referenciada WHERE {condition})"
             ).fetchone()[0]
-            assert nulls == 0, (table, column)
+            assert orphans == 0, (child, columns, parent)
+
+        # As sete colunas de ``cad_contratos`` anuláveis nos arquivos e ``NOT NULL`` no modelo não
+        # têm nulo.
+        for table, columns in source.MODEL_NOT_NULL_DECLARED_NULLABLE.items():
+            for column in columns:
+                nulls = connection.execute(
+                    f'SELECT count(*) FILTER (WHERE "{column}" IS NULL) FROM {table}'
+                ).fetchone()[0]
+                assert nulls == 0, (table, column)
 
 
 def test_rel_contrato_operacao_apportions_each_contract_among_its_operations(
@@ -606,45 +609,46 @@ def test_rel_contrato_operacao_apportions_each_contract_among_its_operations(
 ) -> None:
     """A relação N para N: toda operação tem contratos, um contrato está em mais de uma operação, e
     ``fator_rateio`` soma 1 por contrato."""
-    connection = connect_with_views(base)
-    sums = connection.execute(
-        "SELECT sum(fator_rateio) FROM rel_contrato_operacao GROUP BY data, sistema, contrato"
-    ).fetchall()
-    totals = [row[0] for row in sums]
-    assert totals
-    assert all(total == 1.0 for total in totals)
+    with connect_with_views(base) as connection:
+        sums = connection.execute(
+            "SELECT sum(fator_rateio) FROM rel_contrato_operacao GROUP BY data, sistema, contrato"
+        ).fetchall()
+        totals = [row[0] for row in sums]
+        assert totals
+        assert all(total == 1.0 for total in totals)
 
-    # Toda operação está na relação (o modelo só declara a chave estrangeira no sentido contrário,
-    # dos contratos).
-    without_contract = connection.execute(
-        "SELECT count(*) FROM cad_operacoes operacoes WHERE NOT EXISTS "
-        "(SELECT 1 FROM rel_contrato_operacao relacao "
-        "WHERE relacao.data = operacoes.data AND relacao.operacao = operacoes.operacao)"
-    ).fetchone()[0]
-    assert without_contract == 0
+        # Toda operação está na relação (o modelo só declara a chave estrangeira no sentido
+        # contrário, dos contratos).
+        without_contract = connection.execute(
+            "SELECT count(*) FROM cad_operacoes operacoes WHERE NOT EXISTS "
+            "(SELECT 1 FROM rel_contrato_operacao relacao "
+            "WHERE relacao.data = operacoes.data AND relacao.operacao = operacoes.operacao)"
+        ).fetchone()[0]
+        assert without_contract == 0
 
-    # Alguma operação tem mais de um contrato, e algum contrato está em mais de uma operação.
-    per_operation = connection.execute(
-        "WITH contratos_por_operacao AS "
-        "(SELECT count(*) AS linhas FROM rel_contrato_operacao GROUP BY data, operacao) "
-        "SELECT max(linhas) FROM contratos_por_operacao"
-    ).fetchone()[0]
-    per_contract = connection.execute(
-        "WITH operacoes_por_contrato AS "
-        "(SELECT count(*) AS linhas FROM rel_contrato_operacao GROUP BY data, sistema, contrato) "
-        "SELECT max(linhas) FROM operacoes_por_contrato"
-    ).fetchone()[0]
-    assert per_operation > 1
-    assert per_contract > 1
+        # Alguma operação tem mais de um contrato, e algum contrato está em mais de uma operação.
+        per_operation = connection.execute(
+            "WITH contratos_por_operacao AS "
+            "(SELECT count(*) AS linhas FROM rel_contrato_operacao GROUP BY data, operacao) "
+            "SELECT max(linhas) FROM contratos_por_operacao"
+        ).fetchone()[0]
+        per_contract = connection.execute(
+            "WITH operacoes_por_contrato AS "
+            "(SELECT count(*) AS linhas FROM rel_contrato_operacao "
+            "GROUP BY data, sistema, contrato) "
+            "SELECT max(linhas) FROM operacoes_por_contrato"
+        ).fetchone()[0]
+        assert per_operation > 1
+        assert per_contract > 1
 
-    # O par (data, operacao, sistema, contrato) não se repete.
-    repeated = connection.execute(
-        "WITH pares_repetidos AS "
-        "(SELECT data, operacao, sistema, contrato FROM rel_contrato_operacao "
-        "GROUP BY ALL HAVING count(*) > 1) "
-        "SELECT count(*) FROM pares_repetidos"
-    ).fetchone()[0]
-    assert repeated == 0
+        # O par (data, operacao, sistema, contrato) não se repete.
+        repeated = connection.execute(
+            "WITH pares_repetidos AS "
+            "(SELECT data, operacao, sistema, contrato FROM rel_contrato_operacao "
+            "GROUP BY ALL HAVING count(*) > 1) "
+            "SELECT count(*) FROM pares_repetidos"
+        ).fetchone()[0]
+        assert repeated == 0
 
 
 def path_to_root(
@@ -721,28 +725,29 @@ def test_both_readers_see_the_partition_column_from_the_path(
 ) -> None:
     """O DuckDB e o PyArrow leem a pasta com partição Hive: as mesmas linhas, e a coluna do caminho
     tipada por cada leitor."""
-    connection = duckdb.connect()
-    for table, column in OBSERVED_PARTITION_COLUMNS.items():
-        glob = f"{base.root / table}/*/*.parquet"
-        # O DuckDB converte o valor do caminho para DATE por padrão; só com
-        # hive_types_autocast=false ele fica VARCHAR.
-        typed = connection.execute(
-            f"SELECT typeof({column}) FROM read_parquet('{glob}', hive_partitioning=true) LIMIT 1"
-        ).fetchone()
-        as_text = connection.execute(
-            f"SELECT typeof({column}) FROM read_parquet('{glob}', {HIVE_AS_TEXT}) LIMIT 1"
-        ).fetchone()
-        assert typed == ("DATE",), table
-        assert as_text == ("VARCHAR",), table
-        counted = connection.execute(
-            f"SELECT {column}::VARCHAR, count(*) "
-            f"FROM read_parquet('{glob}', hive_partitioning=true) GROUP BY 1"
-        ).fetchall()
-        assert dict(counted) == base.partition_rows[table], table
+    with duckdb.connect() as connection:
+        for table, column in OBSERVED_PARTITION_COLUMNS.items():
+            glob = f"{base.root / table}/*/*.parquet"
+            # O DuckDB converte o valor do caminho para DATE por padrão; só com
+            # hive_types_autocast=false ele fica VARCHAR.
+            typed = connection.execute(
+                f"SELECT typeof({column}) "
+                f"FROM read_parquet('{glob}', hive_partitioning=true) LIMIT 1"
+            ).fetchone()
+            as_text = connection.execute(
+                f"SELECT typeof({column}) FROM read_parquet('{glob}', {HIVE_AS_TEXT}) LIMIT 1"
+            ).fetchone()
+            assert typed == ("DATE",), table
+            assert as_text == ("VARCHAR",), table
+            counted = connection.execute(
+                f"SELECT {column}::VARCHAR, count(*) "
+                f"FROM read_parquet('{glob}', hive_partitioning=true) GROUP BY 1"
+            ).fetchall()
+            assert dict(counted) == base.partition_rows[table], table
 
-        # O PyArrow lê o valor do caminho como texto.
-        dataset = ds.dataset(base.root / table, format="parquet", partitioning="hive")
-        assert dataset.schema.field(column).type == pa.string(), table
-        assert dataset.count_rows() == base.rows[table], table
-        expected_names = set(source.SCHEMAS[table].names) | {column}
-        assert set(dataset.schema.names) == expected_names, table
+            # O PyArrow lê o valor do caminho como texto.
+            dataset = ds.dataset(base.root / table, format="parquet", partitioning="hive")
+            assert dataset.schema.field(column).type == pa.string(), table
+            assert dataset.count_rows() == base.rows[table], table
+            expected_names = set(source.SCHEMAS[table].names) | {column}
+            assert set(dataset.schema.names) == expected_names, table

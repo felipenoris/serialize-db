@@ -1038,6 +1038,11 @@ def remember_ddl(
     if re.match(r"CREATE\s+TEMP", text, re.IGNORECASE):
         return
     schema = table_schema(connection, match.group("name"))
+    # Um CREATE TABLE repetido sobre o mesmo nome substitui as colunas guardadas, sem dobrá-las.
+    database.duckdb_connection.execute(
+        "DELETE FROM main.emulador_colunas WHERE schema_name = ? AND table_name = ?",
+        [schema, table],
+    )
     for position, (column, kind) in enumerate(definitions, 1):
         data_type, length, precision, scale = redshift_data_type(kind)
         database.duckdb_connection.execute(

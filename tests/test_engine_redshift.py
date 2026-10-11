@@ -363,6 +363,15 @@ class FakeConnection:
         return [mask(command.text) for command in self.commands]
 
 
+def engine_over_driver(
+    storage: Storage | None = None,
+) -> RedshiftEngine:
+    """O motor da suíte sobre o ``driver_connect`` já substituído, com o ``staging/`` da execução
+    na raiz local."""
+    root = storage if storage is not None else Storage.for_uri("/tmp/sem-uso")
+    return RedshiftEngine(CONFIG, EXECUTION_ID, root, f"prd/staging/{EXECUTION_ID}")
+
+
 def fake_engine(
     monkeypatch: pytest.MonkeyPatch,
     connection: FakeConnection,
@@ -370,8 +379,7 @@ def fake_engine(
 ) -> RedshiftEngine:
     """O motor sobre a conexão de mentira, com o ``staging/`` da execução na raiz local."""
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
-    root = storage if storage is not None else Storage.for_uri("/tmp/sem-uso")
-    return RedshiftEngine(CONFIG, EXECUTION_ID, root, f"prd/staging/{EXECUTION_ID}")
+    return engine_over_driver(storage)
 
 
 def run_together(
@@ -892,7 +900,7 @@ def test_connection_dropped_by_the_server_is_reopened_once(
     ``ROLLBACK`` tentado."""
     connections = [FakeConnection(), FakeConnection()]
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
-    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
+    engine = engine_over_driver()
     first = engine._connection
     first.drop_next = 1
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
@@ -923,7 +931,7 @@ def test_connection_dropped_at_commit_raises_without_reconnecting(
     queda deixou na conexão, e o ``BEGIN`` dela vai à conexão reaberta."""
     connections = [FakeConnection(), FakeConnection()]
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
-    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
+    engine = engine_over_driver()
     first = engine._connection
     insert = 'INSERT INTO "esquema"."t" VALUES (1)'
     with pytest.raises(redshift_connector.InterfaceError, match="server socket closed"):
@@ -952,7 +960,7 @@ def test_connection_dropped_in_a_client_transaction_raises_without_repeating(
     ainda o de antes da queda, vai à conexão reaberta."""
     connections = [FakeConnection(), FakeConnection()]
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
-    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
+    engine = engine_over_driver()
     first = engine._connection
     insert = 'INSERT INTO "esquema"."t" VALUES (1)'
     engine.execute("BEGIN")
@@ -985,7 +993,7 @@ def test_broken_pipe_in_the_send_is_read_as_the_dropped_connection(
     o comando numa nota, sem a reconexão nem a repetição."""
     connections = [FakeConnection(), FakeConnection(), FakeConnection()]
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
-    engine = RedshiftEngine(CONFIG, EXECUTION_ID, Storage.for_uri("/tmp/sem-uso"), "prd/staging")
+    engine = engine_over_driver()
     first = engine._connection
     first.drop_on = {"SELECT": broken_pipe()}
     with caplog.at_level(logging.WARNING, logger="serialize_db.engine.redshift"):
@@ -1359,7 +1367,7 @@ def test_ingest_staging_drop_reopens_the_connection_after_a_broken_pipe(
     delta.publish_partition(uri, ENTRIES, MONTHS[0], rows, METADATA, storage)
     connections = [FakeConnection(storage), FakeConnection(storage)]
     monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
-    engine = RedshiftEngine(CONFIG, EXECUTION_ID, storage, f"prd/staging/{EXECUTION_ID}")
+    engine = engine_over_driver(storage)
     first = engine._connection
     first.drop_on = {"COPY": dropped(), "ROLLBACK": dropped(), "DROP": broken_pipe()}
     with pytest.raises(redshift_connector.InterfaceError) as raised:
@@ -1729,7 +1737,7 @@ def test_ingest_stream_appender_export(
             "WHERE id_lancamento = 121"
         ).fetchone()
     assert counted[0] == 120
-    record("redshift.engine.delta_scan_meta", {"tipo": meta_scan[0], "valor": str(meta_scan[1])})
+    record("redshift.engine.delta_scan_meta", {"type": meta_scan[0], "value": str(meta_scan[1])})
 
     # A troca: a partição com NaN pela máquina local, com as mesmas linhas e o aviso; o append
     # entra na tabela esvaziada.
@@ -2179,7 +2187,7 @@ def reconnection_reading(
     for attempt in range(1, attempts + 1):
         time.sleep(TERMINATION_WAIT)
         reading = next_command_reading(session, pid)
-        reading["esperou"] = attempt * TERMINATION_WAIT
+        reading["waited"] = attempt * TERMINATION_WAIT
         if reading.get("reconnected") or "error" in reading:
             return reading
     return reading
@@ -2191,12 +2199,12 @@ def command_until_the_drop(
 ) -> None:
     """Um ``SELECT 1`` na sessão encerrada dentro de uma transação, repetido a cada
     ``TERMINATION_WAIT`` por até ``TERMINATION_LIMIT`` segundos enquanto o servidor responde; o
-    erro da queda sobe daqui, e ``reading["esperou"]`` guarda os segundos entre o
+    erro da queda sobe daqui, e ``reading["waited"]`` guarda os segundos entre o
     ``pg_terminate_backend`` e o comando que o levantou, ou o último."""
     attempts = int(TERMINATION_LIMIT / TERMINATION_WAIT)
     for attempt in range(1, attempts + 1):
         time.sleep(TERMINATION_WAIT)
-        reading["esperou"] = attempt * TERMINATION_WAIT
+        reading["waited"] = attempt * TERMINATION_WAIT
         session.execute("SELECT 1")
 
 
@@ -2226,7 +2234,7 @@ def test_session_terminated_by_the_server_is_read(
     with engine.new_session() as idle:
         pid = backend_pid(idle)
         terminated = terminate_session(engine, pid)
-        reading["ociosa"] = {
+        reading["idle"] = {
             "terminated": terminated,
             "next": reconnection_reading(idle, pid),
             "after": next_command_reading(idle, pid),
@@ -2244,7 +2252,7 @@ def test_session_terminated_by_the_server_is_read(
         except (redshift_connector.Error, OSError) as error:
             in_transaction["raised"] = error_chain(error)
         in_transaction["after"] = next_command_reading(inside, pid)
-        reading["transacao"] = in_transaction
+        reading["in_transaction"] = in_transaction
 
     # Dentro de um BEGIN do cliente: o erro sobe sem repetição, e o comando seguinte, com o
     # in_transaction do driver ainda o de antes da queda, reabre a conexão.
@@ -2259,15 +2267,15 @@ def test_session_terminated_by_the_server_is_read(
         except (redshift_connector.Error, OSError) as error:
             client_transaction["raised"] = error_chain(error)
         client_transaction["after"] = next_command_reading(client, pid)
-        reading["transacao_do_cliente"] = client_transaction
+        reading["client_transaction"] = client_transaction
     record("redshift.engine.terminated_session", reading)
 
     # A ociosa reconecta no comando seguinte; as transações levantam a queda e reconectam fora.
-    idle_reading = reading["ociosa"]
+    idle_reading = reading["idle"]
     assert idle_reading["terminated"] is True
     assert idle_reading["next"].get("reconnected") is True, idle_reading["next"]
     assert idle_reading["after"].get("reconnected") is True, idle_reading["after"]
-    for key in ("transacao", "transacao_do_cliente"):
+    for key in ("in_transaction", "client_transaction"):
         transaction_reading = reading[key]
         assert transaction_reading["terminated"] is True, key
         assert transaction_reading["raised"] is not None, key

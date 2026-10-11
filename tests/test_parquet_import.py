@@ -70,6 +70,17 @@ def folder(
 
 
 @pytest.fixture
+def cli_environment(
+    folder: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """O ambiente dos testes da linha de comando: a pasta do teste como a temporária do processo,
+    onde o DuckDB da carga grava, e sem ``SERIALIZE_DB_ROOT``, para a raiz vir só de ``--root``."""
+    monkeypatch.setattr(tempfile, "tempdir", str(folder))
+    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
+
+
+@pytest.fixture
 def db(
     folder: Path,
 ) -> Database:
@@ -1067,6 +1078,7 @@ def test_cli_import_imports_the_base_and_reports(
     base: source.SourceBase,
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db import`` sobre a base inteira: as tabelas sem partição antes das
@@ -1074,8 +1086,6 @@ def test_cli_import_imports_the_base_and_reports(
     uma partição só, gravada e conferida sozinha, com a tabela sem partição fora, saída 0; 1 na
     partição fora do contrato; 2 no modelo fora do contrato, na tabela fora do modelo, na origem
     ausente ou num esquema que a biblioteca não lê e no conflito, sem traceback."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = str(folder / "delta")
     common = [
         "import",
@@ -1192,13 +1202,12 @@ def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
     base: source.SourceBase,
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db import --partitions`` com uma partição que a origem não tem sai com 1, com a
     mensagem e sem traceback, antes de gravar qualquer partição: a outra partição pedida, que a
     origem tem, fica fora do Delta em toda tabela."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     root = folder / "delta"
     arguments = [
         "import",
@@ -1227,6 +1236,7 @@ def test_cli_import_ignores_the_listed_partitions(
     base: source.SourceBase,
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """``serialize-db import --ignore-partitions`` deixa a partição listada fora da carga e do
@@ -1234,8 +1244,6 @@ def test_cli_import_ignores_the_listed_partitions(
     como a 2025-09-30 da base de produção em 2026-10-06: a tabela sem partição entra inteira, o
     valor que a origem não tem não é recusado, e a saída é 0; com ``--partitions``, é erro de
     uso."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     # Uma cópia de cad_contas e de cad_operacoes, com a partição 2026-03-31 sem id_operacao.
     origin = folder / "origem"
     for name in ("cad_contas", "cad_operacoes"):
@@ -1291,12 +1299,11 @@ def test_cli_import_names_the_unpartitioned_table(
     base: source.SourceBase,
     folder: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
     """A tabela sem partição aparece como tabela inteira na linha da carga e na diferença, que
     sai com 1."""
-    monkeypatch.setattr(tempfile, "tempdir", str(folder))
-    monkeypatch.delenv("SERIALIZE_DB_ROOT", raising=False)
     monkeypatch.setattr(parquet_import, "import_report", unpartitioned_difference)
     arguments = [
         "import",

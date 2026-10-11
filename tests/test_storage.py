@@ -55,11 +55,10 @@ AWS_VARIABLES = (
 @pytest.fixture
 def clean_aws(
     monkeypatch: pytest.MonkeyPatch,
-) -> pytest.MonkeyPatch:
+) -> None:
     """O ambiente sem as variáveis da AWS que ``Storage`` lê."""
     for name in AWS_VARIABLES:
         monkeypatch.delenv(name, raising=False)
-    return monkeypatch
 
 
 @pytest.fixture(
@@ -77,13 +76,14 @@ def storage(
 
 
 def test_storage_for_uri(
-    clean_aws: pytest.MonkeyPatch,
+    clean_aws: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``s3://``, ``file://`` e caminho dão o sistema de arquivos certo e o caminho nele, sem rede,
     com o ``%20`` do ``file://`` como espaço e, na pasta local, ``/`` como separador também no
     Windows; o S3 sem região e outro esquema são erro."""
     # O S3, com a região da variável.
-    clean_aws.setenv("AWS_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
     s3 = Storage.for_uri("s3://bucket/projeto/delta/")
     assert isinstance(s3.filesystem, pafs.S3FileSystem)
     assert s3.filesystem.region == "sa-east-1"
@@ -110,17 +110,18 @@ def test_storage_for_uri(
     # Outro esquema e o S3 sem região são erro.
     with pytest.raises(ValueError, match="esquema"):
         Storage.for_uri("gs://bucket/delta")
-    clean_aws.delenv("AWS_REGION")
+    monkeypatch.delenv("AWS_REGION")
     with pytest.raises(ValueError, match="AWS_REGION"):
         Storage.for_uri("s3://bucket/delta")
 
 
 def test_paths_relative_to_the_root(
-    clean_aws: pytest.MonkeyPatch,
+    clean_aws: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``join`` junta por ``/`` sem barras nas pontas; ``relative`` leva uma URI sob a raiz ao
     caminho relativo e recusa a de fora; ``uri_of`` faz a volta."""
-    clean_aws.setenv("AWS_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
     storage = Storage.for_uri("s3://bucket/delta")
     joined = storage.join("prd/", "/cad_operacoes", "", "_delta_log")
     assert joined == "prd/cad_operacoes/_delta_log"
@@ -132,20 +133,21 @@ def test_paths_relative_to_the_root(
 
 
 def test_storage_options_resolved_per_call(
-    clean_aws: pytest.MonkeyPatch,
+    clean_aws: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cada chamada devolve um dicionário novo, com a região da variável, o retry e as chaves de
     SSE configuradas, e nenhuma credencial; a pasta local não precisa de opção."""
-    clean_aws.setenv("AWS_DEFAULT_REGION", "sa-east-1")
-    clean_aws.setenv("AWS_ACCESS_KEY_ID", "AKIAEXEMPLO")
-    clean_aws.setenv("AWS_SECRET_ACCESS_KEY", "segredo")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXEMPLO")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "segredo")
     storage = Storage.for_uri("s3://bucket/delta")
     first = storage.storage_options()
     assert first == {"AWS_REGION": "sa-east-1", "max_retries": "3", "retry_timeout": "10s"}
 
     # A chamada seguinte relê as variáveis.
-    clean_aws.setenv("AWS_REGION", "us-west-2")
-    clean_aws.setenv("AWS_SERVER_SIDE_ENCRYPTION", "aws:kms")
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("AWS_SERVER_SIDE_ENCRYPTION", "aws:kms")
     second = storage.storage_options()
     assert second is not first
     assert second["AWS_REGION"] == "us-west-2"
@@ -193,21 +195,22 @@ def test_duckdb_proxy_settings_without_credentials_in_the_address() -> None:
 
 
 def test_duckdb_secret_options_for_an_endpoint(
-    clean_aws: pytest.MonkeyPatch,
+    clean_aws: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sem ``AWS_ENDPOINT_URL``, só a região; com ele, o endereço sem o esquema e o endereço por
     caminho, e ``USE_SSL false`` só num endpoint ``http``."""
-    clean_aws.setenv("AWS_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
     region = ["REGION 'sa-east-1'"]
     assert _duckdb_secret_options() == region
 
     # O endpoint http de um serviço compatível num IP, como o moto do substituto local.
-    clean_aws.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:5055")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:5055")
     http = [*region, "ENDPOINT '127.0.0.1:5055'", "URL_STYLE 'path'", "USE_SSL false"]
     assert _duckdb_secret_options() == http
 
     # O endpoint https, com SSL.
-    clean_aws.setenv("AWS_ENDPOINT_URL", "https://minio.exemplo:9000")
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://minio.exemplo:9000")
     https = [*region, "ENDPOINT 'minio.exemplo:9000'", "URL_STYLE 'path'"]
     assert _duckdb_secret_options() == https
 
@@ -240,13 +243,14 @@ def stored_secret(
 
 
 def test_renew_duckdb_secret_follows_the_key(
-    clean_aws: pytest.MonkeyPatch,
+    clean_aws: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """O secret é criado sem um anterior, fica com a mesma chave e é recriado quando a chave da
     credencial troca, com a região do ambiente e sem mostrar o segredo nem o token; a chave, o
     segredo e o token ficam fora do texto dos comandos."""
     require_duckdb_extension("httpfs")
-    clean_aws.setenv("AWS_REGION", "sa-east-1")
+    monkeypatch.setenv("AWS_REGION", "sa-east-1")
     credentials = botocore.credentials.Credentials("AKIAPRIMEIRA", "segredo-um", "token-um")
     with duckdb.connect(config=duckdb_test_config()) as connection:
         connection.execute("LOAD httpfs")
@@ -337,7 +341,8 @@ def refusing_s3_storage(
     ("code", "status"), [("PreconditionFailed", 412), ("ConditionalRequestConflict", 409)]
 )
 def test_s3_refusals_of_the_conditional_write_are_conflict_error(
-    clean_aws: pytest.MonkeyPatch,
+    clean_aws: None,
+    monkeypatch: pytest.MonkeyPatch,
     code: str,
     status: int,
 ) -> None:
@@ -345,7 +350,7 @@ def test_s3_refusals_of_the_conditional_write_are_conflict_error(
     ``ConflictError`` em ``create_text`` e em ``write_text``, cada pedido com a sua condição; sem
     rede, pelo cliente dublê."""
     client = RefusingS3Client(code, status)
-    storage = refusing_s3_storage(clean_aws, client)
+    storage = refusing_s3_storage(monkeypatch, client)
     path = "prd/_serialize_db/snapshots.json"
     with pytest.raises(ConflictError, match=code):
         storage.create_text(path, "{}")
@@ -359,12 +364,13 @@ def test_s3_refusals_of_the_conditional_write_are_conflict_error(
 
 
 def test_s3_other_errors_of_the_conditional_write_propagate(
-    clean_aws: pytest.MonkeyPatch,
+    clean_aws: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No S3, um erro do serviço fora das recusas da condição, como o 403, sobe como a
     ``ClientError`` do botocore, sem virar ``ConflictError``."""
     client = RefusingS3Client("AccessDenied", 403)
-    storage = refusing_s3_storage(clean_aws, client)
+    storage = refusing_s3_storage(monkeypatch, client)
     with pytest.raises(botocore.exceptions.ClientError, match="AccessDenied"):
         storage.create_text("prd/_serialize_db/snapshots.json", "{}")
     assert len(client.requests) == 1
