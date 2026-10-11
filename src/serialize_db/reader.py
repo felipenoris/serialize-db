@@ -217,11 +217,19 @@ class ReaderStream:
         self.schema = stream.schema
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """[public] O próximo lote, na ordem da consulta; o erro que ela encontra depois do último
-        lote entregue sobe aqui, como no ``DuckDBStream``.
+        """[public] O próximo lote, na ordem da consulta.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            with reader.stream(sa.select(Lancamento.__table__)) as stream:
+                first = stream.read_next_batch()
 
         :return: o lote, no esquema ``schema``.
         :raises StopIteration: no fim dos lotes.
+        :raises OSError: o erro que a consulta encontra depois do último lote entregue, do leitor
+            Arrow com a mensagem do DuckDB.
         """
         return self._stream.read_next_batch()
 
@@ -232,7 +240,16 @@ class ReaderStream:
     def read_all(self) -> pa.Table:
         """[public] Os lotes que faltam numa ``pa.Table``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with reader.stream(sa.select(Lancamento.__table__)) as stream:
+                table = stream.read_all()
+
         :return: a tabela, no esquema ``schema``; vazia depois do último lote.
+        :raises OSError: o erro que a consulta encontra depois do último lote entregue, do leitor
+            Arrow com a mensagem do DuckDB.
         """
         return self._stream.read_all()
 
@@ -246,7 +263,18 @@ class ReaderStream:
 
     def close(self) -> None:
         """[public] Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
-        segura."""
+        segura.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            stream = reader.stream(sa.select(Lancamento.__table__))
+            try:
+                first = stream.read_next_batch()
+            finally:
+                stream.close()   # o with do stream chama close na saída
+        """
         self._stream.close()
         self._reader = None
 

@@ -874,6 +874,13 @@ class RedshiftStream:
         """[public] O próximo lote, na ordem dos arquivos do ``UNLOAD``; o erro da leitura de um
         arquivo sobe no lugar do lote em que ele aconteceu.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.stream(sa.select(Lancamento.__table__)) as stream:
+                first = stream.read_next_batch()
+
         :return: o lote, no esquema ``schema``.
         :raises StopIteration: no fim dos lotes.
         """
@@ -898,6 +905,13 @@ class RedshiftStream:
     def read_all(self) -> pa.Table:
         """[public] Os lotes que faltam numa ``pa.Table``.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.stream(sa.select(Lancamento.__table__)) as stream:
+                table = stream.read_all()
+
         :return: a tabela, no esquema ``schema``; vazia depois do último lote.
         """
         return pa.Table.from_batches(list(self), schema=self.schema)
@@ -910,7 +924,18 @@ class RedshiftStream:
         return reader.__arrow_c_stream__(requested_schema)
 
     def close(self) -> None:
-        """[public] Para a leitura e apaga os arquivos do ``UNLOAD`` deste stream."""
+        """[public] Para a leitura e apaga os arquivos do ``UNLOAD`` deste stream.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            stream = engine.stream(sa.select(Lancamento.__table__))
+            try:
+                first = stream.read_next_batch()
+            finally:
+                stream.close()   # o with do stream chama close na saída
+        """
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=10)
@@ -1147,6 +1172,14 @@ class RedshiftAppender:
         """[public] Converte os lotes pelo contrato, na thread do cliente, e os põe na fila; um lote
         recusado faz o appender não inserir nada.
 
+        Exemplo:
+
+        .. code-block:: python
+
+            with engine.appender(Projetado.__table__) as appender:
+                for batch in batches:
+                    appender.write(batch)
+
         :param data: um ``RecordBatch`` ou uma ``pa.Table`` nas colunas do contrato; cada lote traz
             o conjunto de colunas do primeiro.
         :raises serialize_db.errors.ContractError: outro tipo de dado, um valor fora do contrato ou
@@ -1197,6 +1230,14 @@ class RedshiftAppender:
 
         Sem a exceção do ``with``, o erro que a propriedade ``error`` guarda sobe depois do arquivo
         apagado.
+
+        Exemplo:
+
+        .. code-block:: python
+
+            appender = engine.appender(Projetado.__table__)
+            appender.write(batch)
+            appender.close()   # o with do appender chama close na saída
 
         :param error: a exceção que saiu do bloco ``with``, passada pelo ``__exit__``; com ela nada
             é carregado, e ela segue pelo ``with``; ``None`` carrega.
