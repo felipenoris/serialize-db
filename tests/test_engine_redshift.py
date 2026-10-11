@@ -2173,7 +2173,7 @@ def test_ingest_and_pinned_delta_load_reordered_columns(
     version = delta.publish_partition(
         uri, written, "p1", text_columns_rows(written, "p1", [1, 2]), METADATA, storage
     )
-    diff = delta._schema_diff(reordered, delta.open_table(uri, storage))
+    diff = delta.schema_diff(reordered, delta.open_table(uri, storage))
     assert not diff.changes
     assert not diff.destructive
     expected = [

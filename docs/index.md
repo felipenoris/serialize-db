@@ -401,13 +401,15 @@ cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferen
 `NOT NULL` numa tabela ainda sem dados, `NOT NULL` relaxado, `CheckConstraint` nova, comentários)
 e recusa com `serialize_db.errors.SchemaDiffRefused` o que só `serialize_db.delta.rewrite`
 resolve, num commit: remoção (a renomeação é uma remoção e uma coluna nova), mudança de tipo,
-`NOT NULL` numa coluna anulável e coluna `NOT NULL` nova numa tabela com dados. A coluna
-nova entra em qualquer posição do modelo: os arquivos gravados antes dela não a têm, e todo leitor,
-o `COPY` do Redshift inclusive, liga cada coluna do arquivo à de mesmo nome e lê a nova nula neles.
-`serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
-ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva. O nome do snapshot é
-imutável: a entrada não muda depois de gravada, e o nome não volta a ser usado, nem depois do
-arquivamento.
+`NOT NULL` numa coluna anulável e coluna `NOT NULL` nova numa tabela com dados.
+`serialize_db.delta.schema_diff` lê esse diff sem gravar nada, e o pipeline a chama antes da
+execução para saber se `run.publish_delta`, que reconcilia cada tabela que publica, aceita o modelo
+novo. A coluna nova entra em qualquer posição do modelo: os arquivos gravados antes dela não a têm,
+e todo leitor, o `COPY` do Redshift inclusive, liga cada coluna do arquivo à de mesmo nome e lê a
+nova nula neles. `serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo
+de controle do ambiente, e `serialize_db.delta.vacuum_keeping_snapshots` as preserva. O nome do
+snapshot é imutável: a entrada não muda depois de gravada, e o nome não volta a ser usado, nem
+depois do arquivamento.
 
 ### Importar a base Parquet atual
 

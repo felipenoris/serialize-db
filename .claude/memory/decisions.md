@@ -2535,3 +2535,25 @@ public.
 
 `CLAUDE.md` ("Naming conventions", "Docstrings"), `src/serialize_db/delta.py`,
 `tests/test_package.py`.
+
+## The public `schema_diff` (2026-10-11)
+
+The evaluation the user asked at 17:41 UTC found a second name with a client use ("The public
+`partition_values` (2026-10-11)"): `delta._schema_diff`, the diff between the model and a loaded
+version of a Delta table, which writes nothing. `run.publish_delta` calls `reconcile` on each table
+it publishes before writing it, so a destructive model change (a removed column, a changed type,
+`NOT NULL` on a nullable column) shows only there, as `SchemaDiffRefused`, after the pipeline ran,
+and a call to `reconcile` before the run writes the additive part to the table. Asked on a card
+whether the function becomes public ("Pública", recommended, or "Privada"), the user chose "Pública"
+(18:16 UTC). For this name the choice reverses case 1 of 2026-10-10 ("Tirar os 16", in "The public
+API after the evaluation of 2026-10-10") and the "Prefixar" of 06:13 UTC ("The `_` prefix of the
+names only their own module calls, applied (2026-10-11)"), as the card said: the function returns to
+the `__all__` of `delta` as `schema_diff`, its docstring opens with `[public] [uso do cliente]`, the
+second name with the mark, and says the client's use, the module docstring and `docs/index.md` name
+it beside `reconcile`, and `tests/test_engine_redshift.py` reads the public name. `SchemaDiff`, the
+type it returns, was already public.
+`tests/test_delta.py::test_schema_diff_reads_the_diff_without_writing` fails when the function
+commits or misses a removed column.
+
+`src/serialize_db/delta.py`, `docs/index.md`, `tests/test_delta.py`,
+`tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md`.
