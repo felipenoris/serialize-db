@@ -695,8 +695,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   repository; after the merge, the user pointed out that the clients install `delta` and `httpfs`
   from the wheels `duckdb-extension-delta` and `duckdb-extension-httpfs`, each version requiring the
   exact `duckdb`, and the newest was 1.5.5. With `duckdb==1.5.6` the resolver picked the 1.0.3
-  wheels without an error. Before bumping DuckDB, read those wheels' versions on PyPI; the rule
-  lives here because `CLAUDE.md` is at its size budget.
+  wheels without an error. Before bumping DuckDB, read those wheels' versions on PyPI.
 - **A command repeated after a connection drop is read with the command applied before the
   drop** (2026-10-04). `RedshiftEngine.execute` reopened a dropped connection and repeated the
   command, and the bug review of 2026-10-04 read the case the design never had: the driver's
@@ -706,8 +705,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   DDL with `IF`, the `DELETE` of a staging, a `SELECT`) stays outside a transaction, and one that
   adds rows runs inside one, where the drop rises and the server rolls back. The test double
   drops the connection on a named command after passing it to the stand-in
-  (`FakeConnection.drop_on`), so the repeat is measured, not assumed; the rule lives here
-  because `CLAUDE.md` is at its size budget.
+  (`FakeConnection.drop_on`), so the repeat is measured, not assumed.
 - **A driver's state is read on the failure path before a guard relies on it** (2026-10-09). The
   answer to the user at 16:46 UTC proposed refusing the Redshift engine's primitives by the
   driver's `in_transaction` and said the same reading would stop `execute` from repeating a
@@ -717,8 +715,7 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   `transaction()`, and on a dead socket every later command would have raised without the
   reconnect. The engine marks the dropped connection, the local fake and the stand-in keep the
   stale value as the driver does, and a variant without the mark fails two local tests. Before a
-  guard reads a library's state, trace what sets it on the error path; the rule lives here
-  because `CLAUDE.md` is at its size budget.
+  guard reads a library's state, trace what sets it on the error path.
 - **A claim that a lock is released is asserted from a second thread, with a bounded wait**
   (2026-10-10, 2026-10-11). The Redshift engine's lock is a `threading.RLock`, and the suite's
   check "a command runs while a `stream` still reads the files" called `engine.query` on the same

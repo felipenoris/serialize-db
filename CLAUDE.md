@@ -664,6 +664,19 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A Parquet footer is read by each leaf's `path`, never its `name`**: the leaf of a column
   nested in a struct repeats the inner field's name, so `valor` inside `s` passed
   `register_files`, registered and read null (2026-10-01).
+- **A DuckDB version bump waits for the PyPI extension wheels**: the clients install `delta` and
+  `httpfs` from `duckdb-extension-delta` and `duckdb-extension-httpfs`, each version requiring the
+  exact `duckdb`; with `duckdb==1.5.6` the resolver picked the 1.0.3 wheels without an error, the
+  newest being 1.5.5, so read those wheels' versions on PyPI before the bump (2026-10-04).
+- **A command repeated after a connection drop is read with the command applied before the
+  drop**: the driver's `InterfaceError` does not say whether the server applied it, and the
+  repeated `COPY` left 240 rows of a 120-row partition in the stand-in; a command that may repeat
+  (a DDL with `IF`, the `DELETE` of a staging, a `SELECT`) stays outside a transaction, and one
+  that adds rows runs inside one, where the drop rises and the server rolls back (2026-10-04).
+- **A driver's state is read on the failure path before a guard relies on it**:
+  `redshift_connector` sets `in_transaction` only in `handle_READY_FOR_QUERY`, which a dropped
+  connection never sends, so after a `COMMIT` dropped inside `transaction()` it stays `True`;
+  trace what sets a library's state on the error path before a guard reads it (2026-10-09).
 - **A claim that a lock is released is asserted from a second thread, with a bounded wait**: a
   re-entrant lock lets its owner in whether or not it is held, and a `result()` without a
   timeout, or the exit of the pool's `with`, hangs the test instead of failing it (2026-10-10,
