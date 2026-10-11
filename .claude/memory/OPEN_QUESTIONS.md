@@ -274,25 +274,27 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
 - **O prefixo `_` dos nomes que só o próprio módulo chama.** A avaliação da API pública de
-  2026-10-10 (`api-publica/avaliacao-api-publica.md`, na biblioteca do projeto Claude) deixou uma
+  2026-10-10 (`api-publica/avaliacao-api-publica.md`, na biblioteca do projeto Claude) deixou a
   pergunta depois das decisões (`decisions.md`, "The public API after the evaluation of
-  2026-10-10"): se os nomes sem prefixo que só o próprio módulo chama ganham o prefixo `_` da
-  regra de níveis ou ficam protegidos sem prefixo, como o cartão do caso 1 prometeu ("nenhuma
-  importação muda"). A avaliação contou dois, `partition_query`, de `parquet_import`, e
-  `sandbox_prefix`, de `engine.redshift`, cujo prefixo muda `tests/test_parquet_import.py`,
-  `tests/test_engine_redshift.py` e a docstring de `tests/proof_of_concept/test_stdlib.py`. Um
-  `grep -w` em `src/`, em 2026-10-11, acha os outros, com docstrings `[protected]`: dos dezesseis
-  que saíram do `__all__`, `schema_diff` em `delta`, `PublishedColumn`, `control_ddl`,
-  `control_read`, `published_ddl`, `publication_statements`, `unpublication_statements` e
-  `reconcile_published` em `publication` e `schema_from_row_description` em `engine.redshift`;
-  em `engine.redshift`, também `login_of`, `driver_connect` (a porta que os testes trocam pelo
-  substituto), `unload_text`, `table_from_cursor`, `compiled_for_cursor` e `literal_text`; as
-  seis funções SQL de `audit` (`partition_text`, `json_valid`, `text_bytes`, `json_bytes`,
-  `partition_value_valid` e `is_finite`); e `required_parameters` em `sql`. Sem docstring, as
-  constantes `RETENTION` (`delta`) e `ARROW_ONLY` (`engine`) e os loggers (`log`, `command_log`)
-  também são só do próprio módulo. O prefixo muda os testes que leem esses nomes e
-  `probes/operacao/probe_parallel_gain.py`, que importa `publication_statements`, `control_read`
-  e `published_ddl`.
+  2026-10-10"), e o usuário escolheu "Prefixar" em 2026-10-11 (`decisions.md`, "The rules and the
+  open items of the final review of PRs #155 and #156 (2026-10-11)"): os 24 nomes abaixo ganham o
+  prefixo `_` da regra de níveis num PR novo, depois do merge do PR #157, e as docstrings passam de
+  `[protected]` a `[private]`; a importação de fora do pacote quebra, ao contrário do que o cartão
+  do caso 1 prometeu ("nenhuma importação muda"). A avaliação contou dois, `partition_query`, de
+  `parquet_import`, e `sandbox_prefix`, de `engine.redshift`, cujo prefixo muda
+  `tests/test_parquet_import.py`, `tests/test_engine_redshift.py` e a docstring de
+  `tests/proof_of_concept/test_stdlib.py`. Um `grep -w` em `src/`, em 2026-10-11, achou os outros,
+  com docstrings `[protected]`: dos dezesseis que saíram do `__all__`, `schema_diff` em `delta`,
+  `PublishedColumn`, `control_ddl`, `control_read`, `published_ddl`, `publication_statements`,
+  `unpublication_statements` e `reconcile_published` em `publication` e
+  `schema_from_row_description` em `engine.redshift`; em `engine.redshift`, também `login_of`,
+  `driver_connect` (a porta que os testes trocam pelo substituto), `unload_text`,
+  `table_from_cursor`, `compiled_for_cursor` e `literal_text`; as seis funções SQL de `audit`
+  (`partition_text`, `json_valid`, `text_bytes`, `json_bytes`, `partition_value_valid` e
+  `is_finite`); e `required_parameters` em `sql`. A renomeação muda os testes que leem esses nomes e
+  `probes/operacao/probe_parallel_gain.py`, que importa `publication_statements`, `control_read` e
+  `published_ddl`. Sem docstring, as constantes `RETENTION` (`delta`) e `ARROW_ONLY` (`engine`) e os
+  loggers (`log`, `command_log`) também são só do próprio módulo e ficaram fora do cartão.
 
 ## Achados das sondas de consistência de leitura e escrita
 

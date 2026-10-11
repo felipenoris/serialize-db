@@ -2287,8 +2287,9 @@ cases went to him as decision cards, one at a time.
   open with `[protected]`, each docstring naming who calls it. Another module calls five of them
   (`CopyManifest`, `copy_manifest`, `max_key`, `read_back`, `column_ddl`), protected by the level
   rule; only their own module calls the other eleven, which the rule makes private, and the
-  evaluation had counted only `partition_query` and `sandbox_prefix` among them. Whether they
-  take the `_` prefix is in `OPEN_QUESTIONS.md`.
+  evaluation had counted only `partition_query` and `sandbox_prefix` among them. They take the
+  `_` prefix in a new PR after PR #157 ("Prefixar", in "The rules and the open items of the final
+  review of PRs #155 and #156 (2026-10-11)").
 - Case 2 (23:57 UTC, "Públicas", against the recommendation of private classes behind the
   protocols): `DuckDBStream`, `DuckDBAppender`, `RedshiftStream` and `RedshiftAppender` enter the
   `__all__` of their engine modules, with the constructor, `read_next_batch`, `read_all`, `write`
@@ -2413,7 +2414,15 @@ The cards of PR #157, asked one at a time, each with its case before the options
   version written and not re-read, against the decision of 2026-10-02 ("Recusar antes"),
   which the card asked again. `test_export_swap_reads_the_memory_once_before_the_commit`
   fails on the previous code.
+- The `_` prefix of the names only their own module calls (06:13 UTC, "Prefixar", the
+  recommended option): the 24 names the item of `OPEN_QUESTIONS.md` lists take the `_` prefix of
+  the level rule and open with `[private]`, in a new PR after PR #157 merges; an import from
+  outside the package breaks, and none of them is in the documented public API. They are 11 of
+  the 16 names that left `__all__` on 2026-10-10, where the evaluation had counted 2, and 13 more:
+  six in `engine.redshift`, the six SQL functions of `audit` and `required_parameters` in `sql`.
+  The card's reason: the names had already left the public API, and the rule of 2026-10-11 lets
+  the tests read private names.
 
 `CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24 and of the shallow
 clone), `src/serialize_db/delta.py`, `src/serialize_db/engine/redshift.py`,
-`tests/test_engine_redshift.py`.
+`tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md` (the rename of the 24 names).
