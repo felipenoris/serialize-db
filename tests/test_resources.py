@@ -1,17 +1,17 @@
 """``serialize_db.resources``: as CPUs e a memória lidas de um ``/proc`` e de um cgroup fabricados.
 
-Os testes gravam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``) as pastas ``proc/`` e
-``cgroup/`` que tomam o lugar de ``/proc`` e ``/sys/fs/cgroup``, e fixam em 8 as CPUs da afinidade.
-Eles conferem o cgroup v2 com a folga que devolve o cache de arquivos e a cota arredondada para
-cima, o ``MemAvailable`` menor que a folga, o ancestral mais apertado, o cgroup v1 com a pasta do
-processo e o contêiner que monta o próprio cgroup como raiz, a memória compartilhada que a folga
-não devolve, no v2 e no v1, a memória abaixo de 2 MiB ou negativa que ``environment_limits``
-recusa, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do Python. No Windows,
-a memória sem ``/proc`` é a disponível que a API do sistema informa, e a física dessa leitura é
-conferida contra a do WMI. O pico de memória residente é lido de um ``/proc/self/status``
-fabricado, sem ele, e num processo filho que toca 64 MiB. As folgas fabricadas, de 1,25 a 3,5 GiB,
-valem numa máquina com mais memória física que elas, porque ``available_memory`` toma o mínimo com
-a física.
+Os testes que gravam, marcados ``local``, criam sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` as pastas
+``proc/`` e ``cgroup/`` que tomam o lugar de ``/proc`` e ``/sys/fs/cgroup``, e fixam em 8 as CPUs da
+afinidade. Eles conferem o cgroup v2 com a folga que devolve o cache de arquivos e a cota
+arredondada para cima, o ``MemAvailable`` menor que a folga, o ancestral mais apertado, o cgroup v1
+com a pasta do processo e o contêiner que monta o próprio cgroup como raiz, a memória compartilhada
+que a folga não devolve, no v2 e no v1, a memória abaixo de 2 MiB ou negativa que
+``environment_limits`` recusa, e a máquina sem ``/proc``, que fica com a memória física e as CPUs do
+Python. No Windows, a memória sem ``/proc`` é a disponível que a API do sistema informa, e a física
+dessa leitura é conferida contra a do WMI. O pico de memória residente é lido de um
+``/proc/self/status`` fabricado, sem ele, e num processo filho que toca 64 MiB. As folgas
+fabricadas, de 1,25 a 3,5 GiB, valem numa máquina com mais memória física que elas, porque
+``available_memory`` toma o mínimo com a física.
 """
 
 from __future__ import annotations
@@ -28,8 +28,6 @@ import pytest
 from conftest import LocalLocation
 from serialize_db import resources
 from serialize_db.errors import SandboxError
-
-pytestmark = pytest.mark.local
 
 GIB = 2**30
 
@@ -67,6 +65,7 @@ def machine(
     return folder
 
 
+@pytest.mark.local
 def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(
     machine: Path,
 ) -> None:
@@ -92,6 +91,7 @@ def test_cgroup_v2_gives_back_the_file_cache_and_rounds_the_quota_up(
     assert resources.available_memory() == GIB
 
 
+@pytest.mark.local
 def test_the_tightest_ancestor_wins(
     machine: Path,
 ) -> None:
@@ -115,6 +115,7 @@ def test_the_tightest_ancestor_wins(
     assert resources.available_cpus() == 1
 
 
+@pytest.mark.local
 def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(
     machine: Path,
 ) -> None:
@@ -144,6 +145,7 @@ def test_cgroup_v1_with_the_process_folder_and_with_the_container_root(
     assert resources.available_cpus() == 3
 
 
+@pytest.mark.local
 @pytest.mark.parametrize(
     ("cgroup", "files"),
     [
@@ -184,6 +186,7 @@ def test_shared_memory_stays_in_the_cgroup_usage(
     assert resources.available_memory() == 4 * GIB - 3 * GIB + GIB - 3 * GIB // 4
 
 
+@pytest.mark.local
 def test_environment_limits_refuses_the_memory_under_two_mib(
     machine: Path,
 ) -> None:
@@ -210,6 +213,7 @@ def test_environment_limits_refuses_the_memory_under_two_mib(
         resources.environment_limits()
 
 
+@pytest.mark.local
 @pytest.mark.skipif(sys.platform == "win32", reason="no Windows, a memória é a disponível")
 @pytest.mark.usefixtures("machine")
 def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
@@ -220,6 +224,7 @@ def test_without_proc_the_physical_memory_and_the_python_cpus() -> None:
     assert resources.available_cpus() == 8
 
 
+@pytest.mark.local
 @pytest.mark.skipif(sys.platform != "win32", reason="lê a memória pela API do Windows")
 @pytest.mark.usefixtures("machine")
 def test_without_proc_windows_reads_the_memory_from_the_system() -> None:
@@ -240,6 +245,7 @@ def test_without_proc_windows_reads_the_memory_from_the_system() -> None:
     assert resources.available_cpus() == 8
 
 
+@pytest.mark.local
 def test_peak_rss_mb_reads_vmhwm_from_the_process_status(
     machine: Path,
 ) -> None:

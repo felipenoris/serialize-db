@@ -1,6 +1,6 @@
 """``serialize_db.parquet_import``: a carga inicial da base Parquet de origem sobre a base fictícia.
 
-Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a base de
+Os testes que gravam, marcados ``local``, escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``: a base de
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
 teste, com o motor DuckDB da carga na pasta do teste. Eles conferem a descoberta das partições e do
 que fica fora do padrão e fora do modelo; a consulta que leva a partição ao contrato, com ``to``
@@ -43,8 +43,6 @@ from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.errors import ContractError, ExecutionConflict
 from serialize_db.execution import Database
 from serialize_db.schema import arrow_schema, double_columns, table_options
-
-pytestmark = pytest.mark.local
 
 TABLES = Base.metadata.tables
 OUTSIDE_MODEL = ("alembic_version", "meta_update_status", "schema.json")
@@ -135,6 +133,7 @@ def key_values(
 # ---------------------------------------------------------------- a origem
 
 
+@pytest.mark.local
 def test_discover_partitions_and_skipped_entries(
     base: source.SourceBase,
     folder: Path,
@@ -194,6 +193,7 @@ def test_import_order_puts_unpartitioned_tables_first() -> None:
     assert all(table_options(TABLES[name]).partition_by is None for name in ordered[:-4])
 
 
+@pytest.mark.local
 def test_partition_query_casts_to_the_contract(
     base: source.SourceBase,
     db: Database,
@@ -226,6 +226,7 @@ def test_partition_query_casts_to_the_contract(
 # ---------------------------------------------------------------- a carga
 
 
+@pytest.mark.local
 def test_import_table_imports_every_partition_once(
     base: source.SourceBase,
     db: Database,
@@ -278,6 +279,7 @@ def test_import_table_imports_every_partition_once(
     assert rest == ["2026-01-31", "2026-03-31", "2026-06-30"]
 
 
+@pytest.mark.local
 def test_interrupted_import_resumes(
     base: source.SourceBase,
     db: Database,
@@ -316,6 +318,7 @@ def test_interrupted_import_resumes(
     assert delta.open_table(db.uri(table), db.storage).version() == 4
 
 
+@pytest.mark.local
 def test_keys_are_int64_and_timestamps_are_microseconds(
     base: source.SourceBase,
     db: Database,
@@ -345,6 +348,7 @@ def test_keys_are_int64_and_timestamps_are_microseconds(
     assert (source_types["id_lancamento"], source_types["timestamp"]) == ("INT32", "INT96")
 
 
+@pytest.mark.local
 def test_rows_are_written_in_sort_key_order(
     base: source.SourceBase,
     db: Database,
@@ -445,6 +449,7 @@ def assert_refused_without_commit(
     assert list(Path(uri).rglob("*.parquet")) == []
 
 
+@pytest.mark.local
 @pytest.mark.parametrize(
     ("table", "column", "value", "fragment"),
     [
@@ -476,6 +481,7 @@ def test_value_off_the_path_or_above_the_length_aborts_without_commit(
     assert_refused_without_commit(db, config, origin, table, fragment)
 
 
+@pytest.mark.local
 @pytest.mark.parametrize("column", source.MODEL_NOT_NULL_DECLARED_NULLABLE["cad_contratos"])
 def test_null_in_not_null_column_is_refused(
     base: source.SourceBase,
@@ -517,6 +523,7 @@ def source_without_column(
     return str(folder / "origem")
 
 
+@pytest.mark.local
 def test_first_file_without_a_contract_column_is_refused(
     base: source.SourceBase,
     db: Database,
@@ -534,6 +541,7 @@ def test_first_file_without_a_contract_column_is_refused(
     assert_refused_without_commit(db, config, origin, "cad_operacoes", fragment)
 
 
+@pytest.mark.local
 def test_later_file_without_a_contract_column_fails_in_duckdb(
     base: source.SourceBase,
     db: Database,
@@ -551,6 +559,7 @@ def test_later_file_without_a_contract_column_fails_in_duckdb(
     assert list(Path(uri).rglob("*.parquet")) == []
 
 
+@pytest.mark.local
 def test_first_file_with_a_contract_column_in_another_case_is_loaded(
     base: source.SourceBase,
     db: Database,
@@ -585,6 +594,7 @@ def write_chunks(
         pq.write_table(rows, origin / relative / "chunk_0.parquet")
 
 
+@pytest.mark.local
 def test_text_is_measured_as_in_cast_and_the_audit(
     folder: Path,
     config: DuckDBConfig,
@@ -674,6 +684,7 @@ def has_min_max(
     return False
 
 
+@pytest.mark.local
 def test_nonfinite_double_leaves_min_max_out_of_its_partition(
     base: source.SourceBase,
     db: Database,
@@ -722,6 +733,7 @@ def test_nonfinite_double_leaves_min_max_out_of_its_partition(
 # ---------------------------------------------------------------- o relatório e a auditoria
 
 
+@pytest.mark.local
 def test_import_report_matches_and_detects_a_difference(
     base: source.SourceBase,
     db: Database,
@@ -801,6 +813,7 @@ def test_common_conversions_break_a_tie_by_the_first_value() -> None:
     assert parquet_import._common_conversions(majority) == ()
 
 
+@pytest.mark.local
 @pytest.mark.parametrize("value", ["2026-01-31", "2026-06-30"])
 def test_import_report_lists_the_conversions_of_each_partition(
     base: source.SourceBase,
@@ -836,6 +849,7 @@ def test_import_report_lists_the_conversions_of_each_partition(
     assert [row[0] for row in in_delta] == in_source.column("spread_basico").to_pylist()
 
 
+@pytest.mark.local
 def test_import_report_confers_only_the_requested_partitions(
     base: source.SourceBase,
     db: Database,
@@ -876,6 +890,7 @@ def test_import_report_confers_only_the_requested_partitions(
     assert rates.matches
 
 
+@pytest.mark.local
 def test_requested_partition_absent_from_the_source_is_refused(
     base: source.SourceBase,
     db: Database,
@@ -920,6 +935,7 @@ def refuse_engine(
     raise AssertionError("um motor foi aberto")
 
 
+@pytest.mark.local
 def test_unpartitioned_table_under_partitions_is_left_out(
     base: source.SourceBase,
     db: Database,
@@ -952,6 +968,7 @@ def test_unpartitioned_table_under_partitions_is_left_out(
         )
 
 
+@pytest.mark.local
 def test_import_report_reads_only_what_the_import_reads(
     folder: Path,
     config: DuckDBConfig,
@@ -1009,6 +1026,7 @@ def test_import_report_reads_only_what_the_import_reads(
     assert report.conversions == ()
 
 
+@pytest.mark.local
 def test_foreign_key_orphans_are_reported_not_blocking(
     base: source.SourceBase,
     db: Database,
@@ -1074,6 +1092,7 @@ def unpartitioned_difference(
     return parquet_import.ImportReport("cad_contas", (partition,), (), ())
 
 
+@pytest.mark.local
 def test_cli_import_imports_the_base_and_reports(
     base: source.SourceBase,
     folder: Path,
@@ -1198,6 +1217,7 @@ def test_cli_import_imports_the_base_and_reports(
     assert "Traceback" not in printed_errors
 
 
+@pytest.mark.local
 def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
     base: source.SourceBase,
     folder: Path,
@@ -1232,6 +1252,7 @@ def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
     assert list(root.glob("**/_delta_log")) == []
 
 
+@pytest.mark.local
 def test_cli_import_ignores_the_listed_partitions(
     base: source.SourceBase,
     folder: Path,
@@ -1295,6 +1316,7 @@ def test_cli_import_ignores_the_listed_partitions(
     assert "not allowed with argument" in capsys.readouterr().err
 
 
+@pytest.mark.local
 def test_cli_import_names_the_unpartitioned_table(
     base: source.SourceBase,
     folder: Path,

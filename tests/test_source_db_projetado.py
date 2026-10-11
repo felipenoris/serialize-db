@@ -1,17 +1,18 @@
 """A base Parquet de origem fictícia reproduz a estrutura que o probe leu nas duas bases reais.
 
 ``source_db_projetado.write_source`` grava a base uma vez por módulo sob a pasta da sessão da suíte
-local, e os testes são ``local``: pulados sem ``SERIALIZE_DB_TEST_LOCAL_ROOT``. Cada teste confere
-nos arquivos gravados um aspecto das leituras de ``probes/parquet_source.py`` sobre
-``db_projetado`` (a base de desenvolvimento em 2026-09-20 e a de produção em 2026-09-21, idênticas
-na seção 3): as tabelas e o arquivo solto na raiz, o esquema de cada arquivo no vocabulário do
-relatório (tipo Arrow, nulidade, tipo físico, lógico e convertido), as partições, o layout físico,
-os valores que a carga inicial tem de tratar, a leitura pelos dois leitores da biblioteca, o
-controle de esquema da biblioteca anterior e a consistência da base com o modelo de referência. O
-esquema esperado é a seção 3 do relatório, transcrita; a saída do probe fica em ``probes/output/``,
-fora do git, e a transcrição é o que o teste guarda dela. A base é o material de
-``tests/test_parquet_import.py``, de ``tests/test_migrate_parquet_to_delta.py`` e de
-``tests/test_pipeline.py``, e da sonda ``probes/consistencia/probe_load.py``.
+local, e os testes que a leem são ``local``: pulados sem ``SERIALIZE_DB_TEST_LOCAL_ROOT``, menos o
+da transcrição contra as contagens do relatório, que não a lê. Cada teste confere nos arquivos
+gravados um aspecto das leituras de ``probes/parquet_source.py`` sobre ``db_projetado`` (a base de
+desenvolvimento em 2026-09-20 e a de produção em 2026-09-21, idênticas na seção 3): as tabelas e o
+arquivo solto na raiz, o esquema de cada arquivo no vocabulário do relatório (tipo Arrow, nulidade,
+tipo físico, lógico e convertido), as partições, o layout físico, os valores que a carga inicial tem
+de tratar, a leitura pelos dois leitores da biblioteca, o controle de esquema da biblioteca anterior
+e a consistência da base com o modelo de referência. O esquema esperado é a seção 3 do relatório,
+transcrita; a saída do probe fica em ``probes/output/``, fora do git, e a transcrição é o que o
+teste guarda dela. A base é o material de ``tests/test_parquet_import.py``, de
+``tests/test_migrate_parquet_to_delta.py`` e de ``tests/test_pipeline.py``, e da sonda
+``probes/consistencia/probe_load.py``.
 """
 
 from __future__ import annotations
@@ -31,8 +32,6 @@ import pytest
 import parquet_source
 import source_db_projetado as source
 from conftest import LocalLocation
-
-pytestmark = pytest.mark.local
 
 # A seção 3 do relatório do probe sobre a base real, como ele a imprimiu: por tabela, coluna, tipo
 # Arrow, nulidade, tipo físico, tipo lógico, tipo convertido e field_id.
@@ -296,6 +295,7 @@ def base(
     return source.write_source(Path(local_location.child("base-ficticia")))
 
 
+@pytest.mark.local
 def test_root_has_the_table_folders_and_the_loose_file(
     base: source.SourceBase,
 ) -> None:
@@ -323,6 +323,7 @@ def test_root_has_the_table_folders_and_the_loose_file(
     assert base.rows["meta_update_status"] == status_rows
 
 
+@pytest.mark.local
 def test_every_file_has_the_schema_the_probe_reported(
     base: source.SourceBase,
 ) -> None:
@@ -369,6 +370,7 @@ def assert_partition_files(
         assert data.column(partition.source).unique().to_pylist() == expected, path
 
 
+@pytest.mark.local
 def test_partitions_live_in_the_path_and_equal_the_source_column(
     base: source.SourceBase,
 ) -> None:
@@ -395,6 +397,7 @@ def test_partitions_live_in_the_path_and_equal_the_source_column(
         assert names == ["chunk_0.parquet"], table
 
 
+@pytest.mark.local
 def test_chunks_are_numbered_from_zero_without_padding(
     base: source.SourceBase,
 ) -> None:
@@ -461,6 +464,7 @@ def assert_file_layout(
     assert_column_chunks(path, metadata.row_group(0))
 
 
+@pytest.mark.local
 def test_physical_layout_matches_the_reading(
     base: source.SourceBase,
 ) -> None:
@@ -479,6 +483,7 @@ def test_physical_layout_matches_the_reading(
         assert 0 < len(files_with_key) < len(base.files[table]), table
 
 
+@pytest.mark.local
 def test_cad_lancamentos_values_reproduce_what_the_initial_load_handles(
     base: source.SourceBase,
 ) -> None:
@@ -524,6 +529,7 @@ def test_cad_lancamentos_values_reproduce_what_the_initial_load_handles(
     assert 0 < entries.column("contrato").null_count < entries.num_rows
 
 
+@pytest.mark.local
 def test_cad_contratos_values_reproduce_what_the_initial_load_handles(
     base: source.SourceBase,
 ) -> None:
@@ -538,6 +544,7 @@ def test_cad_contratos_values_reproduce_what_the_initial_load_handles(
     assert contracts.column("data_assinatura").null_count > contracts.num_rows // 2
 
 
+@pytest.mark.local
 def test_unpartitioned_values_reproduce_what_the_initial_load_handles(
     base: source.SourceBase,
 ) -> None:
@@ -561,6 +568,7 @@ def test_unpartitioned_values_reproduce_what_the_initial_load_handles(
     assert alembic.column("version_num").to_pylist() == [source.ALEMBIC_REVISION]
 
 
+@pytest.mark.local
 def test_the_base_satisfies_the_reference_model(
     base: source.SourceBase,
 ) -> None:
@@ -604,6 +612,7 @@ def test_the_base_satisfies_the_reference_model(
                 assert nulls == 0, (table, column)
 
 
+@pytest.mark.local
 def test_rel_contrato_operacao_apportions_each_contract_among_its_operations(
     base: source.SourceBase,
 ) -> None:
@@ -664,6 +673,7 @@ def path_to_root(
     return path
 
 
+@pytest.mark.local
 def test_rel_contas_hierarquias_is_a_tree_of_accounts(
     base: source.SourceBase,
 ) -> None:
@@ -690,6 +700,7 @@ def test_rel_contas_hierarquias_is_a_tree_of_accounts(
         assert path_to_root(parent_of, child)[-1] in roots, child
 
 
+@pytest.mark.local
 def test_schema_json_is_the_previous_library_control_and_matches_the_files(
     base: source.SourceBase,
 ) -> None:
@@ -720,6 +731,7 @@ def test_schema_json_is_the_previous_library_control_and_matches_the_files(
     }
 
 
+@pytest.mark.local
 def test_both_readers_see_the_partition_column_from_the_path(
     base: source.SourceBase,
 ) -> None:
