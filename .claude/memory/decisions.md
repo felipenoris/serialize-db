@@ -2280,10 +2280,12 @@ cases went to him as decision cards, one at a time.
   `max_key`, `read_back` and `schema_diff`; in `publication`, `PublishedColumn`, `control_ddl`,
   `control_read`, `publication_statements`, `published_ddl`, `reconcile_published` and
   `unpublication_statements`; in `schema`, `column_ddl`; in `parquet_import`, `partition_query`; in
-  `engine.redshift`, `sandbox_prefix` and `schema_from_row_description`. They are protected by the
-  level rule, each docstring naming who calls it, `partition_query` and `sandbox_prefix` included,
-  which only their own module calls; whether those two take the `_` prefix is in
-  `OPEN_QUESTIONS.md`.
+  `engine.redshift`, `sandbox_prefix` and `schema_from_row_description`. They keep no prefix and
+  open with `[protected]`, each docstring naming who calls it. Another module calls five of them
+  (`CopyManifest`, `copy_manifest`, `max_key`, `read_back`, `column_ddl`), protected by the level
+  rule; only their own module calls the other eleven, which the rule makes private, and the
+  evaluation had counted only `partition_query` and `sandbox_prefix` among them. Whether they
+  take the `_` prefix is in `OPEN_QUESTIONS.md`.
 - Case 2 (23:57 UTC, "Públicas", against the recommendation of private classes behind the
   protocols): `DuckDBStream`, `DuckDBAppender`, `RedshiftStream` and `RedshiftAppender` enter the
   `__all__` of their engine modules, with the constructor, `read_next_batch`, `read_all`, `write`

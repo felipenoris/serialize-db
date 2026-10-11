@@ -86,7 +86,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   levantaram o `InterfaceError` em todas (`.claude/memory/redshift.md`). Desde a decisão do usuário
   de 2026-10-10 (`decisions.md`) o caso assere a queda e a reconexão e repete cada comando a cada
   1 s por até 10 s enquanto a sessão responde no mesmo pid, com os segundos esperados no relatório
-  (`esperou`). Na bateria das 17:02 de 2026-10-10, a primeira com as asserções, os 12 casos das
+  (`waited`). Na bateria das 17:02 de 2026-10-10, a primeira com as asserções, os 12 casos das
   quatro rodadas caíram na primeira repetição, 1 s depois do `pg_terminate_backend`, a ociosa num
   pid novo; a terminação atrasada não voltou, e só uma rodada em que ela volte diz se os 10 s a
   cobrem.
@@ -184,10 +184,11 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   3,720 s e 3,752 s nas seguintes, as threads na sessão principal 3,881 s, 3,952 s e 3,748 s, e as
   sessões a mais 1,954 s, 1,798 s e 2,043 s; o menor tempo de cada forma entra no resumo, e um
   cache servindo as repetições mediria o cache, não o motor (regra de 2026-09-24 em `CLAUDE.md`).
-  Desde o PR desta revisão a sonda imprime, depois das consultas pequenas, quantas delas o
-  `sys_query_history` marca como servidas pelo cache (`result_cache_hit`); a próxima bateria lê o
-  número, e com o cache servindo as repetições a medida passa a desligá-lo na sessão (`SET
-  enable_result_cache_for_session TO off`) ou a variar os valores, por decisão do usuário.
+  Desde o PR #155, de 2026-10-10, a sonda imprime, depois das consultas pequenas, quantas delas o
+  `sys_query_history` marca como servidas pelo cache (`result_cache_hit`), sem as leituras da
+  própria vista; a próxima bateria lê o número, e com o cache servindo as repetições a medida
+  passa a desligá-lo na sessão (`SET enable_result_cache_for_session TO off`) ou a variar os
+  valores, por decisão do usuário.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
@@ -272,14 +273,26 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-10-10, a última às 02:33 de 2026-10-10, o Glue seguia com um banco e uma tabela Parquet, e o
   Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
-- **O prefixo `_` de `partition_query` e `sandbox_prefix`.** A avaliação da API pública de
+- **O prefixo `_` dos nomes que só o próprio módulo chama.** A avaliação da API pública de
   2026-10-10 (`api-publica/avaliacao-api-publica.md`, na biblioteca do projeto Claude) deixou uma
   pergunta depois das decisões (`decisions.md`, "The public API after the evaluation of
-  2026-10-10"): se `partition_query`, de `parquet_import`, e `sandbox_prefix`, de
-  `engine.redshift`, que só o próprio módulo chama, ganham o prefixo `_` da regra de níveis, o que
-  muda `tests/test_parquet_import.py`, `tests/test_engine_redshift.py` e a docstring de
-  `tests/proof_of_concept/test_stdlib.py`, ou ficam protegidas sem prefixo, como o cartão do caso 1
-  prometeu ("nenhuma importação muda").
+  2026-10-10"): se os nomes sem prefixo que só o próprio módulo chama ganham o prefixo `_` da
+  regra de níveis ou ficam protegidos sem prefixo, como o cartão do caso 1 prometeu ("nenhuma
+  importação muda"). A avaliação contou dois, `partition_query`, de `parquet_import`, e
+  `sandbox_prefix`, de `engine.redshift`, cujo prefixo muda `tests/test_parquet_import.py`,
+  `tests/test_engine_redshift.py` e a docstring de `tests/proof_of_concept/test_stdlib.py`. Um
+  `grep -w` em `src/`, em 2026-10-11, acha os outros, com docstrings `[protected]`: dos dezesseis
+  que saíram do `__all__`, `schema_diff` em `delta`, `PublishedColumn`, `control_ddl`,
+  `control_read`, `published_ddl`, `publication_statements`, `unpublication_statements` e
+  `reconcile_published` em `publication` e `schema_from_row_description` em `engine.redshift`;
+  em `engine.redshift`, também `login_of`, `driver_connect` (a porta que os testes trocam pelo
+  substituto), `unload_text`, `table_from_cursor`, `compiled_for_cursor` e `literal_text`; as
+  seis funções SQL de `audit` (`partition_text`, `json_valid`, `text_bytes`, `json_bytes`,
+  `partition_value_valid` e `is_finite`); e `required_parameters` em `sql`. Sem docstring, as
+  constantes `RETENTION` (`delta`) e `ARROW_ONLY` (`engine`) e os loggers (`log`, `command_log`)
+  também são só do próprio módulo. O prefixo muda os testes que leem esses nomes e
+  `probes/operacao/probe_parallel_gain.py`, que importa `publication_statements`, `control_read`
+  e `published_ddl`.
 
 ## Achados das sondas de consistência de leitura e escrita
 

@@ -546,14 +546,15 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   drop's `InterfaceError`, with the original as `__cause__` (`decisions.md`). Since 2026-10-09
   `tests/test_engine_redshift.py` ends an engine session with `pg_terminate_backend` from the parent
   engine, idle, inside `transaction()` and inside a client's `BEGIN`
-  (`redshift.engine.terminated_session`, keys `ociosa`, `transacao` and `transacao_do_cliente`) and
+  (`redshift.engine.terminated_session`, keys `idle`, `in_transaction` and `client_transaction`,
+  `ociosa`, `transacao` and `transacao_do_cliente` in the reports before 2026-10-11) and
   during the `COPY` of `ingest` over a 300,000-row partition
   (`redshift.engine.terminated_during_copy`), and records the error chain, whether the next command
   reconnects and what the server kept; the second battery of 2026-10-09 ran them (below). Since the
   user's decision of 2026-10-10 (`decisions.md`), `terminated_session` asserts the drop and the
   reconnection: each command after the `pg_terminate_backend` repeats every 1 s
   (`TERMINATION_WAIT`) for up to 10 s (`TERMINATION_LIMIT`) while the session answers on the same
-  pid, and the report keeps the seconds waited (`esperou`). The
+  pid, and the report keeps the seconds waited (`waited`, `esperou` before 2026-10-11). The
   driver's `in_transaction` changes only in `handle_READY_FOR_QUERY` (`core.py:1493`), so a drop
   leaves it as it was before the failed command; the engine reads it to refuse the primitives and to
   stop the reconnect inside a client transaction, and marks the dropped connection

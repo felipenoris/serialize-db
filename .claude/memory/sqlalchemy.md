@@ -105,9 +105,13 @@ Read before `serialize_db.schema` and `serialize_db.sql`, a DDL rule per dialect
   type adaptation walks the MRO, so `Double`, `REAL`, `DOUBLE_PRECISION` and
   `Float(asdecimal=True)` take it too, and `_FloatLiteral` writes `'NaN'::float8`,
   `'Infinity'::float8` and `'-Infinity'::float8`, which both engines read; the dialect classes
-  stay as they are for the client's `sqlalchemy.Engine` (2026-10-09). A `-0.0` constant still
+  stay as they are for the client's `sqlalchemy.Engine` (2026-10-09). The DuckDB engine's
+  `engine.duckdb._QMARK` takes it too since 2026-10-10 (PR #155): its values go as parameters,
+  but a `bindparam` with `literal_execute` is embedded in the text, and a `NaN` or infinity
+  value reached DuckDB as `nan`, which the binder read as a column. A `-0.0` constant still
   comes out `-0.0`, which DuckDB parses as `DECIMAL(2,1)` and turns into `+0.0`
-  (`.claude/memory/duckdb.md`). `tests/test_sql.py`, `tests/test_engine_redshift.py`
+  (`.claude/memory/duckdb.md`). `tests/test_sql.py`, `tests/test_engine_redshift.py`,
+  `tests/test_engine_duckdb.py::test_query_embeds_the_nan_and_the_infinities_as_float_literals`
 
 ## SQL tooling
 
