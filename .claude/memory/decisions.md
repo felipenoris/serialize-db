@@ -2563,14 +2563,14 @@ commits or misses a removed column.
 The user asked at 19:16 UTC that the package be compatible with Python 3.12 or later:
 `requires-python` is `>=3.12`. Asked in the project chat which versions the GitHub workflow tests
 (3.12 and the version used today, recommended; only 3.12; every version from 3.12 to the newest),
-the user answered "as duas" (19:18 UTC), read as 3.12 and 3.13 and confirmed in the chat at
+the user answered "as duas" (19:18 UTC), which the coordinator read as 3.12 and 3.13 in the chat at
 19:19 UTC: `tests.yml` runs 3.12 and 3.13 on Ubuntu and Windows, and `docs.yml` stays on 3.13.
 Python 3.15.0, released on 2026-10-09, has no DuckDB `cp315` wheel (`OPEN_QUESTIONS.md`). The
-repository's `.python-version`, the project venv and `prepare_offline.sh` stay on 3.13: asked on
-a card whether `prepare_offline.sh` should build the venv from the target's
+repository's `.python-version`, the project venv and `prepare_offline.sh` stay on 3.13: asked on a
+card the thread raised whether `prepare_offline.sh` should build the venv from the target's
 `/opt/conda/bin/python3.12` instead of the managed Python in `.python/`, the user chose "Manter
-.python/" (19:31 UTC). Three calls of the 3.13 standard library broke the package tests on 3.12,
-104 failures and errors with the local root: `os.process_cpu_count`, now behind
+.python/" (19:31 UTC). Three calls of the 3.13 standard library broke the package tests on 3.12, 104
+failures and errors with the local root: `os.process_cpu_count`, now behind
 `resources._process_cpus`, `Path.from_uri`, behind `storage._path_from_file_uri`, and the `count`
 keyword of `str.replace` in a test.
 

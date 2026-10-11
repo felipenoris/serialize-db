@@ -552,7 +552,11 @@ channel and read, in the probe, the engine's secret renewed before each expiry.
 The counts a session compares its own runs against, until a change moves them. On Linux x86_64
 (deltalake 1.6.6, DuckDB 1.5.5), on 2026-10-04: 256 passed and 437 skipped without variables, 574
 and 119 with the local root, and 691 passed with the local root and `SERIALIZE_DB_TEST_EMULATOR`,
-skipping only the Data API test and the Windows memory test; the container read 256 and 437, and
-574 and 119, again on 2026-10-05 at `f32398f`. The GitHub workflow on 2026-10-01: 362 passed and 76
-skipped on Windows, 363 and 75 on Ubuntu. The Windows counts of the whole suite are in the section
+skipping only the Data API test and the Windows memory test; the container read 256 and 437, and 574
+and 119, again on 2026-10-05 at `f32398f`. The GitHub workflow on 2026-10-01: 362 passed and 76
+skipped on Windows, 363 and 75 on Ubuntu. On 2026-10-11, with the changes of `d66195d`, Python
+3.12.13, 3.13.16 and 3.14.6 read the same counts in the container: 322 passed and 462 skipped
+without variables, 654 and 130 with the local root, and 782 passed and 2 skipped with the local root
+and the stand-in; the GitHub workflow at `d66195d`: 437 passed and 88 skipped on Ubuntu, 435 and 90
+on Windows, on 3.12 and on 3.13 alike. The Windows counts of the whole suite are in the section
 above, and the target batteries' counts in the sections on them.
