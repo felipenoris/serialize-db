@@ -21,9 +21,10 @@ ordem:
   igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum
   texto passa do limite da coluna em bytes, o de ``cast`` e da auditoria, e a contagem dos valores
   não finitos de cada coluna ``Double``;
-- a gravação da partição na ordem da ``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo
+- - a gravação da partição na ordem da ``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo
   da pasta dela na tabela Delta, e o registro por ``serialize_db.delta.register_files``, com as
-  conferências do rodapé, a releitura e as colunas não finitas sem mínimo e máximo (issue #59).
+  conferências do rodapé, a releitura e as colunas não finitas sem mínimo e máximo (issue #59 do
+  serialize-db).
 
 Uma partição fora do contrato é ``ContractError`` antes de qualquer gravação, com a tabela, a
 partição e a coluna, e o arquivo quando é o primeiro que não tem uma coluna do contrato; a
@@ -335,8 +336,8 @@ def partition_query(
     :param value: o valor do caminho, que a coluna de partição recebe; ``None`` na tabela sem
         partição.
     :return: o texto da consulta.
-    :raises ContractError: a tabela com um tipo de coluna fora do contrato ou com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: a tabela com um tipo de coluna fora do contrato ou
+        com mais de uma coluna de partição.
     """
     partition_by = table_options(table).partition_by
     selected = []
@@ -572,8 +573,8 @@ def check_requested_partitions(
     :param table: a tabela do modelo.
     :param partitions: os valores pedidos, que toda tabela particionada precisa ter na origem;
         uma tabela sem partição fica de fora do pedido, sem recusa; ``None`` não recusa nada.
-    :raises ContractError: um valor de ``partitions`` que a origem não tem, com a tabela e os
-        valores ausentes na mensagem.
+    :raises serialize_db.errors.ContractError: um valor de ``partitions`` que a origem não tem, com
+        a tabela e os valores ausentes na mensagem.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
     """
@@ -675,14 +676,17 @@ def import_table(
     :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
         sistema e os limites lidos do ambiente.
     :return: os valores gravados, na ordem da gravação; ``None`` é a tabela sem partição.
-    :raises ContractError: um valor de ``partitions`` que a origem não tem, antes de criar a
-        tabela; ou uma partição fora do contrato, sem commit, pelo primeiro arquivo sem uma coluna
-        do contrato ou nas conferências da consulta, e a chamada seguinte recomeça dela.
+    :raises serialize_db.errors.ContractError: um valor de ``partitions`` que a origem não tem,
+        antes de criar a tabela; ou uma partição fora do contrato, sem commit, pelo primeiro arquivo
+        sem uma coluna do contrato ou nas conferências da consulta, e a chamada seguinte recomeça
+        dela.
     :raises duckdb.Error: uma coluna do contrato ausente de um arquivo depois do primeiro, ou um
         valor que não converte para o tipo do contrato, na conferência ou no ``COPY``, sem commit.
-    :raises RegistrationRefused: uma conferência de ``register_files`` reprovou o arquivo gravado,
-        sem commit, ou a releitura reprovou e ``restore`` voltou a tabela à versão anterior.
-    :raises ExecutionConflict: outro registro da mesma partição a partir da mesma versão.
+    :raises serialize_db.errors.RegistrationRefused: uma conferência de ``register_files`` reprovou
+        o arquivo gravado, sem commit, ou a releitura reprovou e ``restore`` voltou a tabela à
+        versão anterior.
+    :raises serialize_db.errors.ExecutionConflict: outro registro da mesma partição a partir da
+        mesma versão.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
@@ -944,7 +948,7 @@ def import_report(
         sistema e os limites lidos do ambiente.
     :return: o relatório, com o veredito em ``matches``; uma partição presente num lado só tem
         ``None`` nas linhas do outro, e a tabela ainda fora do Delta tem toda partição assim.
-    :raises ContractError: um valor de ``partitions`` que a origem não tem.
+    :raises serialize_db.errors.ContractError: um valor de ``partitions`` que a origem não tem.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
     :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
     :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que o

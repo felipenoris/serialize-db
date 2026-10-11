@@ -234,7 +234,8 @@ class RedshiftConfig:
         :param environ: as variáveis lidas; o padrão é ``os.environ``. A variável vazia conta
             como ausente.
         :return: a configuração; a variável ausente deixa o padrão do campo.
-        :raises ContractError: ``SERIALIZE_DB_REDSHIFT_PORT`` que não é um número inteiro.
+        :raises serialize_db.errors.ContractError: ``SERIALIZE_DB_REDSHIFT_PORT`` que não é um
+            número inteiro.
         """
         port = _variable(environ, "PORT") or "5439"
         try:
@@ -409,7 +410,8 @@ def sandbox_prefix(
     :param execution_id: o identificador da execução; vira minúsculo, e cada caractere fora de
         ``[a-z0-9_]`` vira ``_``.
     :return: o prefixo, que antecede o nome de cada tabela do sandbox no esquema.
-    :raises ContractError: um identificador mais longo, que não deixa os 63 bytes.
+    :raises serialize_db.errors.ContractError: um identificador mais longo, que não deixa os 63
+        bytes.
     """
     normalized = re.sub(r"[^a-z0-9_]", "_", execution_id.lower())
     prefix = f"exec_{normalized}_"
@@ -625,8 +627,8 @@ def schema_from_row_description(
     :param row_desc: a descrição das colunas que o driver guarda em ``cursor.ps["row_desc"]``,
         com ``label``, ``type_oid`` e ``type_modifier`` de cada coluna.
     :return: o esquema, um campo por coluna, na ordem do resultado.
-    :raises SandboxError: outro OID, e um ``NUMERIC`` sem modificador, com o nome da coluna na
-        mensagem.
+    :raises serialize_db.errors.SandboxError: outro OID, e um ``NUMERIC`` sem modificador, com o
+        nome da coluna na mensagem.
     """
     fields = []
     for column in row_desc:
@@ -833,8 +835,8 @@ class RedshiftStream:
         :param text: a consulta no SQL do Redshift, com os valores do cliente já como literais.
         :param batch_size: o máximo de linhas de cada lote lido de cada arquivo; o último lote de
             cada arquivo pode ser menor.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato; ou, sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato;
+            ou, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         # O stop vem antes de tudo: o __del__ de uma construção que falhou o usa.
@@ -1065,7 +1067,7 @@ class RedshiftAppender:
             ``create_table``.
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
-        :raises SandboxError: a tabela que não existe no sandbox.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox.
         """
         # O closed vem antes de tudo: o __del__ de uma abertura recusada o usa.
         self._closed = threading.Event()
@@ -1141,8 +1143,8 @@ class RedshiftAppender:
 
         :param data: um ``RecordBatch`` ou uma ``pa.Table`` nas colunas do contrato; cada lote traz
             o conjunto de colunas do primeiro.
-        :raises ContractError: outro tipo de dado, um valor fora do contrato ou um conjunto de
-            colunas diferente do primeiro lote.
+        :raises serialize_db.errors.ContractError: outro tipo de dado, um valor fora do contrato ou
+            um conjunto de colunas diferente do primeiro lote.
         """
         for batch in checked_batches(data):
             try:
@@ -1190,10 +1192,11 @@ class RedshiftAppender:
 
         :param error: a exceção que saiu do bloco ``with``, passada pelo ``__exit__``; com ela nada
             é carregado, e ela segue pelo ``with``; ``None`` carrega.
-        :raises ContractError: o lote que o ``write`` recusou, de novo, no ``close`` sem ``error``.
-        :raises SandboxError: a sessão numa transação que o cliente abriu depois da abertura
-            (``transaction``); ou, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
-            ``COPY``.
+        :raises serialize_db.errors.ContractError: o lote que o ``write`` recusou, de novo, no
+            ``close`` sem ``error``.
+        :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu depois
+            da abertura (``transaction``); ou, sem ``iam_role``, a sessão ``boto3`` sem credenciais
+            para o ``COPY``.
         :raises redshift_connector.Error: o ``COPY`` que o servidor recusa, a coluna ``NOT NULL``
             ausente do arquivo incluída.
         """
@@ -1288,9 +1291,9 @@ class RedshiftEngine:
         :param prefix: o prefixo das tabelas do esquema que os statements citam; ``None`` é
             ``sandbox_prefix(execution_id)``, o ``exec_<id>_`` do sandbox, e o leitor Redshift
             passa ``<ambiente>_``, o das tabelas publicadas.
-        :raises ContractError: ``execution_id`` fora da regra da partição ou, sem ``prefix``,
-            longo demais para o prefixo; ou a configuração sem conexão: sem ``workgroup``, e sem
-            ``host``, ``user`` e ``password``.
+        :raises serialize_db.errors.ContractError: ``execution_id`` fora da regra da partição ou,
+            sem ``prefix``, longo demais para o prefixo; ou a configuração sem conexão: sem
+            ``workgroup``, e sem ``host``, ``user`` e ``password``.
         """
         self.config = config
         """[public] A configuração da conexão, do ``COPY`` e do ``UNLOAD``."""
@@ -1542,8 +1545,8 @@ class RedshiftEngine:
                 engine.register_created(engine.prefix + "cad_lancamentos_projetados")
 
         :return: o gerenciador de contexto da transação; o ``with`` dá ``None``.
-        :raises SandboxError: a sessão já numa transação, a sua ou a que o cliente abriu por
-            ``BEGIN``, lida no ``in_transaction`` do driver, antes do ``BEGIN``.
+        :raises serialize_db.errors.SandboxError: a sessão já numa transação, a sua ou a que o
+            cliente abriu por ``BEGIN``, lida no ``in_transaction`` do driver, antes do ``BEGIN``.
         :raises redshift_connector.InterfaceError: a conexão derrubada no bloco, que perde a
             transação, ou no ``COMMIT``, cujo resultado fica desconhecido; o comando seguinte,
             fora da transação, reabre a conexão.
@@ -1755,12 +1758,12 @@ class RedshiftEngine:
             ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: não muda nada, porque o Redshift não lê o Delta no lugar, e a
             tabela é sempre carregada.
-        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
-            comando; o nome ocupado no sandbox, ou a tabela que não existe no Delta, sem versão
-            (``version=None``); e, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
-            ``COPY``.
-        :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
-            da partição.
+        :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
+            de qualquer comando; o nome ocupado no sandbox, ou a tabela que não existe no Delta, sem
+            versão (``version=None``); e, sem ``iam_role``, a sessão ``boto3`` sem credenciais para
+            o ``COPY``.
+        :raises serialize_db.errors.ContractError: ``partitions`` numa tabela sem partição, ou um
+            valor fora da regra da partição.
         :raises redshift_connector.Error: o ``COPY`` recusado por uma coluna da versão que o
             modelo não tem, porque a lista de colunas do rodapé a nomeia e a staging, criada do
             modelo, não a tem; o modelo tem de acompanhar a tabela.
@@ -1831,9 +1834,9 @@ class RedshiftEngine:
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core, sobre a
             staging.
-        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
-            comando; numa tabela que ainda não existe, sem versão (``version=None``); e, sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
+        :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
+            de qualquer comando; numa tabela que ainda não existe, sem versão (``version=None``); e,
+            sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação de uma
             partição da carga, que o servidor desfaz; a staging fica criada, sem essa partição e
             sem as seguintes, até o ``cleanup``.
@@ -1879,9 +1882,9 @@ class RedshiftEngine:
             statement ou dos marcadores do texto.
         :return: a tabela do resultado, montada por colunas com o esquema do ``row_desc``; um
             comando sem resultado devolve a tabela vazia.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato.
         """
         text, arguments = compiled_for_cursor(statement_or_sql, params, self.prefix)
         cursor = self.execute(text, arguments or None)
@@ -1902,7 +1905,7 @@ class RedshiftEngine:
 
         :param text: a consulta no SQL do Redshift, sem marcador de parâmetro.
         :return: o esquema Arrow de ``schema_from_row_description``.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato.
         """
         cursor = self.execute(f"SELECT * FROM ({text}) AS t LIMIT 0")
         return schema_from_row_description(cursor.ps["row_desc"])
@@ -1965,12 +1968,12 @@ class RedshiftEngine:
         :return: o ``serialize_db.engine.BatchStream`` dos lotes, gerenciador de contexto; o
             ``close`` apaga os
             arquivos do ``UNLOAD``.
-        :raises ContractError: o motor sem armazenamento (``storage`` ``None``), antes de
-            qualquer comando no servidor: o leitor Redshift o recebe em ``unload_to``.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato; ou, sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
+        :raises serialize_db.errors.ContractError: o motor sem armazenamento (``storage`` ``None``),
+            antes de qualquer comando no servidor: o leitor Redshift o recebe em ``unload_to``.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato;
+            ou, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         if self.storage is None:
@@ -1995,7 +1998,8 @@ class RedshiftEngine:
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox, com o
             prefixo ``exec_<id>_``.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
+        :raises serialize_db.errors.SandboxError: o nome que o ``ingest`` ou outro ``create_table``
+            ocupou.
         """
         name = self.prefix + table.name
         if self.name_in_use(name):
@@ -2030,9 +2034,9 @@ class RedshiftEngine:
         :return: o ``serialize_db.engine.Appender`` da tabela, que guarda os lotes num Parquet do
             ``staging/`` até o
             ``close`` e os carrega por ``COPY ... MANIFEST``.
-        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
-            comando; a tabela que não existe no sandbox; ou, no ``close``, sem ``iam_role``, a
-            sessão ``boto3`` sem credenciais para o ``COPY``.
+        :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
+            de qualquer comando; a tabela que não existe no sandbox; ou, no ``close``, sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação do
             ``close``, o ``COPY`` e o ``INSERT`` da staging, que o servidor desfaz, ou no
             ``COMMIT`` dela, cujo resultado fica desconhecido; o Parquet e o manifesto do
@@ -2061,11 +2065,12 @@ class RedshiftEngine:
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
         :return: as linhas acrescentadas.
-        :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
-            tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
-        :raises SandboxError: a sessão numa transação que o cliente abriu, antes de qualquer
-            comando; a tabela que não existe no sandbox; ou, sem ``iam_role``, a sessão ``boto3``
-            sem credenciais para o ``COPY``.
+        :raises serialize_db.errors.ContractError: um DataFrame, com a conversão sem cópia na
+            mensagem, ou outro tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é
+            inserido.
+        :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
+            de qualquer comando; a tabela que não existe no sandbox; ou, sem ``iam_role``, a sessão
+            ``boto3`` sem credenciais para o ``COPY``.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação do
             ``close`` do ``appender``, o ``COPY`` e o ``INSERT`` da staging, que o servidor
             desfaz, ou no ``COMMIT`` dela, cujo resultado fica desconhecido; o Parquet e o
@@ -2141,10 +2146,11 @@ class RedshiftEngine:
             na staging ``_versao`` só quando a junção roda.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
             ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição.
-        :raises SandboxError: a sessão numa transação que o cliente abriu, quando uma verificação
-            carrega a staging ``_versao``, antes do DDL dela; ou, sem ``iam_role``, a sessão
-            ``boto3`` sem credenciais para o ``COPY`` da staging ``_versao``.
+        :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
+            partição.
+        :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu,
+            quando uma verificação carrega a staging ``_versao``, antes do DDL dela; ou, sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY`` da staging ``_versao``.
         """
         # A versão fixada entra como staging pendente, que _run_check carrega só quando uma
         # verificação a cita.
@@ -2381,8 +2387,9 @@ class RedshiftEngine:
         linhas, nas cinco rodadas de 2026-10-05 a 2026-10-10. Com ``columns_without_min_max``, o
         ``UNLOAD`` vai a
         ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a partição volta por
-        ``publish_partition``, com um aviso no log ``serialize_db.engine.redshift``, porque o
-        rodapé do ``UNLOAD`` deixa o ``NaN`` fora do máximo e o leitor podaria a linha (issue #59).
+        ``publish_partition``, com um aviso no log ``serialize_db.engine.redshift``, porque o rodapé
+        do ``UNLOAD`` deixa o ``NaN`` fora do máximo e o leitor podaria a linha (issue #59 do
+        serialize-db).
 
         Exemplo:
 
@@ -2399,21 +2406,23 @@ class RedshiftEngine:
             do commit e os dois caminhos conferem na releitura depois dele; sem ela, a contagem do
             sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
-            que saem sem mínimo e máximo (issue #59).
+            que saem sem mínimo e máximo (issue #59 do serialize-db).
         :return: a versão do commit.
-        :raises ContractError: o valor fora da regra da partição, ``None`` numa tabela
-            particionada, ou um valor numa tabela sem partição.
-        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, e os
-            arquivos do ``UNLOAD`` ficam órfãos na pasta da partição até um ``vacuum`` com
-            ``full=True``; ou a releitura desfez o commit.
-        :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
+        :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
+            tabela particionada, ou um valor numa tabela sem partição.
+        :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
+            commit, e os arquivos do ``UNLOAD`` ficam órfãos na pasta da partição até um ``vacuum``
+            com ``full=True``; ou a releitura desfez o commit.
+        :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
+            mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, antes do ``UNLOAD``, sem arquivo
             gravado.
-        :raises SandboxError: sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
-            ``UNLOAD``; ou a memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa,
-            lida no registro antes do commit (sem commit, os arquivos do ``UNLOAD`` ficam órfãos
-            na pasta da partição até um ``vacuum`` com ``full=True``) e na troca dos arquivos pelo
-            ``Double`` não finito, na abertura do DuckDB (``environment_limits``).
+        :raises serialize_db.errors.SandboxError: sem ``iam_role``, a sessão ``boto3`` sem
+            credenciais para o ``UNLOAD``; ou a memória que o processo ainda pode usar abaixo de 2
+            MiB, ou negativa, lida no registro antes do commit (sem commit, os arquivos do
+            ``UNLOAD`` ficam órfãos na pasta da partição até um ``vacuum`` com ``full=True``) e na
+            troca dos arquivos pelo ``Double`` não finito, na abertura do DuckDB
+            (``environment_limits``).
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         # O valor conferido antes do UNLOAD: os arquivos de um valor recusado no registro

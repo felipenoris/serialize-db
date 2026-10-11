@@ -136,8 +136,8 @@ def environment_limits() -> dict[str, object]:
 
     :return: as opções da conexão do DuckDB: em ``threads``, as CPUs que o processo pode usar;
         em ``memory_limit``, metade da memória que ele ainda pode usar, em MiB.
-    :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa,
-        que não dá 1 MiB de ``memory_limit`` ao DuckDB (``memory_limit_setting``).
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de 2
+        MiB, ou negativa, que não dá 1 MiB de ``memory_limit`` ao DuckDB (``memory_limit_setting``).
     """
     return {"threads": available_cpus(), "memory_limit": memory_limit_setting()}
 
@@ -148,10 +148,10 @@ def memory_limit_setting() -> str:
     ``memory_limit``.
 
     :return: o valor com unidade, ``"6761MiB"`` num contêiner com 13,2 GiB disponíveis.
-    :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, com a máquina
-        ou o contêiner no limite de memória, ou negativa, com o uso do cgroup lido acima do limite
-        dele, porque o DuckDB não abre com ``0MiB`` e lê um valor negativo como o padrão dele, 80%
-        da memória da máquina; a mensagem traz a memória lida.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de 2
+        MiB, com a máquina ou o contêiner no limite de memória, ou negativa, com o uso do cgroup
+        lido acima do limite dele, porque o DuckDB não abre com ``0MiB`` e lê um valor negativo como
+        o padrão dele, 80% da memória da máquina; a mensagem traz a memória lida.
     """
     available = available_memory()
     memory_limit = int(available * _MEMORY_FRACTION) // 2**20

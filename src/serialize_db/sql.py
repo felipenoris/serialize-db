@@ -334,8 +334,8 @@ def render(
         no texto o sentinela ``{prefix}``, ``prefix=""`` dá o texto sobre as tabelas do contrato,
         e ``prefix="exec_42_"`` o texto sobre o sandbox dessa execução.
     :return: o texto; nenhuma linha termina em espaço.
-    :raises SqlError: um nome de parâmetro fora de ``[a-z_][a-z0-9_]*``, que ``bind`` não leria
-        no texto.
+    :raises serialize_db.errors.SqlError: um nome de parâmetro fora de ``[a-z_][a-z0-9_]*``, que
+        ``bind`` não leria no texto.
     """
     prefixed_statement = prefixed(statement, metadata, prefix)
     with_placeholders = _parameters_as_placeholders(prefixed_statement)
@@ -385,8 +385,8 @@ def bind(
         ``duckdb`` e fica como está no ``redshift``, que o ``redshift_connector`` lê com
         ``cursor.paramstyle = "named"``.
     :return: o texto reescrito e uma cópia de ``params``.
-    :raises SqlError: um texto que ainda traz o sentinela ``{prefix}``, ou um dicionário com
-        parâmetro faltante ou sobrando.
+    :raises serialize_db.errors.SqlError: um texto que ainda traz o sentinela ``{prefix}``, ou um
+        dicionário com parâmetro faltante ou sobrando.
     """
     if SENTINEL in sql:
         raise SqlError(
@@ -469,7 +469,8 @@ def sql_files(
     :return: o conteúdo por nome de arquivo: ``<nome>.duckdb.sql`` e ``<nome>.redshift.sql`` são
         o texto de cada motor, sempre com o sentinela ``{prefix}`` e com ``\\n`` final, porque o
         arquivo versionado serve a qualquer alvo.
-    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
+    :raises serialize_db.errors.SqlError: um statement com nome de parâmetro fora de
+        ``[a-z_][a-z0-9_]*``.
     """
     files = {}
     for name, statement in statements.items():
@@ -500,7 +501,8 @@ def write_sql_files(
         como está.
     :param directory: a pasta local dos arquivos versionados, criada se preciso.
     :return: os caminhos gravados, em ordem de nome.
-    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
+    :raises serialize_db.errors.SqlError: um statement com nome de parâmetro fora de
+        ``[a-z_][a-z0-9_]*``.
     """
     return write_files(sql_files(statements, metadata), directory)
 
@@ -530,7 +532,8 @@ def check_sql_files(
         acrescentado, e um arquivo da pasta terminado em ``.duckdb.sql`` ou ``.redshift.sql`` que
         a geração não produz, como o de um statement que saiu do dicionário, aparece inteiro como
         removido.
-    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
+    :raises serialize_db.errors.SqlError: um statement com nome de parâmetro fora de
+        ``[a-z_][a-z0-9_]*``.
     """
     return diff_files(sql_files(statements, metadata), directory, _SQL_SUFFIXES)
 

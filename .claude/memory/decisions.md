@@ -2343,3 +2343,42 @@ Three more cards of the "Não aplicado" items of PR #156, each answered with the
   `CLAUDE.md`, "Naming conventions", and no protected seam is added for a test.
 
 `CLAUDE.md` ("Docstrings", "Naming conventions").
+
+## The tests' corrections, the module marks and the raises fields (2026-10-11)
+
+The last cards of the "Não aplicado" items of PR #156.
+
+- The mechanical corrections of the tests (02:31 UTC, "Aplicar", the recommended option): six
+  local changes that keep what each test checks, in one commit: `engine_over_driver` for the five
+  reconnection tests of `test_engine_redshift` that built the engine by hand, and the readings'
+  keys in English like the others (`waited`, `idle`, `in_transaction`, `client_transaction`,
+  `type`, `value`); the `cli_environment` fixture and `base_arguments` for the eleven CLI tests of
+  `test_execution`, and the same fixture in `test_parquet_import`; `clean_aws` no longer returns
+  the `monkeypatch`; the stand-in's `remember_ddl` deletes the table's stored columns before
+  inserting the `CREATE TABLE`'s; the three in-memory DuckDB connections of
+  `test_source_db_projetado` close through `with`. The `>= 1` UNLOAD file stays: `PARALLEL` decides
+  the file count, and the test checks the first file's prefix.
+- The module-level `local` mark of five files (02:40 UTC, "Marcar por teste", against the
+  recommendation to leave it): `pytestmark = pytest.mark.local` leaves `test_parquet_import`,
+  `test_source_db_projetado`, `test_resources`, `test_migrate_parquet_to_delta` and
+  `test_operation`, and each test whose fixture closure reaches `local_location` carries
+  `@pytest.mark.local`, 61 tests, read from the collected items; the nine pure ones run in the
+  no-variables run (the card counted six; the closure found three more, two of `test_operation`
+  and one of `test_resources`). A new test of those files that writes under the local root takes
+  the mark, or `conftest.pytest_itemcollected` refuses it at collection.
+- The tests over a hundred lines (02:43 UTC, "Deixar", the recommended option): the thirteen tests
+  over 80 lines, six of them over a hundred (`test_ingest_stream_appender_export`, 160 lines, the
+  longest), stay whole; each chains scenarios over one base, and splitting them would repeat the
+  setup and reload the target.
+- The exception name in the `:raises` fields (02:48 UTC, "Nome completo", the recommended option):
+  the 163 `:raises` fields that name a package exception write it as `serialize_db.errors.<name>`,
+  the only form pdoc 16 turns into a link to the class (the built site links
+  `serialize_db.errors.SandboxError` and leaves a short `ContractError` as plain bold even where the
+  module imports it); the 36 that name a builtin (`ValueError`, `FileNotFoundError`,
+  `StopIteration`, `SystemExit`) stay bare, and a third-party exception keeps its module
+  (`duckdb.Error`). The card counted 199 fields; 163 are the package's. The "Fields" bullet of
+  `CLAUDE.md` says the form of each. The nine bare "issue #59" citations name the repository
+  (`issue #59 do serialize-db`), with no card, because the issue is this repository's.
+
+`tests/`, `CLAUDE.md` ("Docstrings"), `src/serialize_db/` (the `:raises` fields and the issue
+citations).

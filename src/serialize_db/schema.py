@@ -193,9 +193,9 @@ def arrow_type(
 
     :param column: a coluna do modelo.
     :return: o tipo Arrow.
-    :raises ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``, ``ARRAY``,
-        ``Interval``), o ``Enum``, que deriva de ``String`` sem que nada confira a lista de
-        valores, e o ``Numeric`` de precisão fora de 1 a 38 ou de escala fora de 0 à precisão
+    :raises serialize_db.errors.ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``,
+        ``ARRAY``, ``Interval``), o ``Enum``, que deriva de ``String`` sem que nada confira a lista
+        de valores, e o ``Numeric`` de precisão fora de 1 a 38 ou de escala fora de 0 à precisão
         (até 37, a do Redshift), com a tabela e a coluna na mensagem.
     """
     kind = column.type
@@ -246,7 +246,7 @@ def arrow_schema(
     :return: o esquema, com o nome da tabela em ``serialize_db_table``; cada campo leva a
         nulidade, ``PARQUET:field_id`` pela posição e o comentário da coluna em ``metadata``. Um
         campo JSON é ``string``, sem a extensão ``arrow.json``.
-    :raises ContractError: uma coluna de tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato.
     """
     fields = []
     for position, column in enumerate(table.columns, start=1):
@@ -273,7 +273,7 @@ def delta_schema(
 
     :param table: a tabela do modelo.
     :return: o ``deltalake.Schema``.
-    :raises ContractError: uma coluna de tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato.
     """
     fields = []
     for field in arrow_schema(table):
@@ -387,7 +387,7 @@ def table_options(
         primária, as ``UniqueConstraint`` e os índices únicos, nessa ordem e cada grupo em ordem
         dos nomes das colunas, ajustados por ``keys["add"]`` e ``keys["drop"]``, sempre listas de
         colunas.
-    :raises ContractError: mais de uma coluna de partição.
+    :raises serialize_db.errors.ContractError: mais de uma coluna de partição.
     """
     info = table.info.get("serialize_db", {})
     partition_columns = info.get("partition_by") or []
@@ -420,7 +420,7 @@ def double_columns(
     table: sa.Table,
 ) -> list[str]:
     """[protected] Os nomes das colunas ``Double``, as que podem guardar ``NaN`` e infinito, que
-    ficam sem mínimo e máximo no Delta (issue #59). Para a auditoria e a carga de
+    ficam sem mínimo e máximo no Delta (issue #59 do serialize-db). Para a auditoria e a carga de
     ``serialize_db.parquet_import``."""
     names = []
     for column in table.columns:
@@ -473,7 +473,7 @@ def check_partition_value(
 
     :param value: o valor da partição, ou um nome sob a mesma regra, como o ``execution_id``.
     :return: o próprio valor.
-    :raises ContractError: o valor fora da regra, ou que não é ``str``.
+    :raises serialize_db.errors.ContractError: o valor fora da regra, ou que não é ``str``.
     """
     if not isinstance(value, str) or not _PARTITION_VALUE.fullmatch(value):
         raise ContractError(
@@ -507,7 +507,7 @@ def sql_type(
     :param column: a coluna do modelo.
     :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
     :return: o nome do tipo.
-    :raises ContractError: um tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: um tipo fora do contrato.
     """
     kind = column.type
     arrow = arrow_type(column)  # recusa o tipo fora do contrato antes de qualquer texto
@@ -577,7 +577,7 @@ def column_ddl(
     :param column: a coluna do modelo.
     :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
     :return: a linha, sem indentação nem vírgula; ``NOT NULL`` só na coluna que não aceita nulo.
-    :raises ContractError: um tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: um tipo fora do contrato.
     """
     text = f"{quoted(column.name)} {sql_type(column, dialect)}"
     if not column.nullable:
@@ -633,8 +633,8 @@ def ddl(
     :return: o texto, sem ``;`` nem ``\\n`` no fim: colunas, tipos e ``NOT NULL``, todo
         identificador entre aspas; ``DISTSTYLE``, ``DISTKEY`` e ``SORTKEY`` no Redshift, de
         ``table_options``.
-    :raises ContractError: uma coluna de tipo fora do contrato; no Redshift, também mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato; no Redshift,
+        também mais de uma coluna de partição.
     """
     lines = []
     for column in table.columns:
@@ -1003,15 +1003,15 @@ def cast(
     :param table: a tabela do modelo.
     :return: os dados no mesmo tipo em que chegaram; um ``RecordBatchReader`` sai como leitor que
         converte lote a lote.
-    :raises ContractError: nulo em coluna ``NOT NULL``, escala perdida, nanossegundo não nulo,
-        estouro de inteiro, um tipo sem conversão para o do contrato, um lote sem coluna alguma
-        do contrato ou uma coluna do modelo de tipo fora do contrato; ou uma perda que o cast
-        seguro não acusa, com a instrução ao cliente na mensagem: ``double`` fora da escala de um
-        ``Numeric``, ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com fuso numa
-        coluna ``DateTime`` sem fuso e o inverso, documento JSON como ``struct``, texto acima de
-        ``String(n)`` em bytes, texto numa coluna ``Uuid`` acima de 36 bytes, e texto numa coluna
-        ``Text`` ou documento JSON acima de 65.535 bytes, o teto do Redshift. A mensagem traz a
-        tabela e a coluna. Num leitor, a recusa de um valor sai na leitura do lote, e as demais,
+    :raises serialize_db.errors.ContractError: nulo em coluna ``NOT NULL``, escala perdida,
+        nanossegundo não nulo, estouro de inteiro, um tipo sem conversão para o do contrato, um lote
+        sem coluna alguma do contrato ou uma coluna do modelo de tipo fora do contrato; ou uma perda
+        que o cast seguro não acusa, com a instrução ao cliente na mensagem: ``double`` fora da
+        escala de um ``Numeric``, ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com
+        fuso numa coluna ``DateTime`` sem fuso e o inverso, documento JSON como ``struct``, texto
+        acima de ``String(n)`` em bytes, texto numa coluna ``Uuid`` acima de 36 bytes, e texto numa
+        coluna ``Text`` ou documento JSON acima de 65.535 bytes, o teto do Redshift. A mensagem traz
+        a tabela e a coluna. Num leitor, a recusa de um valor sai na leitura do lote, e as demais,
         na chamada.
     """
     if isinstance(data, pa.RecordBatchReader):
@@ -1207,8 +1207,8 @@ def schema_files(
     :return: o conteúdo por nome de arquivo: ``<tabela>.delta.json`` é o esquema Delta em JSON
         canônico, ``<tabela>.duckdb.sql`` e ``<tabela>.redshift.sql`` são o ``CREATE TABLE`` de
         cada motor; todo texto termina em ``\\n``.
-    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato, ou uma tabela
+        com mais de uma coluna de partição.
     """
     files = {}
     for table in metadata.sorted_tables:
@@ -1236,8 +1236,8 @@ def write_schema_files(
     :param metadata: os modelos do cliente, como ``Base.metadata``.
     :param directory: a pasta local dos arquivos versionados, criada se preciso.
     :return: os caminhos gravados, em ordem de nome.
-    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato, ou uma tabela
+        com mais de uma coluna de partição.
     """
     return write_files(schema_files(metadata), directory)
 
@@ -1264,7 +1264,7 @@ def check_schema_files(
         acrescentado, e um arquivo da pasta terminado em ``.delta.json``, ``.duckdb.sql`` ou
         ``.redshift.sql`` que a geração não produz, como o de uma tabela que saiu do modelo,
         aparece inteiro como removido.
-    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato, ou uma tabela
+        com mais de uma coluna de partição.
     """
     return diff_files(schema_files(metadata), directory, _SCHEMA_SUFFIXES)

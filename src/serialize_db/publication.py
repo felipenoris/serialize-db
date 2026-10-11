@@ -281,8 +281,8 @@ def published_ddl(
         ``<ambiente>_<tabela>``.
     :param table: a tabela do modelo.
     :return: o texto do comando, com a tabela qualificada pelo esquema.
-    :raises ContractError: a tabela com um tipo de coluna fora do contrato ou com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: a tabela com um tipo de coluna fora do contrato ou
+        com mais de uma coluna de partição.
     """
     lines = []
     for column in table.columns:
@@ -355,8 +355,8 @@ def publication_statements(
     :param credentials: a cláusula de credenciais, como ``IAM_ROLE default``, que os textos do
         ``COPY`` carregam.
     :return: os comandos, na ordem da transação.
-    :raises ContractError: a tabela com um tipo de coluna fora do contrato ou com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: a tabela com um tipo de coluna fora do contrato ou
+        com mais de uma coluna de partição.
     """
     name = _published_name(environment, table)
     published = _qualified(schema, name)
@@ -497,7 +497,7 @@ def reconcile_published(
     :return: os ``ALTER TABLE ... ADD COLUMN`` do diff aditivo, no fim da tabela, e uma frase por
         diferença destrutiva, que despublica a tabela para a transação da mesma publicação
         recriá-la.
-    :raises ContractError: a tabela com um tipo de coluna fora do contrato.
+    :raises serialize_db.errors.ContractError: a tabela com um tipo de coluna fora do contrato.
     """
     published = _qualified(schema, _published_name(environment, table))
     existing = {column.name: _in_family(column) for column in columns}
@@ -908,7 +908,8 @@ def create_publications_table(
     :param config: a configuração do Redshift, com a conexão e o esquema.
     :raises redshift_connector.Error: a segunda chamada falha com a mensagem do servidor, porque a
         tabela já existe.
-    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
+    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
+        e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -960,15 +961,18 @@ def publish_redshift(
     :param versions: a versão do Delta por nome de tabela, as de um snapshot do arquivo de
         controle (``delta.snapshot_versions``); ``None`` publica a versão atual de cada tabela.
     :return: ``{tabela: versão publicada}``.
-    :raises PublicationError: antes de qualquer escrita, sem a tabela de controle, ou com uma
-        tabela sem versão: fora de ``versions`` ou, sem ``versions``, fora do Delta do ambiente.
-    :raises ExecutionConflict: o ``UPDATE`` da linha de controle sem linha (ou o ``DELETE`` dela,
-        na despublicação de um diff destrutivo), o ``1023`` e a tabela publicada que outra
-        primeira publicação criou, sem repetição.
-    :raises LogUnavailable: um arquivo do log entre a versão publicada e a pedida não existe.
-    :raises SandboxError: sem ``iam_role`` em ``config`` e sem credenciais da AWS na sessão
-        ``boto3``, para o ``COPY``.
-    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
+    :raises serialize_db.errors.PublicationError: antes de qualquer escrita, sem a tabela de
+        controle, ou com uma tabela sem versão: fora de ``versions`` ou, sem ``versions``, fora do
+        Delta do ambiente.
+    :raises serialize_db.errors.ExecutionConflict: o ``UPDATE`` da linha de controle sem linha (ou o
+        ``DELETE`` dela, na despublicação de um diff destrutivo), o ``1023`` e a tabela publicada
+        que outra primeira publicação criou, sem repetição.
+    :raises serialize_db.errors.LogUnavailable: um arquivo do log entre a versão publicada e a
+        pedida não existe.
+    :raises serialize_db.errors.SandboxError: sem ``iam_role`` em ``config`` e sem credenciais da
+        AWS na sessão ``boto3``, para o ``COPY``.
+    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
+        e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -1001,10 +1005,12 @@ def unpublish_redshift(
     :param config: a configuração do Redshift, com a conexão e o esquema.
     :param tables: as tabelas do modelo a despublicar.
     :return: ``{tabela: versão que estava publicada}``, com ``None`` na tabela que não estava.
-    :raises PublicationError: antes de qualquer escrita, sem a tabela de controle.
-    :raises ExecutionConflict: o ``DELETE`` da linha de controle sem linha e o ``1023``, sem
-        repetição.
-    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
+    :raises serialize_db.errors.PublicationError: antes de qualquer escrita, sem a tabela de
+        controle.
+    :raises serialize_db.errors.ExecutionConflict: o ``DELETE`` da linha de controle sem linha e o
+        ``1023``, sem repetição.
+    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
+        e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -1037,9 +1043,11 @@ def publication_status(
     :return: uma ``PublicationStatus`` por tabela, na ordem de ``delta_db.tables()``; as
         partições pendentes são todas na tabela nunca publicada, as de ``version_diff`` nas
         outras.
-    :raises PublicationError: sem a tabela de controle.
-    :raises LogUnavailable: um arquivo do log entre a versão publicada e a atual não existe.
-    :raises ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user`` e ``password``.
+    :raises serialize_db.errors.PublicationError: sem a tabela de controle.
+    :raises serialize_db.errors.LogUnavailable: um arquivo do log entre a versão publicada e a atual
+        não existe.
+    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
+        e ``password``.
     """
     connection = _Connection(config)
     try:

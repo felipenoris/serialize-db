@@ -160,9 +160,9 @@ class Appender(Protocol):
             appender.write(batch)
 
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
-        :raises ContractError: ``data`` de outro tipo, recusado sem afetar o appender, que segue
-            recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas diferentes das do
-            primeiro lote, e então o ``close`` não insere nada.
+        :raises serialize_db.errors.ContractError: ``data`` de outro tipo, recusado sem afetar o
+            appender, que segue recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas
+            diferentes das do primeiro lote, e então o ``close`` não insere nada.
         """
 
     def close(self) -> None:
@@ -175,7 +175,7 @@ class Appender(Protocol):
 
             appender.close()   # o with do appender chama close na saída
 
-        :raises ContractError: o lote que o ``write`` recusou; nada é inserido.
+        :raises serialize_db.errors.ContractError: o lote que o ``write`` recusou; nada é inserido.
         """
 
     def __enter__(self) -> Appender: ...
@@ -273,10 +273,10 @@ class Engine(Protocol):
             ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, o
             motor que lê o Delta no lugar cria uma view.
-        :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
-            sem versão (``version=None``).
-        :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
-            da partição.
+        :raises serialize_db.errors.SandboxError: o nome ocupado no sandbox, ou a tabela que não
+            existe no Delta, sem versão (``version=None``).
+        :raises serialize_db.errors.ContractError: ``partitions`` numa tabela sem partição, ou um
+            valor fora da regra da partição.
         """
 
     def pinned_delta(
@@ -299,7 +299,8 @@ class Engine(Protocol):
         :param uri: a URI da pasta da tabela Delta lida.
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core.
-        :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``).
+        :raises serialize_db.errors.SandboxError: numa tabela que ainda não existe, sem versão
+            (``version=None``).
         """
 
     def stream(
@@ -327,8 +328,8 @@ class Engine(Protocol):
         :param batch_size: o máximo de linhas de cada lote.
         :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` apaga os
             arquivos dele.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
         """
 
     def query(
@@ -350,8 +351,8 @@ class Engine(Protocol):
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :return: a tabela do resultado.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
         """
 
     def create_table(
@@ -368,7 +369,8 @@ class Engine(Protocol):
             engine.create_table(Projetado.__table__)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
+        :raises serialize_db.errors.SandboxError: o nome que o ``ingest`` ou outro ``create_table``
+            ocupou.
         """
 
     def appender(
@@ -396,8 +398,8 @@ class Engine(Protocol):
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
         :return: o ``Appender`` da tabela, que guarda os lotes num arquivo até o ``close``.
-        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
-            ``ingest`` ocupa.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
+            uma view do ``ingest`` ocupa.
         """
 
     def append(
@@ -420,10 +422,11 @@ class Engine(Protocol):
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
         :return: as linhas acrescentadas.
-        :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
-            tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
-        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
-            ``ingest`` ocupa.
+        :raises serialize_db.errors.ContractError: um DataFrame, com a conversão sem cópia na
+            mensagem, ou outro tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é
+            inserido.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
+            uma view do ``ingest`` ocupa.
         """
 
     def audit(
@@ -463,7 +466,8 @@ class Engine(Protocol):
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
             ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+        :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
+            partição.
         """
 
     def export_partition(
@@ -494,17 +498,19 @@ class Engine(Protocol):
         :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
             registrados; sem ela, a contagem do sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
-            que saem sem mínimo e máximo (issue #59).
+            que saem sem mínimo e máximo (issue #59 do serialize-db).
         :return: a versão do commit.
-        :raises ContractError: o valor fora da regra da partição, ``None`` numa tabela
-            particionada, ou um valor numa tabela sem partição.
-        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, e os
-            arquivos gravados ficam órfãos na pasta da partição; ou a releitura desfez o commit.
-        :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
+        :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
+            tabela particionada, ou um valor numa tabela sem partição.
+        :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
+            commit, e os arquivos gravados ficam órfãos na pasta da partição; ou a releitura desfez
+            o commit.
+        :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
+            mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento.
-        :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
-            negativa, lida no registro antes do commit (``environment_limits``), sem commit; os
-            arquivos gravados ficam órfãos na pasta da partição.
+        :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+            2 MiB, ou negativa, lida no registro antes do commit (``environment_limits``), sem
+            commit; os arquivos gravados ficam órfãos na pasta da partição.
         """
 
     def cleanup(self) -> None:

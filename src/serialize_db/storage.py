@@ -617,8 +617,8 @@ class Storage:
         :param path: o arquivo, relativo à raiz; na pasta local, a pasta dele é criada.
         :param text: o conteúdo, gravado em UTF-8.
         :return: a impressão digital do arquivo gravado.
-        :raises ConflictError: o arquivo já existe, ou, no S3, o 409 de outra operação no objeto
-            durante a gravação; nada foi gravado.
+        :raises serialize_db.errors.ConflictError: o arquivo já existe, ou, no S3, o 409 de outra
+            operação no objeto durante a gravação; nada foi gravado.
         """
         if self.is_s3:
             return self._put_s3(path, text, {"IfNoneMatch": "*"})
@@ -652,8 +652,8 @@ class Storage:
         :param if_match: grava só se a impressão digital atual é a informada, a que
             ``read_text`` devolveu; ``None`` grava sem condição.
         :return: a impressão digital nova.
-        :raises ConflictError: a condição falhou, ou, no S3, o 409 de outra operação no objeto
-            durante a gravação; nada foi gravado.
+        :raises serialize_db.errors.ConflictError: a condição falhou, ou, no S3, o 409 de outra
+            operação no objeto durante a gravação; nada foi gravado.
         """
         if not self.is_s3:
             return self._replace_local(path, text, if_match)

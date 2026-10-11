@@ -208,9 +208,11 @@ The standard every public function, method and class follows (user decision of 2
   `cls` (`*parts` is `:param parts:`); `:return:` when the annotation is not `None`, and for a
   context manager what `with` gives, and never on a property, which pdoc shows as an attribute whose
   summary says what it holds (user decision of 2026-10-11); one `:raises Exc:` per exception the
-  function raises deliberately, directly or through the package's own helpers, named as the module
-  imports it. A third-party exception that only propagates stays out, unless the reader acts on it
-  (`duckdb.Error` in `import_table`, `Storage.duckdb_connect` and `DuckDBEngine`,
+  function raises deliberately, directly or through the package's own helpers: a package exception
+  by its full name (`serialize_db.errors.ContractError`), the only form pdoc 16 links to the class,
+  a third-party one by its module (`duckdb.Error`) and a builtin bare (`ValueError`) (user decision
+  of 2026-10-11). A third-party exception that only propagates stays out, unless the reader acts on
+  it (`duckdb.Error` in `import_table`, `Storage.duckdb_connect` and `DuckDBEngine`,
   `redshift_connector.Error` in `RedshiftEngine.execute` and `create_publications_table`). pdoc
   reads only `param`, `return` and `raises`, and ignores `:returns:` and `:raise:`.
 - **Field text.** pt-BR, starting lowercase and ending with a period: what the argument is, its

@@ -561,8 +561,8 @@ class DuckDBAppender:
             ``materialize=True`` ou por ``create_table``.
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
-        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
-            ``ingest`` ocupa.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
+            uma view do ``ingest`` ocupa.
         """
         # O closed vem antes de tudo: o __del__ de uma abertura recusada o usa.
         self._closed = threading.Event()
@@ -639,8 +639,8 @@ class DuckDBAppender:
 
         :param data: um ``RecordBatch`` ou uma ``pa.Table`` nas colunas do contrato; cada lote traz
             o conjunto de colunas do primeiro.
-        :raises ContractError: outro tipo de dado, um valor fora do contrato ou um conjunto de
-            colunas diferente do primeiro lote.
+        :raises serialize_db.errors.ContractError: outro tipo de dado, um valor fora do contrato ou
+            um conjunto de colunas diferente do primeiro lote.
         """
         for batch in checked_batches(data):
             try:
@@ -678,7 +678,8 @@ class DuckDBAppender:
 
         :param error: a exceção que saiu do bloco ``with``, passada pelo ``__exit__``; com ela nada
             é inserido, e ela segue pelo ``with``; ``None`` insere.
-        :raises ContractError: o lote que o ``write`` recusou, de novo, no ``close`` sem ``error``.
+        :raises serialize_db.errors.ContractError: o lote que o ``write`` recusou, de novo, no
+            ``close`` sem ``error``.
         :raises duckdb.Error: o ``INSERT ... BY NAME`` que o DuckDB recusa.
         """
         # O close explícito dentro do with: a saída do with chama close de novo, depois do INSERT
@@ -807,10 +808,11 @@ class DuckDBEngine:
         :param parent: o motor principal, de que esta sessão a mais depende, dado por
             ``new_session``; a sessão abre sobre ``cursor()`` da conexão dele, com o seu lock, e
             o seu ``cleanup`` fecha só o cursor. ``None`` abre o banco.
-        :raises ContractError: ``execution_id`` fora da regra da partição.
-        :raises SandboxError: sem ``memory_limit`` na configuração, a memória que o processo ainda
-            pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de ``memory_limit`` ao
-            DuckDB; a mensagem traz a memória lida, e nada do que o motor criou fica.
+        :raises serialize_db.errors.ContractError: ``execution_id`` fora da regra da partição.
+        :raises serialize_db.errors.SandboxError: sem ``memory_limit`` na configuração, a memória
+            que o processo ainda pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de
+            ``memory_limit`` ao DuckDB; a mensagem traz a memória lida, e nada do que o motor criou
+            fica.
         :raises duckdb.Error: uma extensão ausente da pasta configurada ou o secret recusado, na
             abertura da conexão.
         :raises botocore.exceptions.NoCredentialsError: no S3, a cadeia do ``boto3`` não achou
@@ -1052,8 +1054,8 @@ class DuckDBEngine:
         :param partitions: os valores de partição, pela regra da partição; ``None`` dá o texto
             vazio, e a lista vazia ``WHERE false``.
         :return: a cláusula, com o espaço inicial, para depois do ``delta_scan``.
-        :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
-            da partição.
+        :raises serialize_db.errors.ContractError: ``partitions`` numa tabela sem partição, ou um
+            valor fora da regra da partição.
         """
         if partitions is None:
             return ""
@@ -1102,10 +1104,10 @@ class DuckDBEngine:
         :param materialize: ``True`` copia os dados para a tabela do modelo no sandbox; com
             ``False``, a view lê o Delta no lugar, com os tipos do ``delta_scan`` e toda coluna
             da versão, uma que o modelo não tem incluída.
-        :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
-            sem versão (``version=None``).
-        :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
-            da partição.
+        :raises serialize_db.errors.SandboxError: o nome ocupado no sandbox, ou a tabela que não
+            existe no Delta, sem versão (``version=None``).
+        :raises serialize_db.errors.ContractError: ``partitions`` numa tabela sem partição, ou um
+            valor fora da regra da partição.
         :raises duckdb.Error: com ``materialize=True``, um valor do Delta que o tipo ou o
             ``NOT NULL`` do contrato recusa, o JSON malformado incluído, ou uma coluna da versão
             que o modelo não tem, que o ``INSERT ... BY NAME`` recusa (``BinderException``), e a
@@ -1154,7 +1156,8 @@ class DuckDBEngine:
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core, que
             compila para ``delta_scan(uri, version := v)``.
-        :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``).
+        :raises serialize_db.errors.SandboxError: numa tabela que ainda não existe, sem versão
+            (``version=None``).
         """
         if version is None:
             raise SandboxError(f"{table.name}: sem versão fixada, a tabela ainda não existe")
@@ -1199,8 +1202,8 @@ class DuckDBEngine:
             statement ou dos marcadores do texto.
         :return: a tabela do resultado; um comando sem resultado devolve a tabela ``Count`` ou
             ``Success`` do DuckDB.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto, ou o texto ainda traz o sentinela ``{prefix}``.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto, ou o texto ainda traz o sentinela ``{prefix}``.
         """
         text, arguments = self._compiled(statement_or_sql, params)
         with self.session() as connection:
@@ -1233,8 +1236,8 @@ class DuckDBEngine:
         :return: o ``serialize_db.engine.BatchStream`` dos lotes, gerenciador de contexto; o
             ``close`` cancela a
             consulta que ainda roda e apaga o arquivo de transbordo.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto, ou o texto ainda traz o sentinela ``{prefix}``.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
             sobe na leitura seguinte ao último lote entregue, como ``OSError`` do leitor Arrow
             com a mensagem do DuckDB. Com mais de uma thread, o erro da consulta pode chegar como
@@ -1265,7 +1268,8 @@ class DuckDBEngine:
             engine.create_table(Projetado.__table__)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
+        :raises serialize_db.errors.SandboxError: o nome que o ``ingest`` ou outro ``create_table``
+            ocupou.
         """
         if self.name_in_use(table.name):
             raise SandboxError(f"{table.name}: o nome já está ocupado no sandbox")
@@ -1302,8 +1306,8 @@ class DuckDBEngine:
         :return: o ``serialize_db.engine.Appender`` da tabela, que guarda os lotes num arquivo
             Arrow IPC da pasta de
             transbordo até o ``close`` e os insere num único ``INSERT ... BY NAME``.
-        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
-            ``ingest`` ocupa.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
+            uma view do ``ingest`` ocupa.
         """
         return DuckDBAppender(self, table, queue_depth)
 
@@ -1327,10 +1331,11 @@ class DuckDBEngine:
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
         :return: as linhas acrescentadas.
-        :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
-            tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
-        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
-            ``ingest`` ocupa.
+        :raises serialize_db.errors.ContractError: um DataFrame, com a conversão sem cópia na
+            mensagem, ou outro tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é
+            inserido.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
+            uma view do ``ingest`` ocupa.
         """
         batches = batches_of(data)
         with self.appender(table) as appender:
@@ -1377,7 +1382,8 @@ class DuckDBEngine:
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
             ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+        :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
+            partição.
         """
         # Sem staging a carregar, a consulta de uma verificação é a própria query.
         support = AuditSupport(
@@ -1459,19 +1465,20 @@ class DuckDBEngine:
         :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
             registrados; sem ela, a contagem do sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
-            que saem sem mínimo e máximo (issue #59).
+            que saem sem mínimo e máximo (issue #59 do serialize-db).
         :return: a versão do commit.
-        :raises ContractError: o valor fora da regra da partição, ``None`` numa tabela
-            particionada, ou um valor numa tabela sem partição.
-        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, e o
-            arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
+        :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
+            tabela particionada, ou um valor numa tabela sem partição.
+        :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
+            commit, e o arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
             ``full=True``; ou a releitura desfez o commit.
-        :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
+        :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
+            mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, antes do ``COPY``, sem arquivo
             gravado.
-        :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
-            negativa, lida no registro antes do commit (``environment_limits``); sem commit, o
-            arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
+        :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+            2 MiB, ou negativa, lida no registro antes do commit (``environment_limits``); sem
+            commit, o arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
             ``full=True``.
         """
         # O valor conferido antes do COPY: o arquivo de um valor recusado no registro ficaria

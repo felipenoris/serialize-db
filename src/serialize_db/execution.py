@@ -260,13 +260,14 @@ class Database:
             do ambiente e uma pasta temporária nova, apagada no ``close``.
         :return: o leitor, gerenciador de contexto; sem ``close``, a coleta dele apaga a pasta
             temporária do motor.
-        :raises ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem o canal, com o
-            ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou o snapshot
-            que não existe.
+        :raises serialize_db.errors.ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem
+            o canal, com o ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou
+            o snapshot que não existe.
         :raises duckdb.Error: a extensão ``delta`` ausente da pasta configurada, ou uma versão
             do snapshot que a tabela não tem mais, na criação da view.
-        :raises SandboxError: sem ``memory_limit`` em ``config``, a memória que o processo ainda
-            pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB (``environment_limits``).
+        :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que
+            o processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
+            (``environment_limits``).
         """
         return DeltaReader(self, snapshot, channel, config)
 
@@ -297,9 +298,9 @@ class Database:
             dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
             pasta do leitor.
-        :raises ContractError: a configuração sem conexão, sem ``workgroup`` e sem ``host``,
-            ``user`` e ``password``; ou, sem ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é
-            número.
+        :raises serialize_db.errors.ContractError: a configuração sem conexão, sem ``workgroup`` e
+            sem ``host``, ``user`` e ``password``; ou, sem ``config``,
+            ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
         if unload_to is None:
@@ -420,8 +421,8 @@ class Execution:
             (``serialize_db.engine.redshift.RedshiftConfig``) do motor ``"redshift"``, que sem
             ela lê as variáveis ``SERIALIZE_DB_REDSHIFT_*``, e a porta que não é número é
             ``ContractError`` na entrada do ``with``; o motor ``"duckdb"`` não a usa.
-        :raises ContractError: a partição ou o ``execution_id`` fora da regra da partição, ou a
-            partição acima do ``String(n)`` de uma coluna de partição.
+        :raises serialize_db.errors.ContractError: a partição ou o ``execution_id`` fora da regra da
+            partição, ou a partição acima do ``String(n)`` de uma coluna de partição.
         """
         self.delta_db = delta_db
         """[public] O banco Delta: a raiz, o ambiente e os modelos do cliente."""
@@ -598,7 +599,8 @@ class Execution:
         :param n: quantos valores, no máximo; zero ou negativo dá a lista vazia.
         :return: os valores na ordem de texto, lidos das ações ``add`` da versão fixada, ou a lista
             vazia numa tabela que não existe.
-        :raises ContractError: a tabela sem partição, ou a execução sem partição.
+        :raises serialize_db.errors.ContractError: a tabela sem partição, ou a execução sem
+            partição.
         """
         partition_by = table_options(table).partition_by
         if partition_by is None:
@@ -676,12 +678,12 @@ class Execution:
             a tabela inteira.
         :param materialize: no DuckDB, uma tabela em vez de uma view; no Redshift a tabela é
             sempre carregada.
-        :raises ContractError: um valor fora da regra da partição, ou ``partitions`` numa tabela
-            sem partição.
-        :raises SandboxError: a tabela sem versão fixada, que não existe no ambiente, ou o nome
-            dela já ocupado no sandbox; no motor Redshift, também a sessão numa transação que o
-            cliente abriu por ``BEGIN``, antes de qualquer comando, e, sem ``iam_role``, a sessão
-            ``boto3`` sem credenciais para o ``COPY``.
+        :raises serialize_db.errors.ContractError: um valor fora da regra da partição, ou
+            ``partitions`` numa tabela sem partição.
+        :raises serialize_db.errors.SandboxError: a tabela sem versão fixada, que não existe no
+            ambiente, ou o nome dela já ocupado no sandbox; no motor Redshift, também a sessão numa
+            transação que o cliente abriu por ``BEGIN``, antes de qualquer comando, e, sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         """
         checked = _checked_partitions(partitions)
         with self._step("ingest"):
@@ -710,7 +712,7 @@ class Execution:
 
         :param table: a tabela do modelo.
         :return: o ``FromClause`` com as colunas do contrato.
-        :raises SandboxError: a tabela sem versão fixada, que ainda não existe.
+        :raises serialize_db.errors.SandboxError: a tabela sem versão fixada, que ainda não existe.
         """
         return self.sandbox.pinned_delta(table, self._uri(table), self._version(table))
 
@@ -747,7 +749,7 @@ class Execution:
         :param table: a tabela do modelo, cuja chave é a chave primária inteira de uma coluna.
         :param n: o tamanho da faixa.
         :return: a faixa; na tabela nova, a primeira começa em 1.
-        :raises ContractError: outra chave, ou ``n`` negativo.
+        :raises serialize_db.errors.ContractError: outra chave, ou ``n`` negativo.
         """
         key = _sequential_key(table)
         if n < 0:
@@ -809,9 +811,9 @@ class Execution:
             suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
             ``partition_source``.
         :return: o relatório aprovado.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição, ou a lista
-            vazia, que aprovaria sem auditar.
-        :raises AuditFailed: a reprovação.
+        :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
+            partição, ou a lista vazia, que aprovaria sem auditar.
+        :raises serialize_db.errors.AuditFailed: a reprovação.
         """
         checked = _checked_partitions(partitions)
         # A lista vazia é recusada: o IN () falso aprovaria sem auditar.
@@ -994,21 +996,25 @@ class Execution:
         :param max_workers: quantas tabelas correm ao mesmo tempo; o padrão 1 publica uma por vez,
             e o valor recomendado é 4.
         :return: ``{tabela: versão}``, com a versão do último commit de cada tabela.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição, a lista
-            vazia, ``partitions`` numa tabela sem partição, ou ``None`` numa tabela particionada.
-        :raises AuditFailed: uma tabela sem a auditoria aprovada nessas partições, na mesma ordem,
-            na própria execução.
-        :raises ExecutionConflict: uma alteração de dados na tabela desde a versão fixada,
-            conferida antes de qualquer commit nela (a compactação e os commits só de metadados
-            não contam), ou o commit de outro escritor na mesma partição durante a exportação.
-        :raises SchemaDiffRefused: o diff entre o modelo e a tabela é destrutivo, e ``reconcile``
-            não altera a tabela.
-        :raises RegistrationRefused: uma conferência do arquivo exportado reprovou antes do commit,
-            ou a releitura reprovou depois dele e a tabela voltou à versão anterior.
-        :raises LogUnavailable: um arquivo do log entre a versão fixada e a atual não existe.
-        :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
-            negativa, lida por ``environment_limits`` no registro de cada partição, antes do
-            commit: nada entra no log, e o arquivo que o motor gravou fica órfão na pasta da
+        :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
+            partição, a lista vazia, ``partitions`` numa tabela sem partição, ou ``None`` numa
+            tabela particionada.
+        :raises serialize_db.errors.AuditFailed: uma tabela sem a auditoria aprovada nessas
+            partições, na mesma ordem, na própria execução.
+        :raises serialize_db.errors.ExecutionConflict: uma alteração de dados na tabela desde a
+            versão fixada, conferida antes de qualquer commit nela (a compactação e os commits só de
+            metadados não contam), ou o commit de outro escritor na mesma partição durante a
+            exportação.
+        :raises serialize_db.errors.SchemaDiffRefused: o diff entre o modelo e a tabela é
+            destrutivo, e ``reconcile`` não altera a tabela.
+        :raises serialize_db.errors.RegistrationRefused: uma conferência do arquivo exportado
+            reprovou antes do commit, ou a releitura reprovou depois dele e a tabela voltou à versão
+            anterior.
+        :raises serialize_db.errors.LogUnavailable: um arquivo do log entre a versão fixada e a
+            atual não existe.
+        :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+            2 MiB, ou negativa, lida por ``environment_limits`` no registro de cada partição, antes
+            do commit: nada entra no log, e o arquivo que o motor gravou fica órfão na pasta da
             partição até um ``vacuum`` com ``full=True``; no motor Redshift, também sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
         """
@@ -1044,10 +1050,10 @@ class Execution:
 
         :param name: o nome do snapshot, pela regra da partição, ausente de ``snapshots`` e de
             ``archived`` no arquivo de controle do ambiente.
-        :raises ContractError: na chamada, antes de qualquer commit, o nome fora da regra da
-            partição, ou já usado em ``snapshots`` ou em ``archived``, com o
-            ``serialize-db channel`` na mensagem, e a segunda chamada na execução já marcada, com
-            o nome marcado na mensagem; na saída do ``with``, depois dos commits, o nome que outro
+        :raises serialize_db.errors.ContractError: na chamada, antes de qualquer commit, o nome fora
+            da regra da partição, ou já usado em ``snapshots`` ou em ``archived``, com o
+            ``serialize-db channel`` na mensagem, e a segunda chamada na execução já marcada, com o
+            nome marcado na mensagem; na saída do ``with``, depois dos commits, o nome que outro
             escritor gravou depois da chamada.
         :raises serialize_db.errors.ConflictError: na saída do ``with``, depois dos commits, outro
             escritor gravou o arquivo de controle entre a leitura e a escrita da entrada, que não

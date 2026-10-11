@@ -293,13 +293,14 @@ class DeltaReader:
             ``None`` sem ``snapshot`` lê o canal ``default``.
         :param config: a configuração do DuckDB; ``None`` é ``DuckDBConfig()``, os limites lidos
             do ambiente e uma pasta temporária nova, apagada no ``close``.
-        :raises ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem o canal, com o
-            ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou o snapshot
-            que não existe.
+        :raises serialize_db.errors.ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem
+            o canal, com o ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou
+            o snapshot que não existe.
         :raises duckdb.Error: a extensão ``delta`` ausente da pasta configurada, ou uma versão
             do snapshot que a tabela não tem mais, na criação da view.
-        :raises SandboxError: sem ``memory_limit`` em ``config``, a memória que o processo ainda
-            pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB (``environment_limits``).
+        :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que
+            o processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
+            (``environment_limits``).
         """
         source = _resolve_source(delta_db, snapshot, channel)
         self.snapshot = source.snapshot
@@ -423,8 +424,8 @@ class DeltaReader:
         :param tables: as tabelas do modelo com view no leitor.
         :param partitions: os valores de partição copiados, pela regra da partição; ``None``
             copia a tabela inteira.
-        :raises ContractError: uma tabela sem view no leitor, ``partitions`` numa tabela sem
-            partição ou um valor fora da regra da partição, antes de qualquer troca.
+        :raises serialize_db.errors.ContractError: uma tabela sem view no leitor, ``partitions``
+            numa tabela sem partição ou um valor fora da regra da partição, antes de qualquer troca.
         :raises duckdb.Error: a falha da cópia de uma tabela, que fica com o objeto anterior,
             view ou tabela, enquanto as outras terminam.
         """
@@ -475,10 +476,10 @@ class DeltaReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :return: a tabela do resultado, nos tipos Arrow do contrato nas colunas do modelo.
-        :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
-            modelo sem view no leitor, sem chamar o motor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto, ou o texto ainda traz o sentinela ``{prefix}``.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, ou que cita
+            uma tabela do modelo sem view no leitor, sem chamar o motor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: o texto que cita uma tabela sem view, ou uma coluna que o modelo
             ganhou depois da versão lida.
         """
@@ -511,10 +512,10 @@ class DeltaReader:
         :return: o ``ReaderStream`` dos lotes, um ``BatchStream`` gerenciador de contexto, que
             segura o leitor até o ``close``; o ``close`` cancela a consulta que ainda roda e apaga
             o arquivo de transbordo.
-        :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
-            modelo sem view no leitor, sem chamar o motor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto, ou o texto ainda traz o sentinela ``{prefix}``.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, ou que cita
+            uma tabela do modelo sem view no leitor, sem chamar o motor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
             sobe na leitura seguinte ao último lote entregue. Com mais de uma thread, o erro da
             consulta pode chegar como ``INTERRUPT Error: Interrupted!``, sem a causa, como
@@ -613,9 +614,9 @@ class RedshiftReader:
             ficam nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
             ``stream`` falhar, sem arquivo gravado. A pasta local serve só à conexão de mentira
             dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
-        :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
-            conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou, sem
-            ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
+        :raises serialize_db.errors.ContractError: o ambiente fora da regra da partição, ou a
+            configuração sem conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``;
+            ou, sem ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
         # O módulo do Redshift entra só com o leitor: importar o pacote não carrega o driver.
@@ -661,10 +662,11 @@ class RedshiftReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :return: a tabela do resultado, montada por colunas com o esquema do ``row_desc``.
-        :raises ContractError: um statement Core que não é consulta, sem comando no servidor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, sem comando
+            no servidor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato.
         :raises redshift_connector.Error: a tabela não publicada, que o servidor responde com
             ``XX000`` e ``Relation <nome> does not exist in the database.``.
         """
@@ -699,12 +701,12 @@ class RedshiftReader:
         :param batch_size: o máximo de linhas de cada lote, lido de cada arquivo do ``UNLOAD``.
         :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``BatchStream.close``
             apaga os arquivos do ``UNLOAD`` deste stream.
-        :raises ContractError: um statement Core que não é consulta, ou o leitor sem
-            ``unload_to``, antes de qualquer comando no servidor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato; ou, sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, ou o leitor
+            sem ``unload_to``, antes de qualquer comando no servidor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato;
+            ou, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         _check_select(statement_or_sql)
@@ -780,9 +782,9 @@ def open_redshift(
         arquivo pelo armazenamento do leitor.
     :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia
         ``<unload_to>/<id do leitor>/``.
-    :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
-        conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou, sem ``config``,
-        ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
+    :raises serialize_db.errors.ContractError: o ambiente fora da regra da partição, ou a
+        configuração sem conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou,
+        sem ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
     :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
     """
     return RedshiftReader(metadata, environment, config, unload_to)

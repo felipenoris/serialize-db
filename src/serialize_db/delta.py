@@ -511,11 +511,13 @@ def publish_partition(
     :param metadata: os metadados do commit, de ``commit_metadata``.
     :param storage: o armazenamento da raiz do banco.
     :param columns_without_min_max: as colunas que saem sem mínimo e máximo no rodapé e no log, as
-        ``Double`` com valor não finito na partição (issue #59).
+        ``Double`` com valor não finito na partição (issue #59 do serialize-db).
     :return: a versão do próprio commit.
-    :raises ContractError: ``value`` ausente numa tabela particionada, presente numa tabela sem
-        partição ou fora da regra; os dados sem a coluna de partição, antes de gravar.
-    :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
+    :raises serialize_db.errors.ContractError: ``value`` ausente numa tabela particionada, presente
+        numa tabela sem partição ou fora da regra; os dados sem a coluna de partição, antes de
+        gravar.
+    :raises serialize_db.errors.ExecutionConflict: o commit falhou no delta-rs com
+        ``CommitFailedError``.
     """
     value = checked_value(table, value)
     arrow = _as_arrow(data)
@@ -1047,15 +1049,16 @@ def register_files(
     :param expected_rows: a contagem da fonte, quando o chamador a tem, que a soma das linhas
         dos arquivos tem de igualar; ``None`` não confere a soma.
     :param columns_without_min_max: as colunas cujo mínimo e máximo ficam fora da ação, as
-        ``Double`` com valor não finito na partição (issue #59).
+        ``Double`` com valor não finito na partição (issue #59 do serialize-db).
     :return: a versão do commit.
-    :raises ContractError: ``value`` ausente numa tabela particionada, presente numa tabela sem
-        partição ou fora da regra.
+    :raises serialize_db.errors.ContractError: ``value`` ausente numa tabela particionada, presente
+        numa tabela sem partição ou fora da regra.
     :raises ValueError: ``uri`` fora da raiz de ``storage``.
-    :raises RegistrationRefused: uma conferência reprovou, sem commit, e o arquivo fica órfão na
-        pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)`` (``serialize-db vacuum
-        --full``); ou a releitura reprovou e desfez o commit.
-    :raises ExecutionConflict: um segundo registro da mesma partição a partir da mesma versão.
+    :raises serialize_db.errors.RegistrationRefused: uma conferência reprovou, sem commit, e o
+        arquivo fica órfão na pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)``
+        (``serialize-db vacuum --full``); ou a releitura reprovou e desfez o commit.
+    :raises serialize_db.errors.ExecutionConflict: um segundo registro da mesma partição a partir da
+        mesma versão.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
         2 MiB, ou negativa, lida antes do commit para a conexão da releitura
         (``environment_limits``); nada entra no log, e o arquivo do escritor fica órfão na pasta
@@ -1272,8 +1275,8 @@ def read_back(
     :param value: o valor da partição relida; ``value=None`` relê a tabela inteira.
     :param expected_rows: as linhas que o log e os dois leitores têm de contar.
     :param storage: o armazenamento da raiz do banco.
-    :raises RegistrationRefused: uma diferença entre os leitores, o log e ``expected_rows``,
-        depois de ``restore(version - 1)``; a mensagem traz as leituras.
+    :raises serialize_db.errors.RegistrationRefused: uma diferença entre os leitores, o log e
+        ``expected_rows``, depois de ``restore(version - 1)``; a mensagem traz as leituras.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
         2 MiB, ou negativa, lida por ``environment_limits`` no início da chamada, antes de qualquer
         leitura.
@@ -1366,8 +1369,8 @@ def schema_diff(
     :param table: a tabela do modelo.
     :param dt: a tabela aberta por ``open_table``.
     :return: o diff, separado em aditivo e destrutivo.
-    :raises ContractError: uma ``CheckConstraint`` do modelo sem nome, porque o Delta guarda o
-        ``CHECK`` pelo nome.
+    :raises serialize_db.errors.ContractError: uma ``CheckConstraint`` do modelo sem nome, porque o
+        Delta guarda o ``CHECK`` pelo nome.
     """
     contract = arrow_schema(table)
     current = pa.schema(dt.schema())
@@ -1446,9 +1449,10 @@ def reconcile(
     :param table: a tabela do modelo.
     :param storage: o armazenamento da raiz do banco.
     :return: o diff aplicado.
-    :raises SchemaDiffRefused: o diff destrutivo, sem alteração; a mensagem traz a lista e a
-        instrução de ``rewrite``.
-    :raises ContractError: uma ``CheckConstraint`` do modelo sem nome, como em ``schema_diff``.
+    :raises serialize_db.errors.SchemaDiffRefused: o diff destrutivo, sem alteração; a mensagem traz
+        a lista e a instrução de ``rewrite``.
+    :raises serialize_db.errors.ContractError: uma ``CheckConstraint`` do modelo sem nome, como em
+        ``schema_diff``.
     """
     dt = open_table(uri, storage)
     diff = schema_diff(table, dt)
@@ -1506,7 +1510,7 @@ def _nonfinite_by_partition(
     select: str,
 ) -> dict[str | None, tuple[str, ...]]:
     """[private] As colunas ``Double`` com valor não finito em cada partição do ``SELECT``, que
-    ficam sem mínimo e máximo no log (issue #59)."""
+    ficam sem mínimo e máximo no log (issue #59 do serialize-db)."""
     doubles = double_columns(table)
     if not doubles:
         return {}
@@ -1622,14 +1626,15 @@ def rewrite(
         a preenche: o nome antigo numa renomeação, o valor de uma coluna ``NOT NULL`` nova;
         ``None`` preenche cada coluna pelo próprio nome.
     :return: a versão do commit.
-    :raises ContractError: uma chave de ``expressions`` fora das colunas do modelo, que seria
-        ignorada.
+    :raises serialize_db.errors.ContractError: uma chave de ``expressions`` fora das colunas do
+        modelo, que seria ignorada.
     :raises duckdb.BinderException: uma coluna do contrato ausente da versão atual e fora de
         ``expressions``, antes de qualquer commit; o cliente a acrescenta a ``expressions``.
     :raises ValueError: ``uri`` fora da raiz de ``storage``, antes de qualquer escrita.
-    :raises RegistrationRefused: uma conferência de ``register_files`` reprovou um arquivo novo,
-        sem commit; ou a releitura reprovou e desfez o commit.
-    :raises ExecutionConflict: o commit falhou no delta-rs com ``CommitFailedError``.
+    :raises serialize_db.errors.RegistrationRefused: uma conferência de ``register_files`` reprovou
+        um arquivo novo, sem commit; ou a releitura reprovou e desfez o commit.
+    :raises serialize_db.errors.ExecutionConflict: o commit falhou no delta-rs com
+        ``CommitFailedError``.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
         2 MiB, ou negativa, na abertura da conexão da reescrita, antes de qualquer escrita; a
         releitura usa os mesmos limites (``environment_limits``).
@@ -1718,8 +1723,9 @@ def version_diff(
         numa tabela sem partição, ``{None}`` quando houve alteração.
     :raises ValueError: ``published`` depois de ``current``, ou ``uri`` fora da raiz de
         ``storage``.
-    :raises LogUnavailable: um arquivo do log ausente, com a instrução de publicar a tabela
-        inteira: a limpeza que o apagaria também torna ilegível a versão publicada.
+    :raises serialize_db.errors.LogUnavailable: um arquivo do log ausente, com a instrução de
+        publicar a tabela inteira: a limpeza que o apagaria também torna ilegível a versão
+        publicada.
     """
     if published > current:
         raise ValueError(f"versão publicada {published} depois da atual {current}")
@@ -1905,9 +1911,9 @@ def snapshot(
     :param versions: a versão de cada tabela, pelo nome da tabela; as versões marcadas são as que
         ``vacuum_keeping_snapshots`` preserva.
     :return: o controle novo.
-    :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle;
-        ou um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a pasta
-        ``<ambiente>/arquivo/<nome>/``, com o ``serialize-db channel`` na mensagem.
+    :raises serialize_db.errors.ContractError: o nome fora da regra da partição, antes de ler o
+        arquivo de controle; ou um nome presente em ``snapshots`` ou em ``archived``, porque o nome
+        dá a pasta ``<ambiente>/arquivo/<nome>/``, com o ``serialize-db channel`` na mensagem.
     :raises serialize_db.errors.ConflictError: outro escritor gravou o arquivo de controle entre
         a leitura e a escrita; nada foi gravado.
     """
@@ -2020,8 +2026,8 @@ def set_channel(
         ``current`` é reservado, a versão atual de cada tabela, e não fica no arquivo.
     :param snapshot: o nome do snapshot, presente em ``snapshots``.
     :return: o controle novo.
-    :raises ContractError: o nome do canal fora da regra da partição, ou o nome ``current``,
-        antes de ler o arquivo de controle.
+    :raises serialize_db.errors.ContractError: o nome do canal fora da regra da partição, ou o nome
+        ``current``, antes de ler o arquivo de controle.
     :raises ValueError: o snapshot ausente de ``snapshots``, o arquivado inclusive, porque o
         ``vacuum`` deixa de preservar as versões dele.
     :raises serialize_db.errors.ConflictError: outro escritor gravou o arquivo de controle entre
@@ -2062,9 +2068,9 @@ def channel_snapshot(
     :param control: o arquivo de controle, como ``read_snapshots`` o devolve.
     :param name: o nome do canal.
     :return: o nome do snapshot.
-    :raises ContractError: o canal ausente do arquivo de controle, com o ``serialize-db channel``
-        que o cria na mensagem; ou o canal ``current``, que não aponta snapshot e lê a versão atual
-        de cada tabela sem passar pelo arquivo.
+    :raises serialize_db.errors.ContractError: o canal ausente do arquivo de controle, com o
+        ``serialize-db channel`` que o cria na mensagem; ou o canal ``current``, que não aponta
+        snapshot e lê a versão atual de cada tabela sem passar pelo arquivo.
     """
     # O canal reservado não fica no arquivo, e set_channel recusa criá-lo.
     if name == CURRENT_CHANNEL:
@@ -2097,8 +2103,9 @@ def snapshot_versions(
     :param control: o arquivo de controle, como ``read_snapshots`` o devolve.
     :param name: o nome do snapshot.
     :return: a versão de cada tabela, pelo nome da tabela, numa cópia da entrada.
-    :raises ContractError: o nome ausente de ``snapshots``; a mensagem diz quando ele está em
-        ``archived``, que só o leitor Delta lê, pela cópia em ``<ambiente>/arquivo/<nome>/``.
+    :raises serialize_db.errors.ContractError: o nome ausente de ``snapshots``; a mensagem diz
+        quando ele está em ``archived``, que só o leitor Delta lê, pela cópia em
+        ``<ambiente>/arquivo/<nome>/``.
     """
     versions = control.get("snapshots", {}).get(name)
     if versions is None:
@@ -2188,7 +2195,7 @@ def compact(
     :param storage: o armazenamento da raiz do banco.
     :return: as métricas do ``optimize.compact``, como ``numFilesAdded``, ``numFilesRemoved`` e
         ``totalConsideredFiles``, os arquivos lidos nas partições.
-    :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+    :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     partition_by = table_options(table).partition_by
     filters = None
@@ -2438,13 +2445,13 @@ def deep_copy(
     :param storage: o armazenamento da raiz do banco.
     :return: a versão da cópia, que ganha uma versão por partição copiada; a repetição sobre a
         cópia completa devolve a mesma versão.
-    :raises RegistrationRefused: um destino que registra um arquivo que a versão não lista, que
-        guarda outra tabela; ou, no fim, o esquema da cópia diferente do da versão, sem partição
-        copiada que o trocasse, ou a contagem da cópia pelos dois leitores diferente da soma das
-        ações.
+    :raises serialize_db.errors.RegistrationRefused: um destino que registra um arquivo que a versão
+        não lista, que guarda outra tabela; ou, no fim, o esquema da cópia diferente do da versão,
+        sem partição copiada que o trocasse, ou a contagem da cópia pelos dois leitores diferente da
+        soma das ações.
     :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``, antes de qualquer
         escrita.
-    :raises ExecutionConflict: o commit de uma partição falhou no delta-rs com
+    :raises serialize_db.errors.ExecutionConflict: o commit de uma partição falhou no delta-rs com
         ``CommitFailedError``.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
         2 MiB, ou negativa, lida antes de criar o destino, para a conexão da contagem final

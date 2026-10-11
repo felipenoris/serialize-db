@@ -685,7 +685,7 @@ def checks(
         de uma coluna o ``skip_when``.
     :return: a verificação de linhas, as de chave e as de órfão, nessa ordem; as verificações que
         não rodam ficam fora da lista, e o relatório do motor as registra.
-    :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+    :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     found, _ = checks_and_not_run(
         table, partitions, foreign_keys, key_scope, pinned, referenced, pinned_max_key
@@ -799,7 +799,7 @@ def audit_sql(
     :param prefix: o prefixo das tabelas no texto; o padrão deixa nele o sentinela ``{prefix}``,
         e ``prefix=""`` dá o texto sobre as tabelas do contrato, o que o motor DuckDB roda.
     :return: ``{nome: texto}``, na ordem de ``checks``.
-    :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+    :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     texts = {}
     for check in checks(table, partitions, foreign_keys, key_scope, pinned, referenced):
