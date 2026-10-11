@@ -1157,6 +1157,6 @@ Delta, o `delta_scan` do DuckDB lê toda coluna como nula.
 
 Uma coluna do contrato volta de `query` e de `stream` no tipo Arrow da tabela. No motor Redshift,
 o tipo de cada coluna do resultado vem da descrição de linhas do driver, com o `SUPER` em `string`
-e o `NUMERIC` com a precisão e a escala do `type_modifier`, e o motor recusa com
-`serialize_db.errors.SandboxError` o tipo que não lista, como `TIME`; o motor DuckDB
-devolve o `TIMESTAMPTZ` com o fuso da sessão (`TimeZone`), que `cast` leva a UTC no mesmo instante.
+e o `NUMERIC` com a precisão e a escala do `type_modifier`; um tipo sem correspondente Arrow no
+motor, como `TIME`, é recusado com `serialize_db.errors.SandboxError`. O motor DuckDB devolve o
+`TIMESTAMPTZ` com o fuso da sessão (`TimeZone`), que `cast` leva a UTC no mesmo instante.

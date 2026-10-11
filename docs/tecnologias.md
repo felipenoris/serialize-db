@@ -3070,8 +3070,8 @@ Variantes documentadas:
 O DDL do sandbox sai do contrato SQLAlchemy pelo texto de `serialize_db.schema.ddl(table, "duckdb")`,
 sem chaves pela política de restrições e com os tipos de `sql_type`, executado na conexão DuckDB; a
 biblioteca não compila o DDL pelo dialeto, e o `duckdb_engine` entra só na compilação dos statements
-Core (`serialize_db.sql.render` e o `query` e o `stream` do motor DuckDB). O esboço abaixo obtém um
-DDL equivalente pelo `CreateTable` do dialeto:
+Core (`serialize_db.sql.render`, `query` e `stream` do motor DuckDB). O esboço abaixo obtém um DDL
+equivalente pelo `CreateTable` do dialeto:
 
 ```python
 # Esboço: DDL sem chaves e com comentários pelo CreateTable do duckdb_engine; a biblioteca escreve o
@@ -3096,9 +3096,9 @@ con = duckdb.connect()
 create_table(con, Operacao.__table__)
 con.sql("SELECT sql FROM duckdb_tables() WHERE table_name = 'operacoes'").fetchone()[0]
 # 'CREATE TABLE operacoes(id_operacao BIGINT NOT NULL, data_ref DATE NOT NULL, id_cliente BIGINT NOT NULL,
-#  valor DECIMAL(18,2) NOT NULL, descricao VARCHAR);'
+#  valor DECIMAL(18,2) NOT NULL, descricao VARCHAR, mes VARCHAR NOT NULL);'
 con.sql("SELECT column_name, comment FROM duckdb_columns() WHERE comment IS NOT NULL").fetchall()
-# [('id_cliente', 'Chave do cliente')]
+# [('id_cliente', 'Chave do cliente'), ('mes', 'Mês de data_ref no formato AAAA-MM')]
 ```
 
 `CreateTable` compila `NUMERIC(18, 2)` e `VARCHAR(200)`, que o catálogo guarda como `DECIMAL(18,2)` e
@@ -4313,8 +4313,9 @@ Pontos da referência:
   recebem codificação `RAW` por padrão, salvo `ENCODE` por coluna; `svv_table_info` não as lista. Um
   nome iniciado por `#` cria uma tabela temporária. A biblioteca as usa como staging: a do `COPY`
   da publicação e a do acréscimo em lotes numa tabela com coluna JSON
-  (`staging_ddl(..., temporary=True)`), que um `DROP TABLE` apaga depois do `INSERT`, ou o fim
-  da sessão, numa falha; o pipeline pode criá-las na sessão única do motor.
+  (`staging_ddl(..., temporary=True)`), criadas dentro da transação: um `DROP TABLE` as apaga
+  depois do `INSERT`, o `ROLLBACK` de uma falha desfaz a criação, e o fim da sessão as apaga
+  quando a conexão cai; o pipeline pode criá-las na sessão única do motor.
 - Limites: 127 bytes por nome, 1.600 colunas, cota de tabelas por tipo de nó.
 
 As tabelas do sandbox recebem o prefixo da execução no nome, dentro do único esquema. O `Table` do
@@ -4969,11 +4970,10 @@ Os 32 arquivos saíram de um `UNLOAD ... PARTITION BY` sem `ORDER BY`, de uma ta
 33.239.719 linhas de `cad_lancamentos` (17,3 MB a 559,5 MB), no tempo do `PARALLEL OFF` (razão de
 0,98 a 0,99 em 2026-10-05, às 05:29 de 2026-10-09 e em 2026-10-10, de 0,98 a 1,01 em 2026-10-07 e
 de 0,97 a 1,00 às 21:56 de 2026-10-09), sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e cópias
-dela por
-`CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
-distribuição. O `UNLOAD` da exportação da biblioteca grava em série, num arquivo só
-(`PARALLEL OFF`), a partição de até 5.000.000 linhas, contadas antes no sandbox, e em paralelo
-acima disso (`_PARALLEL_OFF_ROWS`, `serialize_db.engine.redshift`).
+dela por `CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do
+`PARTITION BY` e da distribuição. O `UNLOAD` da exportação da biblioteca grava em série, num
+arquivo só (`PARALLEL OFF`), a partição de até 5.000.000 linhas, contadas antes no sandbox, e em
+paralelo acima disso (`_PARALLEL_OFF_ROWS`, `serialize_db.engine.redshift`).
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
 acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
