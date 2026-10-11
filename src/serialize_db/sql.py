@@ -119,7 +119,7 @@ def with_float_literals(
     dialect: sa.engine.Dialect,
 ) -> sa.engine.Dialect:
     """[protected] O dialeto com o ``Float`` e o ``Double`` embutidos por ``_FloatLiteral``; também
-    para o compilador dos literais do motor Redshift.
+    para os compiladores dos motores DuckDB e Redshift.
 
     O ``colspecs`` da instância troca o tipo que o dialeto adota para cada ``sa.Float`` e cada
     subclasse dele, ``sa.Double`` inclusive; a classe do dialeto, que o cliente pode usar no
@@ -223,7 +223,7 @@ def required_parameters(
     statement: sa.sql.ClauseElement,
 ) -> set[str]:
     """[protected] Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós;
-    o guarda dos motores antes de compilar.
+    o guarda que ``bound_statement`` aplica antes de compilar, no caminho dos motores.
 
     Sob ``literal_binds``, ``compiled.binds`` sai vazio e o ``bindparam`` sem valor vira ``NULL``
     calado, até num ``IN`` de lista; sem ``literal_binds``, ``compiled.binds`` o marca, mas

@@ -86,7 +86,8 @@ def run_in_pool(
     max_workers: int,
 ) -> dict[str, object]:
     """[protected] Roda as tarefas num pool de ``max_workers`` e devolve o resultado de cada uma
-    pelo nome.
+    pelo nome; para ``serialize_db.execution``, ``serialize_db.publication`` e
+    ``serialize_db.reader``.
 
     Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em
     curso terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada

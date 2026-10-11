@@ -90,7 +90,7 @@ def _by_name(
 
 class partition_text(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
     """[protected] O texto ``AAAA-MM-DD`` de uma data: ``strftime`` no DuckDB e ``to_char`` no
-    Redshift."""
+    Redshift; para os contadores de defeito da verificação de linhas."""
 
     name = "partition_text"
     type = sa.String()
@@ -121,7 +121,8 @@ def _redshift_partition_text(
 class json_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
     """[protected] Se o texto é um documento JSON: ``json_valid`` no DuckDB; no Redshift, ``true``,
     porque a coluna JSON é ``SUPER``, cujo valor sempre se serializa como documento JSON, e o
-    ``is_valid_json`` recusa ``SUPER`` (42883, leitura de 2026-09-23)."""
+    ``is_valid_json`` recusa ``SUPER`` (42883, leitura de 2026-09-23). Para os contadores de defeito
+    da verificação de linhas."""
 
     name = "json_valid"
     type = sa.Boolean()
@@ -143,7 +144,7 @@ def _redshift_json_valid(
 class text_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
     """[protected] O comprimento do texto em bytes, a medida do ``VARCHAR(n)`` do Redshift:
     ``strlen`` no DuckDB e ``octet_length`` no Redshift, porque o ``length`` dos dois conta
-    caracteres."""
+    caracteres. Para os contadores de defeito da verificação de linhas."""
 
     name = "text_bytes"
     type = sa.Integer()
@@ -173,7 +174,8 @@ def _redshift_text_bytes(
 
 class json_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
     """[protected] O tamanho do documento JSON em bytes: ``strlen`` do texto no DuckDB, onde a
-    coluna é ``JSON`` ou ``VARCHAR``, e ``json_size`` no Redshift, onde ela é ``SUPER``."""
+    coluna é ``JSON`` ou ``VARCHAR``, e ``json_size`` no Redshift, onde ela é ``SUPER``. Para os
+    contadores de defeito da verificação de linhas."""
 
     name = "json_bytes"
     type = sa.Integer()
@@ -203,7 +205,8 @@ def _redshift_json_bytes(
 
 class partition_value_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
     """[protected] Se o valor de partição segue ``schema.PARTITION_VALUE`` por inteiro:
-    ``regexp_full_match`` no DuckDB e o operador POSIX ``~`` com as âncoras no Redshift."""
+    ``regexp_full_match`` no DuckDB e o operador POSIX ``~`` com as âncoras no Redshift. Para os
+    contadores de defeito da verificação de linhas."""
 
     name = "partition_value_valid"
     type = sa.Boolean()
@@ -233,7 +236,7 @@ def _redshift_partition_value_valid(
 
 class is_finite(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
     """[protected] Se o ``Double`` é finito: ``isfinite`` no DuckDB; no Redshift, estritamente entre
-    os infinitos.
+    os infinitos. Para as somas de controle da verificação de linhas.
 
     O Redshift comparou o ``NaN`` igual a si mesmo numa constante, como o PostgreSQL, e lá a
     comparação estrita com os infinitos dá falso a ele. Na varredura de uma tabela, nem essa

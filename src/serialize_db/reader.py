@@ -11,12 +11,12 @@ O leitor Delta lê, sem argumento, o snapshot do canal ``default`` do ambiente, 
 ``serialize-db channel`` move; ``snapshot=`` lê um snapshot pelo nome, o arquivado pela cópia em
 ``<raiz>/<ambiente>/arquivo/<nome>/``; ``channel="current"`` lê a versão atual de cada tabela.
 Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é consistente num
-snapshot. O ``delta_scan`` poda as partições por ``=`` e por intervalo, e abre todos os arquivos
-com um ``IN`` de mais de um valor sozinho; por isso o filtro das partições é ``BETWEEN`` o menor e
-o maior valor ``AND`` o ``IN`` da lista, como no ``ingest`` dos motores. ``materialize`` copia uma
-tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas
-que ``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas
-tabelas durante uma publicação pode ler versões diferentes.
+snapshot. O ``delta_scan`` poda as partições por ``=`` e por intervalo, e abre todos os arquivos com
+um ``IN`` de mais de um valor sozinho; por isso o filtro das partições é ``BETWEEN`` o menor e o
+maior valor ``AND`` o ``IN`` da lista, como no ``ingest`` do motor DuckDB. ``materialize`` copia uma
+tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas que
+``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas tabelas
+durante uma publicação pode ler versões diferentes.
 
 Exemplo:
 
@@ -408,10 +408,10 @@ class DeltaReader:
         tabela com os dados da versão lida, ou só das partições pedidas.
 
         Cada tabela troca numa transação, e as tabelas correm em paralelo, cada uma numa sessão a
-        mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do
-        ``ingest`` do motor: ``BETWEEN`` o menor e o maior valor, que o ``delta_scan`` poda,
-        ``AND`` o ``IN`` da lista. A cópia é o ``SELECT *`` da versão:
-        uma coluna da versão que o modelo não tem entra na tabela, como na view.
+        mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do ``ingest``
+        do motor DuckDB: ``BETWEEN`` o menor e o maior valor, que o ``delta_scan`` poda, ``AND`` o
+        ``IN`` da lista. A cópia é o ``SELECT *`` da versão: uma coluna da versão que o modelo não
+        tem entra na tabela, como na view.
 
         Exemplo:
 

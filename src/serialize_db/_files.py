@@ -78,7 +78,7 @@ def write_files(
 ) -> list[str]:
     """[protected] Grava cada texto em ``directory/<nome>``, criando a pasta se preciso, e devolve
     os caminhos gravados em ordem de nome; um arquivo da pasta que a geração não produz fica como
-    está."""
+    está. Para ``serialize_db.schema`` e ``serialize_db.sql``."""
     os.makedirs(directory, exist_ok=True)
     written = []
     for name, content in sorted(files.items()):
@@ -95,7 +95,7 @@ def diff_files(
     suffixes: tuple[str, ...],
 ) -> list[str]:
     """[protected] O diff unificado dos arquivos de ``directory`` contra os textos gerados, em ordem
-    de nome.
+    de nome; para ``serialize_db.schema`` e ``serialize_db.sql``.
 
     Vazio quando nada mudou. O texto é comparado exato, o ``\\n`` do fim inclusive; um arquivo
     ausente aparece inteiro como acrescentado, e um arquivo da pasta com nome terminado num de

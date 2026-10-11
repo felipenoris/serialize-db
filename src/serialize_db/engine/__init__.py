@@ -163,6 +163,8 @@ class Appender(Protocol):
         :raises serialize_db.errors.ContractError: ``data`` de outro tipo, recusado sem afetar o
             appender, que segue recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas
             diferentes das do primeiro lote, e então o ``close`` não insere nada.
+        :raises RuntimeError: o ``write`` depois do ``close``, ou com a thread de gravação já
+            encerrada; quando ela terminou por um erro, sobe esse erro.
         """
 
     def close(self) -> None:
@@ -509,8 +511,9 @@ class Engine(Protocol):
             mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-            2 MiB, ou negativa, lida no registro antes do commit (``environment_limits``), sem
-            commit; os arquivos gravados ficam órfãos na pasta da partição.
+            2 MiB, ou negativa, lida no registro antes do commit
+            (``serialize_db.resources.environment_limits``), sem commit; os arquivos gravados ficam
+            órfãos na pasta da partição.
         """
 
     def cleanup(self) -> None:
@@ -656,8 +659,8 @@ def _pinned_max_key(
     uri: str,
     version: int,
 ) -> int | None:
-    """[private] O ``max_key`` da versão fixada na chave sequencial, sem ler dados; ``None`` numa
-    tabela sem ela."""
+    """[private] O ``max_key`` da versão fixada na chave sequencial; ``None`` numa tabela sem
+    ela."""
     key = sequential_key(table)
     if key is None:
         return None
