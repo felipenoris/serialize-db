@@ -173,7 +173,8 @@ def test_redshift_is_finite_under_the_postgresql_rule() -> None:
     """O ``is_finite`` do Redshift dá falso ao ``NaN`` e aos infinitos, verdadeiro ao número e nulo
     ao nulo pela regra do PostgreSQL, que o DuckDB segue: o ``NaN`` igual a si mesmo e acima de todo
     número. O que o Redshift faz com o ``NaN`` na varredura de uma tabela só o ambiente alvo mostra
-    (``test_audit_sql_under_search_path_and_nan_comparison``)."""
+    (``test_audit_sql_under_search_path_and_nan_comparison`` em
+    ``tests/proof_of_concept/test_redshift.py``)."""
     finite = audit.is_finite(sa.column("valor"))
     dialect = RedshiftDialect_redshift_connector(paramstyle="named")
     text = str(finite.compile(dialect=dialect))

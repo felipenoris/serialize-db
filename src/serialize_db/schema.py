@@ -1,4 +1,5 @@
-"""O esquema a partir dos modelos SQLAlchemy: Arrow, Delta, DDL por motor, cast e conferência.
+"""[public] O esquema a partir dos modelos SQLAlchemy: Arrow, Delta, DDL por motor, cast e
+conferência.
 
 O módulo lê os modelos declarativos do cliente (``Base.metadata``) e deriva deles o que a
 biblioteca precisa saber sobre cada tabela: o esquema Arrow do contrato (``arrow_schema``), o
@@ -79,7 +80,6 @@ __all__ = [
     "check_models",
     "check_partition_value",
     "check_schema_files",
-    "column_ddl",
     "ddl",
     "delta_schema",
     "quoted",
@@ -90,7 +90,7 @@ __all__ = [
 ]
 
 Dialect = Literal["duckdb", "redshift"]
-"""Os motores para os quais o módulo gera texto SQL."""
+"""[public] Os motores para os quais o módulo gera texto SQL."""
 
 # A tabela de tipos do contrato. A ordem importa: BigInteger e SmallInteger derivam de Integer, e
 # Text de String, então os derivados vêm antes.
@@ -153,7 +153,7 @@ _ArrowColumn = pa.Array | pa.ChunkedArray
 def _decimal_type(
     column: sa.Column,
 ) -> pa.DataType:
-    """O ``decimal128`` de uma coluna ``Numeric``: sem precisão, 18; sem escala, 0."""
+    """[private] O ``decimal128`` de uma coluna ``Numeric``: sem precisão, 18; sem escala, 0."""
     name = f"{column.table.name}.{column.name}"
     # A precisão 0 declarada fica 0 e é recusada abaixo; só a ausente vira o padrão 18.
     precision = 18 if column.type.precision is None else column.type.precision
@@ -179,7 +179,7 @@ def _decimal_type(
 def arrow_type(
     column: sa.Column,
 ) -> pa.DataType:
-    """O tipo Arrow da coluna, pela tabela de tipos do contrato.
+    """[public] O tipo Arrow da coluna, pela tabela de tipos do contrato.
 
     ``Numeric(p, s)`` vira ``decimal128(p, s)``; ``DateTime`` vira ``timestamp[us]``, com
     ``tz="UTC"`` quando o tipo tem fuso; os demais seguem a tabela.
@@ -193,9 +193,9 @@ def arrow_type(
 
     :param column: a coluna do modelo.
     :return: o tipo Arrow.
-    :raises ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``, ``ARRAY``,
-        ``Interval``), o ``Enum``, que deriva de ``String`` sem que nada confira a lista de
-        valores, e o ``Numeric`` de precisão fora de 1 a 38 ou de escala fora de 0 à precisão
+    :raises serialize_db.errors.ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``,
+        ``ARRAY``, ``Interval``), o ``Enum``, que deriva de ``String`` sem que nada confira a lista
+        de valores, e o ``Numeric`` de precisão fora de 1 a 38 ou de escala fora de 0 à precisão
         (até 37, a do Redshift), com a tabela e a coluna na mensagem.
     """
     kind = column.type
@@ -221,7 +221,8 @@ def _arrow_field(
     column: sa.Column,
     position: int,
 ) -> pa.Field:
-    """O campo Arrow da coluna: tipo, nulidade, ``PARQUET:field_id`` pela posição, comentário."""
+    """[private] O campo Arrow da coluna: tipo, nulidade, ``PARQUET:field_id`` pela posição,
+    comentário."""
     metadata = {"PARQUET:field_id": str(position)}
     if column.comment:
         metadata["comment"] = column.comment
@@ -231,7 +232,7 @@ def _arrow_field(
 def arrow_schema(
     table: sa.Table,
 ) -> pa.Schema:
-    """O esquema Arrow da tabela: um campo por coluna, na ordem do modelo.
+    """[public] O esquema Arrow da tabela: um campo por coluna, na ordem do modelo.
 
     Exemplo:
 
@@ -245,7 +246,7 @@ def arrow_schema(
     :return: o esquema, com o nome da tabela em ``serialize_db_table``; cada campo leva a
         nulidade, ``PARQUET:field_id`` pela posição e o comentário da coluna em ``metadata``. Um
         campo JSON é ``string``, sem a extensão ``arrow.json``.
-    :raises ContractError: uma coluna de tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato.
     """
     fields = []
     for position, column in enumerate(table.columns, start=1):
@@ -256,7 +257,7 @@ def arrow_schema(
 def delta_schema(
     table: sa.Table,
 ) -> DeltaSchema:
-    """O esquema Delta da tabela, derivado do Arrow pelo delta-rs.
+    """[public] O esquema Delta da tabela, derivado do Arrow pelo delta-rs.
 
     ``DateTime`` sem fuso vira ``timestamp_ntz`` e com fuso ``timestamp``; ``Numeric(p, s)`` vira
     ``decimal(p,s)``; JSON e UUID viram ``string``; os comentários ficam nos campos. O
@@ -272,7 +273,7 @@ def delta_schema(
 
     :param table: a tabela do modelo.
     :return: o ``deltalake.Schema``.
-    :raises ContractError: uma coluna de tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato.
     """
     fields = []
     for field in arrow_schema(table):
@@ -287,7 +288,8 @@ def delta_schema(
 
 @dataclasses.dataclass(frozen=True)
 class TableOptions:
-    """O que ``Table.info["serialize_db"]`` declara para uma tabela, com os padrões da biblioteca.
+    """[public] O que ``Table.info["serialize_db"]`` declara para uma tabela, com os padrões da
+    biblioteca.
 
     Exemplo:
 
@@ -299,35 +301,36 @@ class TableOptions:
     """
 
     partition_by: str | None
-    """A coluna de partição, de texto ``String(n)``; ``None`` sem partição. O valor é o nome da
-    pasta da partição e segue ``PARTITION_VALUE``; na base atual é a data em ``AAAA-MM-DD``."""
+    """[public] A coluna de partição, de texto ``String(n)``; ``None`` sem partição. O valor é o
+    nome da pasta da partição e segue ``PARTITION_VALUE``; na base atual é a data em
+    ``AAAA-MM-DD``."""
     partition_source: str | None
-    """A coluna de data de que a coluna de partição deriva por ``strftime('%Y-%m-%d')``, quando
-    deriva; ``None`` quando o valor não vem de outra coluna."""
+    """[public] A coluna de data de que a coluna de partição deriva por ``strftime('%Y-%m-%d')``,
+    quando deriva; ``None`` quando o valor não vem de outra coluna."""
     sort_key: tuple[str, ...]
-    """As colunas da ``SORTKEY`` do Redshift e da ordenação dos arquivos."""
+    """[public] As colunas da ``SORTKEY`` do Redshift e da ordenação dos arquivos."""
     redshift: dict[str, str]
-    """``diststyle`` e ``distkey`` do Redshift; vazio é ``AUTO``."""
+    """[public] ``diststyle`` e ``distkey`` do Redshift; vazio é ``AUTO``."""
     keys: tuple[tuple[str, ...], ...]
-    """As chaves que a auditoria confere: a chave primária, as únicas e os índices únicos do
-    modelo, nessa ordem e cada grupo em ordem dos nomes das colunas, mais ``keys["add"]``, menos
+    """[public] As chaves que a auditoria confere: a chave primária, as únicas e os índices únicos
+    do modelo, nessa ordem e cada grupo em ordem dos nomes das colunas, mais ``keys["add"]``, menos
     ``keys["drop"]``."""
 
 
 def _column_names(
     columns: Iterable[sa.Column],
 ) -> tuple[str, ...]:
-    """Os nomes de uma coleção de colunas, na ordem dela."""
+    """[private] Os nomes de uma coleção de colunas, na ordem dela."""
     return tuple(column.name for column in columns)
 
 
 def _keyed_targets(
     table: sa.Table,
 ) -> list[tuple[str, ...]]:
-    """As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave primária
-    primeiro, depois as ``UniqueConstraint`` em ordem dos nomes das colunas, porque o SQLAlchemy
-    as guarda num conjunto, cuja ordem muda de um processo a outro; um índice único não serve no
-    DuckDB nem no Redshift."""
+    """[private] As listas de colunas que uma chave estrangeira pode apontar na tabela: a chave
+    primária primeiro, depois as ``UniqueConstraint`` em ordem dos nomes das colunas, porque o
+    SQLAlchemy as guarda num conjunto, cuja ordem muda de um processo a outro; um índice único não
+    serve no DuckDB nem no Redshift."""
     targets = []
     if table.primary_key.columns:
         targets.append(_column_names(table.primary_key.columns))
@@ -341,8 +344,8 @@ def _keyed_targets(
 def _declared_keys(
     table: sa.Table,
 ) -> list[tuple[str, ...]]:
-    """A chave primária, as ``UniqueConstraint`` e os índices únicos do modelo, nessa ordem; os
-    índices também saem de um conjunto e vão em ordem dos nomes das colunas."""
+    """[private] A chave primária, as ``UniqueConstraint`` e os índices únicos do modelo, nessa
+    ordem; os índices também saem de um conjunto e vão em ordem dos nomes das colunas."""
     unique_indexes = []
     for index in table.indexes:
         if index.unique:
@@ -354,7 +357,8 @@ def _adjusted_keys(
     keys: list[tuple[str, ...]],
     info: dict,
 ) -> tuple[tuple[str, ...], ...]:
-    """As chaves do modelo mais ``keys["add"]`` e menos ``keys["drop"]`` de ``Table.info``."""
+    """[private] As chaves do modelo mais ``keys["add"]`` e menos ``keys["drop"]`` de
+    ``Table.info``."""
     adjustments = info.get("keys", {})
     declared = list(keys)
     for key in adjustments.get("add", []):
@@ -370,7 +374,7 @@ def _adjusted_keys(
 def table_options(
     table: sa.Table,
 ) -> TableOptions:
-    """As opções físicas da tabela, lidas de ``Table.info["serialize_db"]``.
+    """[public] As opções físicas da tabela, lidas de ``Table.info["serialize_db"]``.
 
     Exemplo:
 
@@ -383,7 +387,7 @@ def table_options(
         primária, as ``UniqueConstraint`` e os índices únicos, nessa ordem e cada grupo em ordem
         dos nomes das colunas, ajustados por ``keys["add"]`` e ``keys["drop"]``, sempre listas de
         colunas.
-    :raises ContractError: mais de uma coluna de partição.
+    :raises serialize_db.errors.ContractError: mais de uma coluna de partição.
     """
     info = table.info.get("serialize_db", {})
     partition_columns = info.get("partition_by") or []
@@ -404,8 +408,8 @@ def table_options(
 def sequential_key(
     table: sa.Table,
 ) -> sa.Column | None:
-    """A chave primária inteira de uma coluna, a chave sequencial que ``next_ids`` preenche;
-    ``None`` quando a chave primária é outra."""
+    """[protected] A chave primária inteira de uma coluna, a chave sequencial que ``next_ids``
+    preenche; ``None`` quando a chave primária é outra. Para a auditoria e os motores."""
     primary = list(table.primary_key.columns)
     if len(primary) != 1 or not isinstance(primary[0].type, sa.Integer):
         return None
@@ -415,8 +419,9 @@ def sequential_key(
 def double_columns(
     table: sa.Table,
 ) -> list[str]:
-    """Os nomes das colunas ``Double``, as que podem guardar ``NaN`` e infinito, que ficam sem
-    mínimo e máximo no Delta (issue #59)."""
+    """[protected] Os nomes das colunas ``Double``, as que podem guardar ``NaN`` e infinito, que
+    ficam sem mínimo e máximo no Delta (issue #59 do serialize-db). Para a auditoria e a carga de
+    ``serialize_db.parquet_import``."""
     names = []
     for column in table.columns:
         if isinstance(column.type, sa.Double):
@@ -427,26 +432,28 @@ def double_columns(
 def _local_column_names(
     constraint: sa.ForeignKeyConstraint,
 ) -> tuple[str, ...]:
-    """Os nomes das colunas locais da chave estrangeira, a chave da ordenação."""
+    """[private] Os nomes das colunas locais da chave estrangeira, a chave da ordenação."""
     return _column_names(constraint.columns)
 
 
 def foreign_keys_by_columns(
     table: sa.Table,
 ) -> list[sa.ForeignKeyConstraint]:
-    """As chaves estrangeiras na ordem das colunas locais: o SQLAlchemy as guarda num conjunto, e
-    a ordem fixa a das mensagens de ``check_models`` e das verificações da auditoria."""
+    """[protected] As chaves estrangeiras na ordem das colunas locais: o SQLAlchemy as guarda num
+    conjunto, e a ordem fixa a das mensagens de ``check_models`` e das verificações da auditoria.
+    Para a auditoria."""
     return sorted(table.foreign_key_constraints, key=_local_column_names)
 
 
 PARTITION_VALUE = r"[0-9A-Za-z][0-9A-Za-z_.-]*"
-"""A regra da partição, que vale também para o ``execution_id``: letra ou dígito no início,
+"""[public] A regra da partição, que vale também para o ``execution_id``: letra ou dígito no início,
 depois letras, dígitos, ``_``, ``.`` e ``-``.
 
-O valor vira nome de pasta e literal SQL. A aspa simples fecharia o literal ``'<valor>'`` do
-predicado da substituição, e o delta-rs grava ``:``, ``%``, ``'`` ou um acento codificados por
-porcentagem no nome da pasta, que o ``COPY`` do DuckDB gravaria sem codificar; com a regra, o
-valor codificado é o próprio valor."""
+O valor vira nome de pasta e literal SQL, e a regra deixa fora o que quebraria um dos dois: a
+aspa simples fecharia o literal ``'<valor>'`` do predicado da substituição, e ``:``, ``%``, ``'``
+ou um acento sairiam codificados por porcentagem no nome da pasta que o delta-rs grava e sem
+codificar no que o ``COPY`` do DuckDB grava; com a regra, o valor codificado é o próprio
+valor."""
 
 _PARTITION_VALUE = re.compile(PARTITION_VALUE)
 
@@ -454,7 +461,7 @@ _PARTITION_VALUE = re.compile(PARTITION_VALUE)
 def check_partition_value(
     value: str,
 ) -> str:
-    """O valor, quando segue ``PARTITION_VALUE`` por inteiro.
+    """[public] O valor, quando segue ``PARTITION_VALUE`` por inteiro.
 
     Exemplo:
 
@@ -466,7 +473,7 @@ def check_partition_value(
 
     :param value: o valor da partição, ou um nome sob a mesma regra, como o ``execution_id``.
     :return: o próprio valor.
-    :raises ContractError: o valor fora da regra, ou que não é ``str``.
+    :raises serialize_db.errors.ContractError: o valor fora da regra, ou que não é ``str``.
     """
     if not isinstance(value, str) or not _PARTITION_VALUE.fullmatch(value):
         raise ContractError(
@@ -483,7 +490,7 @@ def sql_type(
     column: sa.Column,
     dialect: Dialect,
 ) -> str:
-    """O nome do tipo da coluna no motor, pela tabela de tipos do contrato.
+    """[public] O nome do tipo da coluna no motor, pela tabela de tipos do contrato.
 
     ``DECIMAL(p, s)`` para ``Numeric``; ``VARCHAR(n)`` para ``String(n)`` nos dois motores (o
     DuckDB aceita e ignora o comprimento; o Redshift o aplica em bytes); ``VARCHAR`` e
@@ -500,7 +507,7 @@ def sql_type(
     :param column: a coluna do modelo.
     :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
     :return: o nome do tipo.
-    :raises ContractError: um tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: um tipo fora do contrato.
     """
     kind = column.type
     arrow = arrow_type(column)  # recusa o tipo fora do contrato antes de qualquer texto
@@ -518,7 +525,7 @@ def sql_type(
 def quoted(
     name: str,
 ) -> str:
-    """O identificador entre aspas duplas.
+    """[public] O identificador entre aspas duplas.
 
     Todo nome de tabela e de coluna que a biblioteca emite vai entre aspas: ``to`` e
     ``timestamp`` são palavras reservadas dos motores, e os nomes do contrato são minúsculos, que
@@ -539,13 +546,17 @@ def quoted(
 def literal(
     value: str,
 ) -> str:
-    """O literal SQL de um texto, entre aspas simples e com a aspa simples dobrada.
+    """[protected] O literal SQL de um texto, entre aspas simples e com a aspa simples dobrada; para
+    ``serialize_db.storage``, os motores e a carga de ``serialize_db.parquet_import``.
 
     Exemplo:
 
     .. code-block:: python
 
         literal("d'agua")   # "'d''agua'"
+
+    :param value: o texto.
+    :return: o literal, para dentro de um comando SQL.
     """
     return "'" + value.replace("'", "''") + "'"
 
@@ -554,7 +565,8 @@ def column_ddl(
     column: sa.Column,
     dialect: Dialect,
 ) -> str:
-    """A linha da coluna no ``CREATE TABLE``: nome entre aspas, tipo e ``NOT NULL``.
+    """[protected] A linha da coluna no ``CREATE TABLE``: nome entre aspas, tipo e ``NOT NULL``;
+    para ``ddl`` e para a publicação.
 
     Exemplo:
 
@@ -565,7 +577,7 @@ def column_ddl(
     :param column: a coluna do modelo.
     :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
     :return: a linha, sem indentação nem vírgula; ``NOT NULL`` só na coluna que não aceita nulo.
-    :raises ContractError: um tipo fora do contrato.
+    :raises serialize_db.errors.ContractError: um tipo fora do contrato.
     """
     text = f"{quoted(column.name)} {sql_type(column, dialect)}"
     if not column.nullable:
@@ -576,8 +588,8 @@ def column_ddl(
 def redshift_options(
     options: TableOptions,
 ) -> str:
-    """As cláusulas físicas do Redshift depois do parêntese: DISTSTYLE, DISTKEY e SORTKEY;
-    protegida, para o DDL das tabelas publicadas."""
+    """[protected] As cláusulas físicas do Redshift depois do parêntese: DISTSTYLE, DISTKEY e
+    SORTKEY; para o DDL das tabelas publicadas."""
     clauses = []
     if options.redshift.get("diststyle"):
         clauses.append(f"DISTSTYLE {options.redshift['diststyle']}")
@@ -597,7 +609,7 @@ def ddl(
     prefix: str = "",
     temporary: bool = False,
 ) -> str:
-    """O ``CREATE TABLE`` da tabela no motor, gerado como texto.
+    """[public] O ``CREATE TABLE`` da tabela no motor, gerado como texto.
 
     Sem chave, ``DEFERRABLE``, ``Identity``, ``CHECK``, ``DEFAULT`` nem comentário: as chaves são
     da auditoria, e o comentário vai no esquema Delta.
@@ -621,8 +633,8 @@ def ddl(
     :return: o texto, sem ``;`` nem ``\\n`` no fim: colunas, tipos e ``NOT NULL``, todo
         identificador entre aspas; ``DISTSTYLE``, ``DISTKEY`` e ``SORTKEY`` no Redshift, de
         ``table_options``.
-    :raises ContractError: uma coluna de tipo fora do contrato; no Redshift, também mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato; no Redshift,
+        também mais de uma coluna de partição.
     """
     lines = []
     for column in table.columns:
@@ -642,7 +654,7 @@ def _contract_fields(
     contract: pa.Schema,
     table: str,
 ) -> list[pa.Field]:
-    """Os campos do contrato presentes nos dados, na ordem do contrato; nenhum é erro."""
+    """[private] Os campos do contrato presentes nos dados, na ordem do contrato; nenhum é erro."""
     present = []
     for field in contract:
         if field.name in data.schema.names:
@@ -657,7 +669,7 @@ def _refuse_double_out_of_scale(
     field: pa.Field,
     table: str,
 ) -> None:
-    """Um double numa coluna Numeric entra só quando ``pc.round`` o devolve igual."""
+    """[private] Um double numa coluna Numeric entra só quando ``pc.round`` o devolve igual."""
     rounded = pc.round(column, field.type.scale)
     # min_count=0: a tabela vazia de reader.schema.empty_table() passa; sem ele, pc.all dá nulo.
     if not pc.all(pc.equal(rounded, column), min_count=0).as_py():
@@ -672,7 +684,7 @@ def _refuse_timestamp_with_time(
     field: pa.Field,
     table: str,
 ) -> None:
-    """Um timestamp numa coluna Date entra só quando a ida e volta o devolve igual."""
+    """[private] Um timestamp numa coluna Date entra só quando a ida e volta o devolve igual."""
     round_trip = column.cast(field.type).cast(column.type)
     if not pc.all(pc.equal(round_trip, column), min_count=0).as_py():
         raise ContractError(
@@ -685,7 +697,7 @@ def _refuse_time_zone_change(
     field: pa.Field,
     table: str,
 ) -> None:
-    """Um timestamp entra só quando ele e a coluna têm fuso, ou nenhum dos dois tem.
+    """[private] Um timestamp entra só quando ele e a coluna têm fuso, ou nenhum dos dois tem.
 
     Tirar ou pôr o fuso muda a hora gravada, e cada camada o faz de um jeito: o ``cast`` do
     PyArrow guarda a hora UTC, e o ``CAST`` do DuckDB, a hora no ``TimeZone`` da sessão.
@@ -708,7 +720,7 @@ def _refuse_nested_json(
     field: pa.Field,
     table: str,
 ) -> None:
-    """Um documento JSON chega serializado; struct, list e map são recusados."""
+    """[private] Um documento JSON chega serializado; struct, list e map são recusados."""
     if pa.types.is_nested(column.type):
         raise ContractError(
             f"{table}.{field.name}: documento JSON como {column.type}; "
@@ -719,7 +731,7 @@ def _refuse_nested_json(
 def _longest_text(
     column: _ArrowColumn,
 ) -> int:
-    """O maior valor da coluna em bytes; 0 numa coluna vazia ou só de nulos."""
+    """[private] O maior valor da coluna em bytes; 0 numa coluna vazia ou só de nulos."""
     return pc.max(pc.binary_length(column)).as_py() or 0
 
 
@@ -729,7 +741,7 @@ def _refuse_text_above_length(
     table: str,
     limit: int,
 ) -> None:
-    """Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
+    """[private] Texto acima de String(n), medido em bytes como o VARCHAR(n) do Redshift."""
     longest = _longest_text(column)
     if longest > limit:
         raise ContractError(
@@ -743,7 +755,7 @@ def _refuse_text_above_varchar(
     field: pa.Field,
     table: str,
 ) -> None:
-    """Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
+    """[private] Texto acima do teto do VARCHAR do Redshift numa coluna Text, que não declara n."""
     longest = _longest_text(column)
     if longest > TEXT_LIMIT:
         raise ContractError(
@@ -757,8 +769,8 @@ def _refuse_json_above_limit(
     field: pa.Field,
     table: str,
 ) -> None:
-    """Documento JSON acima de 65.535 bytes, o maior que o ``COPY`` de Parquet leva a ``SUPER`` e
-    que a staging ``VARCHAR`` da publicação no Redshift guarda."""
+    """[private] Documento JSON acima de 65.535 bytes, o maior que o ``COPY`` de Parquet leva a
+    ``SUPER`` e que a staging ``VARCHAR`` da publicação no Redshift guarda."""
     longest = _longest_text(column)
     if longest > TEXT_LIMIT:
         raise ContractError(
@@ -772,7 +784,7 @@ def _refuse_text_above_uuid(
     field: pa.Field,
     table: str,
 ) -> None:
-    """Texto acima dos 36 bytes do ``VARCHAR(36)`` numa coluna ``Uuid``."""
+    """[private] Texto acima dos 36 bytes do ``VARCHAR(36)`` numa coluna ``Uuid``."""
     longest = _longest_text(column)
     if longest > UUID_LENGTH:
         raise ContractError(
@@ -787,7 +799,7 @@ def _refuse_silent_losses(
     kind: sa.types.TypeEngine,
     table: str,
 ) -> None:
-    """As perdas que ``cast(safe=True)`` não acusa, recusadas antes da conversão."""
+    """[private] As perdas que ``cast(safe=True)`` não acusa, recusadas antes da conversão."""
     if pa.types.is_floating(column.type) and pa.types.is_decimal(field.type):
         _refuse_double_out_of_scale(column, field, table)
     if pa.types.is_timestamp(column.type) and pa.types.is_date(field.type):
@@ -804,7 +816,8 @@ def _refuse_long_text(
     kind: sa.types.TypeEngine,
     table: str,
 ) -> None:
-    """O texto acima do limite da coluna, medido em bytes na coluna já convertida para ``string``.
+    """[private] O texto acima do limite da coluna, medido em bytes na coluna já convertida para
+    ``string``.
 
     A medida vem depois da conversão porque o texto chega em outros tipos Arrow: ``large_string``
     (o ``str`` do pandas 3) e ``string_view``, que ``pa.types.is_string`` não reconhece e
@@ -825,8 +838,8 @@ def _refuse_long_text(
 def _uuid_as_text(
     column: _ArrowColumn,
 ) -> pa.Array:
-    """O ``arrow.uuid`` no texto canônico de ``str(uuid.UUID)``: os 32 dígitos hexadecimais
-    minúsculos dos 16 bytes, em grupos de 8, 4, 4, 4 e 12 separados por hífen.
+    """[private] O ``arrow.uuid`` no texto canônico de ``str(uuid.UUID)``: os 32 dígitos
+    hexadecimais minúsculos dos 16 bytes, em grupos de 8, 4, 4, 4 e 12 separados por hífen.
 
     O texto sai de ``bytes.hex`` e não de ``str(uuid.UUID)``, que levou quatro vezes mais tempo
     num milhão de valores (leitura de 2026-09-25).
@@ -845,7 +858,7 @@ def _converted(
     column: _ArrowColumn,
     target: pa.DataType,
 ) -> _ArrowColumn:
-    """A coluna no tipo do contrato por ``cast(safe=True)``.
+    """[private] A coluna no tipo do contrato por ``cast(safe=True)``.
 
     O ``arrow.uuid``, o tipo que o PyArrow e o pandas inferem de um ``uuid.UUID``, vai ao texto
     canônico: o cast do PyArrow o leva a ``string`` pelos 16 bytes do valor, que quase sempre
@@ -867,7 +880,7 @@ def _column_to_convert(
     column: _ArrowColumn,
     target: pa.DataType,
 ) -> _ArrowColumn:
-    """A coluna que as recusas conferem e que a conversão leva ao contrato.
+    """[private] A coluna que as recusas conferem e que a conversão leva ao contrato.
 
     O dicionário, a ``category`` do pandas, vira os seus valores: as recusas conferem o tipo dos
     valores, e o cast do PyArrow de um dicionário de ``double`` para ``decimal128`` arredonda em
@@ -887,8 +900,8 @@ def _contract_column(
     field: pa.Field,
     table: sa.Table,
 ) -> _ArrowColumn:
-    """A coluna dos dados no tipo do contrato: as perdas que ``safe=True`` não acusa são recusadas
-    antes da conversão, e o texto longo depois dela."""
+    """[private] A coluna dos dados no tipo do contrato: as perdas que ``safe=True`` não acusa são
+    recusadas antes da conversão, e o texto longo depois dela."""
     column = _column_to_convert(data.column(field.name), field.type)
     kind = table.c[field.name].type
     _refuse_silent_losses(column, field, kind, table.name)
@@ -907,7 +920,7 @@ def _contract_arrays(
     data: pa.Table | pa.RecordBatch,
     table: sa.Table,
 ) -> tuple[list[_ArrowColumn], pa.Schema]:
-    """As colunas do contrato presentes, convertidas, e o esquema delas."""
+    """[private] As colunas do contrato presentes, convertidas, e o esquema delas."""
     contract = arrow_schema(table)
     fields = _contract_fields(data, contract, table.name)
     arrays = []
@@ -920,7 +933,8 @@ def _cast_batch(
     batch: pa.RecordBatch,
     table: sa.Table,
 ) -> pa.RecordBatch:
-    """O lote no esquema do contrato; nulo em coluna NOT NULL é recusado pelo cast do esquema."""
+    """[private] O lote no esquema do contrato; nulo em coluna NOT NULL é recusado pelo cast do
+    esquema."""
     arrays, schema = _contract_arrays(batch, table)
     try:
         return pa.RecordBatch.from_arrays(arrays, schema=schema).cast(schema, safe=True)
@@ -933,7 +947,7 @@ def _cast_table(
     data: pa.Table,
     table: sa.Table,
 ) -> pa.Table:
-    """A tabela no esquema do contrato, pelo mesmo caminho do lote."""
+    """[private] A tabela no esquema do contrato, pelo mesmo caminho do lote."""
     arrays, schema = _contract_arrays(data, table)
     try:
         return pa.Table.from_arrays(arrays, schema=schema).cast(schema, safe=True)
@@ -946,7 +960,7 @@ def _cast_batches(
     reader: pa.RecordBatchReader,
     table: sa.Table,
 ) -> Iterator[pa.RecordBatch]:
-    """Os lotes do leitor convertidos um a um, para o leitor de saída."""
+    """[private] Os lotes do leitor convertidos um a um, para o leitor de saída."""
     for batch in reader:
         yield _cast_batch(batch, table)
 
@@ -955,7 +969,7 @@ def _cast_reader(
     reader: pa.RecordBatchReader,
     table: sa.Table,
 ) -> pa.RecordBatchReader:
-    """O leitor que converte lote a lote, com o esquema derivado do esquema do leitor."""
+    """[private] O leitor que converte lote a lote, com o esquema derivado do esquema do leitor."""
     schema = _cast_table(reader.schema.empty_table(), table).schema
     return pa.RecordBatchReader.from_batches(schema, _cast_batches(reader, table))
 
@@ -964,7 +978,7 @@ def cast(
     data: pa.Table | pa.RecordBatch | pa.RecordBatchReader,
     table: sa.Table,
 ) -> pa.Table | pa.RecordBatch | pa.RecordBatchReader:
-    """Os dados no esquema do contrato da tabela.
+    """[public] Os dados no esquema do contrato da tabela.
 
     Só as colunas do contrato presentes entram, na ordem do contrato; as ausentes ficam para quem
     grava. Cada coluna é convertida com ``safe=True`` (``large_string`` e ``string_view`` para
@@ -989,15 +1003,15 @@ def cast(
     :param table: a tabela do modelo.
     :return: os dados no mesmo tipo em que chegaram; um ``RecordBatchReader`` sai como leitor que
         converte lote a lote.
-    :raises ContractError: nulo em coluna ``NOT NULL``, escala perdida, nanossegundo não nulo,
-        estouro de inteiro, um tipo sem conversão para o do contrato, um lote sem coluna alguma
-        do contrato ou uma coluna do modelo de tipo fora do contrato; ou uma perda que o cast
-        seguro não acusa, com a instrução ao cliente na mensagem: ``double`` fora da escala de um
-        ``Numeric``, ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com fuso numa
-        coluna ``DateTime`` sem fuso e o inverso, documento JSON como ``struct``, texto acima de
-        ``String(n)`` em bytes, texto numa coluna ``Uuid`` acima de 36 bytes, e texto numa coluna
-        ``Text`` ou documento JSON acima de 65.535 bytes, o teto do Redshift. A mensagem traz a
-        tabela e a coluna. Num leitor, a recusa de um valor sai na leitura do lote, e as demais,
+    :raises serialize_db.errors.ContractError: nulo em coluna ``NOT NULL``, escala perdida,
+        nanossegundo não nulo, estouro de inteiro, um tipo sem conversão para o do contrato, um lote
+        sem coluna alguma do contrato ou uma coluna do modelo de tipo fora do contrato; ou uma perda
+        que o cast seguro não acusa, com a instrução ao cliente na mensagem: ``double`` fora da
+        escala de um ``Numeric``, ``timestamp`` com hora numa coluna ``Date``, ``timestamp`` com
+        fuso numa coluna ``DateTime`` sem fuso e o inverso, documento JSON como ``struct``, texto
+        acima de ``String(n)`` em bytes, texto numa coluna ``Uuid`` acima de 36 bytes, e texto numa
+        coluna ``Text`` ou documento JSON acima de 65.535 bytes, o teto do Redshift. A mensagem traz
+        a tabela e a coluna. Num leitor, a recusa de um valor sai na leitura do lote, e as demais,
         na chamada.
     """
     if isinstance(data, pa.RecordBatchReader):
@@ -1013,7 +1027,7 @@ def cast(
 def _string_without_length(
     kind: sa.types.TypeEngine,
 ) -> bool:
-    """Se o tipo é ``String`` sem comprimento, ou uma subclasse dela sem comprimento, como
+    """[private] Se o tipo é ``String`` sem comprimento, ou uma subclasse dela sem comprimento, como
     ``Unicode()``, ``VARCHAR()`` e ``CHAR()``: o Redshift leria ``VARCHAR`` como ``VARCHAR(256)``.
     ``Text`` não declara comprimento, e o ``Enum`` já sai como tipo fora do contrato."""
     if not isinstance(kind, sa.String):
@@ -1026,8 +1040,8 @@ def _string_without_length(
 def _column_problems(
     column: sa.Column,
 ) -> list[str]:
-    """As violações de uma coluna: tipo, autoincrement, Identity, String ou subclasse dela sem
-    comprimento."""
+    """[private] As violações de uma coluna: tipo, autoincrement, Identity, String ou subclasse dela
+    sem comprimento."""
     table = column.table.name
     problems = []
     try:
@@ -1052,8 +1066,8 @@ def _key_problems(
     table: sa.Table,
     options: TableOptions,
 ) -> list[str]:
-    """As violações das chaves: DEFERRABLE, o alvo de chave estrangeira sem chave, a tabela sem
-    chave alguma."""
+    """[private] As violações das chaves: DEFERRABLE, o alvo de chave estrangeira sem chave, a
+    tabela sem chave alguma."""
     problems = []
     for constraint in foreign_keys_by_columns(table):
         columns = list(_column_names(constraint.columns))
@@ -1077,8 +1091,9 @@ def _key_problems(
 def _partition_type(
     kind: sa.types.TypeEngine,
 ) -> bool:
-    """Se o tipo serve à coluna de partição: ``String(n)``, ou uma subclasse dela com comprimento,
-    fora ``Text``, que a auditoria e a carga medem até 65535 bytes, e não pelo ``n``."""
+    """[private] Se o tipo serve à coluna de partição: ``String(n)``, ou uma subclasse dela com
+    comprimento, fora ``Text``, que a auditoria e a carga medem até 65535 bytes, e não pelo
+    ``n``."""
     if not isinstance(kind, sa.String) or isinstance(kind, sa.Text):
         return False
     return bool(kind.length)
@@ -1088,7 +1103,7 @@ def _partition_problems(
     table: sa.Table,
     options: TableOptions,
 ) -> list[str]:
-    """As violações da partição: a coluna ausente ou fora de String(n), a origem que não
+    """[private] As violações da partição: a coluna ausente ou fora de String(n), a origem que não
     existe."""
     problems = []
     if options.partition_source and not options.partition_by:
@@ -1115,7 +1130,7 @@ def _partition_problems(
 def check_models(
     metadata: sa.MetaData,
 ) -> list[str]:
-    """As violações do contrato nos modelos.
+    """[public] As violações do contrato nos modelos.
 
     As regras: tipo fora da tabela de tipos, inclusive o ``Enum`` e o ``Numeric`` de precisão fora
     de 1 a 38 ou de escala fora de 0 à precisão (até 37, a do Redshift); ``autoincrement`` numa
@@ -1158,7 +1173,8 @@ def check_models(
 def _delta_schema_json(
     table: sa.Table,
 ) -> str:
-    """O esquema Delta em JSON canônico: chaves ordenadas e indentado, uma linha por chave.
+    """[private] O esquema Delta em JSON canônico: chaves ordenadas e indentado, uma linha por
+    chave.
 
     O ``to_json()`` do delta-rs serializa os metadados de cada campo em ordem arbitrária, que muda
     a cada geração; o JSON canônico é o que o cliente versiona e compara.
@@ -1175,7 +1191,7 @@ _SCHEMA_SUFFIXES = (".delta.json", ".duckdb.sql", ".redshift.sql")
 def schema_files(
     metadata: sa.MetaData,
 ) -> dict[str, str]:
-    """Os arquivos de esquema de cada tabela, em memória.
+    """[public] Os arquivos de esquema de cada tabela, em memória.
 
     O cliente os versiona no repositório do pipeline, e o diff contra a geração nova mostra o que
     uma mudança de modelo altera em cada motor.
@@ -1191,8 +1207,8 @@ def schema_files(
     :return: o conteúdo por nome de arquivo: ``<tabela>.delta.json`` é o esquema Delta em JSON
         canônico, ``<tabela>.duckdb.sql`` e ``<tabela>.redshift.sql`` são o ``CREATE TABLE`` de
         cada motor; todo texto termina em ``\\n``.
-    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato, ou uma tabela
+        com mais de uma coluna de partição.
     """
     files = {}
     for table in metadata.sorted_tables:
@@ -1206,7 +1222,7 @@ def write_schema_files(
     metadata: sa.MetaData,
     directory: str,
 ) -> list[str]:
-    """Grava ``schema_files`` em ``directory``.
+    """[public] Grava ``schema_files`` em ``directory``.
 
     Nada é apagado: os arquivos de uma tabela que saiu do modelo ficam na pasta, e
     ``check_schema_files`` os acusa até que o cliente os apague.
@@ -1220,8 +1236,8 @@ def write_schema_files(
     :param metadata: os modelos do cliente, como ``Base.metadata``.
     :param directory: a pasta local dos arquivos versionados, criada se preciso.
     :return: os caminhos gravados, em ordem de nome.
-    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato, ou uma tabela
+        com mais de uma coluna de partição.
     """
     return write_files(schema_files(metadata), directory)
 
@@ -1230,7 +1246,7 @@ def check_schema_files(
     metadata: sa.MetaData,
     directory: str,
 ) -> list[str]:
-    """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
+    """[public] O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
     O texto é comparado exato: o arquivo sem o ``\\n`` final difere, com o aviso
     ``\\ Sem quebra de linha no fim do arquivo`` depois da última linha. Nada é gravado.
@@ -1248,7 +1264,7 @@ def check_schema_files(
         acrescentado, e um arquivo da pasta terminado em ``.delta.json``, ``.duckdb.sql`` ou
         ``.redshift.sql`` que a geração não produz, como o de uma tabela que saiu do modelo,
         aparece inteiro como removido.
-    :raises ContractError: uma coluna de tipo fora do contrato, ou uma tabela com mais de uma
-        coluna de partição.
+    :raises serialize_db.errors.ContractError: uma coluna de tipo fora do contrato, ou uma tabela
+        com mais de uma coluna de partição.
     """
     return diff_files(schema_files(metadata), directory, _SCHEMA_SUFFIXES)

@@ -5,17 +5,20 @@ sandbox e a pasta de transbordo ficam numa pasta nova por teste. O modelo é o d
 particionado por ``data_base_str`` com a origem ``data_base``, com uma chave estrangeira para
 ``Conta``, e ``Projetado``, a tabela que o pipeline grava, com as mesmas colunas.
 
-Eles conferem a configuração com os limites lidos do ambiente e a sessão única, a abertura que
-falha, a sessão a mais, a ingestão presa à versão e a poda por intervalo, a transação do cliente em
-``session()`` diante do ``ingest`` materializado e de ``create_table``, os parâmetros do statement,
-as constantes com contrabarra, a versão fixada, o stream (o primeiro lote com a consulta rodando, o
-orçamento, o cancelamento, os erros), ``create_table`` e o appender (o ``INSERT`` único no
-``close``, o ``close`` repetido, as recusas do ``write``, o appender abandonado, a view e a tabela
-ausente recusadas, a ordem do exemplo mensal, o pipeline de três estágios, a leitura durante um
-acréscimo em voo, dois escritores na mesma tabela), as formas por tabela, os tipos e o ``NOT NULL``
-do ``ingest`` materializado, o ciclo com o pandas, a auditoria (cada defeito, a dispensa da junção,
-a amostra, os não finitos, o órfão), a exportação pelo registro do arquivo do ``COPY`` e o pipeline
-de exemplo num banco em arquivo. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+Eles conferem a configuração e a sessão única, os limites lidos do ambiente, a abertura que falha,
+a pasta temporária, a sessão a mais, o secret do S3 (recriado quando a chave muda, uma vez entre
+sessões concorrentes e pela thread do stream, e a chave velha no bucket, o caso marcado ``s3``, que
+grava sob ``SERIALIZE_DB_TEST_S3_ROOT``), a ingestão presa à versão e a poda por intervalo, a coluna
+do Delta fora do modelo, a transação do cliente em ``session()`` diante do ``ingest`` materializado
+e de ``create_table``, os parâmetros do statement, as constantes com contrabarra, os literais de
+``NaN`` e infinito, a versão fixada, o stream (o primeiro lote com a consulta rodando, o orçamento,
+o cancelamento, os erros), ``create_table`` e o appender (o ``INSERT`` único no ``close``, o
+``close`` repetido, as recusas do ``write``, o appender abandonado, a view e a tabela ausente
+recusadas, a ordem do exemplo mensal, o pipeline de três estágios, a leitura durante um acréscimo em
+voo, dois escritores na mesma tabela), as formas por tabela, os tipos e o ``NOT NULL`` do ``ingest``
+materializado, o ciclo com o pandas, a auditoria (cada defeito, a dispensa da junção, a amostra, os
+não finitos, o órfão), a exportação pelo registro do arquivo do ``COPY`` e o pipeline de exemplo num
+banco em arquivo. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -282,12 +285,10 @@ def result_of(
 
 def test_engine_config_and_single_session(
     setup: Setup,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """As configurações pedidas, os limites lidos do ambiente quando a configuração os omite e o
-    banco em arquivo dentro da pasta; três threads usam a mesma sessão, a tabela temporária de uma
-    vale para as outras, uma primitiva dentro de ``session()`` não trava, e ``cleanup`` apaga o
-    banco e o transbordo."""
+    """As configurações pedidas e o banco em arquivo dentro da pasta; três threads usam a mesma
+    sessão, a tabela temporária de uma vale para as outras, uma primitiva dentro de ``session()``
+    não trava, e ``cleanup`` apaga o banco e o transbordo."""
     engine = setup.engine
     assert isinstance(engine, Engine)
     settings_query = (
@@ -325,8 +326,23 @@ def test_engine_config_and_single_session(
         assert count_of(engine, "dentro") == 1
         assert engine.holds_session()
 
-    # Os limites lidos do ambiente, noutro motor: metade dos 2 GiB disponíveis e a cota de uma
-    # CPU, num /proc e num cgroup fabricados; o memory_limit informado fica no lugar do lido.
+    # O cleanup apaga o banco e o transbordo e fecha a sessão.
+    engine.cleanup()
+    engine.cleanup()  # a segunda chamada não faz nada
+    assert not database.exists()
+    assert not (setup.folder / "sandbox" / f"{EXECUTION_ID}_transbordo").exists()
+    with pytest.raises(duckdb.ConnectionException):
+        engine.query("SELECT 1")
+
+
+def test_engine_reads_the_limits_from_the_environment(
+    setup: Setup,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Os limites lidos do ambiente quando a configuração os omite: metade da memória disponível e
+    a cota de CPU de um ``/proc`` e de um cgroup fabricados; o ``memory_limit`` informado fica no
+    lugar do lido, e a memória abaixo do mínimo recusa a abertura sem deixar banco nem
+    transbordo."""
     machine = setup.folder / "maquina"
     fabricated = {
         "proc/meminfo": "MemAvailable:   2097152 kB\n",
@@ -364,14 +380,6 @@ def test_engine_config_and_single_session(
     limits = informed.query(limits_query).to_pylist()[0]
     informed.cleanup()
     assert limits == {"m": "768.0 MiB", "t": 1}
-
-    # O cleanup apaga o banco e o transbordo e fecha a sessão.
-    engine.cleanup()
-    engine.cleanup()  # a segunda chamada não faz nada
-    assert not database.exists()
-    assert not (setup.folder / "sandbox" / f"{EXECUTION_ID}_transbordo").exists()
-    with pytest.raises(duckdb.ConnectionException):
-        engine.query("SELECT 1")
 
 
 def test_temporary_folder_is_created_and_removed(
@@ -441,6 +449,8 @@ def test_new_session_runs_beside_the_main_one(
         assert counted == 10
         other.query("CREATE TABLE da_outra AS SELECT 1 AS x")
     assert count_of(engine, "da_outra") == 1
+    with pytest.raises(duckdb.ConnectionException):
+        other.query("SELECT 1")
     assert setup.database_file().exists()
 
 
@@ -831,7 +841,8 @@ def test_statement_parameters_expand_in_lists(
     for entry_id in range(1, 31):
         if account_of(entry_id) in (1, 2) and entry_id not in (1, 4):
             expected.append(entry_id)
-    assert by_query == by_stream == expected
+    assert by_query == expected
+    assert by_stream == expected
     with pytest.raises(SqlError, match="não fecham"):
         engine.query(statement, {"areas": ["TI"]})
     with pytest.raises(SqlError, match="não fecham"):
@@ -907,8 +918,7 @@ def test_stream_delivers_each_batch_while_the_query_runs(
 ) -> None:
     """O primeiro lote com a consulta rodando, sem arquivo com o cliente acompanhando; um
     comando no meio da leitura roda depois da consulta; a tabela temporária e o stream dentro de
-    ``session()``; o abandono para a consulta e apaga o arquivo; o erro chega na construção ou na
-    leitura seguinte ao último lote."""
+    ``session()``; o abandono para a consulta e apaga o arquivo."""
     engine = setup.engine
     create_numbers(engine)
 
@@ -959,12 +969,18 @@ def test_stream_delivers_each_batch_while_the_query_runs(
     assert not thread.is_alive()
     assert spool_files(engine) == []
 
-    # O erro chega na construção, quando a consulta não entrega lote algum, ou na leitura seguinte
-    # ao último lote, com os lotes na memória ou no arquivo. A falha na linha 2.900.000 chegou como
-    # OSError do leitor Arrow, depois de 25 ou 26 lotes, nos dois orçamentos (seis leituras de
-    # 2026-09-23, com duas threads), a classe que a docstring do stream promete.
+
+def test_stream_raises_the_error_at_construction_or_after_the_last_batch(
+    setup: Setup,
+) -> None:
+    """O erro da consulta chega na construção, quando ela não entrega lote algum, ou na leitura
+    seguinte ao último lote, com os lotes na memória ou no arquivo, como ``OSError`` do leitor
+    Arrow."""
+    # A falha na linha 2.900.000 chegou como OSError do leitor Arrow, depois de 25 ou 26 lotes, nos
+    # dois orçamentos (seis leituras de 2026-09-23, com duas threads), a classe que a docstring do
+    # stream promete.
     with pytest.raises(duckdb.CatalogException, match="nao_existe"):
-        engine.stream("SELECT * FROM nao_existe")
+        setup.engine.stream("SELECT * FROM nao_existe")
     # A consulta que falha no meio roda num motor de uma thread: com duas, o DuckDB 1.5.5 entregou
     # INTERRUPT Error: Interrupted! no lugar do erro de conversão em 3 de 21 execuções de
     # 2026-09-28.
@@ -1040,8 +1056,9 @@ def wait_for_the_sort(
 def test_close_and_cleanup_interrupt_the_running_query(
     setup: Setup,
 ) -> None:
-    """O ``close`` depois do primeiro lote de uma varredura longa cancela a consulta, e a sessão
-    continua usável; o ``cleanup`` cancela a ordenação de um stream que outra thread ainda
+    """O ``close`` depois do primeiro lote de uma varredura longa cancela a consulta ainda em
+    curso, ou a encontra terminada na máquina carregada, e volta em menos de um segundo com a
+    sessão usável; o ``cleanup`` cancela a ordenação de um stream que outra thread ainda
     constrói."""
     engine = setup.engine
     engine.query("CREATE TABLE numeros AS SELECT range AS id FROM range(20_000_000)")
@@ -1158,7 +1175,7 @@ def test_appender_inserts_in_one_statement_on_close(
     assert count_of(engine, "cad_segunda") == 0
 
     # O lote sem a coluna NOT NULL valor passa pelo cast e falha no INSERT, que não deixa linha.
-    with pytest.raises(duckdb.ConstraintException):
+    with pytest.raises(duckdb.ConstraintException, match="valor"):
         with engine.appender(other) as appender:
             appender.write(entry_rows(MONTHS[0], 1, 10, PROJECTED).drop_columns(["valor"]))
     assert count_of(engine, "cad_segunda") == 0
@@ -1349,7 +1366,8 @@ def test_three_stage_pipeline_overlaps_read_work_and_write(
             f"SELECT count(*) AS n, sum(valor) AS v, sum(dobro::DECIMAL(18, 2)) AS d FROM {name}"
         )
         totals[name] = engine.query(query).to_pylist()[0]
-    assert totals["por_tabela"] == totals["sequencial"] == totals["encadeado"]
+    assert totals["sequencial"] == totals["por_tabela"]
+    assert totals["encadeado"] == totals["por_tabela"]
     assert totals["encadeado"]["n"] == 3_000_000
     readings = []
     for name, seconds in timings.items():
@@ -1396,7 +1414,7 @@ def test_read_during_an_append_in_flight_sees_the_table_without_the_new_rows(
             assert release.wait(timeout=10)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(append)  # o cliente esquece o result()
+        future = pool.submit(append)  # o cliente lê antes do result()
         assert opened.wait(timeout=10)
 
         # O acréscimo em voo: as duas sessões leem as dez linhas anteriores, nenhuma das novas.
@@ -1548,7 +1566,8 @@ def test_audit_finds_each_defect(
 ) -> None:
     """Nulo, texto acima do ``String(n)`` em bytes e dentro dele em caracteres, partição fora da
     origem, valor de partição fora da regra, JSON inválido, documento JSON acima de 65.535 bytes,
-    chave repetida na partição e contra a versão fixada, e chave única repetida contra ela."""
+    chave repetida na partição e contra a versão fixada, e a chave única sem repetição contra
+    ela."""
     version = published_table(setup, PROJECTED, MONTHS[:2], rows=10)
     engine = setup.engine
     good = entry_rows(MONTHS[2], 100, 7, PROJECTED)
@@ -1737,7 +1756,7 @@ def test_export_partition_registers_the_copy_file(
     assert re.fullmatch(pattern, files[0].removeprefix(folder))
 
     # expected_rows diferente recusa, sem commit.
-    with pytest.raises(RegistrationRefused):
+    with pytest.raises(RegistrationRefused, match="999 na fonte"):
         engine.export_partition(PROJECTED, uri, MONTHS[1], METADATA, expected_rows=999)
     assert delta.open_table(uri, setup.storage).version() == 1
 

@@ -1,4 +1,4 @@
-"""O acesso de leitura à base, com o modelo: o leitor Delta e o leitor Redshift.
+"""[public] O acesso de leitura à base, com o modelo: o leitor Delta e o leitor Redshift.
 
 ``DeltaReader`` abre um DuckDB no processo com uma view por tabela do modelo sobre a versão de um
 snapshot da base Delta, e ``RedshiftReader`` roda o mesmo statement nas tabelas publicadas
@@ -11,9 +11,10 @@ O leitor Delta lê, sem argumento, o snapshot do canal ``default`` do ambiente, 
 ``serialize-db channel`` move; ``snapshot=`` lê um snapshot pelo nome, o arquivado pela cópia em
 ``<raiz>/<ambiente>/arquivo/<nome>/``; ``channel="current"`` lê a versão atual de cada tabela.
 Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é consistente num
-snapshot. O ``delta_scan`` poda as partições por ``=``, por ``BETWEEN`` e pelo ``IN`` ao lado de
-um intervalo, e abre todos os arquivos com um ``IN`` de mais de um valor sozinho; ``materialize``
-copia uma tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas
+snapshot. O ``delta_scan`` poda as partições por ``=`` e por intervalo, e abre todos os arquivos
+com um ``IN`` de mais de um valor sozinho; por isso o filtro das partições é ``BETWEEN`` o menor e
+o maior valor ``AND`` o ``IN`` da lista, como no ``ingest`` dos motores. ``materialize`` copia uma
+tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas
 que ``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas
 tabelas durante uma publicação pode ler versões diferentes.
 
@@ -66,13 +67,13 @@ if TYPE_CHECKING:
     from serialize_db.engine.redshift import RedshiftConfig
     from serialize_db.execution import Database
 
-__all__ = ["DeltaReader", "RedshiftReader", "open_redshift"]
+__all__ = ["DeltaReader", "ReaderStream", "RedshiftReader", "open_redshift"]
 
 log = logging.getLogger("serialize_db.reader")
 
 
 def _new_reader_id() -> str:
-    """``reader-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
+    """[private] ``reader-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     return f"reader-{today}-{uuid.uuid4().hex[:8]}"
 
@@ -80,8 +81,9 @@ def _new_reader_id() -> str:
 def _check_select(
     statement_or_sql: sa.sql.ClauseElement | str,
 ) -> None:
-    """A regra de leitura comum: um statement Core que não é ``Select`` nem ``CompoundSelect`` é
-    ``ContractError`` antes de chamar o motor; um texto pronto roda como está."""
+    """[private] A regra de leitura comum: um statement Core que não é ``Select`` nem
+    ``CompoundSelect`` é ``ContractError`` antes de chamar o motor; um texto pronto roda como
+    está."""
     if isinstance(statement_or_sql, str):
         return
     if not isinstance(statement_or_sql, (sa.Select, sa.CompoundSelect)):
@@ -96,8 +98,8 @@ def _check_select(
 
 @dataclasses.dataclass(frozen=True)
 class _Source:
-    """De onde o leitor Delta lê: o snapshot (``None`` no canal ``current``), a versão e a URI de
-    cada tabela do modelo com view, e o texto da origem para as mensagens."""
+    """[private] De onde o leitor Delta lê: o snapshot (``None`` no canal ``current``), a versão e a
+    URI de cada tabela do modelo com view, e o texto da origem para as mensagens."""
 
     snapshot: str | None
     versions: dict[str, int]
@@ -108,8 +110,8 @@ class _Source:
 def _current_source(
     delta_db: Database,
 ) -> _Source:
-    """A versão atual de cada tabela do modelo que existe no ambiente, como ``Execution`` na
-    abertura."""
+    """[private] A versão atual de cada tabela do modelo que existe no ambiente, como ``Execution``
+    na abertura."""
     versions = {}
     uris = {}
     for table in delta_db.tables():
@@ -125,7 +127,7 @@ def _snapshot_source(
     name: str,
     entry: Mapping[str, int],
 ) -> _Source:
-    """As versões da entrada do snapshot, nas tabelas do modelo que ela tem."""
+    """[private] As versões da entrada do snapshot, nas tabelas do modelo que ela tem."""
     versions = {}
     uris = {}
     for table in delta_db.tables():
@@ -140,8 +142,8 @@ def _archived_source(
     name: str,
     entry: Mapping[str, int],
 ) -> _Source:
-    """As cópias de ``arquivo/<nome>/<tabela>`` das tabelas do modelo que a entrada arquivada tem,
-    na versão atual de cada cópia, que não muda depois do ``archive``."""
+    """[private] As cópias de ``arquivo/<nome>/<tabela>`` das tabelas do modelo que a entrada
+    arquivada tem, na versão atual de cada cópia, que não muda depois do ``archive``."""
     storage = delta_db.storage
     versions = {}
     uris = {}
@@ -159,8 +161,8 @@ def _resolve_source(
     snapshot: str | None,
     channel: str | None,
 ) -> _Source:
-    """As versões pelo modo pedido: o canal ``current``, o snapshot pelo nome, vivo ou arquivado,
-    ou o snapshot do canal, o ``default`` sem argumento."""
+    """[private] As versões pelo modo pedido: o canal ``current``, o snapshot pelo nome, vivo ou
+    arquivado, ou o snapshot do canal, o ``default`` sem argumento."""
     if snapshot is not None and channel is not None:
         raise ContractError(
             f"open_delta recebe snapshot={snapshot!r} ou channel={channel!r}, não os dois"
@@ -179,22 +181,48 @@ def _resolve_source(
 # ---------------------------------------------------------------- o stream do leitor Delta
 
 
-class _ReaderStream:
-    """O ``BatchStream`` do motor com o leitor Delta preso até o ``close``: o leitor fora de uma
-    variável, como em ``db.open_delta().stream(...)``, não é coletado enquanto o stream está
-    aberto, e o finalizador dele não fecha o motor debaixo da consulta."""
+class ReaderStream:
+    """[public] Os lotes de uma consulta do leitor Delta: o ``BatchStream`` do motor com o leitor
+    preso até o ``close``.
+
+    O leitor fora de uma variável, como em ``db.open_delta().stream(...)``, não é coletado
+    enquanto o stream está aberto, e o finalizador dele não fecha o motor debaixo da consulta. Os
+    lotes, o esquema, o ``for``, o ``with`` e ``__arrow_c_stream__`` são os do stream do motor
+    (``DuckDBStream``); ``DeltaReader.stream`` o devolve.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        with reader.stream(sa.select(Lancamento.__table__)) as stream:
+            first = stream.read_next_batch()
+            rest = stream.read_all()
+    """
+
+    schema: pa.Schema
+    """[public] O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
 
     def __init__(
         self,
         reader: DeltaReader,
         stream: BatchStream,
     ) -> None:
+        """[public] Embrulha o stream do motor e segura o leitor até o ``close``.
+
+        :param reader: o leitor Delta que abriu a consulta, solto no ``close``.
+        :param stream: o stream do motor DuckDB do leitor, aberto por ``DuckDBEngine.stream``.
+        """
         self._reader: DeltaReader | None = reader
         self._stream = stream
         self.schema = stream.schema
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último lote."""
+        """[public] O próximo lote, na ordem da consulta; o erro que ela encontra depois do último
+        lote entregue sobe aqui, como no ``DuckDBStream``.
+
+        :return: o lote, no esquema ``schema``.
+        :raises StopIteration: no fim dos lotes.
+        """
         return self._stream.read_next_batch()
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
@@ -202,7 +230,10 @@ class _ReaderStream:
         yield from self._stream
 
     def read_all(self) -> pa.Table:
-        """Os lotes que faltam numa ``pa.Table``."""
+        """[public] Os lotes que faltam numa ``pa.Table``.
+
+        :return: a tabela, no esquema ``schema``; vazia depois do último lote.
+        """
         return self._stream.read_all()
 
     def __arrow_c_stream__(
@@ -214,12 +245,12 @@ class _ReaderStream:
         return batches.__arrow_c_stream__(requested_schema)
 
     def close(self) -> None:
-        """Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
+        """[public] Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
         segura."""
         self._stream.close()
         self._reader = None
 
-    def __enter__(self) -> _ReaderStream:
+    def __enter__(self) -> ReaderStream:
         return self
 
     def __exit__(
@@ -233,8 +264,8 @@ class _ReaderStream:
 
 
 class DeltaReader:
-    """O leitor da base Delta: um DuckDB no processo com uma view por tabela do modelo, presa à
-    versão do snapshot lido.
+    """[public] O leitor da base Delta: um DuckDB no processo com uma view por tabela do modelo,
+    presa à versão do snapshot lido.
 
     Exemplo:
 
@@ -252,36 +283,37 @@ class DeltaReader:
         channel: str | None = None,
         config: DuckDBConfig | None = None,
     ) -> None:
-        """Lê as versões, abre o motor e cria as views; ``db.open_delta`` é a entrada.
+        """[public] Lê as versões, abre o motor e cria as views; ``db.open_delta`` é a entrada.
 
         :param delta_db: o banco Delta lido, com a raiz, o ambiente e os modelos.
         :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
             ``<raiz>/<ambiente>/arquivo/<nome>/``. ``None`` lê o canal.
         :param channel: o canal do ambiente, ``"default"``, o mesmo que sem argumento, ou
-            ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente.
-            ``None`` com ``snapshot`` ``None`` é o canal ``default``.
+            ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente;
+            ``None`` sem ``snapshot`` lê o canal ``default``.
         :param config: a configuração do DuckDB; ``None`` é ``DuckDBConfig()``, os limites lidos
             do ambiente e uma pasta temporária nova, apagada no ``close``.
-        :raises ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem o canal, com o
-            ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou o snapshot
-            que não existe.
+        :raises serialize_db.errors.ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem
+            o canal, com o ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou
+            o snapshot que não existe.
         :raises duckdb.Error: a extensão ``delta`` ausente da pasta configurada, ou uma versão
             do snapshot que a tabela não tem mais, na criação da view.
-        :raises SandboxError: sem ``memory_limit`` em ``config``, a memória que o processo ainda
-            pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB (``environment_limits``).
+        :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que
+            o processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
+            (``environment_limits``).
         """
         source = _resolve_source(delta_db, snapshot, channel)
         self.snapshot = source.snapshot
-        """O snapshot lido; ``None`` no canal ``current``."""
+        """[public] O snapshot lido; ``None`` no canal ``current``."""
         self.versions = source.versions
-        """A versão de cada tabela com view, pelo nome da tabela; no snapshot arquivado, a versão
-        de cada cópia em ``<raiz>/<ambiente>/arquivo/<nome>/``. A tabela do modelo ausente do
+        """[public] A versão de cada tabela com view, pelo nome da tabela; no snapshot arquivado, a
+        versão de cada cópia em ``<raiz>/<ambiente>/arquivo/<nome>/``. A tabela do modelo ausente do
         snapshot não tem view."""
         self.materialized: dict[str, list[str] | None] = {}
-        """As tabelas copiadas para o banco local por ``materialize``, com as partições de cada
-        uma; ``None`` na tabela inteira."""
+        """[public] As tabelas copiadas para o banco local por ``materialize``, com as partições de
+        cada uma; ``None`` na tabela inteira."""
         self.reader_id = _new_reader_id()
-        """O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, que nomeia o banco
+        """[public] O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, que nomeia o banco
         temporário e a pasta de transbordo do motor."""
         self._delta_db = delta_db
         self._uris = source.uris
@@ -304,12 +336,12 @@ class DeltaReader:
         self,
         table: sa.Table,
     ) -> None:
-        """A view de uma tabela, numa sessão a mais do motor, fechada no fim."""
+        """[private] A view de uma tabela, numa sessão a mais do motor, fechada no fim."""
         with self._engine.new_session() as session:
             session.ingest(table, self._uris[table.name], self.versions[table.name])
 
     def _open_views(self) -> None:
-        """Uma view por tabela do modelo presente nas versões, as tabelas em paralelo."""
+        """[private] Uma view por tabela do modelo presente nas versões, as tabelas em paralelo."""
         tasks = []
         for table in self._delta_db.tables():
             if table.name in self.versions:
@@ -323,7 +355,7 @@ class DeltaReader:
         self,
         name: str,
     ) -> None:
-        """A tabela do modelo sem view é ``ContractError`` com a origem das versões."""
+        """[private] A tabela do modelo sem view é ``ContractError`` com a origem das versões."""
         if name not in self.versions:
             raise ContractError(
                 f"{name}: a tabela do modelo não tem view no leitor, porque não "
@@ -334,7 +366,7 @@ class DeltaReader:
         self,
         name: str,
     ) -> str:
-        """``TABLE`` depois de uma materialização, ``VIEW`` antes dela."""
+        """[private] ``TABLE`` depois de uma materialização, ``VIEW`` antes dela."""
         with self._lock:
             return "TABLE" if name in self.materialized else "VIEW"
 
@@ -344,9 +376,9 @@ class DeltaReader:
         where: str,
         partitions: list[str] | None,
     ) -> None:
-        """A troca da view, ou da tabela de uma materialização anterior, por ``CREATE TABLE ... AS
-        SELECT * FROM delta_scan(...)``, numa transação de uma sessão a mais; a falha devolve o
-        objeto anterior pelo ``ROLLBACK``."""
+        """[private] A troca da view, ou da tabela de uma materialização anterior, por
+        ``CREATE TABLE ... AS         SELECT * FROM delta_scan(...)``, numa transação de uma sessão
+        a mais; a falha devolve o objeto anterior pelo ``ROLLBACK``."""
         name = quoted(table.name)
         select = f"SELECT * FROM {delta_scan(self._uris[table.name], self.versions[table.name])}"
         with self._engine.new_session() as session, session.session() as connection:
@@ -372,12 +404,13 @@ class DeltaReader:
         *tables: sa.Table,
         partitions: list[str] | None = None,
     ) -> None:
-        """Copia as tabelas para o banco local do leitor: o nome do modelo passa a ser uma tabela
-        com os dados da versão lida, ou só das partições pedidas.
+        """[public] Copia as tabelas para o banco local do leitor: o nome do modelo passa a ser uma
+        tabela com os dados da versão lida, ou só das partições pedidas.
 
         Cada tabela troca numa transação, e as tabelas correm em paralelo, cada uma numa sessão a
         mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do
-        ``ingest`` do motor, o intervalo ao lado do ``IN``. A cópia é o ``SELECT *`` da versão:
+        ``ingest`` do motor: ``BETWEEN`` o menor e o maior valor, que o ``delta_scan`` poda,
+        ``AND`` o ``IN`` da lista. A cópia é o ``SELECT *`` da versão:
         uma coluna da versão que o modelo não tem entra na tabela, como na view.
 
         Exemplo:
@@ -391,8 +424,8 @@ class DeltaReader:
         :param tables: as tabelas do modelo com view no leitor.
         :param partitions: os valores de partição copiados, pela regra da partição; ``None``
             copia a tabela inteira.
-        :raises ContractError: uma tabela sem view no leitor, ``partitions`` numa tabela sem
-            partição ou um valor fora da regra da partição, antes de qualquer troca.
+        :raises serialize_db.errors.ContractError: uma tabela sem view no leitor, ``partitions``
+            numa tabela sem partição ou um valor fora da regra da partição, antes de qualquer troca.
         :raises duckdb.Error: a falha da cópia de uma tabela, que fica com o objeto anterior,
             view ou tabela, enquanto as outras terminam.
         """
@@ -414,8 +447,8 @@ class DeltaReader:
         self,
         statement_or_sql: sa.sql.ClauseElement | str,
     ) -> None:
-        """A regra de leitura comum e, num statement Core, a view de cada tabela do modelo que
-        ele cita; o texto pronto recebe o erro de catálogo do DuckDB."""
+        """[private] A regra de leitura comum e, num statement Core, a view de cada tabela do modelo
+        que ele cita; o texto pronto recebe o erro de catálogo do DuckDB."""
         _check_select(statement_or_sql)
         if isinstance(statement_or_sql, str):
             return
@@ -428,7 +461,7 @@ class DeltaReader:
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
     ) -> pa.Table:
-        """O resultado inteiro como ``pa.Table``, pelo motor.
+        """[public] O resultado inteiro como ``pa.Table``, pelo motor.
 
         Exemplo:
 
@@ -443,10 +476,10 @@ class DeltaReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :return: a tabela do resultado, nos tipos Arrow do contrato nas colunas do modelo.
-        :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
-            modelo sem view no leitor, sem chamar o motor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto, ou o texto ainda traz o sentinela ``{prefix}``.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, ou que cita
+            uma tabela do modelo sem view no leitor, sem chamar o motor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: o texto que cita uma tabela sem view, ou uma coluna que o modelo
             ganhou depois da versão lida.
         """
@@ -458,9 +491,9 @@ class DeltaReader:
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
-    ) -> BatchStream:
-        """Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a memória
-        limitada a 64 MiB de lotes.
+    ) -> ReaderStream:
+        """[public] Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a
+        memória limitada a 64 MiB de lotes.
 
         Exemplo:
 
@@ -476,25 +509,25 @@ class DeltaReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote.
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto, que segura o leitor até o
-            ``close``; o ``BatchStream.close`` cancela a consulta que ainda roda e apaga o arquivo
-            de transbordo.
-        :raises ContractError: um statement Core que não é consulta, ou que cita uma tabela do
-            modelo sem view no leitor, sem chamar o motor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto, ou o texto ainda traz o sentinela ``{prefix}``.
+        :return: o ``ReaderStream`` dos lotes, um ``BatchStream`` gerenciador de contexto, que
+            segura o leitor até o ``close``; o ``close`` cancela a consulta que ainda roda e apaga
+            o arquivo de transbordo.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, ou que cita
+            uma tabela do modelo sem view no leitor, sem chamar o motor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
             sobe na leitura seguinte ao último lote entregue. Com mais de uma thread, o erro da
             consulta pode chegar como ``INTERRUPT Error: Interrupted!``, sem a causa, como
             descreve o ``DuckDBEngine.stream``.
         """
         self._check_readable(statement_or_sql)
-        return _ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))
+        return ReaderStream(self, self._engine.stream(statement_or_sql, params, batch_size))
 
     @contextlib.contextmanager
     def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
-        """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
-        é consulta, como uma tabela temporária ao lado das views.
+        """[public] A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando
+        que não é consulta, como uma tabela temporária ao lado das views.
 
         Exemplo:
 
@@ -515,10 +548,10 @@ class DeltaReader:
     # ------------------------------------------------------------ o encerramento
 
     def close(self) -> None:
-        """Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco temporário,
-        com as tabelas materializadas, e a pasta de transbordo. O DuckDB só devolve a memória
-        aqui: num caderno, o leitor sem ``with`` segura a memória até esta chamada. A segunda
-        chamada não faz nada.
+        """[public] Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco
+        temporário, com as tabelas materializadas, e a pasta de transbordo. O DuckDB só devolve a
+        memória aqui: num caderno, o leitor sem ``with`` segura a memória até esta chamada. A
+        segunda chamada não faz nada.
 
         Exemplo:
 
@@ -544,8 +577,8 @@ class DeltaReader:
 
 
 class RedshiftReader:
-    """O leitor da base publicada no Redshift: as tabelas ``<ambiente>_<tabela>`` do esquema,
-    numa sessão do motor Redshift com o prefixo do ambiente.
+    """[public] O leitor da base publicada no Redshift: as tabelas ``<ambiente>_<tabela>`` do
+    esquema, numa sessão do motor Redshift com o prefixo do ambiente.
 
     Exemplo:
 
@@ -565,36 +598,37 @@ class RedshiftReader:
         config: RedshiftConfig | None = None,
         unload_to: str | None = None,
     ) -> None:
-        """Abre a sessão no esquema; ``open_redshift`` e ``db.open_redshift`` são as entradas.
+        """[public] Abre a sessão no esquema; ``open_redshift`` e ``db.open_redshift`` são as
+        entradas.
 
         :param metadata: o ``MetaData`` dos modelos do cliente, cujas tabelas os statements citam.
         :param environment: o ambiente publicado, ``prd`` ou ``dsv``, que prefixa o nome das
             tabelas publicadas.
         :param config: a configuração do Redshift; ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*`` (``RedshiftConfig.from_environment``).
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
-            leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa ``stream``
-            fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo ``workgroup``
-            ou pelo ``host``, e na do substituto local das suítes, só uma pasta
-            ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam
-            nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
-            ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; o leitor grava
+            em ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` deixa
+            ``stream`` fora, e o leitor não toca arquivo algum. O ``UNLOAD`` grava só no S3,
+            então só uma pasta ``s3://bucket/prefixo`` serve, na conexão com o Redshift, pelo
+            ``workgroup`` ou pelo ``host``, e na do substituto local das suítes: os arquivos
+            ficam nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
+            ``stream`` falhar, sem arquivo gravado. A pasta local serve só à conexão de mentira
             dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
-        :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
-            conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou, sem
-            ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
+        :raises serialize_db.errors.ContractError: o ambiente fora da regra da partição, ou a
+            configuração sem conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``;
+            ou, sem ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
         # O módulo do Redshift entra só com o leitor: importar o pacote não carrega o driver.
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
         self.environment = check_partition_value(environment)
-        """O ambiente publicado, o prefixo ``<ambiente>_`` das tabelas."""
+        """[public] O ambiente publicado, o prefixo ``<ambiente>_`` das tabelas."""
         self.metadata = metadata
-        """O ``MetaData`` dos modelos."""
+        """[public] O ``MetaData`` dos modelos."""
         self.reader_id = _new_reader_id()
-        """O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, a pasta dos arquivos do
-        ``UNLOAD`` sob ``unload_to``."""
+        """[public] O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, a pasta dos arquivos
+        do ``UNLOAD`` sob ``unload_to``."""
         if config is None:
             config = RedshiftConfig.from_environment()
         storage = None
@@ -611,7 +645,7 @@ class RedshiftReader:
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
     ) -> pa.Table:
-        """O resultado inteiro como ``pa.Table``, pelo cursor do driver, que materializa o
+        """[public] O resultado inteiro como ``pa.Table``, pelo cursor do driver, que materializa o
         resultado no cliente: o caminho dos resultados pequenos.
 
         Exemplo:
@@ -628,10 +662,11 @@ class RedshiftReader:
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :return: a tabela do resultado, montada por colunas com o esquema do ``row_desc``.
-        :raises ContractError: um statement Core que não é consulta, sem comando no servidor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, sem comando
+            no servidor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato.
         :raises redshift_connector.Error: a tabela não publicada, que o servidor responde com
             ``XX000`` e ``Relation <nome> does not exist in the database.``.
         """
@@ -644,7 +679,7 @@ class RedshiftReader:
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
     ) -> BatchStream:
-        """Os lotes da consulta lidos dos arquivos do ``UNLOAD ... PARALLEL OFF`` dela em
+        """[public] Os lotes da consulta lidos dos arquivos do ``UNLOAD ... PARALLEL OFF`` dela em
         ``<unload_to>/<id do leitor>/stream/<uuid>/``, dois lotes à frente do cliente: o caminho
         dos resultados grandes.
 
@@ -666,20 +701,20 @@ class RedshiftReader:
         :param batch_size: o máximo de linhas de cada lote, lido de cada arquivo do ``UNLOAD``.
         :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``BatchStream.close``
             apaga os arquivos do ``UNLOAD`` deste stream.
-        :raises ContractError: um statement Core que não é consulta, ou o leitor sem
-            ``unload_to``, antes de qualquer comando no servidor.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
-        :raises SandboxError: uma coluna do resultado num tipo fora do contrato; ou, sem
-            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
+        :raises serialize_db.errors.ContractError: um statement Core que não é consulta, ou o leitor
+            sem ``unload_to``, antes de qualquer comando no servidor.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
+        :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato;
+            ou, sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
         _check_select(statement_or_sql)
         return self._engine.stream(statement_or_sql, params, batch_size)
 
     def session(self) -> contextlib.AbstractContextManager[object]:
-        """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
-        é consulta, como uma tabela temporária.
+        """[public] A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando
+        que não é consulta, como uma tabela temporária.
 
         Exemplo:
 
@@ -694,8 +729,8 @@ class RedshiftReader:
         return self._engine.session()
 
     def close(self) -> None:
-        """Fecha a sessão e esvazia a pasta ``<unload_to>/<id do leitor>/``, nada fora dela; sem
-        ``unload_to``, só fecha a sessão. A segunda chamada não faz nada.
+        """[public] Fecha a sessão e esvazia a pasta ``<unload_to>/<id do leitor>/``, nada fora
+        dela; sem ``unload_to``, só fecha a sessão. A segunda chamada não faz nada.
 
         Exemplo:
 
@@ -723,8 +758,8 @@ def open_redshift(
     config: RedshiftConfig | None = None,
     unload_to: str | None = None,
 ) -> RedshiftReader:
-    """Abre o leitor da base publicada no Redshift para o cliente que tem o modelo e não a raiz
-    Delta; o time que tem o ``Database`` entra por ``db.open_redshift``.
+    """[public] Abre o leitor da base publicada no Redshift para o cliente que tem o modelo e não a
+    raiz Delta; o time que tem o ``Database`` entra por ``db.open_redshift``.
 
     Exemplo:
 
@@ -737,19 +772,19 @@ def open_redshift(
     :param environment: o ambiente publicado, ``prd`` ou ``dsv``.
     :param config: a configuração do Redshift; ``None`` lê as variáveis
         ``SERIALIZE_DB_REDSHIFT_*``.
-    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
-        leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa
-        ``stream`` fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo
-        ``workgroup`` ou pelo ``host``, e na do substituto local das suítes, só uma pasta
-        ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam nela
-        até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro ``stream``
-        falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira dos testes do
-        pacote, que grava o arquivo pelo armazenamento do leitor.
+    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; o leitor grava em
+        ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` deixa
+        ``stream`` fora, e o leitor não toca arquivo algum. O ``UNLOAD`` grava só no S3, então só
+        uma pasta ``s3://bucket/prefixo`` serve, na conexão com o Redshift, pelo ``workgroup`` ou
+        pelo ``host``, e na do substituto local das suítes: os arquivos ficam nela até o ``close``
+        do stream e o do leitor, e uma pasta local faz o primeiro ``stream`` falhar, sem arquivo
+        gravado. A pasta local serve só à conexão de mentira dos testes do pacote, que grava o
+        arquivo pelo armazenamento do leitor.
     :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia
         ``<unload_to>/<id do leitor>/``.
-    :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
-        conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou, sem ``config``,
-        ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
+    :raises serialize_db.errors.ContractError: o ambiente fora da regra da partição, ou a
+        configuração sem conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou,
+        sem ``config``, ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
     :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
     """
     return RedshiftReader(metadata, environment, config, unload_to)

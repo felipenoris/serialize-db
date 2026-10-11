@@ -1,4 +1,4 @@
-"""A linha de comando ``serialize-db``.
+"""[public] A linha de comando ``serialize-db``.
 
 Cada subcomando roda uma rotina do pacote: a geração dos arquivos do contrato, a execução de um
 pipeline, a carga inicial, a publicação no Redshift e a operação do banco Delta. O runbook abaixo
@@ -47,27 +47,27 @@ Exemplo:
         --statements pipeline.queries:STATEMENTS sql/
     serialize-db sql check --metadata pipeline.models:Base.metadata \\
         --statements pipeline.queries:STATEMENTS sql/
-    serialize-db run --root s3://bucket/delta --environment prd --partition 2026-08-31 \\
+    serialize-db run --root s3://bucket/projeto/delta --environment prd --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
-    serialize-db run --root s3://bucket/delta --environment prd \\
+    serialize-db run --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata pipeline.dominios:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
-    serialize-db import --root s3://bucket/delta --environment prd \\
-        --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
+    serialize-db import --root s3://bucket/projeto/delta --environment prd \\
+        --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
     serialize-db publish_redshift --init
-    serialize-db publish_redshift --root s3://bucket/delta --environment prd \\
+    serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --channel default
-    serialize-db publish_redshift --root s3://bucket/delta --environment prd \\
+    serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --snapshot 2026T2 --tables cad_lancamentos
-    serialize-db publish_redshift --root s3://bucket/delta --environment prd \\
+    serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --status
-    serialize-db snapshot --root s3://bucket/delta --environment prd \\
+    serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --name 2026T3
-    serialize-db channel --root s3://bucket/delta --environment prd \\
+    serialize-db channel --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3
-    serialize-db vacuum --root s3://bucket/delta --environment prd \\
+    serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --apply
-    serialize-db history --root s3://bucket/delta --environment prd \\
+    serialize-db history --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
 O código de saída:
@@ -75,8 +75,9 @@ O código de saída:
 - 0 quando o comando termina.
 - 1 quando ``check`` encontra diferença, com o diff impresso; quando a auditoria reprova, também
   pelo valor fora do contrato que o ``ingest`` da auditoria recusa, impresso com o erro do banco;
-  e quando a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem,
-  ou uma diferença de contagem ou soma.
+  quando a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem,
+  ou uma diferença de contagem ou soma; e numa exceção sem tratamento, como ``SandboxError`` ou
+  ``RegistrationRefused``, com o traceback.
 - 2 no erro de uso: o motor fora de ``duckdb`` e ``redshift`` e ``--partitions`` na auditoria de uma
   tabela sem partição; ``--partitions`` com ``--ignore-partitions`` na carga; a configuração do
   Redshift sem conexão ou com a porta que não é número; a tabela fora do modelo ou sem Delta; a
@@ -133,8 +134,8 @@ __all__ = ["main"]
 def _resolve_attribute(
     spec: str,
 ) -> object:
-    """O objeto de ``modulo:atributo``, pelo ``pkgutil.resolve_name`` da biblioteca padrão: importa
-    o módulo e segue os atributos por ponto.
+    """[private] O objeto de ``modulo:atributo``, pelo ``pkgutil.resolve_name`` da biblioteca
+    padrão: importa o módulo e segue os atributos por ponto.
 
     Exemplo:
 
@@ -154,7 +155,7 @@ def _resolve_attribute(
 def _resolve_metadata(
     spec: str,
 ) -> sa.MetaData:
-    """O ``MetaData`` de ``modulo:atributo``, para ``--metadata``."""
+    """[private] O ``MetaData`` de ``modulo:atributo``, para ``--metadata``."""
     target = _resolve_attribute(spec)
     if not isinstance(target, sa.MetaData):
         raise argparse.ArgumentTypeError(f"{spec} não é um MetaData: {type(target).__name__}")
@@ -164,7 +165,8 @@ def _resolve_metadata(
 def _resolve_statements(
     spec: str,
 ) -> dict[str, sa.sql.ClauseElement]:
-    """O dicionário ``{nome: statement}`` de ``modulo:atributo``, para ``--statements``."""
+    """[private] O dicionário ``{nome: statement}`` de ``modulo:atributo``, para
+    ``--statements``."""
     target = _resolve_attribute(spec)
     if not isinstance(target, dict):
         raise argparse.ArgumentTypeError(f"{spec} não é um dicionário: {type(target).__name__}")
@@ -179,7 +181,8 @@ def _resolve_statements(
 def _resolve_function(
     spec: str,
 ) -> Callable[..., object]:
-    """A função de ``modulo:funcao``, o pipeline que ``run`` chama com a execução aberta."""
+    """[private] A função de ``modulo:funcao``, o pipeline que ``run`` chama com a execução
+    aberta."""
     target = _resolve_attribute(spec)
     if not callable(target):
         raise argparse.ArgumentTypeError(f"{spec} não é uma função: {type(target).__name__}")
@@ -189,8 +192,8 @@ def _resolve_function(
 def _name_argument(
     text: str,
 ) -> str:
-    """Um valor de partição, um ``execution_id``, um ambiente ou o nome de um snapshot ou de um
-    canal, pela regra da partição."""
+    """[private] Um valor de partição, um ``execution_id``, um ambiente ou o nome de um snapshot ou
+    de um canal, pela regra da partição."""
     try:
         return schema.check_partition_value(text)
     except ContractError as error:
@@ -200,9 +203,9 @@ def _name_argument(
 def _root_argument(
     text: str,
 ) -> str:
-    """A raiz de ``--root`` ou de ``SERIALIZE_DB_ROOT``, conferida por ``Storage.for_uri``: outro
-    esquema que não uma pasta local, ``file://`` ou ``s3://``, ou o S3 sem região, é erro de uso,
-    antes do subcomando."""
+    """[private] A raiz de ``--root`` ou de ``SERIALIZE_DB_ROOT``, conferida por
+    ``Storage.for_uri``: outro esquema que não uma pasta local, ``file://`` ou ``s3://``, ou o S3
+    sem região, é erro de uso, antes do subcomando."""
     try:
         Storage.for_uri(text)
     except ValueError as error:
@@ -211,16 +214,17 @@ def _root_argument(
 
 
 def _environment_default() -> str:
-    """O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, com a
-    variável vazia lida como ausente, ou ``dsv``."""
+    """[private] O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, com
+    a variável vazia lida como ausente, ou ``dsv``."""
     return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv"
 
 
 def _engine_argument(
     text: str,
 ) -> str:
-    """O motor de ``--engine``, ``duckdb`` ou ``redshift``. O ``argparse`` confere o padrão, o de
-    ``SERIALIZE_DB_ENGINE``, só por esta função, porque o ``choices`` não vale para o padrão."""
+    """[private] O motor de ``--engine``, ``duckdb`` ou ``redshift``. O ``argparse`` confere o
+    padrão, o de ``SERIALIZE_DB_ENGINE``, só por esta função, porque o ``choices`` não vale para o
+    padrão."""
     if text not in ("duckdb", "redshift"):
         raise argparse.ArgumentTypeError(
             f"motor {text!r}: use duckdb ou redshift, em --engine ou SERIALIZE_DB_ENGINE"
@@ -231,7 +235,7 @@ def _engine_argument(
 def _add_database_arguments(
     parser: argparse.ArgumentParser,
 ) -> None:
-    """``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
+    """[private] ``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
     ``SERIALIZE_DB_*``: os de ``run``, de ``import`` e das rotinas de operação. ``--root`` passa
     por ``_root_argument`` em todo subcomando que a recebe."""
     root = os.environ.get("SERIALIZE_DB_ROOT")
@@ -239,7 +243,7 @@ def _add_database_arguments(
         "--metadata",
         required=True,
         type=_resolve_metadata,
-        help="o MetaData dos modelos, como pipeline.models:Base.metadata",
+        help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
     )
     parser.add_argument(
         "--root",
@@ -261,7 +265,7 @@ def _add_database_arguments(
 def _add_run_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão."""
+    """[private] ``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão."""
     run = commands.add_parser("run", help="executa o pipeline, de uma partição ou sem partição")
     _add_database_arguments(run)
     run.add_argument(
@@ -269,6 +273,7 @@ def _add_run_parser(
         type=_engine_argument,
         choices=["duckdb", "redshift"],
         default=os.environ.get("SERIALIZE_DB_ENGINE") or "duckdb",
+        help="o motor do sandbox, duckdb ou redshift; padrão SERIALIZE_DB_ENGINE, senão duckdb",
     )
     run.add_argument(
         "--partition",
@@ -276,7 +281,13 @@ def _add_run_parser(
         default=None,
         help="a partição da execução; sem ela, a execução não tem partição",
     )
-    run.add_argument("--execution-id", type=_name_argument, default=None)
+    run.add_argument(
+        "--execution-id",
+        type=_name_argument,
+        default=None,
+        help="o identificador da execução, nos metadados de cada commit e no nome dos arquivos; "
+        "sem ele, exec-<AAAA-MM-DD>-<uuid8>, com a data em UTC",
+    )
     run.add_argument(
         "pipeline", type=_resolve_function, help="modulo:funcao que recebe a execução aberta"
     )
@@ -286,8 +297,8 @@ def _add_run_parser(
 def _add_publish_redshift_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """``serialize-db publish_redshift``: a publicação no Redshift de um snapshot, pelo nome ou
-    pelo canal, o estado, a tabela de controle e a despublicação; a conexão vem de
+    """[private] ``serialize-db publish_redshift``: a publicação no Redshift de um snapshot, pelo
+    nome ou pelo canal, o estado, a tabela de controle e a despublicação; a conexão vem de
     ``SERIALIZE_DB_REDSHIFT_*``."""
     publish = commands.add_parser(
         "publish_redshift",
@@ -298,7 +309,8 @@ def _add_publish_redshift_parser(
         "--metadata",
         type=_resolve_metadata,
         default=None,
-        help="modulo:atributo com o MetaData dos modelos; dispensado por --init",
+        help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata; "
+        "dispensado por --init",
     )
     publish.add_argument(
         "--root",
@@ -333,13 +345,18 @@ def _add_publish_redshift_parser(
         default=None,
         help="as tabelas a publicar ou despublicar; sem ela, todas do modelo",
     )
-    publish.add_argument("--max-workers", type=int, default=1)
+    publish.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        help="as tabelas publicadas ao mesmo tempo, cada uma na sua conexão; padrão 1",
+    )
     publish.add_argument(
         "--execution-id",
         type=_name_argument,
         default=None,
-        help="o identificador gravado na linha de controle; sem ele, "
-        "publicacao-<AAAA-MM-DD>-<uuid8>",
+        help="o identificador gravado na linha de controle, que dá a pasta dos manifestos do "
+        "COPY; sem ele, publicacao-<AAAA-MM-DD>-<uuid8>, com a data em UTC",
     )
     publish.add_argument(
         "--init",
@@ -347,7 +364,9 @@ def _add_publish_redshift_parser(
         help="cria a tabela de controle serialize_db_publications, uma vez",
     )
     publish.add_argument(
-        "--status", action="store_true", help="mostra a versão publicada e a atual de cada tabela"
+        "--status",
+        action="store_true",
+        help="mostra a versão publicada, a atual e as partições pendentes de cada tabela",
     )
     publish.add_argument(
         "--unpublish",
@@ -360,7 +379,8 @@ def _add_publish_redshift_parser(
 def _add_import_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """``import``: a carga inicial da base Parquet de origem nas tabelas Delta do ambiente."""
+    """[private] ``import``: a carga inicial da base Parquet de origem nas tabelas Delta do
+    ambiente."""
     import_command = commands.add_parser(
         "import",
         help="importa a base Parquet de --source nas tabelas Delta <raiz>/<ambiente>/<tabela>",
@@ -400,7 +420,7 @@ def _add_import_parser(
 def _add_operation_parsers(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """Os subcomandos da operação: ``snapshot``, ``channel``, ``vacuum``, ``compact``,
+    """[private] Os subcomandos da operação: ``snapshot``, ``channel``, ``vacuum``, ``compact``,
     ``archive``, ``export`` e ``history``."""
     snapshot = commands.add_parser(
         "snapshot",
@@ -408,7 +428,12 @@ def _add_operation_parsers(
         "<raiz>/<ambiente>/_serialize_db/snapshots.json",
     )
     _add_database_arguments(snapshot)
-    snapshot.add_argument("--name", required=True, type=_name_argument)
+    snapshot.add_argument(
+        "--name",
+        required=True,
+        type=_name_argument,
+        help="o nome do snapshot, inédito em snapshots e em archived do arquivo de controle",
+    )
     snapshot.set_defaults(handler=_snapshot)
 
     channel = commands.add_parser(
@@ -416,7 +441,10 @@ def _add_operation_parsers(
     )
     _add_database_arguments(channel)
     channel.add_argument(
-        "--name", type=_name_argument, default=None, help="o canal, como default; com --snapshot"
+        "--name",
+        type=_name_argument,
+        default=None,
+        help="o canal apontado, como default, com --snapshot; sem os dois, lista os canais",
     )
     channel.add_argument(
         "--snapshot",
@@ -427,11 +455,19 @@ def _add_operation_parsers(
     channel.set_defaults(handler=_channel)
 
     vacuum = commands.add_parser(
-        "vacuum", help="os arquivos fora da retenção e das versões dos snapshots"
+        "vacuum",
+        help="lista, ou apaga com --apply, os arquivos fora da retenção e das versões dos "
+        "snapshots",
     )
     _add_database_arguments(vacuum)
-    vacuum.add_argument("--apply", action="store_true", help="apaga os arquivos listados")
-    vacuum.add_argument("--full", action="store_true", help="inclui os arquivos órfãos")
+    vacuum.add_argument(
+        "--apply", action="store_true", help="apaga os arquivos listados; sem ela, só lista"
+    )
+    vacuum.add_argument(
+        "--full",
+        action="store_true",
+        help="inclui os arquivos órfãos, que nenhuma versão do log referencia",
+    )
     vacuum.add_argument(
         "--retention-hours",
         type=int,
@@ -444,8 +480,14 @@ def _add_operation_parsers(
         "compact", help="junta os arquivos pequenos das partições"
     )
     _add_database_arguments(compact_command)
-    compact_command.add_argument("--table", required=True)
-    compact_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
+    compact_command.add_argument("--table", required=True, help="a tabela do modelo compactada")
+    compact_command.add_argument(
+        "--partitions",
+        nargs="+",
+        type=_name_argument,
+        default=None,
+        help="as partições compactadas; obrigatória numa tabela particionada",
+    )
     compact_command.set_defaults(handler=_compact)
 
     archive = commands.add_parser(
@@ -453,7 +495,13 @@ def _add_operation_parsers(
         help="copia as tabelas de um snapshot para <raiz>/<ambiente>/arquivo/<nome>/<tabela>",
     )
     _add_database_arguments(archive)
-    archive.add_argument("--name", required=True, type=_name_argument)
+    archive.add_argument(
+        "--name",
+        required=True,
+        type=_name_argument,
+        help="o snapshot arquivado, registrado em snapshots e apontado por nenhum canal; a cópia "
+        "vai para <raiz>/<ambiente>/arquivo/<nome>/<tabela>",
+    )
     archive.set_defaults(handler=_archive)
 
     export = commands.add_parser(
@@ -461,39 +509,69 @@ def _add_operation_parsers(
         help="grava uma versão da tabela Delta em pastas Parquet de --destination, sem o log",
     )
     _add_database_arguments(export)
-    export.add_argument("--table", required=True)
+    export.add_argument("--table", required=True, help="a tabela do modelo exportada")
     export.add_argument(
         "--destination",
         required=True,
         help="a URI da pasta que recebe os arquivos Parquet, vazia e sob a raiz",
     )
     export.add_argument("--version", type=int, default=None, help="a versão; padrão a atual")
-    export.add_argument("--mode", choices=["copy", "rewrite"], default="copy")
+    export.add_argument(
+        "--mode",
+        choices=["copy", "rewrite"],
+        default="copy",
+        help="copy copia os arquivos que o log da versão lista; rewrite grava um arquivo por "
+        "partição pelo COPY do DuckDB; padrão copy",
+    )
     export.set_defaults(handler=_export)
 
     history = commands.add_parser(
-        "history", help="os commits de uma tabela com os metadados da biblioteca"
+        "history", help="lista os commits de uma tabela com os metadados da biblioteca"
     )
     _add_database_arguments(history)
-    history.add_argument("--table", required=True)
+    history.add_argument(
+        "--table", required=True, help="a tabela do modelo cujos commits são listados"
+    )
     history.set_defaults(handler=_history)
 
 
 def _add_audit_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """``serialize-db audit``: o texto das verificações ou a auditoria da versão atual do Delta."""
-    audit_command = commands.add_parser("audit", help="a auditoria de uma tabela")
+    """[private] ``serialize-db audit``: o texto das verificações ou a auditoria da versão atual do
+    Delta."""
+    audit_command = commands.add_parser(
+        "audit",
+        help="audita uma tabela na versão atual do Delta, ou imprime o texto das verificações "
+        "com --sql",
+    )
     audit_command.add_argument(
         "--metadata",
         required=True,
         type=_resolve_metadata,
-        help="modulo:atributo com o MetaData dos modelos",
+        help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
     )
-    audit_command.add_argument("--table", required=True)
-    audit_command.add_argument("--partitions", nargs="+", type=_name_argument, default=None)
-    audit_command.add_argument("--foreign-keys", action="store_true")
-    audit_command.add_argument("--key-scope", choices=["partition", "table"], default=None)
+    audit_command.add_argument("--table", required=True, help="a tabela do modelo auditada")
+    audit_command.add_argument(
+        "--partitions",
+        nargs="+",
+        type=_name_argument,
+        default=None,
+        help="as partições auditadas; sem ela, a tabela inteira; erro de uso numa tabela sem "
+        "partição",
+    )
+    audit_command.add_argument(
+        "--foreign-keys",
+        action="store_true",
+        help="confere as chaves estrangeiras contra a versão atual de cada tabela referenciada",
+    )
+    audit_command.add_argument(
+        "--key-scope",
+        choices=["partition", "table"],
+        default=None,
+        help="partition suprime a verificação da chave contra a versão atual do Delta; table a "
+        "faz também na chave com a coluna de partition_source",
+    )
     audit_command.add_argument(
         "--engine",
         type=_engine_argument,
@@ -524,7 +602,7 @@ def _add_audit_parser(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """O parser da linha de comando, com um subcomando por primitiva."""
+    """[private] O parser da linha de comando, com um subcomando por primitiva."""
     parser = argparse.ArgumentParser(prog="serialize-db")
     commands = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(commands)
@@ -533,34 +611,46 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_import_parser(commands)
     _add_operation_parsers(commands)
 
-    schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
+    schema_command = commands.add_parser(
+        "schema", help="grava ou confere os arquivos de esquema dos modelos"
+    )
     schema_actions = schema_command.add_subparsers(dest="action", required=True)
     for action, handler, help_text in (
-        ("write", _schema_write, "grava os arquivos"),
-        ("check", _schema_check, "compara sem gravar"),
+        ("write", _schema_write, "grava os arquivos na pasta"),
+        (
+            "check",
+            _schema_check,
+            "compara os versionados com a geração nova, sem gravar; 1 na diferença",
+        ),
     ):
         action_parser = schema_actions.add_parser(action, help=help_text)
         action_parser.add_argument(
             "--metadata",
             required=True,
             type=_resolve_metadata,
-            help="modulo:atributo com o MetaData dos modelos",
+            help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
         )
         action_parser.add_argument("directory", help="a pasta dos arquivos de esquema")
         action_parser.set_defaults(handler=handler)
 
-    sql_command = commands.add_parser("sql", help="o texto SQL dos statements em cada motor")
+    sql_command = commands.add_parser(
+        "sql", help="grava ou confere o texto SQL dos statements em cada motor"
+    )
     sql_actions = sql_command.add_subparsers(dest="action", required=True)
     for action, handler, help_text in (
-        ("write", _sql_write, "grava os arquivos"),
-        ("check", _sql_check, "compara sem gravar"),
+        ("write", _sql_write, "grava os arquivos na pasta"),
+        (
+            "check",
+            _sql_check,
+            "compara os versionados com a geração nova, sem gravar; 1 na diferença",
+        ),
     ):
         action_parser = sql_actions.add_parser(action, help=help_text)
         action_parser.add_argument(
             "--metadata",
             required=True,
             type=_resolve_metadata,
-            help="modulo:atributo com o MetaData dos modelos",
+            help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
         )
         action_parser.add_argument(
             "--statements",
@@ -578,7 +668,8 @@ def _print_diff(
     directory: str,
     kind: str,
 ) -> int:
-    """Imprime o diff dos arquivos versionados contra a geração nova; 1 quando há diferença."""
+    """[private] Imprime o diff dos arquivos versionados contra a geração nova; 1 quando há
+    diferença."""
     for line in diff:
         print(line)
     if diff:
@@ -590,7 +681,7 @@ def _print_diff(
 def _schema_write(
     args: argparse.Namespace,
 ) -> int:
-    """Grava os arquivos de esquema e imprime os caminhos."""
+    """[private] Grava os arquivos de esquema e imprime os caminhos."""
     for path in schema.write_schema_files(args.metadata, args.directory):
         print(path)
     return 0
@@ -599,7 +690,7 @@ def _schema_write(
 def _schema_check(
     args: argparse.Namespace,
 ) -> int:
-    """Compara os arquivos de esquema versionados com a geração nova."""
+    """[private] Compara os arquivos de esquema versionados com a geração nova."""
     diff = schema.check_schema_files(args.metadata, args.directory)
     return _print_diff(diff, args.directory, "esquema")
 
@@ -607,7 +698,7 @@ def _schema_check(
 def _sql_write(
     args: argparse.Namespace,
 ) -> int:
-    """Grava os arquivos de texto SQL e imprime os caminhos."""
+    """[private] Grava os arquivos de texto SQL e imprime os caminhos."""
     for path in sql.write_sql_files(args.statements, args.metadata, args.directory):
         print(path)
     return 0
@@ -616,7 +707,7 @@ def _sql_write(
 def _sql_check(
     args: argparse.Namespace,
 ) -> int:
-    """Compara os arquivos de texto SQL versionados com a geração nova."""
+    """[private] Compara os arquivos de texto SQL versionados com a geração nova."""
     diff = sql.check_sql_files(args.statements, args.metadata, args.directory)
     return _print_diff(diff, args.directory, "texto SQL")
 
@@ -624,12 +715,12 @@ def _sql_check(
 def _run(
     args: argparse.Namespace,
 ) -> int:
-    """Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na auditoria
-    reprovada, 2 no conflito na tabela e no arquivo de controle e no ``ContractError`` da
+    """[private] Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na
+    auditoria reprovada, 2 no conflito na tabela e no arquivo de controle e no ``ContractError`` da
     abertura, do pipeline ou da saída, como a configuração do Redshift sem conexão ou com a porta
-    que não é número, o ``execution_id`` longo demais para o prefixo do sandbox e o nome de
-    snapshot já usado, que ``run.snapshot`` recusa antes dos commits e a saída recusa quando
-    outro escritor o grava depois da marcação."""
+    que não é número, o ``execution_id`` longo demais para o prefixo do sandbox e o nome de snapshot
+    já usado, que ``run.snapshot`` recusa antes dos commits e a saída recusa quando outro escritor o
+    grava depois da marcação."""
     try:
         redshift = None
         if args.engine == "redshift":
@@ -663,7 +754,8 @@ def _run(
 def _print_report(
     report: AuditReport,
 ) -> None:
-    """O relatório da auditoria: o veredito de cada verificação, as amostras e as leituras."""
+    """[private] O relatório da auditoria: o veredito de cada verificação, as amostras e as
+    leituras."""
     for result in report.results:
         verdict = "aprovada" if result.passed else f"reprovada, {result.defects} defeito(s)"
         if result.reason:
@@ -675,8 +767,7 @@ def _print_report(
         print(f"não rodou: {reason}")
     for value, totals in report.totals.items():
         # A tabela sem partição soma numa linha só, sob None.
-        label = "tabela inteira" if value is None else f"partição {value}"
-        print(f"{label}: {totals}")
+        print(f"{delta.partition_label(value)}: {totals}")
 
 
 def _audit_engine(
@@ -684,8 +775,8 @@ def _audit_engine(
     delta_db: Database,
     execution_id: str,
 ) -> Engine:
-    """O sandbox próprio da auditoria: o motor de ``--engine``; outro nome é ``ContractError``,
-    nunca o DuckDB."""
+    """[private] O sandbox próprio da auditoria: o motor de ``--engine``; outro nome é
+    ``ContractError``, nunca o DuckDB."""
     if args.engine == "duckdb":
         return DuckDBEngine(DuckDBConfig(), execution_id, delta_db.storage)
     if args.engine == "redshift":
@@ -704,12 +795,12 @@ def _audit_engine(
 def _contract_refusals(
     engine_name: str,
 ) -> tuple[type[Exception], ...]:
-    """As classes dos erros com que o ``ingest`` pelo DDL do modelo recusa um valor fora do
-    contrato, no motor de ``--engine``: no DuckDB, ``duckdb.ConstraintException``, o nulo numa
+    """[private] As classes dos erros com que o ``ingest`` pelo DDL do modelo recusa um valor fora
+    do contrato, no motor de ``--engine``: no DuckDB, ``duckdb.ConstraintException``, o nulo numa
     coluna ``NOT NULL``, e ``duckdb.ConversionException``, o JSON malformado; no Redshift,
     ``redshift_connector.Error``. No Redshift, a classe não separa a recusa de outro erro do
-    servidor, que também sai como reprovação: o substituto dá às duas recusas o
-    ``ProgrammingError`` com ``XX000``."""
+    servidor, que também sai como reprovação: o substituto dá às duas recusas o ``ProgrammingError``
+    com ``XX000``."""
     if engine_name == "redshift":
         # O driver entra só com o motor: importar o pacote não o carrega.
         import redshift_connector
@@ -722,10 +813,10 @@ def _audit_current(
     args: argparse.Namespace,
     table: sa.Table,
 ) -> int:
-    """A auditoria da versão atual do Delta, num sandbox próprio do motor de ``--engine``: 1 na
-    auditoria reprovada, também quando o ``ingest`` recusa um valor fora do contrato, impresso com
-    o erro do banco e sem as outras contagens; 2 na tabela sem Delta e na configuração do Redshift
-    sem conexão ou com a porta que não é número."""
+    """[private] A auditoria da versão atual do Delta, num sandbox próprio do motor de ``--engine``:
+    1 na auditoria reprovada, também quando o ``ingest`` recusa um valor fora do contrato, impresso
+    com o erro do banco e sem as outras contagens; 2 na tabela sem Delta e na configuração do
+    Redshift sem conexão ou com a porta que não é número."""
     db = Database(args.root, args.environment, args.metadata)
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
@@ -767,7 +858,7 @@ def _audit_current(
 def _audit(
     args: argparse.Namespace,
 ) -> int:
-    """``--sql`` imprime o texto das verificações; sem ele, a auditoria da versão atual do
+    """[private] ``--sql`` imprime o texto das verificações; sem ele, a auditoria da versão atual do
     Delta. 2 na tabela fora do modelo e em ``--partitions`` numa tabela sem partição, antes de
     abrir um motor."""
     table = args.metadata.tables.get(args.table)
@@ -798,7 +889,8 @@ def _selected_tables(
     metadata: sa.MetaData,
     names: list[str] | None,
 ) -> list[sa.Table]:
-    """As tabelas de ``--tables`` no modelo, ou todas; um nome fora do modelo é erro de uso."""
+    """[private] As tabelas de ``--tables`` no modelo, ou todas; um nome fora do modelo é erro de
+    uso."""
     if names is None:
         return list(metadata.sorted_tables)
     tables = []
@@ -813,7 +905,7 @@ def _selected_tables(
 def _publish_redshift(
     args: argparse.Namespace,
 ) -> int:
-    """``--init`` cria a tabela de controle; ``--status`` mostra o estado; ``--unpublish``
+    """[private] ``--init`` cria a tabela de controle; ``--status`` mostra o estado; ``--unpublish``
     despublica; sem os três, publica as tabelas no snapshot de ``--snapshot`` ou do canal de
     ``--channel``, um dos dois obrigatório. 2 no erro de uso, na configuração do Redshift sem
     conexão ou com a porta que não é número, sem a tabela de controle, no snapshot ou no canal
@@ -886,8 +978,8 @@ def _versions_to_publish(
     args: argparse.Namespace,
     tables: list[sa.Table],
 ) -> dict[str, int]:
-    """As versões que ``publish_redshift`` grava: as do snapshot de ``--snapshot`` ou do canal de
-    ``--channel``, e a versão atual de cada tabela do ambiente com ``--channel current``; a
+    """[private] As versões que ``publish_redshift`` grava: as do snapshot de ``--snapshot`` ou do
+    canal de ``--channel``, e a versão atual de cada tabela do ambiente com ``--channel current``; a
     tabela pedida sem versão é ``PublicationError`` com a origem."""
     if args.channel == delta.CURRENT_CHANNEL:
         versions = _current_versions(delta_db)
@@ -908,8 +1000,8 @@ def _versions_to_publish(
 def _publication_id(
     execution_id: str | None,
 ) -> str:
-    """O ``--execution-id`` da publicação, ou ``publicacao-<AAAA-MM-DD>-<uuid8>`` sem ele, com a
-    data em UTC."""
+    """[private] O ``--execution-id`` da publicação, ou ``publicacao-<AAAA-MM-DD>-<uuid8>`` sem ele,
+    com a data em UTC."""
     if execution_id:
         return execution_id
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -919,8 +1011,8 @@ def _publication_id(
 def _print_statuses(
     statuses: list[PublicationStatus],
 ) -> None:
-    """Uma linha por tabela: a versão publicada, ou ``nunca publicada``, a atual e as partições
-    pendentes, com a ``tabela inteira`` da tabela sem partição."""
+    """[private] Uma linha por tabela: a versão publicada, ou ``nunca publicada``, a atual e as
+    partições pendentes, com a ``tabela inteira`` da tabela sem partição."""
     for status in statuses:
         if status.published_version is None:
             published = "nunca publicada"
@@ -936,7 +1028,7 @@ def _print_statuses(
 def _print_published(
     versions: dict[str, int],
 ) -> None:
-    """Uma linha por tabela publicada: a versão do Delta que ela tem agora."""
+    """[private] Uma linha por tabela publicada: a versão do Delta que ela tem agora."""
     for name, version in versions.items():
         print(f"{name}: versão {version}")
 
@@ -944,7 +1036,7 @@ def _print_published(
 def _print_unpublished(
     versions: dict[str, int | None],
 ) -> None:
-    """Uma linha por tabela despublicada: a versão que estava publicada."""
+    """[private] Uma linha por tabela despublicada: a versão que estava publicada."""
     for name, version in versions.items():
         if version is None:
             print(f"{name}: não estava publicada")
@@ -958,8 +1050,8 @@ def _side_text(
     sums: Mapping[str, object],
     nonfinite: Mapping[str, int],
 ) -> str:
-    """Um lado da diferença da carga: as linhas, as somas e os não finitos, ou ``ausente`` quando
-    a partição falta nele."""
+    """[private] Um lado da diferença da carga: as linhas, as somas e os não finitos, ou ``ausente``
+    quando a partição falta nele."""
     if rows is None:
         return f"{side} ausente"
     return f"{side} {rows} linhas {dict(sums)} não finitos {dict(nonfinite)}"
@@ -969,8 +1061,8 @@ def _print_import_report(
     report: ImportReport,
     imported: list[str | None],
 ) -> None:
-    """As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o veredito,
-    as conversões de tipo da maior parte das partições, uma linha por partição com outras
+    """[private] As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o
+    veredito, as conversões de tipo da maior parte das partições, uma linha por partição com outras
     conversões, e o que ficou fora do padrão."""
     written = f"{report.table}: {len(imported)} partição(ões) gravada(s)"
     if imported:
@@ -1002,17 +1094,35 @@ def _print_import_report(
         print(f"  fora do padrão: {entry}")
 
 
+def _partitions_to_import(
+    args: argparse.Namespace,
+    table: sa.Table,
+) -> list[str] | None:
+    """[private] As partições que a carga grava de uma tabela: as de ``--partitions``, ou ``None``
+    pela origem inteira; com ``--ignore-partitions``, as da origem fora das ignoradas, cada ignorada
+    numa linha, e a tabela sem partição entra inteira."""
+    unpartitioned = schema.table_options(table).partition_by is None
+    if args.ignore_partitions is None or unpartitioned:
+        return args.partitions
+    partitions, ignored = parquet_import.split_ignored_partitions(
+        args.source, table, args.ignore_partitions
+    )
+    for value in ignored:
+        print(f"{table.name}: partição {value} ignorada, em --ignore-partitions")
+    return partitions
+
+
 def _import(
     args: argparse.Namespace,
 ) -> int:
-    """A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada uma: 1 na
-    partição pedida que a origem não tem, recusada antes de qualquer gravação, na partição fora do
-    contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato, na tabela fora do
-    modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito. Com
+    """[private] A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada
+    uma: 1 na partição pedida que a origem não tem, recusada antes de qualquer gravação, na partição
+    fora do contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato, na tabela
+    fora do modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito. Com
     ``--partitions``, a tabela sem partição sai numa linha como fora do pedido, sem carga nem
-    relatório; com ``--ignore-partitions``, as partições listadas ficam fora da carga e do
-    relatório em toda tabela particionada que as tem, cada uma numa linha, e a tabela sem
-    partição entra inteira."""
+    relatório; com ``--ignore-partitions``, as partições listadas ficam fora da carga e do relatório
+    em toda tabela particionada que as tem, cada uma numa linha, e a tabela sem partição entra
+    inteira."""
     problems = schema.check_models(args.metadata)
     if problems:
         print(
@@ -1035,18 +1145,10 @@ def _import(
             parquet_import.check_requested_partitions(args.source, table, args.partitions)
         for table in tables:
             # A tabela sem partição fica inteira de fora do pedido por partições.
-            unpartitioned = schema.table_options(table).partition_by is None
-            if args.partitions is not None and unpartitioned:
+            if args.partitions is not None and schema.table_options(table).partition_by is None:
                 print(f"{table.name}: tabela sem partição, fora de --partitions")
                 continue
-            # As partições da tabela: as pedidas, ou as da origem fora das ignoradas.
-            partitions = args.partitions
-            if args.ignore_partitions is not None and not unpartitioned:
-                partitions, ignored = parquet_import.split_ignored_partitions(
-                    args.source, table, args.ignore_partitions
-                )
-                for value in ignored:
-                    print(f"{table.name}: partição {value} ignorada, em --ignore-partitions")
+            partitions = _partitions_to_import(args, table)
             imported = parquet_import.import_table(db, table, args.source, partitions)
             report = parquet_import.import_report(db, table, args.source, partitions)
             _print_import_report(report, imported)
@@ -1075,7 +1177,7 @@ def _import(
 def _existing_tables(
     delta_db: Database,
 ) -> dict[str, tuple[sa.Table, str]]:
-    """As tabelas do modelo que existem no ambiente: ``{nome: (tabela, URI)}``."""
+    """[private] As tabelas do modelo que existem no ambiente: ``{nome: (tabela, URI)}``."""
     found = {}
     for table in delta_db.tables():
         uri = delta_db.uri(table)
@@ -1089,8 +1191,8 @@ def _existing_table(
     delta_db: Database,
     command: str,
 ) -> tuple[sa.Table, str] | None:
-    """A tabela de ``--table`` no modelo e a URI dela no ambiente, ou ``None`` com a mensagem
-    impressa quando ela não está no modelo ou não tem Delta."""
+    """[private] A tabela de ``--table`` no modelo e a URI dela no ambiente, ou ``None`` com a
+    mensagem impressa quando ela não está no modelo ou não tem Delta."""
     table = args.metadata.tables.get(args.table)
     if table is None:
         print(
@@ -1107,8 +1209,8 @@ def _existing_table(
 def _current_versions(
     delta_db: Database,
 ) -> dict[str, int]:
-    """A versão atual de cada tabela do modelo que existe no ambiente: a entrada de ``snapshot``
-    e as versões do canal ``current`` de ``publish_redshift``."""
+    """[private] A versão atual de cada tabela do modelo que existe no ambiente: a entrada de
+    ``snapshot`` e as versões do canal ``current`` de ``publish_redshift``."""
     versions = {}
     for name, (_, uri) in _existing_tables(delta_db).items():
         versions[name] = delta.open_table(uri, delta_db.storage).version()
@@ -1118,8 +1220,8 @@ def _current_versions(
 def _snapshot(
     args: argparse.Namespace,
 ) -> int:
-    """A entrada do snapshot com a versão atual de cada tabela do ambiente; 2 no nome repetido e
-    no conflito de escrita."""
+    """[private] A entrada do snapshot com a versão atual de cada tabela do ambiente; 2 no nome
+    repetido e no conflito de escrita."""
     db = Database(args.root, args.environment, args.metadata)
     versions = _current_versions(db)
     try:
@@ -1136,9 +1238,9 @@ def _snapshot(
 def _channel(
     args: argparse.Namespace,
 ) -> int:
-    """Com ``--name`` e ``--snapshot``, aponta o canal e imprime o snapshot anterior e o novo; sem
-    os dois, lista os canais do ambiente. 2 com um só dos dois, no canal ``current``, no snapshot
-    ausente ou arquivado e no conflito de escrita."""
+    """[private] Com ``--name`` e ``--snapshot``, aponta o canal e imprime o snapshot anterior e o
+    novo; sem os dois, lista os canais do ambiente. 2 com um só dos dois, no canal ``current``, no
+    snapshot ausente ou arquivado e no conflito de escrita."""
     if (args.name is None) != (args.snapshot is None):
         print(
             "serialize-db channel: informe --name e --snapshot juntos, ou nenhum dos dois para "
@@ -1169,8 +1271,8 @@ def _channel(
 def _vacuum(
     args: argparse.Namespace,
 ) -> int:
-    """A lista, ou a exclusão com ``--apply``, dos arquivos de cada tabela fora da retenção e das
-    versões dos snapshots."""
+    """[private] A lista, ou a exclusão com ``--apply``, dos arquivos de cada tabela fora da
+    retenção e das versões dos snapshots."""
     db = Database(args.root, args.environment, args.metadata)
     control, _ = delta.read_snapshots(db.storage, db.environment)
     verb = "apagado(s)" if args.apply else "a apagar"
@@ -1187,8 +1289,8 @@ def _vacuum(
 def _measure(
     started: float,
 ) -> str:
-    """O tempo desde ``started`` e o pico de memória residente do processo, no formato do script
-    de migração: a medida da rotina na tabela, para dimensionar a máquina."""
+    """[private] O tempo desde ``started`` e o pico de memória residente do processo, no formato do
+    script de migração: a medida da rotina na tabela, para dimensionar a máquina."""
     seconds = time.perf_counter() - started
     return f"em {seconds:.1f} s; RSS máximo do processo {peak_rss_mb():.0f} MB"
 
@@ -1196,8 +1298,8 @@ def _measure(
 def _compact(
     args: argparse.Namespace,
 ) -> int:
-    """A compactação das partições pedidas, com o tempo e o pico de RSS impressos; 2 na tabela
-    fora do modelo ou sem Delta, na tabela particionada sem ``--partitions`` e no snapshot na
+    """[private] A compactação das partições pedidas, com o tempo e o pico de RSS impressos; 2 na
+    tabela fora do modelo ou sem Delta, na tabela particionada sem ``--partitions`` e no snapshot na
     versão atual da tabela."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "compact")
@@ -1238,8 +1340,8 @@ def _compact(
 def _archive(
     args: argparse.Namespace,
 ) -> int:
-    """A cópia de cada tabela do snapshot para ``arquivo/<nome>/``, com o tempo e o pico de RSS
-    impressos por tabela, e a entrada movida para ``archived``; 2 no snapshot ausente de
+    """[private] A cópia de cada tabela do snapshot para ``arquivo/<nome>/``, com o tempo e o pico
+    de RSS impressos por tabela, e a entrada movida para ``archived``; 2 no snapshot ausente de
     ``snapshots`` ou apontado por um canal, na tabela do snapshot que já não existe na raiz e no
     conflito de escrita, no commit da cópia de uma tabela ou no arquivo de controle. A repetição
     depois de uma interrupção continua a cópia: ``deep_copy`` pula as partições já registradas no
@@ -1297,8 +1399,8 @@ def _archive(
 def _export(
     args: argparse.Namespace,
 ) -> int:
-    """A exportação de uma versão da tabela para pastas Parquet sem o log, com o tempo e o pico
-    de RSS impressos; 2 na tabela fora do modelo ou sem Delta e no destino fora da raiz ou não
+    """[private] A exportação de uma versão da tabela para pastas Parquet sem o log, com o tempo e o
+    pico de RSS impressos; 2 na tabela fora do modelo ou sem Delta e no destino fora da raiz ou não
     vazio."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "export")
@@ -1325,8 +1427,8 @@ def _export(
 def _history(
     args: argparse.Namespace,
 ) -> int:
-    """Uma linha por commit da tabela, do mais recente ao mais antigo: a versão, a operação, o
-    instante em UTC e os metadados da biblioteca que o commit tem."""
+    """[private] Uma linha por commit da tabela, do mais recente ao mais antigo: a versão, a
+    operação, o instante em UTC e os metadados da biblioteca que o commit tem."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "history")
     if found is None:
@@ -1340,8 +1442,8 @@ def _history(
 def _history_line(
     entry: dict,
 ) -> str:
-    """A linha de um commit: a versão, a operação, o instante em UTC e os metadados da biblioteca
-    que ele tem, na ordem de ``delta.history``."""
+    """[private] A linha de um commit: a versão, a operação, o instante em UTC e os metadados da
+    biblioteca que ele tem, na ordem de ``delta.history``."""
     instant = entry["timestamp"].isoformat(timespec="seconds")
     line = f"{entry['version']} {entry['operation']} {instant}"
     for key, value in entry.items():
@@ -1353,7 +1455,7 @@ def _history_line(
 def main(
     argv: list[str] | None = None,
 ) -> int:
-    """Executa a linha de comando.
+    """[public] Executa a linha de comando.
 
     Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``). Fora de
     ``schema`` e ``sql``, o log vai ao stderr a partir do nível ``INFO``.

@@ -1,4 +1,4 @@
-"""Os motores da execução e a interface comum a eles.
+"""[public] Os motores da execução e a interface comum a eles.
 
 ``Engine`` é o protocolo que ``serialize_db.execution`` usa, com a mesma forma nos dois motores:
 ``serialize_db.engine.duckdb`` e ``serialize_db.engine.redshift``. Cada motor guarda uma sessão por
@@ -31,17 +31,21 @@ Exemplo, com o motor DuckDB:
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import itertools
 import queue
 import threading
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
 import pyarrow as pa
 import sqlalchemy as sa
 
-from serialize_db.audit import AuditReport, KeyScope
+from serialize_db import audit, delta, sql
+from serialize_db.audit import AuditReport, CheckResult, KeyScope
 from serialize_db.errors import ContractError
+from serialize_db.schema import Dialect, sequential_key
+from serialize_db.storage import Storage
 
 __all__ = ["Appender", "BatchStream", "Engine", "duckdb", "redshift"]
 
@@ -54,7 +58,7 @@ ARROW_ONLY = (
 
 
 class BatchStream(Protocol):
-    """Os lotes de uma consulta, lidos na ordem dela enquanto ela roda.
+    """[public] Os lotes de uma consulta, lidos na ordem dela enquanto ela roda.
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
@@ -70,10 +74,10 @@ class BatchStream(Protocol):
     """
 
     schema: pa.Schema
-    """O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
+    """[public] O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """O próximo lote, na ordem da consulta.
+        """[public] O próximo lote, na ordem da consulta.
 
         O erro que a consulta ou a leitura encontra sobe depois do último lote entregue.
 
@@ -90,7 +94,7 @@ class BatchStream(Protocol):
     def __iter__(self) -> Iterator[pa.RecordBatch]: ...
 
     def read_all(self) -> pa.Table:
-        """Os lotes que faltam numa ``pa.Table``.
+        """[public] Os lotes que faltam numa ``pa.Table``.
 
         Exemplo:
 
@@ -102,8 +106,8 @@ class BatchStream(Protocol):
         """
 
     def close(self) -> None:
-        """Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream; a sessão
-        continua usável.
+        """[public] Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream; a
+        sessão continua usável.
 
         Exemplo:
 
@@ -124,7 +128,7 @@ class BatchStream(Protocol):
 
 
 class Appender(Protocol):
-    """O acréscimo em lotes a uma tabela do sandbox, inserido no ``close``.
+    """[public] O acréscimo em lotes a uma tabela do sandbox, inserido no ``close``.
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
@@ -139,13 +143,14 @@ class Appender(Protocol):
     """
 
     rows: int
-    """As linhas gravadas até agora; depois do ``close``, as acrescentadas à tabela."""
+    """[public] As linhas gravadas até agora; depois de um ``close`` sem erro, as acrescentadas à
+    tabela."""
 
     def write(
         self,
         data: pa.RecordBatch | pa.Table,
     ) -> None:
-        """Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
+        """[public] Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
         gravação, que bloqueia quando está cheia.
 
         Exemplo:
@@ -155,14 +160,14 @@ class Appender(Protocol):
             appender.write(batch)
 
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
-        :raises ContractError: ``data`` de outro tipo, recusado nessa chamada só; ou um lote que o
-            ``cast`` recusa, ou com colunas diferentes das do primeiro lote, e então o appender
-            não insere nada.
+        :raises serialize_db.errors.ContractError: ``data`` de outro tipo, recusado sem afetar o
+            appender, que segue recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas
+            diferentes das do primeiro lote, e então o ``close`` não insere nada.
         """
 
     def close(self) -> None:
-        """Insere na tabela os lotes gravados, numa transação: um erro não deixa linha. A segunda
-        chamada não faz nada.
+        """[public] Insere na tabela os lotes gravados, numa transação: um erro não deixa linha. A
+        segunda chamada não faz nada.
 
         Exemplo:
 
@@ -170,7 +175,7 @@ class Appender(Protocol):
 
             appender.close()   # o with do appender chama close na saída
 
-        :raises ContractError: o lote que o ``write`` recusou; nada é inserido.
+        :raises serialize_db.errors.ContractError: o lote que o ``write`` recusou; nada é inserido.
         """
 
     def __enter__(self) -> Appender: ...
@@ -182,7 +187,7 @@ class Appender(Protocol):
 
 @runtime_checkable
 class Engine(Protocol):
-    """A interface dos dois motores; ``Execution`` só depende dela.
+    """[public] A interface dos dois motores; ``Execution`` só depende dela.
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
@@ -201,11 +206,12 @@ class Engine(Protocol):
     """
 
     execution_id: str
-    """O identificador da execução, na regra da partição (``schema.PARTITION_VALUE``)."""
+    """[public] O identificador da execução, na regra da partição
+    (``serialize_db.schema.PARTITION_VALUE``)."""
 
     def session(self) -> contextlib.AbstractContextManager[object]:
-        """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
-        chamada dentro do bloco não trava.
+        """[public] A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma
+        primitiva chamada dentro do bloco não trava.
 
         Exemplo:
 
@@ -218,8 +224,8 @@ class Engine(Protocol):
         """
 
     def new_session(self) -> Engine:
-        """Uma sessão a mais sobre o mesmo banco, com o seu lock, para o que roda em paralelo:
-        vê o que a sessão principal confirmou e não as tabelas temporárias dela.
+        """[public] Uma sessão a mais sobre o mesmo banco, com o seu lock, para o que roda em
+        paralelo: vê o que a sessão principal confirmou e não as tabelas temporárias dela.
 
         Exemplo:
 
@@ -246,8 +252,8 @@ class Engine(Protocol):
         partitions: list[str] | None = None,
         materialize: bool = False,
     ) -> None:
-        """Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o nome do
-        modelo.
+        """[public] Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o
+        nome do modelo.
 
         Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado, é recusada na
         carga por cada motor à sua maneira, e só a view do motor DuckDB a traz: o modelo tem de
@@ -261,15 +267,16 @@ class Engine(Protocol):
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da pasta da tabela Delta de origem.
-        :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
+        :param version: a versão fixada da tabela; ``None`` diz que a tabela ainda não existe no
+            Delta, e a ingestão a recusa.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
             ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, o
             motor que lê o Delta no lugar cria uma view.
-        :raises SandboxError: o nome ocupado no sandbox, ou a tabela que não existe no Delta,
-            sem versão (``version=None``).
-        :raises ContractError: ``partitions`` numa tabela sem partição, ou um valor fora da regra
-            da partição.
+        :raises serialize_db.errors.SandboxError: o nome ocupado no sandbox, ou a tabela que não
+            existe no Delta, sem versão (``version=None``).
+        :raises serialize_db.errors.ContractError: ``partitions`` numa tabela sem partição, ou um
+            valor fora da regra da partição.
         """
 
     def pinned_delta(
@@ -278,8 +285,8 @@ class Engine(Protocol):
         uri: str,
         version: int | None,
     ) -> sa.FromClause:
-        """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
-        sandbox.
+        """[public] A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo
+        no sandbox.
 
         Exemplo:
 
@@ -292,7 +299,8 @@ class Engine(Protocol):
         :param uri: a URI da pasta da tabela Delta lida.
         :param version: a versão fixada.
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core.
-        :raises SandboxError: numa tabela que ainda não existe, sem versão (``version=None``).
+        :raises serialize_db.errors.SandboxError: numa tabela que ainda não existe, sem versão
+            (``version=None``).
         """
 
     def stream(
@@ -301,7 +309,7 @@ class Engine(Protocol):
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
     ) -> BatchStream:
-        """Os lotes da consulta, lidos na ordem dela enquanto o cliente trabalha no lote
+        """[public] Os lotes da consulta, lidos na ordem dela enquanto o cliente trabalha no lote
         anterior.
 
         Exemplo:
@@ -320,8 +328,8 @@ class Engine(Protocol):
         :param batch_size: o máximo de linhas de cada lote.
         :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` apaga os
             arquivos dele.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
         """
 
     def query(
@@ -329,7 +337,7 @@ class Engine(Protocol):
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
     ) -> pa.Table:
-        """O resultado inteiro como ``pa.Table``, sob o lock.
+        """[public] O resultado inteiro como ``pa.Table``, sob o lock.
 
         Exemplo:
 
@@ -343,16 +351,16 @@ class Engine(Protocol):
         :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
             statement ou dos marcadores do texto.
         :return: a tabela do resultado.
-        :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
-            texto.
+        :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
+            statement ou do texto.
         """
 
     def create_table(
         self,
         table: sa.Table,
     ) -> None:
-        """Cria no sandbox a tabela vazia do modelo, pelo DDL do motor, para os dados que não vêm
-        do ``ingest``.
+        """[public] Cria no sandbox a tabela vazia do modelo, pelo DDL do motor, para os dados que
+        não vêm do ``ingest``.
 
         Exemplo:
 
@@ -361,7 +369,8 @@ class Engine(Protocol):
             engine.create_table(Projetado.__table__)
 
         :param table: a tabela do modelo, cujo nome não pode estar ocupado no sandbox.
-        :raises SandboxError: o nome que o ``ingest`` ou outro ``create_table`` ocupou.
+        :raises serialize_db.errors.SandboxError: o nome que o ``ingest`` ou outro ``create_table``
+            ocupou.
         """
 
     def appender(
@@ -369,7 +378,7 @@ class Engine(Protocol):
         table: sa.Table,
         queue_depth: int = 2,
     ) -> Appender:
-        """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
+        """[public] O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
         ``ingest`` com ``materialize=True`` ou por ``create_table``, e os insere no ``close``.
 
         Dois appenders na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas,
@@ -389,8 +398,8 @@ class Engine(Protocol):
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
         :return: o ``Appender`` da tabela, que guarda os lotes num arquivo até o ``close``.
-        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
-            ``ingest`` ocupa.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
+            uma view do ``ingest`` ocupa.
         """
 
     def append(
@@ -398,7 +407,7 @@ class Engine(Protocol):
         table: sa.Table,
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
-        """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
+        """[public] Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
 
         Dois ``append`` na mesma tabela ao mesmo tempo, ou um ``append`` e um ``UPDATE`` dela,
         entram os dois, como no ``appender``.
@@ -413,10 +422,11 @@ class Engine(Protocol):
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
         :return: as linhas acrescentadas.
-        :raises ContractError: um DataFrame, com a conversão sem cópia na mensagem, ou outro
-            tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é inserido.
-        :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
-            ``ingest`` ocupa.
+        :raises serialize_db.errors.ContractError: um DataFrame, com a conversão sem cópia na
+            mensagem, ou outro tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é
+            inserido.
+        :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
+            uma view do ``ingest`` ocupa.
         """
 
     def audit(
@@ -429,7 +439,7 @@ class Engine(Protocol):
         key_scope: KeyScope | None = None,
         referenced: Mapping[str, tuple[str, int]] | None = None,
     ) -> AuditReport:
-        """Roda as verificações do contrato sobre a tabela do sandbox.
+        """[public] Roda as verificações do contrato sobre a tabela do sandbox.
 
         Exemplo:
 
@@ -441,9 +451,10 @@ class Engine(Protocol):
         :param table: a tabela do modelo, no sandbox.
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
             sandbox.
-        :param uri: a URI da tabela fixada pela execução; com ``version``, dá a versão
-            fixada, que as chaves fora da partição comparam, e o ``max_key`` do
-            ``skip_when``.
+        :param uri: a URI da tabela Delta da execução; com ``version``, a verificação
+            ``chave_<colunas>_tabela`` compara as chaves das partições da execução com as das
+            demais partições dessa versão, e é dispensada sem rodar quando o menor valor da chave
+            primária inteira de uma coluna na execução passa do maior registrado no log da versão.
         :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a verificação
             ``chave_<colunas>_tabela`` não roda.
         :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
@@ -454,8 +465,9 @@ class Engine(Protocol):
         :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
-            ``Execution.audit`` levanta ``AuditFailed``.
-        :raises ContractError: um valor de ``partitions`` fora da regra da partição.
+            ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
+        :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
+            partição.
         """
 
     def export_partition(
@@ -467,7 +479,7 @@ class Engine(Protocol):
         expected_rows: int | None = None,
         columns_without_min_max: Collection[str] = (),
     ) -> int:
-        """Leva a partição do sandbox ao Delta num commit.
+        """[public] Leva a partição do sandbox ao Delta num commit.
 
         O motor grava a partição em arquivos novos na pasta dela na tabela Delta, e o commit os
         registra no log da tabela.
@@ -482,23 +494,28 @@ class Engine(Protocol):
         :param table: a tabela do modelo, no sandbox.
         :param uri: a URI da pasta da tabela Delta de destino, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
-        :param metadata: os metadados do commit, de ``delta.commit_metadata``.
+        :param metadata: os metadados do commit, de ``serialize_db.delta.commit_metadata``.
         :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
             registrados; sem ela, a contagem do sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
-            que saem sem mínimo e máximo (issue #59).
+            que saem sem mínimo e máximo (issue #59 do serialize-db).
         :return: a versão do commit.
-        :raises ContractError: o valor fora da regra da partição, ``None`` numa tabela
-            particionada, ou um valor numa tabela sem partição.
-        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, ou a
-            releitura desfez o commit.
-        :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
-        :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
+        :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
+            tabela particionada, ou um valor numa tabela sem partição.
+        :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
+            commit, e os arquivos gravados ficam órfãos na pasta da partição; ou a releitura desfez
+            o commit.
+        :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
+            mesma versão.
+        :raises ValueError: ``uri`` fora da raiz do armazenamento.
+        :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+            2 MiB, ou negativa, lida no registro antes do commit (``environment_limits``), sem
+            commit; os arquivos gravados ficam órfãos na pasta da partição.
         """
 
     def cleanup(self) -> None:
-        """Fecha a sessão e apaga o que a execução criou no sandbox; numa sessão a mais, fecha
-        só ela. A segunda chamada não faz nada.
+        """[public] Fecha a sessão e apaga o que a execução criou no sandbox; numa sessão a mais,
+        fecha só ela. A segunda chamada não faz nada.
 
         Exemplo:
 
@@ -514,9 +531,9 @@ class Engine(Protocol):
 def batches_of(
     data: object,
 ) -> Iterator[pa.RecordBatch]:
-    """Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de lotes; protegida,
-    para o ``append`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError`` antes de
-    qualquer gravação."""
+    """[protected] Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de
+    lotes; para o ``append`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError``
+    antes de qualquer gravação."""
     if isinstance(data, pa.Table):
         return iter(data.to_batches())
     if isinstance(data, pa.RecordBatch):
@@ -538,7 +555,7 @@ def batches_of(
 def checked_batches(
     data: pa.RecordBatch | pa.Table,
 ) -> list[pa.RecordBatch]:
-    """Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; protegida, para o ``write`` dos
+    """[protected] Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; para o ``write`` dos
     appenders. Outro tipo é ``ContractError``."""
     if isinstance(data, pa.Table):
         return data.to_batches()
@@ -551,8 +568,8 @@ def take(
     source: queue.Queue,
     stop: threading.Event,
 ) -> object | None:
-    """O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o ``stop`` em
-    vez de ficar preso num ``get`` sem fim; protegida, para as threads dos motores. ``None`` quando
+    """[protected] O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o
+    ``stop`` em vez de ficar preso num ``get`` sem fim; para as threads dos motores. ``None`` quando
     ``stop`` chega com a fila vazia; nenhum item da fila é ``None``."""
     while True:
         try:
@@ -561,3 +578,169 @@ def take(
             pass
         if stop.is_set():
             return None
+
+
+# -------------------------------------------------------------------- a auditoria dos dois motores
+
+
+@dataclasses.dataclass(frozen=True)
+class AuditSupport:
+    """[protected] O que ``audit_report`` pede ao motor que roda a auditoria; para o ``audit`` dos
+    dois motores, que o montam com os seus próprios métodos."""
+
+    dialect: Dialect
+    """[protected] O dialeto em que ``serialize_db.sql.render`` escreve o texto das verificações."""
+    prefix: str
+    """[protected] O prefixo das tabelas do sandbox, no texto das verificações e nos nomes que
+    ``name_in_use`` confere; vazio no DuckDB."""
+    storage: Storage
+    """[protected] O armazenamento onde o log da versão fixada é lido, para o ``max_key``."""
+    query: Callable[[str], pa.Table]
+    """[protected] A consulta do motor: a ``pa.Table`` de um texto SQL."""
+    run_check: Callable[[str], pa.Table]
+    """[protected] A consulta de uma verificação de chave ou de órfão, com o que o texto cita
+    carregado antes: a staging ``_versao`` no Redshift; no DuckDB, a própria ``query``."""
+    name_in_use: Callable[[str], bool]
+    """[protected] Se o nome, já com o prefixo, está ocupado no sandbox."""
+    pinned_source: Callable[[sa.Table, str, int], sa.FromClause]
+    """[protected] A versão fixada da tabela como origem de consulta das verificações."""
+
+
+def audit_report(
+    support: AuditSupport,
+    table: sa.Table,
+    partitions: list[str] | None,
+    uri: str | None,
+    version: int | None,
+    foreign_keys: bool,
+    key_scope: KeyScope | None,
+    referenced: Mapping[str, tuple[str, int]] | None,
+) -> AuditReport:
+    """[protected] Roda as verificações do contrato sobre a tabela do sandbox e monta o
+    ``AuditReport``; para o ``audit`` dos dois motores, que recebem os mesmos argumentos e dizem
+    nas suas docstrings o que cada um levanta. Com ``uri`` e ``version``, a versão fixada entra
+    pelo ``pinned_source`` de ``support``, e o seu ``max_key`` dispensa a verificação da chave da
+    tabela quando o menor valor da execução passa dele; um valor de ``partitions`` fora da regra da
+    partição é ``ContractError``."""
+    pinned = None
+    pinned_max_key = None
+    if uri is not None and version is not None:
+        pinned = support.pinned_source(table, uri, version)
+        pinned_max_key = _pinned_max_key(support, table, uri, version)
+    sources = _referenced_sources(support, table, foreign_keys, referenced)
+    found, not_run = audit.checks_and_not_run(
+        table, partitions, foreign_keys, key_scope, pinned, sources, pinned_max_key
+    )
+    results = []
+    totals: dict = {}
+    nonfinite: dict = {}
+    for check in found:
+        if check.name == "linhas":
+            result, totals, nonfinite = _rows_result(support, table, check, partitions)
+        else:
+            result = _check_result(support, table, check)
+        results.append(result)
+    return AuditReport(
+        table=table.name,
+        partitions=tuple(partitions) if partitions is not None else None,
+        results=tuple(results),
+        not_run=tuple(not_run),
+        nonfinite_columns=nonfinite,
+        totals=totals,
+    )
+
+
+def _pinned_max_key(
+    support: AuditSupport,
+    table: sa.Table,
+    uri: str,
+    version: int,
+) -> int | None:
+    """[private] O ``max_key`` da versão fixada na chave sequencial, sem ler dados; ``None`` numa
+    tabela sem ela."""
+    key = sequential_key(table)
+    if key is None:
+        return None
+    return delta.max_key(delta.open_table(uri, support.storage, version), key.name)
+
+
+def _referenced_sources(
+    support: AuditSupport,
+    table: sa.Table,
+    foreign_keys: bool,
+    referenced: Mapping[str, tuple[str, int]] | None,
+) -> dict[str, sa.FromClause]:
+    """[private] A origem da linha referenciada de cada chave estrangeira: a tabela do sandbox com
+    o nome do modelo, ou a versão fixada informada em ``referenced``."""
+    sources: dict[str, sa.FromClause] = {}
+    if not foreign_keys:
+        return sources
+    for constraint in table.foreign_key_constraints:
+        target = constraint.referred_table
+        if support.name_in_use(support.prefix + target.name):
+            sources[target.name] = target
+        elif referenced is not None and target.name in referenced:
+            uri, version = referenced[target.name]
+            sources[target.name] = support.pinned_source(target, uri, version)
+    return sources
+
+
+def _check_text(
+    support: AuditSupport,
+    statement: sa.sql.ClauseElement,
+    table: sa.Table,
+) -> str:
+    """[private] O texto de uma verificação no dialeto do motor, sobre as tabelas do sandbox."""
+    return sql.render(statement, support.dialect, table.metadata, prefix=support.prefix)
+
+
+def _rows_result(
+    support: AuditSupport,
+    table: sa.Table,
+    check: audit.Check,
+    partitions: Sequence[str] | None,
+) -> tuple[CheckResult, dict, dict]:
+    """[private] A verificação de linhas: o resultado, as leituras por partição e os não finitos."""
+    text = _check_text(support, check.statement, table)
+    rows = support.query(text).to_pylist()
+    totals, nonfinite = audit.readings_by_partition(rows, table)
+    defects, failing = audit.failing_counters(check.counters, totals)
+    sample = _rows_sample(support, table, check, partitions, failing)
+    return CheckResult(check.name, text, defects, sample, defects == 0), totals, nonfinite
+
+
+def _rows_sample(
+    support: AuditSupport,
+    table: sa.Table,
+    check: audit.Check,
+    partitions: Sequence[str] | None,
+    failing: list[str],
+) -> pa.Table:
+    """[private] Até 20 linhas inteiras dos contadores reprovados, uma consulta por contador."""
+    samples = []
+    for label in failing:
+        statement = audit.sample_statement(table, partitions, check.counters[label])
+        samples.append(support.query(_check_text(support, statement, table)))
+    if not samples:
+        return pa.table({})
+    return pa.concat_tables(samples).slice(0, audit.SAMPLE_ROWS)
+
+
+def _check_result(
+    support: AuditSupport,
+    table: sa.Table,
+    check: audit.Check,
+) -> CheckResult:
+    """[private] Uma verificação de chave ou de órfão; o ``skip_when`` verdadeiro a aprova sem
+    rodá-la, e ``run_check`` carrega o que ela cita só quando ela roda."""
+    text = _check_text(support, check.statement, table)
+    if check.skip_when is not None:
+        skip_text = _check_text(support, check.skip_when, table)
+        skipped = support.query(skip_text).column(0)[0].as_py()
+        if skipped is True:
+            reason = "dispensada: o menor valor da execução passa do maior da versão fixada"
+            return CheckResult(check.name, text, 0, pa.table({}), True, reason)
+    found = support.run_check(text)
+    return CheckResult(
+        check.name, text, found.num_rows, found.slice(0, audit.SAMPLE_ROWS), found.num_rows == 0
+    )

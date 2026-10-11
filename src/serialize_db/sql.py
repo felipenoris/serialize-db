@@ -1,4 +1,5 @@
-"""O texto SQL de cada motor a partir de um statement Core: prefixo, renderização, bind, arquivos.
+"""[public] O texto SQL de cada motor a partir de um statement Core: prefixo, renderização, bind,
+arquivos.
 
 O módulo gera o texto SQL do DuckDB e do Redshift a partir de um statement Core do SQLAlchemy
 (``render``): as constantes ficam embutidas, cada ``bindparam`` sem valor sai como ``:nome``, o
@@ -78,12 +79,14 @@ __all__ = [
 ]
 
 SENTINEL = "{prefix}"
-"""O sentinela do prefixo do sandbox no texto gerado: ``read_sql`` o troca pelo prefixo informado,
-o motor e o leitor Redshift pelo prefixo deles, e ``bind`` recusa um texto que ainda o traz."""
+"""[protected] O sentinela do prefixo do sandbox no texto gerado: ``read_sql`` o troca pelo prefixo
+informado, o motor e o leitor Redshift pelo prefixo deles, e ``bind`` recusa um texto que ainda o
+traz."""
 
 
 class _FloatLiteral(sa.Float):
-    """O ``Float`` e o ``Double`` que os dialetos de ``with_float_literals`` embutem como constante.
+    """[private] O ``Float`` e o ``Double`` que os dialetos de ``with_float_literals`` embutem como
+    constante.
 
     ``NaN`` e os infinitos saem como texto convertido para ``float8``, que o DuckDB e o Redshift
     leem; o SQLAlchemy os escreveria ``nan``, ``inf`` e ``-inf``, que os dois motores leem como nome
@@ -94,7 +97,7 @@ class _FloatLiteral(sa.Float):
         self,
         dialect: sa.engine.Dialect,
     ) -> Callable[[object], str]:
-        """O conversor de cada valor no literal do texto."""
+        """[private] O conversor de cada valor no literal do texto."""
         number_literal = super().literal_processor(dialect)
 
         def process(
@@ -115,7 +118,7 @@ class _FloatLiteral(sa.Float):
 def with_float_literals(
     dialect: sa.engine.Dialect,
 ) -> sa.engine.Dialect:
-    """O dialeto com o ``Float`` e o ``Double`` embutidos por ``_FloatLiteral``; protegida, também
+    """[protected] O dialeto com o ``Float`` e o ``Double`` embutidos por ``_FloatLiteral``; também
     para o compilador dos literais do motor Redshift.
 
     O ``colspecs`` da instância troca o tipo que o dialeto adota para cada ``sa.Float`` e cada
@@ -154,8 +157,8 @@ def _prefixed_copy(
     table: sa.Table,
     prefix: str,
 ) -> sa.Table:
-    """A cópia da tabela com o prefixo no nome e, de cada coluna, só o nome, a ``key`` e o tipo, o
-    que um DML compilado usa.
+    """[private] A cópia da tabela com o prefixo no nome e, de cada coluna, só o nome, a ``key`` e o
+    tipo, o que um DML compilado usa.
 
     Todo nome vai citado, como no DDL de ``serialize_db.schema``: o texto não depende da lista de
     palavras reservadas do dialeto, e o sentinela fica dentro das aspas. A ``key`` de cada coluna
@@ -174,7 +177,7 @@ def prefixed(
     metadata: sa.MetaData,
     prefix: str = SENTINEL,
 ) -> sa.sql.ClauseElement:
-    """O statement com cada tabela do contrato trocada pela cópia prefixada.
+    """[public] O statement com cada tabela do contrato trocada pela cópia prefixada.
 
     A cópia de cada tabela de ``metadata`` leva o prefixo no nome e cada coluna com nome, ``key``
     e tipo, os nomes entre aspas; chaves e índices ficam de fora, porque um ``SELECT`` ou um
@@ -219,7 +222,7 @@ def prefixed(
 def required_parameters(
     statement: sa.sql.ClauseElement,
 ) -> set[str]:
-    """Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós; protegida,
+    """[protected] Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós;
     o guarda dos motores antes de compilar.
 
     Sob ``literal_binds``, ``compiled.binds`` sai vazio e o ``bindparam`` sem valor vira ``NULL``
@@ -237,8 +240,8 @@ def required_parameters(
 def _statement_metadata(
     statement: sa.sql.ClauseElement,
 ) -> sa.MetaData | None:
-    """O ``MetaData`` das tabelas do contrato que o statement cita, o que ``prefixed`` recebe;
-    ``None`` num statement sem ``sa.Table``."""
+    """[private] O ``MetaData`` das tabelas do contrato que o statement cita, o que ``prefixed``
+    recebe; ``None`` num statement sem ``sa.Table``."""
     for table in find_tables(statement, include_crud=True):
         if isinstance(table, sa.Table):
             return table.metadata
@@ -250,7 +253,7 @@ def bound_statement(
     params: Mapping[str, object] | None,
     prefix: str,
 ) -> sa.sql.ClauseElement:
-    """A cópia prefixada do statement com os valores do cliente; protegida, o começo do caminho de
+    """[protected] A cópia prefixada do statement com os valores do cliente; o começo do caminho de
     compilação dos dois motores.
 
     Os nomes de ``params`` fecham com os ``bindparam`` sem valor, ou é ``SqlError``: ``params``
@@ -279,8 +282,8 @@ def bound_statement(
 def _parameters_as_placeholders(
     statement: sa.sql.ClauseElement,
 ) -> sa.sql.ClauseElement:
-    """A cópia do statement com cada ``bindparam`` sem valor trocado por ``:nome``; o original não
-    muda.
+    """[private] A cópia do statement com cada ``bindparam`` sem valor trocado por ``:nome``; o
+    original não muda.
 
     ``literal_binds`` renderizaria o ``bindparam`` sem valor como ``NULL``; um
     ``literal_column(":nome")`` atravessa a compilação como texto. O ``bindparam`` com valor fica,
@@ -307,7 +310,8 @@ def render(
     metadata: sa.MetaData,
     prefix: str = SENTINEL,
 ) -> str:
-    """O texto do motor com as constantes embutidas e cada ``bindparam`` sem valor como ``:nome``.
+    """[public] O texto do motor com as constantes embutidas e cada ``bindparam`` sem valor como
+    ``:nome``.
 
     O statement é compilado sobre a cópia prefixada (``prefixed``) pelo dialeto do motor com
     ``paramstyle="named"``, que não dobra o ``%`` dos literais. O ``bindparam`` sem valor é o
@@ -330,8 +334,8 @@ def render(
         no texto o sentinela ``{prefix}``, ``prefix=""`` dá o texto sobre as tabelas do contrato,
         e ``prefix="exec_42_"`` o texto sobre o sandbox dessa execução.
     :return: o texto; nenhuma linha termina em espaço.
-    :raises SqlError: um nome de parâmetro fora de ``[a-z_][a-z0-9_]*``, que ``bind`` não leria
-        no texto.
+    :raises serialize_db.errors.SqlError: um nome de parâmetro fora de ``[a-z_][a-z0-9_]*``, que
+        ``bind`` não leria no texto.
     """
     prefixed_statement = prefixed(statement, metadata, prefix)
     with_placeholders = _parameters_as_placeholders(prefixed_statement)
@@ -349,7 +353,7 @@ def render(
 def _placeholders(
     sql: str,
 ) -> set[str]:
-    """Os nomes dos marcadores ``:nome`` do texto, fora das regiões citadas."""
+    """[private] Os nomes dos marcadores ``:nome`` do texto, fora das regiões citadas."""
     names = set()
     for match in _QUOTED_OR_PLACEHOLDER.finditer(sql):
         if match.group("name") is not None:
@@ -362,7 +366,7 @@ def bind(
     params: dict[str, object],
     dialect: Dialect,
 ) -> tuple[str, dict[str, object]]:
-    """O texto com ``:nome`` reescrito para o marcador do motor e o dicionário conferido.
+    """[public] O texto com ``:nome`` reescrito para o marcador do motor e o dicionário conferido.
 
     Toda região citada passa intacta, entre aspas simples ou duplas: ``'12:30'``,
     ``valor::DECIMAL(18, 2)`` e a coluna ``"taxa :base"`` não mudam. Nenhum valor entra no texto:
@@ -381,8 +385,8 @@ def bind(
         ``duckdb`` e fica como está no ``redshift``, que o ``redshift_connector`` lê com
         ``cursor.paramstyle = "named"``.
     :return: o texto reescrito e uma cópia de ``params``.
-    :raises SqlError: um texto que ainda traz o sentinela ``{prefix}``, ou um dicionário com
-        parâmetro faltante ou sobrando.
+    :raises serialize_db.errors.SqlError: um texto que ainda traz o sentinela ``{prefix}``, ou um
+        dicionário com parâmetro faltante ou sobrando.
     """
     if SENTINEL in sql:
         raise SqlError(
@@ -408,7 +412,8 @@ def bind(
 def referenced_tables(
     statement_or_sql: sa.sql.ClauseElement | str,
 ) -> set[str]:
-    """As tabelas de um statement Core (``find_tables``) ou de um texto gerado (o sentinela).
+    """[public] As tabelas de um statement Core (``find_tables``) ou de um texto gerado (o
+    sentinela).
 
     Num statement Core entram as tabelas lidas e o alvo de um ``INSERT``, ``UPDATE`` ou
     ``DELETE`` (``include_crud=True``), só as ``sa.Table``; num texto gerado, cada nome que segue
@@ -446,7 +451,7 @@ def sql_files(
     statements: dict[str, sa.sql.ClauseElement],
     metadata: sa.MetaData,
 ) -> dict[str, str]:
-    """Os arquivos de texto SQL de cada statement, em memória.
+    """[public] Os arquivos de texto SQL de cada statement, em memória.
 
     O pipeline os versiona no seu repositório, e o diff contra a geração nova mostra o que uma
     mudança de modelo ou de statement altera em cada motor.
@@ -464,7 +469,8 @@ def sql_files(
     :return: o conteúdo por nome de arquivo: ``<nome>.duckdb.sql`` e ``<nome>.redshift.sql`` são
         o texto de cada motor, sempre com o sentinela ``{prefix}`` e com ``\\n`` final, porque o
         arquivo versionado serve a qualquer alvo.
-    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
+    :raises serialize_db.errors.SqlError: um statement com nome de parâmetro fora de
+        ``[a-z_][a-z0-9_]*``.
     """
     files = {}
     for name, statement in statements.items():
@@ -478,7 +484,7 @@ def write_sql_files(
     metadata: sa.MetaData,
     directory: str,
 ) -> list[str]:
-    """Grava ``sql_files`` em ``directory``.
+    """[public] Grava ``sql_files`` em ``directory``.
 
     Nada é apagado: os arquivos de um statement que saiu do dicionário ficam na pasta, e
     ``check_sql_files`` os acusa até que o cliente os apague.
@@ -495,7 +501,8 @@ def write_sql_files(
         como está.
     :param directory: a pasta local dos arquivos versionados, criada se preciso.
     :return: os caminhos gravados, em ordem de nome.
-    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
+    :raises serialize_db.errors.SqlError: um statement com nome de parâmetro fora de
+        ``[a-z_][a-z0-9_]*``.
     """
     return write_files(sql_files(statements, metadata), directory)
 
@@ -505,7 +512,7 @@ def check_sql_files(
     metadata: sa.MetaData,
     directory: str,
 ) -> list[str]:
-    """O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
+    """[public] O diff unificado dos arquivos versionados em ``directory`` contra a geração nova.
 
     O texto é comparado exato: o arquivo sem o ``\\n`` final difere, com o aviso
     ``\\ Sem quebra de linha no fim do arquivo`` depois da última linha. Nada é gravado.
@@ -525,7 +532,8 @@ def check_sql_files(
         acrescentado, e um arquivo da pasta terminado em ``.duckdb.sql`` ou ``.redshift.sql`` que
         a geração não produz, como o de um statement que saiu do dicionário, aparece inteiro como
         removido.
-    :raises SqlError: um statement com nome de parâmetro fora de ``[a-z_][a-z0-9_]*``.
+    :raises serialize_db.errors.SqlError: um statement com nome de parâmetro fora de
+        ``[a-z_][a-z0-9_]*``.
     """
     return diff_files(sql_files(statements, metadata), directory, _SQL_SUFFIXES)
 
@@ -536,7 +544,8 @@ def read_sql(
     dialect: Dialect,
     prefix: str,
 ) -> str:
-    """O texto versionado com o sentinela trocado pelo prefixo informado, pronto para ``bind``.
+    """[public] O texto versionado com o sentinela trocado pelo prefixo informado, pronto para
+    ``bind``.
 
     O motor e o leitor Redshift também trocam o sentinela de um texto pronto pelo prefixo deles,
     ``exec_<id>_`` e ``<ambiente>_``; o motor DuckDB e o leitor Delta o entregam a ``bind``, que
@@ -556,6 +565,7 @@ def read_sql(
         ``exec_<id>_`` para o sandbox da execução; obrigatório, porque quem chama sabe o alvo.
     :return: o texto do arquivo ``<name>.duckdb.sql`` ou ``<name>.redshift.sql`` de
         ``directory``.
+    :raises FileNotFoundError: o arquivo ausente de ``directory``.
     """
     path = os.path.join(directory, f"{name}.{dialect}.sql")
     with open(path, encoding="utf-8") as handle:

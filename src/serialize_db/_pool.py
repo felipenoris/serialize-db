@@ -1,4 +1,4 @@
-"""Privado: o pool de tarefas por tabela que a execução, a publicação e o leitor usam.
+"""[private] O pool de tarefas por tabela que a execução, a publicação e o leitor usam.
 
 Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em curso
 terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada tarefa
@@ -20,7 +20,7 @@ Task = tuple[str, Callable[[], object]]
 def _outcome(
     future: Future,
 ) -> str:
-    """O resultado de uma tarefa terminada ou cancelada, para a nota da exceção."""
+    """[private] O resultado de uma tarefa terminada ou cancelada, para a nota da exceção."""
     if future.cancelled():
         return "cancelada"
     error = future.exception()
@@ -32,8 +32,8 @@ def _outcome(
 def _outcomes_note(
     outcomes: Mapping[str, str],
 ) -> str:
-    """A nota da exceção com o resultado de cada tabela: os commits feitos ficam, porque o Delta não
-    tem transação entre tabelas."""
+    """[private] A nota da exceção com o resultado de cada tabela: os commits feitos ficam, porque o
+    Delta não tem transação entre tabelas."""
     lines = []
     for name, outcome in sorted(outcomes.items()):
         lines.append(f"{name}: {outcome}")
@@ -43,7 +43,7 @@ def _outcomes_note(
 def _outcomes_of(
     futures: Mapping[Future, str],
 ) -> dict[str, str]:
-    """O resultado de cada tarefa terminada, pelo nome da tabela."""
+    """[private] O resultado de cada tarefa terminada, pelo nome da tabela."""
     outcomes = {}
     for future, name in futures.items():
         outcomes[name] = _outcome(future)
@@ -52,8 +52,9 @@ def _outcomes_of(
 
 @dataclasses.dataclass
 class _PoolState:
-    """O estado do pool das tabelas: uma tarefa começa só com um worker livre e nenhuma falha,
-    então, na primeira falha, o que está em curso termina e o que não começou fica de fora."""
+    """[private] O estado do pool das tabelas: uma tarefa começa só com um worker livre e nenhuma
+    falha, então, na primeira falha, o que está em curso termina e o que não começou fica de
+    fora."""
 
     pool: ThreadPoolExecutor
     workers: int
@@ -65,14 +66,14 @@ class _PoolState:
         self,
         waiting: list[Task],
     ) -> None:
-        """Começa as tarefas que cabem nos workers livres, enquanto não houve falha."""
+        """[private] Começa as tarefas que cabem nos workers livres, enquanto não houve falha."""
         while waiting and self.failure is None and len(self.running) < self.workers:
             name, action = waiting.pop(0)
             future = self.pool.submit(action)
             self.running[future] = name
 
     def collect(self) -> None:
-        """Espera a próxima tarefa terminar e guarda a primeira falha."""
+        """[private] Espera a próxima tarefa terminar e guarda a primeira falha."""
         done, _ = wait(self.running, return_when=FIRST_COMPLETED)
         for future in done:
             self.finished[future] = self.running.pop(future)
@@ -84,7 +85,8 @@ def run_in_pool(
     tasks: list[Task],
     max_workers: int,
 ) -> dict[str, object]:
-    """Roda as tarefas num pool de ``max_workers`` e devolve o resultado de cada uma pelo nome.
+    """[protected] Roda as tarefas num pool de ``max_workers`` e devolve o resultado de cada uma
+    pelo nome.
 
     Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em
     curso terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada

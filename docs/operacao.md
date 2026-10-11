@@ -1,17 +1,35 @@
 ## Operação
 
-O runbook das rotinas de operação do banco Delta, cada uma um subcomando de `serialize-db` sobre as
-primitivas de `serialize_db.delta`, com o que conferir antes e o que esperar depois. Os subcomandos
-recebem `--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
+O runbook das rotinas de operação do banco: a carga inicial, a publicação no Redshift, a auditoria
+avulsa e as rotinas sobre as primitivas de `serialize_db.delta`, cada uma um subcomando de
+`serialize-db`, com o que conferir antes e o que esperar depois. Os subcomandos recebem
+`--metadata modulo:atributo`, `--root` (`SERIALIZE_DB_ROOT`) e `--environment`
 (`SERIALIZE_DB_ENVIRONMENT`, `dsv`), menos `publish_redshift --init`, que lê só as variáveis
-`SERIALIZE_DB_REDSHIFT_*`. Saem com 0 quando terminam; com 1 na auditoria reprovada, na carga com
-diferença de contagem ou soma ou com partição fora do contrato, e no erro sem tratamento, que
-imprime o traceback; e com 2 no erro de uso, na configuração do Redshift sem conexão ou com a porta
-que não é número, no nome repetido ou ausente e no conflito com outro escritor, no arquivo de
-controle ou na tabela. `compact`, `archive` e `export` imprimem por tabela o tempo e o pico de
-memória residente do processo (`VmHWM`), a medida da rotina na tabela com que a máquina é
-dimensionada; a publicação a põe na linha de cada tabela no log `serialize_db.publication`, e
-`scripts/migrate_parquet_to_delta.py` o imprime por partição da carga. Nas nove cargas da base de
+`SERIALIZE_DB_REDSHIFT_*`, e `audit --sql`, que lê só `--metadata`. Saem com 0 quando terminam; com
+1 na auditoria reprovada, na carga com diferença de contagem ou soma ou com partição fora do
+contrato, e no erro sem tratamento, que imprime o traceback; e com 2 no erro de uso, na
+configuração do Redshift sem conexão ou com a porta que não é número, no nome repetido ou ausente e
+no conflito com outro escritor, no arquivo de controle ou na tabela. `compact`, `archive` e
+`export` imprimem por tabela o tempo e o pico de memória residente do processo (`VmHWM`), a medida
+da rotina na tabela com que a máquina é dimensionada; a publicação a põe na linha de cada tabela
+no log `serialize_db.publication`, e `scripts/migrate_parquet_to_delta.py` o imprime por partição
+da carga. A linha de comando imprime o log no stderr a partir do nível `INFO`. Todo subcomando que
+abre o DuckDB, da carga à releitura de um commit, lê as extensões `delta` e, no S3, `httpfs` da
+pasta de `SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual quando
+existe, ou da pasta padrão do DuckDB, sem download.
+
+### Carga inicial
+
+Uma vez por ambiente, antes da primeira execução: a base Parquet de origem vai para as tabelas
+Delta do ambiente, uma partição por commit, e o relatório confere contagem e somas por partição:
+
+```shell
+serialize-db import --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
+```
+
+Antes: a origem com uma pasta por tabela, `<origem>/<tabela>/`, que a carga só lê, e a memória da
+máquina, porque o pico do processo passa do `memory_limit` do DuckDB. Nas nove cargas da base de
 2026-09-25 a 2026-10-10, em máquinas de 2, 4 e 8 vCPUs, o pico do processo da carga ficou entre
 1,38 e 1,51 vez o `memory_limit` do DuckDB, entre 69% e 76% da memória disponível, sempre na maior
 partição de `cad_lancamentos`: 4.138 MB com 5.801 MB disponíveis e 2.900 MiB de limite em
@@ -19,7 +37,11 @@ partição de `cad_lancamentos`: 4.138 MB com 5.801 MB disponíveis e 2.900 MiB 
 memória disponível que `environment_limits` lê na abertura de cada conexão, e não o tamanho da
 partição: a carga coube em todas as máquinas medidas, com ao menos um quarto da memória disponível
 de folga, e a máquina maior só a encurta (0,35 milhão de linhas por segundo com 2 vCPUs, 0,66 com
-8). A linha de comando imprime o log no stderr a partir do nível `INFO`.
+8). Depois: cada partição da origem num commit da tabela Delta, com `carga-<uuid8>` em
+`serialize_db_execution_id`; a segunda chamada não grava nada, e a chamada depois de uma falha
+recomeça da partição que falhou; 1 na diferença de contagem ou soma e na partição fora do
+contrato. `--partitions` restringe a carga a algumas partições, e `--ignore-partitions` deixa
+partições fora dela.
 
 ### Tabela de controle da publicação
 
@@ -30,8 +52,8 @@ serialize-db publish_redshift --init
 ```
 
 Antes: as variáveis `SERIALIZE_DB_REDSHIFT_*` da conexão. Depois: a tabela
-`serialize_db_publications` no esquema; sem ela, `serialize-db publish_redshift` recusa publicar com
-`serialize_db.errors.PublicationError`.
+`serialize_db_publications` no esquema; sem ela, `serialize-db publish_redshift` recusa publicar,
+com a saída 2 e a mensagem de `serialize_db.errors.PublicationError`.
 
 ### Snapshot do banco
 
@@ -47,8 +69,9 @@ serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \
 Antes: nenhuma execução aberta no ambiente, porque a entrada leva a versão atual de cada tabela,
 e um nome inédito em `snapshots` e em `archived` do arquivo de controle
 `<ambiente>/_serialize_db/snapshots.json`. Depois: a entrada `{nome: {tabela: versão}}` gravada na
-escrita condicional; outro escritor entre a leitura e a escrita dá
-`serialize_db.errors.ConflictError`, e o comando se repete. As versões marcadas ficam legíveis
+escrita condicional; outro escritor entre a leitura e a escrita dá a saída 2 com a mensagem do
+conflito (`serialize_db.errors.ConflictError`), e o comando se repete. As versões marcadas ficam
+legíveis
 qualquer que seja a retenção do `vacuum`.
 
 O nome de um snapshot é imutável: a entrada gravada nunca muda de versões, e o nome não volta a ser
@@ -103,10 +126,19 @@ Os dados de um snapshot já gravado se refazem num snapshot novo, e o canal pass
 1. A execução roda de novo marcada com outro nome, como `run.snapshot("2026T3.r2")`. O
    `publish_delta` substitui as partições refeitas, e a entrada nova leva a versão atual de toda
    tabela do ambiente, inclusive das que não mudaram.
-2. `serialize-db channel --name default --snapshot 2026T3.r2` aponta o canal para o snapshot novo,
-   que o leitor Delta passa a abrir sem argumento.
+2. `serialize-db channel` aponta o canal `default` para o snapshot novo, que o leitor Delta passa
+   a abrir sem argumento.
 3. `serialize-db publish_redshift --channel default` leva ao Redshift as partições alteradas desde
    a versão publicada.
+
+Os comandos dos passos 2 e 3:
+
+```shell
+serialize-db channel --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3.r2
+serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \
+    --metadata pipeline.models:Base.metadata --channel default
+```
 
 O `2026T3` continua legível pelo nome e prende as versões dele no `vacuum` até o `archive`.
 
@@ -141,21 +173,20 @@ serialize-db compact --root s3://bucket/projeto/delta --environment prd \
 
 Antes: o arquivo de controle sem snapshot na versão atual da tabela (o comando confere e recusa); a
 memória da máquina, porque a reescrita roda no escritor do delta-rs, fora do `memory_limit` do
-DuckDB. No ambiente alvo, em 2026-10-05, uma partição de `cad_lancamentos` com 33.239.719 linhas em
-64 arquivos de 5,3 a 16,7 MB, 551,5 MB gravados pelo DuckDB, virou 6 arquivos de 43,5 a 67,8 MB,
-370,0 MB, em 6,0 s, com o pico do processo em 1.714 MB e 12,5 GiB disponíveis; em 2026-10-07, com
-2 vCPUs e 5,6 GiB disponíveis, a mesma partição em 40 arquivos de 11,6 a 16,7 MB virou 6 arquivos
-de 51,4 a 65,1 MB, 367,1 MB, em 23,6 s, com o pico em 481 MB; e em 2026-10-09, com 4 vCPUs e
-12,9 GiB disponíveis, em 50 arquivos de 5,3 a 19,5 MB virou 6 arquivos de 53,4 a 65,3 MB,
-368,6 MB, em 12,4 s, com o pico em 762 MB, e às 21:55 do mesmo dia, com 8 vCPUs e 12,4 GiB
-disponíveis, em 64 arquivos de 5,4 a 20,5 MB virou 6 arquivos de 55,1 a 66,9 MB, 370,1 MB, em
-5,6 s, com o pico em 1.445 MB; e em 2026-10-10, com 8 vCPUs e 12,6 GiB disponíveis, em 64 arquivos
-de 5,4 a 16,6 MB virou 6 arquivos de 54,4 a 65,8 MB, 370,5 MB, em 6,0 s, com o pico em 1.649 MB, e
-às 18:25 do mesmo dia, com 12,6 GiB disponíveis, em 61 arquivos de 5,6 a 21,2 MB virou 6 arquivos
-de 54,6 a 65,7 MB, 370,1 MB, em 5,2 s, com o pico em 1.502 MB.
-Depois:
-`numFilesAdded` e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a medida da
-memória da compactação; um commit `OPTIMIZE` com `dataChange` falso, que
+DuckDB. As compactações no ambiente alvo da mesma partição de `cad_lancamentos`, de 33.239.719
+linhas, que saiu sempre em 6 arquivos:
+
+| Data | vCPUs | Memória disponível | Arquivos antes | Arquivos depois | Tempo | Pico do processo |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-05 | 8 | 12,5 GiB | 64, de 5,3 a 16,7 MB, 551,5 MB gravados pelo DuckDB | de 43,5 a 67,8 MB, 370,0 MB | 6,0 s | 1.714 MB |
+| 2026-10-07 | 2 | 5,6 GiB | 40, de 11,6 a 16,7 MB | de 51,4 a 65,1 MB, 367,1 MB | 23,6 s | 481 MB |
+| 2026-10-09 | 4 | 12,9 GiB | 50, de 5,3 a 19,5 MB | de 53,4 a 65,3 MB, 368,6 MB | 12,4 s | 762 MB |
+| 2026-10-09, 21:55 | 8 | 12,4 GiB | 64, de 5,4 a 20,5 MB | de 55,1 a 66,9 MB, 370,1 MB | 5,6 s | 1.445 MB |
+| 2026-10-10 | 8 | 12,6 GiB | 64, de 5,4 a 16,6 MB | de 54,4 a 65,8 MB, 370,5 MB | 6,0 s | 1.649 MB |
+| 2026-10-10, 18:25 | 8 | 12,6 GiB | 61, de 5,6 a 21,2 MB | de 54,6 a 65,7 MB, 370,1 MB | 5,2 s | 1.502 MB |
+
+Depois: `numFilesAdded` e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a
+medida da memória da compactação; um commit `OPTIMIZE` com `dataChange` falso, que
 `serialize_db.delta.version_diff` não conta.
 
 O delta-rs junta numa partição só os arquivos que cabem juntos no tamanho alvo, a propriedade
@@ -164,9 +195,9 @@ outro. Sem nada a juntar, como na partição de um arquivo só que a carga inici
 nem commita, e o comando imprime `nada a juntar em <n> arquivo(s), nenhum commit`, com os arquivos
 que leu nas partições pedidas.
 
-### `vacuum`
+### Limpeza dos arquivos removidos
 
-Mensal: a lista dos arquivos fora da retenção e fora das versões dos snapshots, revisada, depois
+Mensal, por `serialize-db vacuum`: a lista dos arquivos fora da retenção e fora das versões dos snapshots, revisada, depois
 aplicada; `--full` de tempos em tempos para os órfãos das escritas interrompidas e dos registros
 recusados:
 
@@ -187,9 +218,9 @@ versionado o espaço só é liberado pela regra `NoncurrentVersionExpiration`, e
 (`BK-14`) mostra o acumulado. A seção "Retenção dos arquivos removidos" da página principal diz
 como mudar a retenção.
 
-### Arquivo
+### Arquivamento de um snapshot
 
-Anual: os snapshots mais velhos que o prazo da tabela viva vão para
+Anual, por `serialize-db archive`: os snapshots mais velhos que o prazo da tabela viva vão para
 `<raiz>/<ambiente>/arquivo/<nome>/<tabela>/`, pela cópia dos arquivos de cada partição e o registro
 deles, sem os dados passarem pela máquina, e a entrada passa de `snapshots` para `archived` no mesmo
 arquivo de controle:
@@ -201,8 +232,9 @@ serialize-db archive --root s3://bucket/projeto/delta --environment prd \
 
 Antes: o snapshot registrado em `snapshots` e apontado por nenhum canal, que `serialize-db channel`
 move antes; a pasta `<raiz>/<ambiente>/arquivo/<nome>/` recebe a regra de ciclo de vida do bucket.
-Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os mesmos arquivos e as
-mesmas somas, cada tabela impressa com o tempo da cópia e o pico de RSS do processo, e o tempo de
+Depois: uma tabela nova por tabela do snapshot, com uma versão por partição, os mesmos arquivos e a
+mesma contagem de linhas, lida pelos dois leitores, cada tabela impressa com o tempo da cópia e o
+pico de RSS do processo, e o tempo de
 cada partição no log `serialize_db.delta`; a entrada em `archived`, que `vacuum` não prende mais, e
 `snapshot` recusando o nome, porque ele dá a pasta. O comando se repete depois de uma interrupção e
 continua de onde parou: a tabela já inteira no arquivo e a partição já registrada nele são puladas,
@@ -243,9 +275,9 @@ Depois: o veredito de cada verificação, com as amostras; 1 quando alguma repro
 recusa a ingestão pelo DDL do modelo, como no nulo numa coluna `NOT NULL` ou no JSON malformado, o
 comando imprime `ingestão: reprovada (<erro do banco>)`, sem as outras contagens, e sai com 1.
 
-### Monitoração
+### Histórico de uma tabela
 
-O histórico de uma tabela com os metadados da biblioteca:
+Os commits de uma tabela com os metadados da biblioteca, por `serialize-db history`:
 
 ```shell
 serialize-db history --root s3://bucket/projeto/delta --environment prd \
@@ -255,7 +287,8 @@ serialize-db history --root s3://bucket/projeto/delta --environment prd \
 Depois: uma linha por commit, do mais recente ao mais antigo, com a versão, a operação, o
 instante em UTC e `serialize_db_execution_id`, `serialize_db_input_versions` e
 `serialize_db_snapshot` quando o commit os tem, o que só os commits das partições de uma execução
-fazem: a criação da tabela, a reconciliação do esquema, a reescrita, a cópia do arquivo, o
+e os da carga fazem (a carga com `carga-<uuid8>` e `{}` nas versões lidas, sem snapshot): a
+criação da tabela, a reconciliação do esquema, a reescrita, a cópia do arquivo, o
 `restore` de uma releitura reprovada, o `vacuum` (`VACUUM START`, `VACUUM END`) e o `OPTIMIZE`
 vêm sem eles.
 
@@ -300,7 +333,7 @@ recebem só `--metadata`.
 | `pipeline` (posicional) | obrigatória | `modulo:funcao`, a função que recebe a execução aberta. |
 | `--partition` | nenhum | O valor da partição da execução; sem ela, a execução não tem partição e `run.partition` é `None`. |
 | `--engine` | `SERIALIZE_DB_ENGINE`, senão `duckdb` | O motor do sandbox: `duckdb` ou `redshift`. |
-| `--execution-id` | `exec-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador da execução. |
+| `--execution-id` | `exec-<AAAA-MM-DD>-<uuid8>`, com a data em UTC | O identificador da execução, gravado em `serialize_db_execution_id` nos metadados de cada commit dela e no nome dos arquivos que o motor grava e da pasta `staging/<execution_id>/` do motor Redshift. |
 
 ### `audit`
 
@@ -373,7 +406,7 @@ um dos dois obrigatório e excludentes.
 
 | Opção | Padrão | Descrição |
 | --- | --- | --- |
-| `--name` | obrigatória | O snapshot arquivado, registrado em `snapshots`; a cópia vai para `<raiz>/<ambiente>/arquivo/<nome>/<tabela>`. |
+| `--name` | obrigatória | O snapshot arquivado, registrado em `snapshots` e apontado por nenhum canal, o que o comando confere e recusa; a cópia vai para `<raiz>/<ambiente>/arquivo/<nome>/<tabela>`. |
 
 ### `export`
 

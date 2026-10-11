@@ -1,4 +1,6 @@
-"""# Revisão das Tecnologias
+"""[public]
+
+# Revisão das Tecnologias
 
 .. include:: ../../docs/tecnologias.md
 """

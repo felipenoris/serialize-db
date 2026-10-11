@@ -701,12 +701,9 @@ def assert_audits_ran_every_check(
     assert "orfao_data_base_sistema_contrato" in checks[ENTRIES.name]
     assert "orfao_id_conta" in checks[ENTRIES.name]
     for report in audits.values():
-        against_table = []
-        for result in report.results:
-            if result.name.endswith("_tabela"):
-                against_table.append(result)
-        (table_check,) = against_table
-        assert table_check.reason.startswith("dispensada"), table_check
+        against_table = [result for result in report.results if result.name.endswith("_tabela")]
+        assert len(against_table) == 1, report.table
+        assert against_table[0].reason.startswith("dispensada"), against_table[0]
 
 
 # ---------------------------------------------------------------- a execução
@@ -833,7 +830,8 @@ def test_following_month_runs_over_the_published_partition(
     for table in PRODUCED:
         commit = delta.history(db.uri(table), db.storage)[0]
         execution_ids.add(commit["serialize_db_execution_id"])
-    (generated_id,) = execution_ids
+    assert len(execution_ids) == 1, execution_ids
+    generated_id = execution_ids.pop()
     assert generated_id.startswith("exec-")
     assert kept_inputs(db, generated_id) == delivered
 

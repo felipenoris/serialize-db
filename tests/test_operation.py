@@ -1,7 +1,7 @@
 """A operação: ``serialize-db snapshot``, ``vacuum``, ``compact``, ``archive``, ``export`` e
 ``history`` sobre as primitivas de ``serialize_db.delta``, e o ``serialize-db channel``.
 
-Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): o banco de
+Os testes que gravam, marcados ``local``, escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``: o banco de
 ``tests/lancamentos_model.py`` numa raiz por teste, com a pasta temporária do processo apontada
 para a pasta do teste. Eles conferem o snapshot com a versão atual de cada tabela e o histórico
 com os metadados da biblioteca; o ``vacuum`` que preserva a versão do snapshot e nada lista dentro
@@ -43,8 +43,6 @@ from serialize_db.execution import Database
 from serialize_db.parquet_import import ImportReport, PartitionReport
 from serialize_db.publication import PublicationStatus
 from serialize_db.storage import Storage
-
-pytestmark = pytest.mark.local
 
 METADATA = "lancamentos_model:Base.metadata"
 
@@ -109,7 +107,7 @@ def exit_code(
 def count_and_sum(
     db: Database,
     uri: str,
-) -> tuple:
+) -> tuple[int, float]:
     """As linhas e a soma de ``valor`` de uma tabela pelo ``delta_scan``."""
     with db.storage.duckdb_connect() as connection:
         query = f"SELECT count(*), sum(valor) FROM delta_scan('{uri}')"
@@ -129,6 +127,7 @@ def files_of_version(
     return sorted(zip(paths, sizes))
 
 
+@pytest.mark.local
 def test_snapshot_records_every_table_and_history_shows_the_metadata(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -166,6 +165,7 @@ def test_snapshot_records_every_table_and_history_shows_the_metadata(
     assert "serialize_db_execution_id" not in history[-1]
 
 
+@pytest.mark.local
 def test_vacuum_keeps_the_snapshot_version(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -196,6 +196,7 @@ def test_vacuum_keeps_the_snapshot_version(
         delta.open_table(uri, storage, version=1).to_pyarrow_dataset().to_table()
 
 
+@pytest.mark.local
 def test_compact_refuses_after_a_snapshot_on_the_current_version(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -253,6 +254,7 @@ def test_compact_refuses_after_a_snapshot_on_the_current_version(
     assert cli.main(["compact", *common_arguments(db), "--table", "nada"]) == 2
 
 
+@pytest.mark.local
 def test_archive_copies_each_table_with_the_same_sums(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -339,6 +341,9 @@ def test_archive_copies_each_table_with_the_same_sums(
         patch.setattr(Storage, "copy", copy_until_the_third)
         with pytest.raises(OSError, match="cópia interrompida"):
             cli.main(["archive", *common_arguments(db), "--name", "2026T4"])
+    assert len(copies) == 3
+    assert "cad_contas" in copies[0]
+    assert "cad_lancamentos" in copies[2]
     resumed_entries_uri = storage.uri_of("prd/arquivo/2026T4/cad_lancamentos")
     assert delta.open_table(resumed_entries_uri, storage).version() == 1
     control, _ = delta.read_snapshots(storage, "prd")
@@ -359,6 +364,7 @@ def test_archive_copies_each_table_with_the_same_sums(
     assert control["archived"]["2026T4"] == {"cad_contas": 1, "cad_lancamentos": 3}
 
 
+@pytest.mark.local
 def test_archive_exits_with_2_on_a_conflicting_copy(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -388,6 +394,7 @@ def test_archive_exits_with_2_on_a_conflicting_copy(
     assert "2026T3" in control["snapshots"]
 
 
+@pytest.mark.local
 def test_export_by_copy_and_by_rewrite(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -426,6 +433,7 @@ def test_export_by_copy_and_by_rewrite(
     assert "fora da raiz" in capsys.readouterr().err
 
 
+@pytest.mark.local
 def test_channel_points_moves_and_lists(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -473,6 +481,7 @@ def test_channel_points_moves_and_lists(
     assert delta.read_snapshots(db.storage, "prd")[0] == control
 
 
+@pytest.mark.local
 def test_empty_environment_variable_counts_as_absent(
     db: Database,
     capsys: pytest.CaptureFixture,
@@ -488,6 +497,7 @@ def test_empty_environment_variable_counts_as_absent(
     assert control["snapshots"] == {"2026T3": {}}
 
 
+@pytest.mark.local
 def test_cli_operation_usage_errors(
     db: Database,
     capsys: pytest.CaptureFixture,

@@ -2245,3 +2245,140 @@ on 2026-10-09, with no read failing (`aws-s3.md`), about 63 minutes each.
 
 `suite_alvo.sh`, `SUITE_ALVO.md`, `probes/README.md`, `duckdb.md`, `aws-s3.md`,
 `environments.md`, `OPEN_QUESTIONS.md`
+
+## The level tag opens every docstring (2026-10-11)
+
+The user asked (2026-10-11, 00:02 UTC), on the card about the engine classes out of `__all__` but
+documented by pdoc ("pode manter no pdoc como está"), that every docstring carry `[public]`,
+`[protected]` or `[private]`, so the reader of the source and the reader of the pdoc site see the
+level of each name; asked where and how far, he answered (00:34 UTC): at the opening of the
+docstring, and every docstring the assistant classifies.
+
+- Every docstring of `src/serialize_db/` opens with the tag of its level, before the summary: a
+  module by its package's `__all__` and the `_` prefix, a module-level name by the module's
+  `__all__` and the prefix, a class member or attribute by its own prefix bounded by the class's
+  level; a dunder takes the class's level and a nested function is private. `_pool.py` and
+  `_files.py` are private modules whose unprefixed functions are protected, because other modules
+  of the package call them.
+- A protected docstring keeps who uses it ("para o motor Redshift") and loses the word
+  "protegida", which the tag now says.
+- The names the API cards move (the 16 of case 1 out of `__all__`, the four engine classes of
+  case 2 into it) carry the tag of the current `__all__` until that commit changes both.
+- `tests/test_package.py` checks the tag of every docstring against the level the rule gives.
+
+`CLAUDE.md` ("Docstrings", "Naming conventions"), `tests/test_package.py`, every module of
+`src/serialize_db/`
+
+## The public API after the evaluation of 2026-10-10 (2026-10-10, 2026-10-11)
+
+The user asked (2026-10-10, 22:34 UTC) for an evaluation of what could leave the public API; the
+evaluation is `api-publica/avaliacao-api-publica.md` in the Claude project's library, and its four
+cases went to him as decision cards, one at a time.
+
+- Case 1 (23:42 UTC, "Tirar os 16"): the 16 names only the package calls leave `__all__`, with no
+  import path changed, as the card promised: in `delta`, `CopyManifest`, `copy_manifest`,
+  `max_key`, `read_back` and `schema_diff`; in `publication`, `PublishedColumn`, `control_ddl`,
+  `control_read`, `publication_statements`, `published_ddl`, `reconcile_published` and
+  `unpublication_statements`; in `schema`, `column_ddl`; in `parquet_import`, `partition_query`; in
+  `engine.redshift`, `sandbox_prefix` and `schema_from_row_description`. They are protected by the
+  level rule, each docstring naming who calls it, `partition_query` and `sandbox_prefix` included,
+  which only their own module calls; whether those two take the `_` prefix is in
+  `OPEN_QUESTIONS.md`.
+- Case 2 (23:57 UTC, "Públicas", against the recommendation of private classes behind the
+  protocols): `DuckDBStream`, `DuckDBAppender`, `RedshiftStream` and `RedshiftAppender` enter the
+  `__all__` of their engine modules, with the constructor, `read_next_batch`, `read_all`, `write`
+  and `close` documented by the field standard. The user's rule (23:57 UTC): "Os tipos que
+  retornam de funções públicas entendo que são públicos também"; it makes
+  `reader._ReaderStream` public too (the last bullet).
+- Case 3 (2026-10-11, 00:02 UTC): the twelve protected methods of public classes stay in pdoc, and
+  the level tag opens every docstring instead ("The level tag opens every docstring").
+- Case 4 (2026-10-11, 01:08 UTC, "Só em resources"): `environment_limits` is public in
+  `serialize_db.resources`, beside `available_cpus`, `available_memory` and `peak_rss_mb`, and
+  leaves the `__all__` and the imports of `serialize_db.engine.duckdb`; the migration script,
+  `probes/duckdb_threads.py` and `docs/tecnologias.md` import it from `resources`, with no alias,
+  the one import path the evaluation changes.
+- The follow-up of case 2 (2026-10-11, 01:51 UTC, "Pública" on the card): `reader._ReaderStream`
+  becomes `ReaderStream`, in `reader.__all__`, documented by the field standard, and
+  `DeltaReader.stream` is annotated with it; `RedshiftReader.stream` keeps `-> BatchStream`,
+  because it returns the engine's public `RedshiftStream`.
+
+`delta.py`, `publication.py`, `schema.py`, `parquet_import.py`, `engine/duckdb.py`,
+`engine/redshift.py`, `resources.py`, `reader.py`, `scripts/migrate_parquet_to_delta.py`,
+`probes/duckdb_threads.py`, `docs/tecnologias.md`, `CLAUDE.md` ("Repository index"),
+`OPEN_QUESTIONS.md`
+
+## The audit shared by the engines (2026-10-11)
+
+The "Não aplicado" items of PR #156 reach the user as decision cards, one at a time, after the API
+cards. The first card, the appender and audit scaffolding duplicated in the two engines (02:12 UTC,
+"Só o audit", the recommended option): the audit's body and its helpers (`_pinned_max_key`,
+`_referenced_sources`, `_text`, `_rows_result`, `_rows_sample`, `_check_result`), identical in the
+two engines but for the pinned source (`pinned_delta` in DuckDB, the pending staging in Redshift),
+the dialect, the prefix, the storage and the staging load before a check runs, move to
+`serialize_db.engine` as the protected `audit_report` over an `AuditSupport`, a frozen dataclass
+each engine's `audit` fills with its own methods; Redshift's `_load_cited` becomes `_run_check`,
+the load and the query. The appenders keep their 80 identical lines (`rows`, `error`, `_put`,
+`_converted`, `write`, `__enter__`, `__exit__`, `__del__`), because sharing them needs a base class.
+
+`engine/__init__.py`, `engine/duckdb.py`, `engine/redshift.py`, `CLAUDE.md` ("Repository index").
+
+## The properties, the long functions and the private names the tests read (2026-10-11)
+
+Three more cards of the "Não aplicado" items of PR #156, each answered with the recommended option.
+
+- The nine properties without `:return:` (02:18 UTC, "Deixar"): `AuditReport.passed`,
+  `SchemaDiff.changes`, `rows` and `error` of the two appenders, `PartitionReport.matches`,
+  `ImportReport.matches` and `Storage.is_s3` stay as they are, and the field standard says a
+  property has no `:return:`, because pdoc shows it as an attribute whose summary says what it
+  holds (probe of 2026-10-11: pdoc 16 renders the field as a "Returns" block under the attribute,
+  repeating the summary).
+- The three functions the review called long (02:23 UTC, "Deixar"): `import_table`,
+  `import_report` and `publication_statements` have 75, 69 and 81 lines, 38, 40 and 36 of them
+  docstring, and 30, 21 and 34 of code, one responsibility each, and stay whole; the package's
+  longest functions are the argparse declarations of `cli.py` (`_add_operation_parsers`, 111
+  lines of code), which no card asked about.
+- The private names the tests read (02:35 UTC, "Regra"): a test may read and replace the private
+  names of the module it tests (`stream._spool` in `test_engine_duckdb`, `engine._connection`,
+  `redshift._write_file_manifest` and `session._run` in `test_engine_redshift`); the rule is in
+  `CLAUDE.md`, "Naming conventions", and no protected seam is added for a test.
+
+`CLAUDE.md` ("Docstrings", "Naming conventions").
+
+## The tests' corrections, the module marks and the raises fields (2026-10-11)
+
+The last cards of the "Não aplicado" items of PR #156.
+
+- The mechanical corrections of the tests (02:31 UTC, "Aplicar", the recommended option): six
+  local changes that keep what each test checks, in one commit: `engine_over_driver` for the five
+  reconnection tests of `test_engine_redshift` that built the engine by hand, and the readings'
+  keys in English like the others (`waited`, `idle`, `in_transaction`, `client_transaction`,
+  `type`, `value`); the `cli_environment` fixture and `base_arguments` for the eleven CLI tests of
+  `test_execution`, and the same fixture in `test_parquet_import`; `clean_aws` no longer returns
+  the `monkeypatch`; the stand-in's `remember_ddl` deletes the table's stored columns before
+  inserting the `CREATE TABLE`'s; the three in-memory DuckDB connections of
+  `test_source_db_projetado` close through `with`. The `>= 1` UNLOAD file stays: `PARALLEL` decides
+  the file count, and the test checks the first file's prefix.
+- The module-level `local` mark of five files (02:40 UTC, "Marcar por teste", against the
+  recommendation to leave it): `pytestmark = pytest.mark.local` leaves `test_parquet_import`,
+  `test_source_db_projetado`, `test_resources`, `test_migrate_parquet_to_delta` and
+  `test_operation`, and each test whose fixture closure reaches `local_location` carries
+  `@pytest.mark.local`, 61 tests, read from the collected items; the nine pure ones run in the
+  no-variables run (the card counted six; the closure found three more, two of `test_operation`
+  and one of `test_resources`). A new test of those files that writes under the local root takes
+  the mark, or `conftest.pytest_itemcollected` refuses it at collection.
+- The tests over a hundred lines (02:43 UTC, "Deixar", the recommended option): the thirteen tests
+  over 80 lines, six of them over a hundred (`test_ingest_stream_appender_export`, 160 lines, the
+  longest), stay whole; each chains scenarios over one base, and splitting them would repeat the
+  setup and reload the target.
+- The exception name in the `:raises` fields (02:48 UTC, "Nome completo", the recommended option):
+  the 163 `:raises` fields that name a package exception write it as `serialize_db.errors.<name>`,
+  the only form pdoc 16 turns into a link to the class (the built site links
+  `serialize_db.errors.SandboxError` and leaves a short `ContractError` as plain bold even where the
+  module imports it); the 36 that name a builtin (`ValueError`, `FileNotFoundError`,
+  `StopIteration`, `SystemExit`) stay bare, and a third-party exception keeps its module
+  (`duckdb.Error`). The card counted 199 fields; 163 are the package's. The "Fields" bullet of
+  `CLAUDE.md` says the form of each. The nine bare "issue #59" citations name the repository
+  (`issue #59 do serialize-db`), with no card, because the issue is this repository's.
+
+`tests/`, `CLAUDE.md` ("Docstrings"), `src/serialize_db/` (the `:raises` fields and the issue
+citations).

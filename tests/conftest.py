@@ -157,8 +157,12 @@ def opened_partition_folders(
     ).fetchall()
     folders = set()
     for (message,) in messages:
-        if '"op":"OPEN"' in message and ".parquet" in message:
-            folders.add(re.search(rf"{column}=[0-9-]+", message).group(0))
+        if '"op":"OPEN"' not in message or ".parquet" not in message:
+            continue
+        # Um Parquet fora de uma pasta de partição, aberto na mesma conexão, não entra.
+        found = re.search(rf"{column}=[0-9-]+", message)
+        if found is not None:
+            folders.add(found.group(0))
     return folders
 
 
@@ -260,8 +264,8 @@ def create_duckdb_s3_secret(
 ) -> None:
     """Cria na conexão o secret S3 de ``Storage.duckdb_setup``: a chave que a cadeia do ``boto3``
     resolve agora, a região e, com ``AWS_ENDPOINT_URL``, o endpoint, como no substituto local. O
-    secret guarda essa chave pela sessão, e a suíte S3 levou 225,5 s no ambiente alvo em
-    2026-09-25."""
+    secret guarda essa chave pela sessão inteira, mais curta que a credencial de uma hora: a suíte
+    S3 levou 225,5 s no ambiente alvo em 2026-09-25."""
     from serialize_db.storage import _create_duckdb_secret, aws_credentials
 
     _create_duckdb_secret(connection, aws_credentials().get_frozen_credentials())
@@ -441,7 +445,8 @@ class S3Location(SessionRoot):
         bucket, _, prefix = table_uri.removeprefix("s3://").partition("/")
         paginator = boto3.client("s3").get_paginator("list_objects_v2")
         keys = []
-        for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
+        # A URI com barra final, como DeltaTable.table_uri, não vira um prefixo com duas barras.
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix.rstrip("/") + "/"):
             keys.extend(item["Key"] for item in page.get("Contents", []))
 
         files = []
@@ -974,12 +979,16 @@ def redshift_session() -> Iterator[RedshiftSession]:
     connection.close()
 
 
+# O corte da mensagem de um teste reprovado no relatório, em caracteres.
+FAILURE_MESSAGE_LIMIT = 300
+
+
 def failure_message(
     report: pytest.TestReport,
-    limit: int = 300,
 ) -> str:
     """As primeiras linhas do erro de um teste reprovado, para o relatório: a exceção e a asserção
-    que a explica, com as credenciais mascaradas antes do corte em ``limit`` caracteres."""
+    que a explica, com as credenciais mascaradas antes do corte em ``FAILURE_MESSAGE_LIMIT``
+    caracteres."""
     crash = getattr(report.longrepr, "reprcrash", None)
     text = crash.message if crash is not None else str(report.longrepr)
     # A máscara vem antes do corte: um valor cortado no meio perde a aspa final que
@@ -988,7 +997,7 @@ def failure_message(
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return report.outcome
-    return " | ".join(lines[:2])[:limit]
+    return " | ".join(lines[:2])[:FAILURE_MESSAGE_LIMIT]
 
 
 def pytest_terminal_summary(

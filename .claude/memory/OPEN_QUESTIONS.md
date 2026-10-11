@@ -32,8 +32,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
   retenção. A mesma pergunta vale para a regra de ciclo de vida que `docs/operacao.md`, seção
-  "Arquivo", espera na pasta `arquivo/`: a passagem dos arquivos dela à classe de armazenamento mais
-  barata. As sondas da operação também apagam a pasta delas sob a raiz da suíte no fim de cada
+  "Arquivamento de um snapshot", espera na pasta `arquivo/`: a passagem dos arquivos dela à classe
+  de armazenamento mais barata. As sondas da operação também apagam a pasta delas sob a raiz da
+  suíte no fim de cada
   rodada: 19.293 MB em 2026-10-05, 19.284 MB na segunda rodada de 2026-10-07, 19.293 MB em
   2026-10-09 às 05:18, 19.289 MB às 21:50, 19.612 MB em 2026-10-10 às 03:58 e 12.021 MB às
   18:20, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos relatórios. Cada rodada deixa ao
@@ -271,6 +272,14 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-10-10, a última às 02:33 de 2026-10-10, o Glue seguia com um banco e uma tabela Parquet, e o
   Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
+- **O prefixo `_` de `partition_query` e `sandbox_prefix`.** A avaliação da API pública de
+  2026-10-10 (`api-publica/avaliacao-api-publica.md`, na biblioteca do projeto Claude) deixou uma
+  pergunta depois das decisões (`decisions.md`, "The public API after the evaluation of
+  2026-10-10"): se `partition_query`, de `parquet_import`, e `sandbox_prefix`, de
+  `engine.redshift`, que só o próprio módulo chama, ganham o prefixo `_` da regra de níveis, o que
+  muda `tests/test_parquet_import.py`, `tests/test_engine_redshift.py` e a docstring de
+  `tests/proof_of_concept/test_stdlib.py`, ou ficam protegidas sem prefixo, como o cartão do caso 1
+  prometeu ("nenhuma importação muda").
 
 ## Achados das sondas de consistência de leitura e escrita
 

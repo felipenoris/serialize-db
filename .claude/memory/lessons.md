@@ -719,3 +719,17 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   stale value as the driver does, and a variant without the mark fails two local tests. Before a
   guard reads a library's state, trace what sets it on the error path; the rule lives here
   because `CLAUDE.md` is at its size budget.
+- **A claim that a lock is released is asserted from a second thread** (2026-10-10). The Redshift
+  engine's lock is a `threading.RLock`, and the suite's check "a command runs while a `stream` still
+  reads the files" called `engine.query` on the same thread as the stream: a re-entrant lock lets
+  the owning thread in whether or not the stream holds it, so the assertion passed in both states.
+  The review of 2026-10-10 moved the command to a worker thread with a timeout on `result()`, the
+  only reading that fails when the lock is held; the rule lives here because `CLAUDE.md` is at its
+  size budget.
+- **`monkeypatch.undo()` in a test body undoes the suite fixtures' patches too** (2026-10-10). The
+  `redshift_driver` fixture replaces `driver_connect` through the same `monkeypatch` instance the
+  test receives, so an `undo()` that meant to retire one double restored the real driver for the
+  rest of the test (`tests/test_engine_redshift.py`), and the same call in
+  `tests/test_parquet_import.py` retired every patch of the test's fixtures. Nothing after the two
+  calls opened a connection, so both stayed green. A double that leaves before the test ends enters
+  through `monkeypatch.context()`; the rule lives here because `CLAUDE.md` is at its size budget.

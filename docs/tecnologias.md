@@ -100,10 +100,10 @@ PyArrow grava `version` 2 (exibido como `format_version 2.6`) e o DuckDB grava 1
 cresce com row groups × colunas, e um leitor o decodifica inteiro antes de ler qualquer dado, o que
 pesa em arquivos com milhares de row groups ou colunas.
 
-Nos exemplos em Python desta seção, `tabela` é a tabela Arrow do mês com as cinco colunas do
-contrato, `esquema` é o esquema dela (`arrow_schema` de [SQLAlchemy](#sqlalchemy), sem a coluna
-de partição `mes`, que fica no diretório), `tabela_mes` acrescenta `mes` derivada de `data_ref`
-(`pc.strftime(tabela["data_ref"], "%Y-%m")`) e `con` é a conexão DuckDB do sandbox com a tabela
+Nos exemplos em Python desta seção, `table` é a tabela Arrow do mês com as cinco colunas do
+contrato, `schema` é o esquema dela (`arrow_schema` de [SQLAlchemy](#sqlalchemy), sem a coluna
+de partição `mes`, que fica no diretório), `month_table` acrescenta `mes` derivada de `data_ref`
+(`pc.strftime(table["data_ref"], "%Y-%m")`) e `con` é a conexão DuckDB do sandbox com a tabela
 `operacoes`. Eles rodaram em 2026-09-19 com PyArrow 25.0.1, DuckDB 1.5.5 e deltalake 1.6.4, sobre
 uma amostra com a mesma forma do arquivo de exemplo.
 
@@ -164,7 +164,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 schema = pa.schema([
-    pa.field(c.name, arrow_type(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
+    pa.field(c.name, arrow_type(c), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
     for i, c in enumerate(Operacao.__table__.columns, start=1)
     if c.name != "mes"
 ])
@@ -341,8 +341,9 @@ def delta_stats(path: str) -> dict:
             "nullCount": null_counts}
 ```
 
-O dicionário é o campo `stats` de `serialize_db.delta.RegisteredFile`, a entrada de
-`serialize_db.delta.register_files`. Com um
+O dicionário é o `stats` da ação `add`, que `serialize_db.delta.register_files` monta a partir do
+campo `stats` de `serialize_db.delta.RegisteredFile` (`{"min": {coluna: valor}, "max": {...},
+"null_count": {...}}`, com os valores tipados; as linhas vão em `rows`), a sua entrada. Com um
 arquivo de agosto registrado assim, `dt.file_uris(file_pruning_predicate="data_ref >= '2026-09-15'")`
 devolveu lista vazia, e `mes = '2026-08'` devolveu só esse arquivo.
 
@@ -582,7 +583,7 @@ print(pq.read_metadata("operacoes/_metadata").row_group(0).column(0).file_path)
 ```
 
 Com `store_schema=False` o PyArrow deixa de gravar também as chaves próprias, e `metadata` volta
-`None`. `write_metadata` exige o esquema dos arquivos: com o esquema de `tabela_mes`, que inclui
+`None`. `write_metadata` exige o esquema dos arquivos: com o esquema de `month_table`, que inclui
 `mes`, ele falha com `AppendRowGroups requires equal schemas`.
 
 Ordem das colunas (`column_orders`) e `sorting_columns` estão descritos nas seções
@@ -1282,7 +1283,7 @@ assert date(2026, 8, 1) <= date.fromisoformat(columns["data_ref"]["min"])
 assert date.fromisoformat(columns["data_ref"]["max"]) < date(2026, 9, 1)
 ```
 
-`comando_copy` é o `COPY` acima como string. `column_statistics` chega como
+`copy_command` é o `COPY` acima como string. `column_statistics` chega como
 `MAP(VARCHAR, MAP(VARCHAR, VARCHAR))`: as chaves são os nomes das colunas entre aspas e todos os
 valores são texto, inclusive `null_count`.
 
@@ -1297,7 +1298,7 @@ ou como não verificado.
 #### COPY a partir de Parquet
 
 ```sql
-COPY execucao_abc123.operacoes
+COPY <esquema>.exec_abc123_operacoes
 FROM 's3://bucket/staging/abc123/operacoes/manifest'
 IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET
@@ -1369,15 +1370,16 @@ informativas). O que o Redshift garante e o que não garante:
 | `PRIMARY KEY`, `UNIQUE`, `FOREIGN KEY` | Informativas; não são verificadas. Duplicatas entram e depois produzem resultados errados no planejador ([Chaves, restrições e índices](#chaves-restricoes-e-indices)). |
 
 A carga com verificação segue a [Ingestão de dados](#ingestao-de-dados-3) do Redshift: Arrow com o
-esquema do modelo, Parquet
-numa área de staging, `COPY` numa tabela do sandbox da execução, `pg_last_copy_count()` contra a
-contagem enviada e auditoria de unicidade por consulta antes de publicar.
+esquema do modelo, Parquet numa área de staging (`<ambiente>/staging/<execution_id>/<tabela>/`),
+`COPY ... MANIFEST FILLRECORD` com a lista de colunas numa tabela `exec_<id>_<tabela>` do sandbox,
+com as credenciais da sessão no texto do comando, e auditoria de contagem e de unicidade por
+consulta antes de publicar; a biblioteca não lê `pg_last_copy_count()`.
 
 #### UNLOAD para Parquet
 
 ```sql
 UNLOAD ('SELECT id_operacao, data_ref, id_cliente, valor::DECIMAL(18, 2) AS valor, descricao
-         FROM execucao_abc123.operacoes
+         FROM <esquema>.exec_abc123_operacoes
          WHERE data_ref >= ''2026-08-01'' AND data_ref < ''2026-09-01''
          ORDER BY data_ref, id_operacao')
 TO 's3://bucket/operacoes/data/2026-08/abc123_'
@@ -1528,7 +1530,7 @@ Cada commit é um arquivo JSON nomeado pela versão com 20 dígitos, com uma aç
 | `metaData` | `id` da tabela, `name`, `description`, `format` (`parquet`), `schemaString`, `partitionColumns`, `createdTime`, `configuration`. | Na criação e em cada mudança de esquema ou propriedade. |
 | `add` | `path` relativo à pasta da tabela, `partitionValues`, `size`, `modificationTime`, `dataChange` e `stats` em JSON (`numRecords`, `minValues`, `maxValues`, `nullCount`). | Em cada arquivo que entra. |
 | `remove` | `path`, `deletionTimestamp`, `partitionValues`, `size`. | Em cada arquivo que sai; o arquivo físico permanece até o `vacuum`. |
-| `txn` | `appId`, `version`, `lastUpdated`. | Quando a biblioteca registra uma transação de aplicação. |
+| `txn` | `appId`, `version`, `lastUpdated`. | Nunca: a biblioteca grava só `custom_metadata` no `commitInfo`. |
 
 ```python
 import json, pathlib
@@ -1551,8 +1553,8 @@ O valor de partição entra no nome da pasta codificado por porcentagem (`p=a%3A
 `p=d%27agua` para `d'agua`, `p=a%C3%A7%C3%A3o` para `ação`), e o `path` da ação `add` codifica a
 pasta de novo (`p=a%253Ab`). O valor só de letras, dígitos, `_`, `.` e `-` sai igual nos dois. A
 regra da partição de `serialize_db.schema.check_partition_value` aceita só esses caracteres,
-porque o `COPY` do modo `register` monta o nome da pasta com o valor sem codificar (deltalake
-1.6.4, 2026-09-23,
+porque o `COPY ... TO` do motor DuckDB e o `UNLOAD` do motor Redshift, em `export_partition`,
+montam o nome da pasta com o valor sem codificar (deltalake 1.6.4, 2026-09-23,
 `test_deltalake.py::test_partition_value_is_percent_encoded_in_the_folder_and_the_log`).
 
 #### Log, snapshot e checkpoint
@@ -1776,7 +1778,7 @@ Code Editor, `NO_PROXY` existe vazia, e num terminal do Code Editor ela tem a li
 Com `NO_PROXY` ausente, exportada de `no_proxy` ou reduzida a `169.254.170.2`, ou sem as variáveis
 de proxy, a chamada passa (em 2026-09-19 também passou com `AWS_CONTAINER_CREDENTIALS_FULL_URI`),
 com deltalake 1.5.0 e 1.6.4 e com os dois interpretadores. O teste `test_delta_rs_credential_chain`
-em `tests/` registra as cinco variantes no ambiente onde roda, e a biblioteca exporta `NO_PROXY` a
+em `tests/proof_of_concept/test_s3.py` registra as cinco variantes no ambiente onde roda, e a biblioteca exporta `NO_PROXY` a
 partir de `no_proxy` ao iniciar, quando a maiúscula está ausente ou vazia. As credenciais
 temporárias que o `boto3` resolve também abrem a tabela quando passadas em `storage_options`
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`;
@@ -1825,8 +1827,10 @@ O delta-rs grava o arquivo com o tipo lógico `String`; um arquivo do PyArrow ou
 lógico `JSON`, registrado por `create_write_transaction`, é lido pelos dois leitores na mesma tabela.
 O `delta_scan` mostra `VARCHAR`, e `->>`, `json_extract` e `json_valid` funcionam sobre ele. Nem o
 Arrow nem o Delta validam o texto: a validação é do `::JSON` do DuckDB na materialização e do
-`JSON_PARSE` do Redshift na carga, e a auditoria roda `json_valid` antes de publicar. O tratamento
-por camada está na [tabela de mapeamento de tipos][tipos].
+`JSON_PARSE` do Redshift na carga, e a auditoria roda `json_valid` no DuckDB antes de publicar;
+no Redshift a função compila para `true`, porque a coluna é `SUPER` e `is_valid_json` a recusa
+(42883, 2026-09-23), e a validação é a do `JSON_PARSE` da carga. O tratamento por camada está na
+[tabela de mapeamento de tipos][tipos].
 
 ```python
 import json
@@ -1874,17 +1878,18 @@ import sqlalchemy as sa
 from deltalake import DeltaTable
 from serialize_db.schema import arrow_schema   # seção SQLAlchemy: tipos, nulidade e PARQUET:field_id
 
+# Esboço; a função da biblioteca é serialize_db.schema.delta_schema(table), que devolve o esquema
+# Delta, e serialize_db.delta.create_table(uri, table, storage) cria a tabela.
 def delta_schema(model) -> pa.Schema:
     """Esquema Arrow do contrato com o comentário de cada coluna nos metadados do campo."""
     return pa.schema([
         field.with_metadata({**field.metadata, "comment": column.comment}) if column.comment else field
-        for field, column in zip(arrow_schema(model), model.__table__.columns)
+        for field, column in zip(arrow_schema(model.__table__), model.__table__.columns)
     ])
 
-PROPERTIES = {
+PROPERTIES = {   # serialize_db.delta.RETENTION; a biblioteca não define delta.checkpointInterval
     "delta.logRetentionDuration": "interval 3650 days",
-    "delta.deletedFileRetentionDuration": "interval 3650 days",
-    "delta.checkpointInterval": "10",
+    "delta.deletedFileRetentionDuration": "interval 400 days",
 }
 
 def create_delta_table(model, uri: str, storage_options: dict[str, str] | None = None) -> DeltaTable:
@@ -1906,18 +1911,23 @@ def create_delta_table(model, uri: str, storage_options: dict[str, str] | None =
 
 Regras da derivação:
 
-- A coluna de partição é uma coluna comum do modelo (`mes: Mapped[str] = mapped_column(String(7))`),
-  preenchida pela biblioteca a partir de `data_ref` na escrita e conferida na auditoria. O Delta não
-  tem partição oculta.
+- A coluna de partição é uma coluna comum do modelo (`String(n)` com a data `AAAA-MM-DD` na base
+  atual; `mes: Mapped[str] = mapped_column(String(7))` nos exemplos desta página). Na carga
+  inicial, `serialize_db.parquet_import.partition_query` a preenche com o valor do caminho da
+  origem; no pipeline, a consulta do cliente a grava; a auditoria a confere contra
+  `partition_source` (`partition_text`: `strftime(..., '%Y-%m-%d')` no DuckDB,
+  `to_char(..., 'YYYY-MM-DD')` no Redshift). O Delta não tem partição oculta.
 - `PRIMARY KEY`, `UNIQUE`, `FOREIGN KEY` e índices não existem no formato e são ignorados; a
   auditoria por consulta os verifica, como nos outros bancos. `NOT NULL` vira `nullable=False` e é
   aplicado pelo escritor. `CheckConstraint` vira `delta.constraints.<nome>`, avaliada pelo delta-rs
   na escrita; a expressão precisa ser SQL que o delta-rs entenda (`valor >= 0`).
 - O comprimento de `String(n)` não existe no Delta; a auditoria de tamanho continua sendo a barreira
   para o `VARCHAR(n)` do Redshift.
-- `server_default` do modelo não vira default no Delta; a biblioteca preenche o valor antes de gravar.
-- `dt.schema().to_json()` de cada tabela é gravado em `schema/<tabela>.delta.json`, versionado e
-  comparado por um teste; a mudança de modelo aparece no diff do PR.
+- `server_default` do modelo não vira default no Delta, e a biblioteca não preenche valor nenhum
+  antes de gravar: a coluna sai da consulta do cliente com o valor que ela produz.
+- `serialize_db.schema.schema_files` gera do modelo `schema/<tabela>.delta.json`, o esquema Delta
+  em JSON canônico, com `<tabela>.duckdb.sql` e `<tabela>.redshift.sql`, versionados;
+  `check_schema_files` acusa o arquivo desatualizado, e a mudança de modelo aparece no diff do PR.
 
 #### Propriedades e protocolo
 
@@ -1985,11 +1995,11 @@ com o modelo pela reconciliação.
 A reconciliação é o comando da biblioteca que substitui a migração: compara `arrow_schema(Table)`
 com `dt.schema()`, aplica o diff aditivo, recusa o destrutivo com a instrução de reescrita, e repete
 o mesmo diff nas tabelas publicadas no Redshift (`ALTER TABLE ADD COLUMN`, que acrescenta no fim, ou
-recriação e recarga). O `COPY` de Parquet liga as colunas por posição, e a biblioteca passa a cada
-`COPY` a lista das colunas do rodapé, com um manifesto por lista, que leva cada coluna do arquivo à
-de mesmo nome e deixa nula a que um arquivo anterior a uma coluna nova não tem; o `FILLRECORD`,
-que carregou no ambiente alvo em 2026-09-21 um arquivo anterior a uma coluna nova com ela nula,
-como a lista, segue em todo `COPY` da biblioteca ([Regras do COPY para
+recriação e recarga). O `COPY` de Parquet liga as colunas por posição. Por isso a biblioteca passa a
+cada `COPY` a lista das colunas do rodapé, com um manifesto por lista: cada coluna do arquivo entra
+na de mesmo nome, e a coluna que um arquivo anterior a uma coluna nova não tem fica nula. O
+`FILLRECORD` segue em todo `COPY` da biblioteca; em 2026-09-21 ele carregou no ambiente alvo um
+arquivo anterior a uma coluna nova com ela nula, como a lista ([Regras do COPY para
 Parquet](#regras-do-copy-para-parquet)).
 
 ### O que substitui o Alembic
@@ -2040,9 +2050,12 @@ dt.transaction_version("pipeline")             # 42
 
 Os metadados personalizados aparecem no `commitInfo` e voltam em `history()`. A ação `txn` registra a
 última versão de aplicação por `app_id`, mas o delta-rs não recusa uma segunda escrita com a mesma
-versão (a repetição foi aceita e duplicou as linhas): a idempotência é da biblioteca, que consulta
-`transaction_version` antes de escrever, ou, mais simples, do próprio `overwrite` com predicado, que
-substitui o mês em vez de acrescentar.
+versão (a repetição foi aceita e duplicou as linhas). A biblioteca não grava `txn` nem consulta
+`transaction_version`: ela passa só `CommitProperties(custom_metadata=...)`
+(`serialize_db.delta.publish_partition` e `register_files`), e a idempotência vem do `overwrite`
+com predicado, que substitui a partição em vez de acrescentar, e do conflito que o delta-rs levanta
+quando outro commit da mesma partição partiu da mesma versão (`ExecutionConflict`). O exemplo acima
+é do delta-rs, não da biblioteca.
 
 Concorrência otimista, verificada com duas `DeltaTable` carregadas na mesma versão:
 
@@ -2141,7 +2154,7 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
    `create_write_transaction` não confere nada disso, nem a existência do arquivo nem a estatística:
    um caminho inexistente, uma estatística falsa e um arquivo sem uma coluna `NOT NULL` commitam, e os
    leitores obedecem à ação (as conferências que a biblioteca faz antes do commit
-   estão em `serialize_db.delta.register_files`). `estatisticas` segue o JSON da ação `add`
+   estão em `serialize_db.delta.register_files`). `stats` segue o JSON da ação `add`
    (`numRecords`, `minValues`, `maxValues`, `nullCount`, sem as colunas de partição); o DuckDB os
    fornece por `COPY ... (RETURN_STATS)`, e um arquivo alheio os fornece pelo rodapé Parquet
    (`pq.read_metadata`). Com as estatísticas, a poda funcionou nos dois leitores: `file_uris` com
@@ -2156,8 +2169,12 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
    ordem de colunas e o layout Hive do contrato; não foi testado.
 4. `INSERT INTO` numa tabela anexada no DuckDB, descrito adiante.
 
-A carga inicial dos Parquet atuais é o caminho 1, tabela a tabela e mês a mês, com cast para o
-contrato (os modelos usam `Double` onde o contrato pede `Numeric(18, 2)`).
+A carga inicial dos Parquet atuais é `serialize_db.parquet_import.import_table`, o caminho 2:
+tabela a tabela, na ordem de `import_order`, e partição a partição, o DuckDB lê a pasta da
+partição com `CAST` de cada coluna para o tipo do contrato e o valor do caminho na coluna de
+partição (`partition_query`), grava um arquivo novo na pasta `<coluna>=<valor>/` da tabela Delta
+por `COPY ... (RETURN_STATS)` e o registra por `register_files`, um commit por partição. As colunas
+numéricas do modelo cliente são `Double`; nenhuma passa por `Numeric(18, 2)`.
 
 #### As estatísticas por tipo
 
@@ -2341,12 +2358,12 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
    com prefixo da execução.
 3. **Execução.** O pipeline roda no sandbox, com statements Core do SQLAlchemy e lógica Python;
    resultados intermediários ficam no sandbox, não no Delta.
-4. **Auditoria.** Contagens, nulos, unicidade de chaves, `mes` igual a `strftime(data_ref, '%Y-%m')`,
-   limites de tipo, no motor.
-5. **Publicação.** Por tabela e por mês: do DuckDB, `write_deltalake(mode="overwrite",
-   predicate="mes = ...")` com o `RecordBatchReader` da consulta, ou `COPY ... TO` na subpasta do
-   mês mais `create_write_transaction`; do Redshift, `UNLOAD` num prefixo novo dentro da subpasta do
-   mês mais `create_write_transaction`. Cada commit leva `serialize_db_execution_id` e
+4. **Auditoria.** Contagens, nulos, unicidade de chaves, coluna de partição igual a
+   `partition_text(partition_source)` (`strftime(data_ref, '%Y-%m-%d')` no DuckDB,
+   `to_char(data_ref, 'YYYY-MM-DD')` no Redshift), limites de tipo, no motor.
+5. **Publicação.** Por tabela e por partição: do DuckDB, `COPY ... TO` na subpasta da partição mais
+   `register_files` (`create_write_transaction`); do Redshift, `UNLOAD` num prefixo novo dentro da
+   subpasta da partição mais `register_files`. Cada commit leva `serialize_db_execution_id` e
    `serialize_db_input_versions` em `custom_metadata`. Uma reexecução repete os mesmos `overwrite` e
    é idempotente; um conflito de commit no mesmo mês significa outra execução publicando a mesma
    tabela, e a execução aborta.
@@ -2446,10 +2463,10 @@ COMMIT;
 ```
 
 A tabela de staging existe porque a coluna de partição não está nos arquivos e o `COPY` só lê o
-conteúdo deles; a lista de colunas no `COPY` de Parquet funciona (2026-09-21), e a biblioteca a
-passa com as colunas do rodapé de cada grupo de arquivos, um manifesto por lista, mas ela não
-fornece o valor da coluna ausente, então a staging fica, e o
-`INSERT` lista as colunas na ordem do contrato, com o valor da partição no lugar da coluna. A
+conteúdo deles. A lista de colunas no `COPY` de Parquet funciona (2026-09-21), e a biblioteca a
+passa com as colunas do rodapé de cada grupo de arquivos, um manifesto por lista; mas a lista não
+fornece o valor da coluna ausente, então a staging fica, e o `INSERT` lista as colunas na ordem do
+contrato, com o valor da partição no lugar da coluna. A
 publicação incremental compara as ações da versão publicada com as da pedida e recarrega só os meses
 que mudaram, numa transação por tabela, sem atomicidade entre as tabelas; a versão publicada de cada
 tabela fica numa tabela de controle
@@ -2620,6 +2637,8 @@ snapshot do banco é um número de versão por tabela, e os mecanismos são este
 import json
 from deltalake import DeltaTable
 
+# Esboço; a função da biblioteca é serialize_db.delta.vacuum_keeping_snapshots(uri, control,
+# table_name, storage, retention_hours=9600, apply=False, full=False).
 # O arquivo de controle mapeia snapshot -> {tabela: versão}; o vacuum preserva essas versões.
 def vacuum_keeping_snapshots(dt: DeltaTable, control: dict, table: str, retention_hours: int = 24 * 400,
                              apply: bool = False) -> list[str]:
@@ -2689,8 +2708,12 @@ Delta é o DuckDB ou o Redshift, cada um com o dialeto de [SQLAlchemy](#sqlalche
   e o `select()` Core compilado pelo `duckdb_engine` roda sem mudança; o resultado sai em Arrow pela
   conexão DuckDB (`to_arrow_table()` ou `to_arrow_reader()`), preservando `decimal128` e `date32`. No
   Redshift, a tabela do sandbox carregada por `COPY` é uma tabela comum.
-- Escrita: o `select()` que produz o mês é compilado com `literal_binds`, executado pelo DuckDB como
-  `RecordBatchReader` e entregue a `write_deltalake`; nenhuma linha passa por `executemany`.
+- Escrita: o `select()` que produz a partição é compilado com `literal_binds` e vai dentro de
+  `COPY (...) TO '<coluna>=<valor>/<execution_id>_<uuid>.parquet' (FORMAT parquet, RETURN_STATS)`,
+  e `serialize_db.delta.register_files` põe o arquivo no log (`DuckDBEngine.export_partition`);
+  nenhuma linha passa por `executemany` nem pela memória do processo. `write_deltalake` entra só em
+  `serialize_db.delta.publish_partition`, que o motor Redshift chama para a partição com coluna
+  `Double` de valor não finito.
 - O ORM como unidade de trabalho (instâncias, `session.add`) não tem papel; o pipeline não o usa.
 
 ### Referências
@@ -2820,7 +2843,6 @@ projeto:
 | Divisão de inteiros | `1 / 2` é `0`. | `1 / 2` é `0.5`; `1 // 2` é `0`. |
 | Identificadores | Sem aspas viram minúsculas; com aspas preservam maiúsculas. `TO` e `TIMESTAMP` são reservadas. | Insensíveis a maiúsculas em qualquer caso, com a grafia preservada. `duckdb_keywords()` dá a categoria: `to` é `reserved` (`CREATE TABLE t (to VARCHAR(2))` falha com `syntax error at or near "to"`), `timestamp` é `column_name` e `data` é `unreserved`, aceitas sem aspas (2026-09-21). |
 | Igualdade com cast implícito | `'1.1' = 1` é erro. | `'1.1' = 1` é verdadeiro. |
-
 | Inserção linha a linha | Adequada. | Prejudicial; a documentação pede lotes acima de algumas linhas. |
 | Tipos | Arrays, `JSON`, `UUID`. | `LIST`, `ARRAY`, `STRUCT`, `MAP`, `UNION`, `JSON` (extensão), `UUID`, inteiros sem sinal, `HUGEINT`. |
 | Comprimento de `VARCHAR(n)` | Aplicado. | Ignorado; `VARCHAR(200)` vira `VARCHAR`. |
@@ -2895,7 +2917,8 @@ representação interna depende da largura:
 | 19 a 38 | `INT128` | 16 |
 
 A documentação recomenda largura até 18: a aritmética em `INT128` é muito mais cara. `DECIMAL(18, 2)`,
-o tipo do contrato para valores contábeis, cabe em 8 bytes e corresponde ao `decimal128(18, 2)` do
+o tipo dos exemplos desta página para valores contábeis (o modelo cliente usa `Double`), cabe em
+8 bytes e corresponde ao `decimal128(18, 2)` do
 Arrow.
 
 Regras aritméticas, verificadas na 1.5.5:
@@ -2947,6 +2970,7 @@ df = pd.DataFrame({"id_operacao": [1, 2], "data_ref": [date(2026, 8, 1), date(20
 con.sql("DESCRIBE SELECT valor FROM df").fetchone()[1]         # 'DECIMAL(7,2)', inferido da amostra
 
 incoming = pa.Table.from_pandas(df, schema=arrow_schema(Operacao.__table__), preserve_index=False)
+con.register("entrada", incoming)
 con.sql("DESCRIBE SELECT valor FROM entrada").fetchone()[1]    # 'DECIMAL(18,2)', fixado pelo contrato
 con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
 
@@ -3042,11 +3066,15 @@ Variantes documentadas:
 - Sequências como chave: `CREATE SEQUENCE id_seq START 1;` e
   `id INTEGER PRIMARY KEY DEFAULT nextval('id_seq')`.
 
-O DDL do sandbox sai do contrato SQLAlchemy, sem chaves pela política de restrições, compilado pelo
-dialeto `duckdb_engine` e executado na conexão DuckDB:
+O DDL do sandbox sai do contrato SQLAlchemy pelo texto de `serialize_db.schema.ddl(table, "duckdb")`,
+sem chaves pela política de restrições e com os tipos de `sql_type`, executado na conexão DuckDB; a
+biblioteca não compila o DDL pelo dialeto, e o `duckdb_engine` entra só na compilação dos statements
+Core (`serialize_db.sql.render`). O esboço abaixo obtém um DDL equivalente pelo `CreateTable` do
+dialeto:
 
 ```python
-# DDL do sandbox derivado do contrato: sem chaves, com comentários, compilado pelo duckdb_engine.
+# Esboço: DDL sem chaves e com comentários pelo CreateTable do duckdb_engine; a biblioteca escreve o
+# texto em serialize_db.schema.ddl.
 import duckdb, duckdb_engine, sqlalchemy as sa
 from sqlalchemy.schema import CreateTable, SetColumnComment, SetTableComment
 
@@ -3108,8 +3136,11 @@ depende do catálogo.
 
 ```sql
 DROP TABLE IF EXISTS operacoes_antigas;
-DROP SCHEMA execucao_abc123 CASCADE;
+DROP SCHEMA relatorios CASCADE;
 ```
+
+O sandbox da biblioteca no DuckDB é um banco em arquivo por execução, apagado no fim dela, sem
+esquema por execução.
 
 `RESTRICT`, o padrão, recusa remover um objeto com dependentes rastreados (esquema com tabelas,
 sequências, tipos, views); `CASCADE` remove todos. Views não são rastreadas: uma view sobre tabela
@@ -3224,6 +3255,7 @@ compõe relações por nome.
 import pyarrow as pa
 
 incoming = pa.Table.from_pandas(df, schema=contract_schema, preserve_index=False)
+con.register("entrada", incoming)
 con.execute("INSERT INTO operacoes BY NAME SELECT * FROM entrada")
 con.append("operacoes", df, by_name=True)          # equivalente sem SQL
 ```
@@ -3398,10 +3430,12 @@ anuláveis; a nulidade fica com o esquema Delta e com a auditoria. `PIN_SNAPSHOT
 lida: um commit externo depois do `ATTACH` não mudou a contagem de `fonte`, e um `delta_scan` novo já
 viu a linha nova. O filtro por `mes` poda as partições (`Scanning Files: 1/4` no `EXPLAIN ANALYZE` do
 teste). Para URIs `s3://`, `CREATE SECRET (TYPE s3, PROVIDER credential_chain)` antes do `ATTACH` usa
-as credenciais da sessão. O caminho de volta, do sandbox para o Delta, é
+as credenciais da sessão. O caminho de volta, do sandbox para o Delta, é o `COPY ... (RETURN_STATS)`
+de `DuckDBEngine.export_partition` mais `register_files`, na seção de exportação abaixo;
 `write_deltalake(uri, con.execute(consulta).to_arrow_reader(50_000), mode="overwrite",
-predicate="mes = '2026-08'")`; `fetch_record_batch` está depreciado na 1.5.5 em favor de
-`to_arrow_reader`.
+predicate="mes = '2026-08'")` é o caminho de `serialize_db.delta.publish_partition`, que o motor
+Redshift usa na partição com `Double` não finito, pelo leitor do DuckDB sobre os arquivos do
+`UNLOAD`; `fetch_record_batch` está depreciado na 1.5.5 em favor de `to_arrow_reader`.
 
 ### Exportação para Parquet
 
@@ -3452,6 +3486,8 @@ dicionário de dicionários de texto:
 # Conferência do arquivo exportado pelo RETURN_STATS: nulos em colunas NOT NULL e data_ref dentro da partição.
 import os
 
+# Esboço; o método da biblioteca é DuckDBEngine.export_partition(table, uri, value, metadata,
+# expected_rows, columns_without_min_max), que também registra o arquivo no log.
 def export_partition(con: duckdb.DuckDBPyConnection, value: str, folder: str) -> dict[str, dict[str, str]]:
     destination = f"{folder}/mes={value}/exec_abc123.parquet"
     os.makedirs(os.path.dirname(destination), exist_ok=True)         # o COPY não cria a pasta
@@ -3505,20 +3541,19 @@ aceito dentro da consulta do `COPY`. É o `COPY` de
 - Disco: SSD ou NVMe; EBS serve; a documentação desaconselha o formato nativo em modo leitura e
   escrita sobre NFS e SMB.
 
-Os limites entram na abertura da conexão ou por `SET`. A máquina muda de tamanho, e o pacote os
-lê do ambiente na abertura, nunca de um valor fixo (instrução do usuário de 2026-09-24):
-`environment_limits()`, de `serialize_db.resources`, que `serialize_db.engine.duckdb` publica, dá
-`threads` igual às CPUs que o processo pode usar e `memory_limit` igual a metade da memória que ele
-ainda pode usar, pelas leituras de `serialize_db.engine.duckdb.environment_limits`; o motor e as
-conexões do DuckDB de `serialize_db.delta` a aplicam, e a memória lida abaixo de 2 MiB, ou
-negativa, é recusada com `SandboxError`, porque o DuckDB 1.5.5 não abre com `0MiB` e lê um valor
-negativo como o padrão dele, 80% da memória da máquina (sonda de 2026-10-01). Num contêiner Linux
-de 4 vCPUs com limite de cgroup de 13,4 GiB (2026-09-24):
+Os limites entram na abertura da conexão ou por `SET`. A máquina muda de tamanho, então o pacote os
+lê do ambiente na abertura, nunca de um valor fixo (instrução do usuário de 2026-09-24).
+`environment_limits()`, de `serialize_db.resources`, dá `threads` igual às CPUs que o processo pode
+usar e `memory_limit` igual a metade da memória que ele ainda pode usar; o motor e as conexões
+DuckDB de `serialize_db.delta` a aplicam. A memória lida abaixo de 2 MiB, ou negativa, é recusada
+com `SandboxError`: o DuckDB 1.5.5 não abre com `0MiB` e lê um valor negativo como o padrão dele,
+80% da memória da máquina (sonda de 2026-10-01). Num contêiner Linux de 4 vCPUs com limite de
+cgroup de 13,4 GiB (2026-09-24):
 
 ```python
 # Memória, threads e pasta de transbordo definidos na abertura da conexão e conferidos no catálogo.
 import duckdb
-from serialize_db.engine.duckdb import environment_limits
+from serialize_db.resources import environment_limits
 
 limits = environment_limits()   # as CPUs do processo e metade da memória que ele ainda pode usar
 # {'threads': 4, 'memory_limit': '6771MiB'}
@@ -3651,12 +3686,16 @@ class Base(DeclarativeBase):
 
 class Operacao(Base):
     __tablename__ = "operacoes"
-    __table_args__ = {"comment": "Operações do mês"}
+    __table_args__ = {
+        "comment": "Operações do mês",
+        "info": {"serialize_db": {"partition_by": ["mes"], "sort_key": ["data_ref", "id_operacao"]}},
+    }
     id_operacao: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     data_ref: Mapped[dt.date] = mapped_column(primary_key=True)
     id_cliente: Mapped[int] = mapped_column(BigInteger, comment="Chave do cliente")
     valor: Mapped[decimal.Decimal] = mapped_column(Numeric(18, 2))
     descricao: Mapped[str | None] = mapped_column(String(200))
+    mes: Mapped[str] = mapped_column(String(7), comment="Mês de data_ref no formato AAAA-MM")
 
 engine = sa.create_engine("duckdb:///sandbox.duckdb", connect_args={"config": {"memory_limit": "4GB"}})
 Base.metadata.create_all(engine)
@@ -3687,12 +3726,12 @@ import pyarrow as pa
 from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
-def arrow_schema(model) -> pa.Schema:
-    """Esquema Arrow derivado das colunas do modelo (serialize_db.schema.arrow_schema)."""
+def arrow_schema(table) -> pa.Schema:
+    """Esquema Arrow derivado das colunas da tabela (serialize_db.schema.arrow_schema)."""
     ...
 
 def ingest(engine, model, df: pd.DataFrame) -> None:
-    table = pa.Table.from_pandas(df, schema=arrow_schema(model), preserve_index=False)
+    table = pa.Table.from_pandas(df, schema=arrow_schema(model.__table__), preserve_index=False)
     with engine.begin() as conn:
         con = conn.connection.dbapi_connection
         con.register("entrada", table)
@@ -3747,7 +3786,8 @@ Esta seção descreve a conectividade do ambiente alvo, como ele organiza os dad
 interessam ao contrato, o DDL, a manipulação de dados com pandas e Arrow, a ingestão em volume, a
 exportação para Parquet, as recomendações de performance e o suporte a SQLAlchemy. As afirmações vêm
 da documentação oficial, consultada em 2026-09-18 e, na seção de conectividade, em 2026-09-20, e do
-código dos pacotes `redshift_connector` 2.1.16, `sqlalchemy-redshift` 1.0.0 e `awswrangler` 3.17.1.
+código dos pacotes `redshift_connector` 2.1.16 (lido em 2026-09-18; o projeto fixa 2.1.17 desde
+2026-10-01), `sqlalchemy-redshift` 1.0.0 e `awswrangler` 3.17.1.
 Os dois caminhos de conexão rodaram no ambiente alvo em 2026-09-20, e `probes/redshift.py` repete
 as mesmas chamadas; os exemplos de SQLAlchemy foram compilados sem conexão a um cluster.
 
@@ -3829,7 +3869,7 @@ seguinte levanta o `InterfaceError` do driver, porque a transação se perdeu, e
 
 #### O cache de prepared statements e a leitura do resultado no driver
 
-O `redshift_connector` (2.1.16) guarda um prepared statement nomeado por texto de comando
+O `redshift_connector` (lido na 2.1.16; o projeto fixa a 2.1.17) guarda um prepared statement nomeado por texto de comando
 (`Connection.execute`, chave `(operation, params)`) e o reaproveita no `execute` seguinte do mesmo
 texto, com `Bind` e `Execute` sem novo `Parse`; ele fecha e descarta os guardados quando o servidor
 confirma um `ALTER`, `CREATE`, `DROP` ou `ROLLBACK` (`handle_COMMAND_COMPLETE`), e não depois de
@@ -4107,8 +4147,8 @@ compila o DDL pelo dialeto: `serialize_db.schema.sql_type` escreve `VARCHAR(6553
 a escala vai de 0 à precisão, até 37. A representação depende da precisão: até 19 dígitos, inteiro
 de 8 bytes; de 20 a 38, inteiro de 16 bytes, que ocupa o dobro em disco e torna as consultas mais
 lentas. A documentação pede que a precisão máxima não seja atribuída sem necessidade.
-`DECIMAL(18, 2)`, o tipo do contrato para valores contábeis, fica em 8 bytes nos dois bancos; o
-`decimal128(18, 2)` do Arrow, que o representa nos arquivos e na memória, ocupa 16 bytes por valor.
+`DECIMAL(18, 2)`, o tipo dos exemplos desta página para valores contábeis (o modelo cliente usa
+`Double`), fica em 8 bytes nos dois bancos; o `decimal128(18, 2)` do Arrow, que o representa nos arquivos e na memória, ocupa 16 bytes por valor.
 
 Regras de carga documentadas:
 
@@ -4151,8 +4191,8 @@ except pa.ArrowInvalid as error:
 O cast seguro rejeita a perda de escala e o estouro de precisão; `pa.Table.from_pandas(df,
 schema=esquema)` falha com a mesma mensagem numa coluna `object` de `Decimal`. `safe=False` trunca e
 diverge do arredondamento da carga; `pc.round` antes do cast reproduz os valores documentados. A
-biblioteca rejeita o lote ou arredonda de forma explícita; nos dois casos, o valor que chega ao
-`COPY` já tem a escala da coluna.
+biblioteca recusa o lote (`ContractError`, `double fora da escala`, com a instrução de arredondar
+no cliente antes de chamar) e não arredonda; o valor que chega ao `COPY` já tem a escala da coluna.
 
 #### JSON e o tipo SUPER
 
@@ -4270,8 +4310,10 @@ Pontos da referência:
 - Tabelas temporárias vivem num esquema da sessão, o primeiro do `search_path`, morrem com ela,
   aceitam nome igual ao de uma permanente, que fica à sombra até ser qualificada pelo esquema, e
   recebem codificação `RAW` por padrão, salvo `ENCODE` por coluna; `svv_table_info` não as lista. Um
-  nome iniciado por `#` cria uma tabela temporária. O sandbox da biblioteca não as usa; o pipeline
-  pode criá-las na sessão única do motor.
+  nome iniciado por `#` cria uma tabela temporária. A biblioteca as usa como staging: a do `COPY`
+  da publicação e a do acréscimo em lotes numa tabela com coluna JSON
+  (`staging_ddl(..., temporary=True)`), que o fim da sessão apaga; o pipeline pode criá-las na
+  sessão única do motor.
 - Limites: 127 bytes por nome, 1.600 colunas, cota de tabelas por tipo de nó.
 
 As tabelas do sandbox recebem o prefixo da execução no nome, dentro do único esquema. O `Table` do
@@ -4466,7 +4508,7 @@ def to_dataframe(rows: list[tuple], query: sa.Select, schema: pa.Schema) -> pd.D
     return data.to_pandas(types_mapper=pd.ArrowDtype)
 
 rows = [(1, dt.date(2026, 8, 1), 100, Decimal("10.50"), "op-1", "2026-08")]   # forma de cursor.fetchall()
-print(to_dataframe(rows, query, arrow_schema(Operacao)).dtypes)
+print(to_dataframe(rows, query, arrow_schema(Operacao.__table__)).dtypes)
 ```
 
 ```text
@@ -4641,14 +4683,16 @@ distintas não esperam; linhas distintas da tabela de controle confirmam as duas
 criou espera o `COMMIT` dela; o `DELETE` das linhas que outra transação confirmada trocou recebe
 `1023 Serializable isolation violation`; o `LOCK` é recusado (`0A000 Operation is not supported
 through datashares`); e o `UPDATE` condicionado à versão lida espera o `COMMIT` da outra e afeta 0
-linhas. A publicação lê a linha de controle no início da transação e a grava no fim. Em 2026-10-10,
-`probes/operacao/probe_parallel_gain.py` leu no `sys_query_history` as 52 gravações da linha de
+linhas. A publicação lê a linha de controle no início da transação e a grava no fim.
+
+Em 2026-10-10, `probes/operacao/probe_parallel_gain.py` leu no `sys_query_history` as 52 gravações da linha de
 controle de 13 publicações de quatro tabelas, em quatro conexões ou uma por vez, e no
 `svv_transactions`, por uma quinta sessão a cada segundo, os locks delas: a espera por lock foi de
 até 0,132 s, sem fila, e o `PgXenWriteLock` na tabela de controle apareceu uma vez como pendente,
 por um segundo; os quatro `INSERT` que passaram de 3 s levaram de 20,067 s a 21,070 s no
-planejamento, todos em publicações que criaram as tabelas (`.claude/memory/concurrency.md`). Às
-18:52 do mesmo dia a sonda publicou as quatro tabelas pela própria transação com a linha de
+planejamento, todos em publicações que criaram as tabelas (`.claude/memory/concurrency.md`).
+
+Às 18:52 do mesmo dia a sonda publicou as quatro tabelas pela própria transação com a linha de
 controle logo depois do `CREATE TABLE`, antes do `COPY`: a gravação da linha toma um lock de
 escrita na tabela de controle que a transação segura até o `COMMIT`, as quatro transações se
 serializaram nele, cada `INSERT` esperando o `COMMIT` da anterior, e o `sys_query_history` contou
@@ -4656,7 +4700,7 @@ a espera como planejamento, de 4,995 s a 16,481 s, com até 0,132 s de espera po
 publicação grava a linha por último, e com as tabelas criadas e confirmadas antes da transação
 nenhum `INSERT` esperou. As três ordens levaram de 9,427 s a 9,710 s (a da publicação), de
 22,798 s a 23,358 s (a linha de controle antes do `COPY`) e de 9,135 s a 10,234 s (as tabelas
-criadas antes), e o usuário aceitou em 2026-10-10 a espera de cerca de 20 s da primeira publicação
+criadas antes). O usuário aceitou em 2026-10-10 a espera de cerca de 20 s da primeira publicação
 paralela de uma tabela nova (`docs/index.md`, seção "Multithreading").
 
 ### Ingestão de dados
@@ -4690,11 +4734,17 @@ O fluxo do projeto substitui o `INSERT` grande da biblioteca atual:
 1. Converter o DataFrame numa tabela Arrow com o esquema do modelo (cast seguro).
 2. Gravar Parquet em `<caminho S3 do projeto>/staging/<execution_id>/<tabela>/`, fora das pastas das
    tabelas Delta, com o pyarrow.
-3. `COPY execucao_<id>.<tabela> FROM '<manifesto>' IAM_ROLE '<arn>' FORMAT AS PARQUET MANIFEST`, ou
-   com `IAM_ROLE 'SESSION'` numa conexão federada por IAM enquanto o namespace não tiver papel
-   associado; `SESSION` usa as permissões da identidade da sessão no S3 e não combina com outro
-   método.
-4. Comparar `pg_last_copy_count()` com o número de linhas enviadas e então `commit`.
+3. `COPY <esquema>.exec_<id>_<tabela> FROM '<manifesto>' ACCESS_KEY_ID '...' SECRET_ACCESS_KEY '...'
+   SESSION_TOKEN '...' FORMAT AS PARQUET MANIFEST FILLRECORD`, com a lista das colunas do arquivo
+   ([O S3 alcançado pelas credenciais de quem chama](#o-s3-alcancado-pelas-credenciais-de-quem-chama)).
+   `IAM_ROLE '<arn>'`, ou `IAM_ROLE 'SESSION'` numa conexão federada por IAM, serve a um namespace
+   com papel associado, que o ambiente alvo não tem; `SESSION` usa as permissões da identidade da
+   sessão no S3 e não combina com outro método.
+4. `commit`; a contagem é a da auditoria, por consulta, porque a biblioteca não lê
+   `pg_last_copy_count()`.
+
+O esboço abaixo é um `COPY` por `IAM_ROLE` com a contagem de `pg_last_copy_count()`, fora do fluxo
+da biblioteca:
 
 ```python
 import json
@@ -4725,9 +4775,9 @@ def load(conn: redshift_connector.Connection, df, schema: pa.Schema, table: str,
 ```
 
 Um arquivo por lote basta abaixo de 128 MB; acima disso, vários arquivos de tamanho parecido
-aproveitam as slices. A biblioteca apaga o staging da execução ao terminar, e a rotina de limpeza
-remove o staging de execuções que falharam. Uma regra de ciclo de vida no bucket do domínio
-dependeria do administrador.
+aproveitam as slices. A biblioteca apaga o staging da execução ao terminar, com ou sem erro; o
+staging de um processo interrompido fica até ser apagado à mão. Uma regra de ciclo de vida no
+bucket do domínio dependeria do administrador.
 
 Os métodos do `redshift_connector` para DataFrames não substituem esse fluxo:
 
@@ -4920,18 +4970,23 @@ Os 32 arquivos saíram de um `UNLOAD ... PARTITION BY` sem `ORDER BY`, de uma ta
 de 0,97 a 1,00 às 21:56 de 2026-10-09), sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e cópias
 dela por
 `CREATE TABLE AS ... LIMIT`; a leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
-distribuição.
+distribuição. Desde 2026-10-05, o `UNLOAD` da exportação da biblioteca grava em série, num arquivo
+só (`PARALLEL OFF`), a partição de até 5.000.000 linhas, contadas antes no sandbox, e em paralelo
+acima disso (`_PARALLEL_OFF_ROWS`, `serialize_db.engine.redshift`).
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
 acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
 pyarrow e o papel do projeto. O `awswrangler.redshift.unload` executa o `UNLOAD` e lê os arquivos de
 volta num DataFrame; `unload_to_files` só descarrega.
 
-Com o Delta como fonte da verdade ([Delta Lake](#delta-lake)), o `UNLOAD` grava com `PARTITION BY (mes)`
-na pasta da tabela, e a biblioteca registra os arquivos no log do Delta depois de conferir o
-manifesto verboso. O `schema.elements` lista também a coluna de partição, que o `PARTITION BY` tira
-dos arquivos (`mes` como `character varying` de `max_length` 7 na suíte de 2026-09-21): a lista
-esperada da conferência de `register_files` a inclui. Uma amostra do
+Com o Delta como fonte da verdade ([Delta Lake](#delta-lake)), o `UNLOAD` da biblioteca grava uma
+partição por comando, sem `PARTITION BY`, num prefixo novo por chamada dentro da pasta
+`<coluna>=<valor>/` da tabela, e registra os arquivos no log do Delta depois de conferir o
+manifesto verboso (`RedshiftEngine.export_partition`). Sob `PARTITION BY`, o `schema.elements`
+listou também a coluna de partição, que a cláusula tira dos arquivos (`mes` como
+`character varying` de `max_length` 7 na suíte de 2026-09-21); sem a cláusula, como a biblioteca
+grava, ele lista só as colunas do `select`, e essa é a lista esperada da conferência de
+`register_files`. Uma amostra do
 manifesto, reduzida aos campos que a biblioteca lê, no leiaute que a documentação descreve (URL,
 `content_length` e `record_count` por entrada, `schema.elements` com nome e tipo, total em `meta`):
 
@@ -4992,8 +5047,10 @@ TO 's3://bucket/prd/operacoes/' IAM_ROLE 'arn:aws:iam::123456789012:role/papel'
 FORMAT AS PARQUET PARTITION BY (mes) MANIFEST VERBOSE
 ```
 
-Os nomes de tipo da amostra e a presença da coluna de partição em `schema` sob `PARTITION BY` não
-foram verificados; por isso a lista esperada é um parâmetro. `UnloadFromSelect` do dialeto não tem
+Os nomes de tipo da amostra e a coluna de partição em `schema` sob `PARTITION BY` foram lidos na
+suíte de 2026-09-21 (`mes` como `character varying`, `max_length` 7); sem `PARTITION BY`, como a
+biblioteca grava, `schema.elements` lista só as colunas do `select`. `UnloadFromSelect` do dialeto
+não tem
 `PARTITION BY` nem `VERBOSE`, e o comando fica em texto.
 
 ### O manifesto entre o log do Delta e o Redshift
@@ -5050,7 +5107,7 @@ ficam onde estão, sem cópia nem reescrita. É `serialize_db.delta.register_fil
 | `meta.content_length` | `size` |
 | `meta.record_count` | `stats.numRecords` |
 | nenhuma | `partition_values`, o valor da partição exportada, que a biblioteca também põe no caminho, `<coluna>=<valor>/` na convenção Hive |
-| nenhuma | `modification_time`, do `LastModified` do objeto no S3 |
+| nenhuma | `modification_time`, o instante do registro em milissegundos (`int(time.time() * 1000)`), não o `LastModified` do objeto |
 | nenhuma | `data_change`, conceito do Delta sem contraparte |
 | nenhuma | `stats.minValues`, `maxValues` e `nullCount`, lidos do rodapé Parquet |
 
@@ -5065,8 +5122,8 @@ partição. A coluna de timestamp é a exceção, porque o `INT96` do `UNLOAD` n
 O `schema.elements` do manifesto verboso traz o nome e o tipo de cada coluna, e é a primeira
 conferência antes do commit: um `cast` errado no `select` do `UNLOAD` aparece ali, não na primeira
 leitura da tabela meses depois. Sob `PARTITION BY`, o bloco listou também a coluna de partição, que
-os arquivos não têm (suíte de 2026-09-21); sem ele, como a biblioteca grava, a lista esperada é a do
-`select`, que a próxima execução da suíte confere. A conferência a que o leitor obedece é a do
+os arquivos não têm (suíte de 2026-09-21); sem ele, como a biblioteca grava, a lista é a do
+`select` (leitura em `.claude/memory/redshift.md`). A conferência a que o leitor obedece é a do
 rodapé, abaixo.
 
 #### As conferências antes do commit e a releitura depois
@@ -5234,6 +5291,7 @@ class Operacao(Base):
     id_cliente: Mapped[int] = mapped_column(BigInteger)
     valor: Mapped[decimal.Decimal] = mapped_column(Numeric(18, 2))
     descricao: Mapped[str | None] = mapped_column(String(200), redshift_encode="zstd")
+    mes: Mapped[str] = mapped_column(String(7))
 
 print(CreateTable(Operacao.__table__).compile(dialect=RedshiftDialect_redshift_connector()))
 ```
@@ -5258,9 +5316,11 @@ coluna geram a forma `coluna BIGINT DISTKEY SORTKEY`.
 
 Com o dialeto instalado, o SQLAlchemy valida os argumentos `redshift_*` e rejeita os que o dialeto
 não aceita (`ArgumentError`); sem o dialeto, cada argumento entra com o aviso `Can't validate
-argument` e não gera DDL. Para manter os modelos neutros, o projeto guarda as opções em `Table.info`
-(`serialize_db.schema.table_options`) e as aplica na compilação do DDL com um gancho do
-compilador, verificado com o dialeto 1.0.0:
+argument` e não gera DDL. Para manter os modelos neutros, o projeto guarda as opções em
+`Table.info["serialize_db"]["redshift"]` (`serialize_db.schema.table_options`), e
+`serialize_db.schema.ddl` as escreve no fim do próprio `CREATE TABLE` (`redshift_options`), sem
+compilar pelo dialeto. O gancho do compilador abaixo, verificado com o dialeto 1.0.0, é o caminho
+para quem compila `CreateTable`:
 
 ```python
 from sqlalchemy.ext.compiler import compiles
@@ -5321,7 +5381,8 @@ O comando compilado, com os valores embutidos:
 
 ```sql
 UNLOAD ('SELECT operacoes.id_operacao, operacoes.data_ref, operacoes.id_cliente, operacoes.valor,
-operacoes.descricao FROM operacoes WHERE operacoes.data_ref >= ''2026-08-01''')
+operacoes.descricao FROM operacoes WHERE operacoes.data_ref >= ''2026-08-01'' AND
+operacoes.data_ref < ''2026-09-01'' ORDER BY operacoes.data_ref, operacoes.id_operacao')
 TO 's3://bucket/operacoes/data/2026-08/abc123_'
 CREDENTIALS 'aws_iam_role=arn:aws:iam::123456789012:role/papel' MANIFEST FORMAT AS PARQUET MAXFILESIZE 256.0 MB
 ```
@@ -5438,11 +5499,13 @@ Delta, DuckDB e Redshift.
 
 Restrições e índices são objetos: `PrimaryKeyConstraint`, `ForeignKey` na coluna ou
 `ForeignKeyConstraint` na tabela, `UniqueConstraint`, `CheckConstraint`, `Index`. Desde a versão
-2.0, `restricao.ddl_if(dialect="redshift")` limita a emissão a um dialeto, o que implementa a
-política de restrições (chaves no Redshift, nenhuma no DuckDB) sem dois modelos:
+2.0, `restricao.ddl_if(dialect="redshift")` limita a emissão a um dialeto. A biblioteca não compila
+`CreateTable`: `serialize_db.schema.ddl` não escreve chave nenhuma nos DDL do sandbox, e
+`serialize_db.publication.published_ddl` escreve `PRIMARY KEY` na tabela publicada do Redshift a
+partir de `table.primary_key`; o modelo declara a chave sem `ddl_if`:
 
 ```python
-PrimaryKeyConstraint("id_operacao", "data_ref").ddl_if(dialect="redshift")
+PrimaryKeyConstraint("id_operacao", "data_ref")
 ```
 
 #### Restrições adiáveis
@@ -5502,9 +5565,10 @@ verificação adiada feita pelo próprio pipeline. No Redshift só a tabela publ
 
 O nome do esquema vai em `Table.schema` ou em `MetaData(schema=...)`; `BLANK_SCHEMA` exclui uma tabela
 do padrão. A opção de execução `schema_translate_map` troca nomes de esquema por conexão, útil quando
-cada execução do pipeline tem o próprio esquema (`execucao_abc123`) e os modelos declaram um nome
-lógico. Prefixos no nome da tabela, o caminho quando só há um esquema no Redshift, exigem gerar o
-nome em `__tablename__`.
+cada execução do pipeline tem o próprio esquema e os modelos declaram um nome lógico. A biblioteca
+tem um esquema só no Redshift e prefixa o nome da tabela (`exec_<id>_<tabela>`) na compilação:
+`serialize_db.sql.render` troca cada tabela do modelo por uma cópia com o nome prefixado e citado
+(`prefixed`), e `__tablename__` continua o nome lógico.
 
 #### DDL
 
@@ -5554,7 +5618,7 @@ from deltalake import DeltaTable
 table = Operacao.__table__
 schema = pa.schema([
     field.with_metadata({**field.metadata, "comment": column.comment}) if column.comment else field
-    for field, column in zip(arrow_schema(Operacao), table.columns)
+    for field, column in zip(arrow_schema(table), table.columns)
 ])
 delta_table = DeltaTable.create(
     "lago/operacoes", schema, mode="ignore", partition_by=["mes"],
@@ -5594,12 +5658,16 @@ individuais: `get_table_names`, `get_columns`, `get_pk_constraint`, `get_foreign
 
 A reflexão devolve o que o dialeto sabe extrair. No duckdb_engine 0.17.0, `get_pk_constraint`
 devolve vazio e índices não são refletidos, embora a função `duckdb_constraints()` do DuckDB liste a
-chave; colunas, tipos e comentários voltam corretos. A comparação entre o modelo e o banco, uma das
-auditorias do projeto, precisa de uma consulta ao catálogo para as chaves no DuckDB.
+chave; colunas, tipos e comentários voltam corretos. A comparação entre o modelo e o armazenamento
+na biblioteca é `serialize_db.delta.reconcile` (o esquema Delta) e
+`serialize_db.publication.reconcile_published` (as tabelas publicadas, por `svv_all_columns`); ela
+não reflete o DuckDB. Uma comparação pela reflexão precisaria de uma consulta ao catálogo para as
+chaves no DuckDB, como no esboço abaixo.
 
-A auditoria compara os tipos pela correspondência Arrow (`arrow_type`, definida na seção sobre
-arquivos Parquet), o que ignora o comprimento de `String(n)` que o catálogo do DuckDB descarta, e
-busca a chave no catálogo:
+O esboço compara os tipos por `arrow_type` (`serialize_db.schema.arrow_type`, que recebe a coluna;
+definida adiante em [O esquema Arrow dos arquivos Parquet](#o-esquema-arrow-dos-arquivos-parquet)),
+o que ignora o comprimento de `String(n)` que o catálogo do DuckDB descarta, e busca a chave no
+catálogo:
 
 ```python
 # Compara a tabela refletida do DuckDB com o contrato; a chave vem do catálogo, não da reflexão.
@@ -5613,7 +5681,7 @@ for c in operations.columns:
     r = reflected.columns.get(c.name)
     if r is None:
         mismatches.append(f"{c.name}: ausente no banco")
-    elif arrow_type(r.type) != arrow_type(c.type) or r.nullable != c.nullable:
+    elif arrow_type(r) != arrow_type(c) or r.nullable != c.nullable:
         mismatches.append(f"{c.name}: banco {r.type}, contrato {c.type}")
 mismatches += [f"{c.name}: fora do contrato" for c in reflected.columns if c.name not in operations.columns]
 print(mismatches)
@@ -6215,7 +6283,7 @@ class Rastreio:
 class Operacao(Rastreio, Base):
     __tablename__ = "operacoes"
     __table_args__ = (
-        PrimaryKeyConstraint("id_operacao", "data_ref").ddl_if(dialect="redshift"),
+        PrimaryKeyConstraint("id_operacao", "data_ref"),
         {
             "comment": "Operações do mês",
             "info": {"serialize_db": {"partition_by": ["mes"],
@@ -6237,8 +6305,8 @@ class Operacao(Rastreio, Base):
   `mapped_column(nullable=...)` prevalece.
 - `type_annotation_map` na classe base troca a tabela padrão de tipos (`int` para `Integer`, `str`
   para `String()`, `Decimal` para `Numeric()` sem precisão, `datetime` para `DateTime()` sem fuso).
-  O contrato exige `BigInteger`, `Numeric(18, 2)` e `TIMESTAMP` com fuso, então o mapa é parte do
-  modelo.
+  O contrato dos exemplos exige `BigInteger`, `Numeric(18, 2)` e `TIMESTAMP` com fuso, então o mapa
+  é parte do modelo.
 - `Annotated` com `mapped_column` define tipos reutilizáveis, como `Amount` acima.
 - `__table_args__` aceita um dicionário ou uma tupla de restrições com o dicionário no fim; nele
   entram `schema`, `comment`, `info`, `implicit_returning` e os argumentos de dialeto.
@@ -6327,9 +6395,11 @@ with Session(engine) as session:
   SQLite. O Redshift não tem `ON CONFLICT`; o caminho é `MERGE` em `text()`.
 - Os métodos `bulk_insert_mappings` e `bulk_update_mappings` são a forma legada dos mesmos recursos.
 
-O lote da biblioteca não passa pelo `executemany` em nenhum dos dois bancos. No DuckDB, o lote é uma
-tabela Arrow com o esquema do contrato, registrada na conexão bruta; no Redshift, um `INSERT` de
-várias linhas compilado do mesmo modelo:
+O lote da biblioteca não passa pelo `executemany` em nenhum dos dois bancos. No DuckDB, os lotes vão
+num arquivo Arrow IPC lido por um único `INSERT ... BY NAME` (seção Ingestão de dados do DuckDB); no
+Redshift, num Parquet do `staging_prefix` que um `COPY ... MANIFEST FILLRECORD` com a lista de
+colunas carrega ([Ingestão de dados](#ingestao-de-dados-3)). O esboço abaixo registra a tabela Arrow
+na conexão bruta e compila um `INSERT` de várias linhas para o Redshift:
 
 ```python
 # Lote sem executemany: tabela Arrow registrada no DuckDB; um INSERT de várias linhas no Redshift.
@@ -6342,7 +6412,7 @@ records = [
 ]
 for r in records:
     r["mes"] = r["data_ref"].strftime("%Y-%m")               # coluna de partição, derivada antes de gravar
-batch = pa.Table.from_pylist(records, schema=arrow_schema(Operacao))   # chaves ausentes viram nulo
+batch = pa.Table.from_pylist(records, schema=arrow_schema(Operacao.__table__))   # chaves ausentes viram nulo
 
 engine = create_engine("duckdb:///:memory:")
 Base.metadata.create_all(engine)
@@ -6370,7 +6440,7 @@ dígitos em `decimal128(18, 2)` falha com
 um texto em `int64` falha com `Could not convert 'x' with type str`. Um nulo em campo não anulável
 passa pela construção da tabela Arrow e é recusado pelo `NOT NULL` da tabela na carga
 (`Constraint Error: NOT NULL constraint failed: operacoes.id_cliente`). O registro vale até o
-`unregister`: depois dele, o mesmo `INSERT` falha com `Catalog Error: Table with name batch does not exist!`.
+`unregister`: depois dele, o mesmo `INSERT` falha com `Catalog Error: Table with name lote does not exist!`.
 
 #### Chaves geradas no servidor
 
@@ -6457,7 +6527,7 @@ SQLAlchemy](#suporte-a-sqlalchemy-2) do DuckDB traz os detalhes; o resumo para o
 
 | Tema | Comportamento |
 | --- | --- |
-| DDL | `create_all` funciona com chaves, `NOT NULL`, comentários e sequências; `Identity` e `use_alter` falham, e `DEFERRABLE` é descartado nas restrições de tabela; `String(n)` perde o comprimento. Uma chave primária `Integer` de uma coluna com o `autoincrement` padrão sai como `SERIAL` e falha com `Type with name SERIAL does not exist!`, então as chaves do cliente levam `autoincrement=False`. Restrições ficam fora pela política do projeto (`ddl_if(dialect="redshift")`). |
+| DDL | `create_all` funciona com chaves, `NOT NULL`, comentários e sequências; `Identity` e `use_alter` falham, e `DEFERRABLE` é descartado nas restrições de tabela; `String(n)` perde o comprimento. Uma chave primária `Integer` de uma coluna com o `autoincrement` padrão sai como `SERIAL` e falha com `Type with name SERIAL does not exist!`, então as chaves do cliente levam `autoincrement=False`. Restrições ficam fora pela política do projeto: `serialize_db.schema.ddl` não as escreve; o `ddl_if(dialect="redshift")` do SQLAlchemy serve a quem compila `CreateTable`. |
 | Reflexão | Colunas e comentários sim; chave primária e índices não. |
 | Importação | `INSERT INTO tabela BY NAME SELECT * FROM entrada` com a tabela Arrow registrada na conexão bruta (`conn.connection.dbapi_connection.register`), porque variáveis Python não são visíveis pelo engine. Volumes pequenos pelo bulk insert do ORM (0,98 s para 50.000 linhas, 0,77 s com `render_nulls=True`). |
 | Exportação | `COPY (...) TO 'arquivo.parquet'` em `text()`, com a consulta do modelo compilada com `literal_binds`. |
@@ -6474,8 +6544,10 @@ correspondência de tipos, e a aplicação do esquema acontece no Arrow, na escr
 import pyarrow as pa, pyarrow.parquet as pq
 from sqlalchemy import types as t
 
-def arrow_type(sa_type: t.TypeEngine) -> pa.DataType:
-    match sa_type:
+# Esboço; as funções da biblioteca são serialize_db.schema.arrow_type(column), que recebe a coluna,
+# e serialize_db.schema.arrow_schema(table), que recebe a tabela, com a mesma correspondência.
+def arrow_type(column) -> pa.DataType:
+    match column.type:
         case t.SmallInteger():
             return pa.int16()
         case t.BigInteger():
@@ -6500,21 +6572,21 @@ def arrow_type(sa_type: t.TypeEngine) -> pa.DataType:
             return pa.string()
         case t.JSON():
             return pa.string()
-    raise TypeError(f"tipo sem correspondência Arrow: {sa_type!r}")
+    raise TypeError(f"tipo sem correspondência Arrow: {column.type!r}")
 
-def arrow_schema(model) -> pa.Schema:
+def arrow_schema(table) -> pa.Schema:
     return pa.schema([
-        pa.field(c.name, arrow_type(c.type), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
-        for i, c in enumerate(model.__table__.columns, start=1)
+        pa.field(c.name, arrow_type(c), nullable=c.nullable, metadata={"PARQUET:field_id": str(i)})
+        for i, c in enumerate(table.columns, start=1)
     ])
 
 def write_parquet(model, df, path: str) -> None:
-    schema = arrow_schema(model)
+    schema = arrow_schema(model.__table__)
     table = pa.Table.from_pandas(df, schema=schema, preserve_index=False, safe=True)
     pq.write_table(table, path, compression="zstd", row_group_size=100_000)
 
 def check(model, path: str) -> None:
-    expected, actual = arrow_schema(model), pq.read_schema(path)
+    expected, actual = arrow_schema(model.__table__), pq.read_schema(path)
     for field in expected:
         actual_field = actual.field(field.name)
         if actual_field.type != field.type or (not field.nullable and actual_field.nullable):

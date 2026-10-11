@@ -1,12 +1,14 @@
-"""Os dois armazenamentos da biblioteca, a pasta local e o S3, pelo sistema de arquivos do PyArrow.
+"""[public] Os dois armazenamentos da biblioteca, a pasta local e o S3, pelo sistema de arquivos do
+PyArrow.
 
 ``Storage`` guarda a raiz do banco: a URI que o delta-rs e o DuckDB recebem, o sistema de arquivos
 do ``pyarrow.fs`` que lista, lê, copia e apaga nos dois armazenamentos, e o caminho da raiz nele.
 Os métodos recebem caminhos relativos à raiz, montados com ``/`` por ``join``; ``relative`` leva
 uma URI sob a raiz ao caminho relativo. Dois grupos de métodos têm um ramo por armazenamento: a
-escrita condicional do arquivo de controle (``create_text`` e ``write_text``), ``put_object`` do
-``boto3`` com ``IfNoneMatch`` ou ``IfMatch`` no S3, porque o ``pyarrow.fs`` não tem a condição nem
-devolve a etag, e ``O_EXCL`` ou a impressão digital com ``os.replace`` na pasta local; e a cópia, a
+leitura e a escrita condicional do arquivo de controle (``read_text``, ``create_text`` e
+``write_text``), ``get_object`` e ``put_object`` do ``boto3``, este com ``IfNoneMatch`` ou
+``IfMatch``, no S3, porque o ``pyarrow.fs`` não tem a condição nem devolve a etag, e a leitura do
+arquivo, ``O_EXCL`` ou a impressão digital com ``os.replace`` na pasta local; e a cópia, a
 transferência gerenciada do ``boto3`` no S3, porque o ``CopyObject`` único do ``copy_file`` do
 PyArrow é abandonado pelo SDK da AWS depois de 3 segundos sem resposta num objeto grande.
 
@@ -74,19 +76,19 @@ _DUCKDB_SECRET = "serialize_db_s3"
 
 
 def _region() -> str | None:
-    """A região de ``AWS_REGION`` ou, sem ela, de ``AWS_DEFAULT_REGION``."""
+    """[private] A região de ``AWS_REGION`` ou, sem ela, de ``AWS_DEFAULT_REGION``."""
     return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
 
 def _endpoint() -> str | None:
-    """O endpoint de ``AWS_ENDPOINT_URL``, para um serviço compatível com o S3."""
+    """[private] O endpoint de ``AWS_ENDPOINT_URL``, para um serviço compatível com o S3."""
     return os.environ.get("AWS_ENDPOINT_URL") or None
 
 
 def _extension_directory() -> str | None:
-    """A pasta de extensões do DuckDB: ``SERIALIZE_DB_DUCKDB_EXTENSIONS``; sem ela, ``.duckdb/``
-    ao lado do ambiente virtual quando existe, a pasta que ``prepare_offline.sh`` cria; senão
-    ``None``, a padrão do DuckDB."""
+    """[private] A pasta de extensões do DuckDB: ``SERIALIZE_DB_DUCKDB_EXTENSIONS``; sem ela,
+    ``.duckdb/`` ao lado do ambiente virtual quando existe, a pasta que ``prepare_offline.sh`` cria;
+    senão ``None``, a padrão do DuckDB."""
     configured = os.environ.get("SERIALIZE_DB_DUCKDB_EXTENSIONS")
     if configured:
         return configured
@@ -97,7 +99,7 @@ def _extension_directory() -> str | None:
 def _proxy_settings(
     environ: Mapping[str, str],
 ) -> dict[str, str]:
-    """As configurações de proxy do DuckDB lidas de ``HTTP_PROXY``.
+    """[private] As configurações de proxy do DuckDB lidas de ``HTTP_PROXY``.
 
     O DuckDB recusa o endereço com as credenciais embutidas, e o erro atinge o acesso ao S3: o
     endereço vai sem elas em ``http_proxy``, e o usuário e a senha em ``http_proxy_username`` e
@@ -126,8 +128,9 @@ def _proxy_settings(
 
 
 def _duckdb_secret_options() -> list[str]:
-    """As opções do secret S3 do DuckDB fora da credencial: a região e, com ``AWS_ENDPOINT_URL``,
-    o endereço sem o esquema, o endereço por caminho e, num endpoint ``http``, ``USE_SSL false``.
+    """[private] As opções do secret S3 do DuckDB fora da credencial: a região e, com
+    ``AWS_ENDPOINT_URL``, o endereço sem o esquema, o endereço por caminho e, num endpoint ``http``,
+    ``USE_SSL false``.
 
     O DuckDB não lê ``AWS_ENDPOINT_URL``. Sem ``URL_STYLE 'path'`` o bucket vira subdomínio do
     endereço, que num IP não resolve, e sem ``USE_SSL false`` a conexão a um endpoint ``http`` tenta
@@ -150,7 +153,7 @@ def _create_duckdb_secret(
     connection: duckdb.DuckDBPyConnection,
     credentials: botocore.credentials.ReadOnlyCredentials,
 ) -> None:
-    """Cria o secret do S3, ou o substitui, com a chave de ``credentials`` e as opções de
+    """[private] Cria o secret do S3, ou o substitui, com a chave de ``credentials`` e as opções de
     ``_duckdb_secret_options``.
 
     A chave, o segredo e o token vão como parâmetros do comando, fora do texto, que o erro de
@@ -169,8 +172,9 @@ def _create_duckdb_secret(
 def _secret_key_id(
     connection: duckdb.DuckDBPyConnection,
 ) -> str | None:
-    """A chave que o secret do S3 guarda, lida do ``secret_string`` de ``duckdb_secrets()``, que
-    no DuckDB 1.5.5 mostra ``key_id`` sem redação; ``None`` sem o secret."""
+    """[private] A chave que o secret do S3 guarda, lida do ``secret_string`` de
+    ``duckdb_secrets()``, que no DuckDB 1.5.5 mostra ``key_id`` sem redação; ``None`` sem o
+    secret."""
     rows = connection.execute(
         "SELECT secret_string FROM duckdb_secrets() WHERE name = ?", [_DUCKDB_SECRET]
     ).fetchall()
@@ -183,7 +187,7 @@ def _secret_key_id(
 
 
 def aws_credentials() -> botocore.credentials.Credentials:
-    """A credencial da cadeia padrão do ``boto3``, resolvida numa sessão nova; protegida, para o
+    """[protected] A credencial da cadeia padrão do ``boto3``, resolvida numa sessão nova; para o
     motor DuckDB, que a segura pela execução.
 
     A do contêiner é uma ``RefreshableCredentials``: o ``get_frozen_credentials`` dela pede outra
@@ -204,8 +208,8 @@ def renew_duckdb_secret(
     connection: duckdb.DuckDBPyConnection,
     credentials: botocore.credentials.Credentials,
 ) -> bool:
-    """Recria o secret do S3 quando a chave guardada nele não é a que ``credentials`` dá agora;
-    protegida, para o motor DuckDB, que a chama na entrada de cada sessão.
+    """[protected] Recria o secret do S3 quando a chave guardada nele não é a que ``credentials`` dá
+    agora; para o motor DuckDB, que a chama na entrada de cada sessão.
 
     O secret guarda a chave da criação, e o ``delta_scan`` não o renova: no ambiente alvo, o
     ``delta_scan`` falhou depois que a chave guardada expirou, com a credencial do ``boto3`` já em
@@ -226,7 +230,8 @@ def renew_duckdb_secret(
 def _fingerprint(
     content: bytes,
 ) -> str:
-    """A impressão digital de um conteúdo na pasta local: o ``sha256`` dele, o papel da etag."""
+    """[private] A impressão digital de um conteúdo na pasta local: o ``sha256`` dele, o papel da
+    etag."""
     return hashlib.sha256(content).hexdigest()
 
 
@@ -234,7 +239,7 @@ def _write_new_file(
     full: Path,
     content: bytes,
 ) -> None:
-    """Grava ``content`` num arquivo local que ainda não existe, pela abertura exclusiva
+    """[private] Grava ``content`` num arquivo local que ainda não existe, pela abertura exclusiva
     ``O_EXCL``, no modo de um arquivo novo: 0o666 menos a umask do processo, sem execução. O
     arquivo existente é ``FileExistsError``, sem gravar."""
     descriptor = os.open(full, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
@@ -244,7 +249,8 @@ def _write_new_file(
 
 @dataclasses.dataclass(frozen=True)
 class Storage:
-    """A raiz do banco num dos dois armazenamentos, com o sistema de arquivos que a percorre.
+    """[public] A raiz do banco num dos dois armazenamentos, com o sistema de arquivos que a
+    percorre.
 
     Exemplo:
 
@@ -257,18 +263,19 @@ class Storage:
     """
 
     uri: str
-    """A raiz como o delta-rs e o DuckDB a recebem, sem barra final: ``s3://bucket/prefixo`` ou o
-    caminho absoluto da pasta local, com ``/`` também no Windows (``C:/dados/delta``)."""
+    """[public] A raiz como o delta-rs e o DuckDB a recebem, sem barra final:
+    ``s3://bucket/prefixo`` ou o caminho absoluto da pasta local, com ``/`` também no Windows
+    (``C:/dados/delta``)."""
     filesystem: pafs.FileSystem
-    """``S3FileSystem`` ou ``LocalFileSystem``."""
+    """[public] ``S3FileSystem`` ou ``LocalFileSystem``."""
     path: str
-    """A raiz na forma do sistema de arquivos: ``bucket/prefixo`` ou o caminho absoluto."""
+    """[public] A raiz na forma do sistema de arquivos: ``bucket/prefixo`` ou o caminho absoluto."""
 
     @staticmethod
     def for_uri(
         uri: str,
     ) -> Storage:
-        """O armazenamento de ``s3://bucket/prefixo``, de um caminho ou de ``file://``.
+        """[public] O armazenamento de ``s3://bucket/prefixo``, de um caminho ou de ``file://``.
 
         No S3, o ``S3FileSystem`` leva a região de ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``, a
         mesma que ``storage_options`` passa ao delta-rs, e o ``endpoint_override`` de
@@ -298,7 +305,7 @@ class Storage:
 
     @property
     def is_s3(self) -> bool:
-        """Se a raiz está no S3."""
+        """[public] Se a raiz está no S3."""
         return self.uri.startswith("s3://")
 
     # ------------------------------------------------------------ caminhos
@@ -307,7 +314,7 @@ class Storage:
         self,
         *parts: str,
     ) -> str:
-        """O caminho relativo à raiz com as partes juntadas por ``/``.
+        """[public] O caminho relativo à raiz com as partes juntadas por ``/``.
 
         Exemplo:
 
@@ -330,7 +337,7 @@ class Storage:
         self,
         uri: str,
     ) -> str:
-        """O caminho relativo à raiz de uma URI sob ela.
+        """[public] O caminho relativo à raiz de uma URI sob ela.
 
         Exemplo:
 
@@ -354,7 +361,7 @@ class Storage:
         self,
         path: str,
     ) -> str:
-        """A URI de um caminho relativo à raiz, como o delta-rs e o DuckDB a recebem.
+        """[public] A URI de um caminho relativo à raiz, como o delta-rs e o DuckDB a recebem.
 
         Exemplo:
 
@@ -371,14 +378,14 @@ class Storage:
         self,
         path: str,
     ) -> str:
-        """O caminho no sistema de arquivos de um caminho relativo à raiz."""
+        """[private] O caminho no sistema de arquivos de um caminho relativo à raiz."""
         return f"{self.path}/{path}" if path else self.path
 
     def _local_parent(
         self,
         path: str,
     ) -> None:
-        """Cria a pasta de um arquivo na pasta local; no S3 não há pasta a criar."""
+        """[private] Cria a pasta de um arquivo na pasta local; no S3 não há pasta a criar."""
         if not self.is_s3:
             Path(self._full(path)).parent.mkdir(parents=True, exist_ok=True)
 
@@ -386,8 +393,8 @@ class Storage:
         self,
         path: str,
     ) -> None:
-        """Cria a pasta na pasta local, porque o ``COPY`` do DuckDB para um arquivo não cria a pasta
-        dele; no S3 não há pasta a criar.
+        """[public] Cria a pasta na pasta local, porque o ``COPY`` do DuckDB para um arquivo não
+        cria a pasta dele; no S3 não há pasta a criar.
 
         Exemplo:
 
@@ -406,7 +413,7 @@ class Storage:
         self,
         path: str,
     ) -> bool:
-        """Se o arquivo ou a pasta existe.
+        """[public] Se o arquivo ou a pasta existe.
 
         Exemplo:
 
@@ -424,7 +431,7 @@ class Storage:
         self,
         path: str,
     ) -> int | None:
-        """O tamanho de um arquivo.
+        """[public] O tamanho de um arquivo.
 
         Exemplo:
 
@@ -446,7 +453,7 @@ class Storage:
         prefix: str,
         suffix: str = "",
     ) -> list[str]:
-        """Os arquivos sob ``prefix`` que terminam em ``suffix``.
+        """[public] Os arquivos sob ``prefix`` que terminam em ``suffix``.
 
         A listagem desce as subpastas e exclui ``_delta_log/``, onde os checkpoints também
         terminam em ``.parquet``.
@@ -476,7 +483,7 @@ class Storage:
         source: str,
         destination: str,
     ) -> None:
-        """Copia um arquivo sem passar os dados pelo Python.
+        """[public] Copia um arquivo sem passar os dados pelo Python.
 
         No S3, a transferência gerenciada do ``boto3``: um ``CopyObject`` até 8 MiB e, acima, um
         upload multipart de ``UploadPartCopy`` em partes de 8 MiB, em paralelo e com a repetição
@@ -509,7 +516,7 @@ class Storage:
         self,
         paths: list[str],
     ) -> None:
-        """Apaga os arquivos.
+        """[public] Apaga os arquivos.
 
         Exemplo:
 
@@ -529,8 +536,8 @@ class Storage:
         self,
         path: str,
     ) -> pa.NativeFile:
-        """O arquivo aberto para leitura aleatória, como ``pq.ParquetFile`` o recebe: no S3, o
-        rodapé é lido por GET de intervalo.
+        """[public] O arquivo aberto para leitura aleatória, como ``pq.ParquetFile`` o recebe: no
+        S3, o rodapé é lido por GET de intervalo.
 
         Exemplo:
 
@@ -548,8 +555,8 @@ class Storage:
         self,
         path: str,
     ) -> pa.NativeFile:
-        """O arquivo aberto para escrita sequencial, como ``pq.ParquetWriter`` o recebe: no S3, um
-        upload em partes que termina no ``close``.
+        """[public] O arquivo aberto para escrita sequencial, como ``pq.ParquetWriter`` o recebe: no
+        S3, um upload em partes que termina no ``close``.
 
         Exemplo:
 
@@ -570,7 +577,7 @@ class Storage:
         self,
         path: str,
     ) -> tuple[str, str]:
-        """O texto do arquivo e a impressão digital dele, a que ``write_text`` recebe em
+        """[public] O texto do arquivo e a impressão digital dele, a que ``write_text`` recebe em
         ``if_match``.
 
         Exemplo:
@@ -594,7 +601,7 @@ class Storage:
         path: str,
         text: str,
     ) -> str:
-        """Grava o texto num arquivo que ainda não existe.
+        """[public] Grava o texto num arquivo que ainda não existe.
 
         No S3, ``put_object`` com ``IfNoneMatch="*"``, atômico no servidor; na pasta local, a
         abertura com ``O_EXCL``, no modo de um arquivo novo, 0o666 menos a umask.
@@ -610,8 +617,8 @@ class Storage:
         :param path: o arquivo, relativo à raiz; na pasta local, a pasta dele é criada.
         :param text: o conteúdo, gravado em UTF-8.
         :return: a impressão digital do arquivo gravado.
-        :raises ConflictError: o arquivo já existe, ou, no S3, o 409 de outra operação no objeto
-            durante a gravação; nada foi gravado.
+        :raises serialize_db.errors.ConflictError: o arquivo já existe, ou, no S3, o 409 de outra
+            operação no objeto durante a gravação; nada foi gravado.
         """
         if self.is_s3:
             return self._put_s3(path, text, {"IfNoneMatch": "*"})
@@ -623,14 +630,15 @@ class Storage:
         text: str,
         if_match: str | None = None,
     ) -> str:
-        """Grava o texto por inteiro, substituindo o arquivo, com a condição opcional de ele não ter
-        mudado desde a leitura.
+        """[public] Grava o texto por inteiro, substituindo o arquivo, com a condição opcional de
+        ele não ter mudado desde a leitura.
 
         No S3, ``put_object``, com ``IfMatch=<etag>`` quando a condição vem, atômico no servidor.
-        Na pasta local, a comparação da impressão digital seguida de ``os.replace`` de um arquivo
-        temporário, que não é atômica entre processos e basta à pasta local, o ambiente dos testes
-        e do desenvolvimento; o arquivo substituído mantém o modo, o novo nasce como em
-        ``create_text``, e a escrita ou a troca que falha não deixa o temporário na pasta.
+        Na pasta local, a impressão digital do arquivo é comparada e um arquivo temporário entra
+        no lugar dele por ``os.replace``; a sequência não é atômica entre processos, o que basta à
+        pasta local, o ambiente dos testes e do desenvolvimento. O arquivo substituído mantém o
+        modo, o novo nasce como em ``create_text``, e a escrita ou a troca que falha não deixa o
+        temporário na pasta.
 
         Exemplo:
 
@@ -644,8 +652,8 @@ class Storage:
         :param if_match: grava só se a impressão digital atual é a informada, a que
             ``read_text`` devolveu; ``None`` grava sem condição.
         :return: a impressão digital nova.
-        :raises ConflictError: a condição falhou, ou, no S3, o 409 de outra operação no objeto
-            durante a gravação; nada foi gravado.
+        :raises serialize_db.errors.ConflictError: a condição falhou, ou, no S3, o 409 de outra
+            operação no objeto durante a gravação; nada foi gravado.
         """
         if not self.is_s3:
             return self._replace_local(path, text, if_match)
@@ -659,7 +667,7 @@ class Storage:
         path: str,
         text: str,
     ) -> str:
-        """A criação na pasta local, pela abertura exclusiva ``O_EXCL``."""
+        """[private] A criação na pasta local, pela abertura exclusiva ``O_EXCL``."""
         full = Path(self._full(path))
         full.parent.mkdir(parents=True, exist_ok=True)
         content = text.encode("utf-8")
@@ -675,8 +683,8 @@ class Storage:
         text: str,
         if_match: str | None,
     ) -> str:
-        """A substituição na pasta local, com a impressão digital conferida quando ``if_match``
-        vem."""
+        """[private] A substituição na pasta local, com a impressão digital conferida quando
+        ``if_match`` vem."""
         full = Path(self._full(path))
         full.parent.mkdir(parents=True, exist_ok=True)
         if if_match is not None:
@@ -703,20 +711,20 @@ class Storage:
         self,
         path: str,
     ) -> tuple[str, str]:
-        """O bucket e a chave de um caminho relativo à raiz no S3."""
+        """[private] O bucket e a chave de um caminho relativo à raiz no S3."""
         bucket, _, key = self._full(path).partition("/")
         return bucket, key
 
     def _s3_client(self) -> object:
-        """O cliente S3 do ``boto3`` com a região e o endpoint do ambiente: o botocore não lê
-        ``AWS_REGION`` e, sem região, iria ao endpoint global."""
+        """[private] O cliente S3 do ``boto3`` com a região e o endpoint do ambiente: o botocore não
+        lê ``AWS_REGION`` e, sem região, iria ao endpoint global."""
         return boto3.client("s3", region_name=_region(), endpoint_url=_endpoint())
 
     def _read_s3(
         self,
         path: str,
     ) -> tuple[str, str]:
-        """O texto e a etag de um objeto do S3."""
+        """[private] O texto e a etag de um objeto do S3."""
         bucket, key = self._bucket_and_key(path)
         try:
             response = self._s3_client().get_object(Bucket=bucket, Key=key)
@@ -732,8 +740,8 @@ class Storage:
         text: str,
         condition: Mapping[str, str],
     ) -> str:
-        """O ``put_object`` com a condição, ``IfNoneMatch`` ou ``IfMatch``; o 412 e o 409 viram
-        ``ConflictError``."""
+        """[private] O ``put_object`` com a condição, ``IfNoneMatch`` ou ``IfMatch``; o 412 e o 409
+        viram ``ConflictError``."""
         bucket, key = self._bucket_and_key(path)
         try:
             response = self._s3_client().put_object(
@@ -751,7 +759,7 @@ class Storage:
     # ------------------------------------------------------------ delta-rs e DuckDB
 
     def storage_options(self) -> dict[str, str]:
-        """As opções do delta-rs, montadas a cada chamada.
+        """[public] As opções do delta-rs, montadas a cada chamada.
 
         Nenhuma credencial: a cadeia padrão do delta-rs as resolve e as renova no ``DeltaTable``
         que a execução segura, enquanto um trio congelado expiraria em cerca de uma hora e
@@ -784,8 +792,8 @@ class Storage:
         self,
         connection: duckdb.DuckDBPyConnection,
     ) -> None:
-        """Carrega as extensões que a raiz pede e, no S3, cria o secret com a chave da credencial
-        do ``boto3``.
+        """[public] Carrega as extensões que a raiz pede e, no S3, cria o secret com a chave da
+        credencial do ``boto3``.
 
         Na pasta local, só ``LOAD delta``. No S3, ``LOAD httpfs`` e ``LOAD delta``, o secret
         ``serialize_db_s3`` com a chave, o segredo e o token que a cadeia do ``boto3`` resolve
@@ -803,6 +811,8 @@ class Storage:
             connection.execute(f"SELECT count(*) FROM delta_scan('{uri}')")
 
         :param connection: a conexão aberta do DuckDB que recebe as extensões e o secret.
+        :raises duckdb.Error: uma extensão ausente da pasta configurada na conexão, ou o secret
+            recusado.
         :raises botocore.exceptions.NoCredentialsError: no S3, a cadeia do ``boto3`` não achou
             credencial.
         """
@@ -820,8 +830,8 @@ class Storage:
         database: str = ":memory:",
         config: Mapping[str, object] | None = None,
     ) -> duckdb.DuckDBPyConnection:
-        """Uma conexão do DuckDB com as extensões da pasta configurada, sem instalação automática,
-        e ``duckdb_setup`` aplicado.
+        """[public] Uma conexão do DuckDB com as extensões da pasta configurada, sem instalação
+        automática, e ``duckdb_setup`` aplicado.
 
         A instalação e a carga automáticas ficam desligadas: o ``LOAD`` de uma extensão conhecida
         a baixaria para ``~/.duckdb`` sem aviso, e o ambiente alvo não tem internet.
@@ -864,7 +874,7 @@ class Storage:
 def _s3_storage(
     uri: str,
 ) -> Storage:
-    """O armazenamento no S3, com a região e o endpoint das variáveis."""
+    """[private] O armazenamento no S3, com a região e o endpoint das variáveis."""
     region = _region()
     if not region:
         raise ValueError(f"{uri}: o S3 precisa da região em AWS_REGION ou AWS_DEFAULT_REGION")
@@ -879,8 +889,8 @@ def _s3_storage(
 def _local_storage(
     uri: str,
 ) -> Storage:
-    """O armazenamento numa pasta local, com o caminho absoluto resolvido e escrito com ``/``; o
-    de uma URI ``file://`` sai de ``Path.from_uri``, que decodifica o ``%XX``."""
+    """[private] O armazenamento numa pasta local, com o caminho absoluto resolvido e escrito com
+    ``/``; o de uma URI ``file://`` sai de ``Path.from_uri``, que decodifica o ``%XX``."""
     local_path = Path.from_uri(uri) if uri.startswith("file://") else Path(uri)
     # O as_posix troca o \ do Windows por /, o separador dos caminhos que o PyArrow lista e que
     # join e relative montam; no Linux e no macOS, o texto não muda.
@@ -891,7 +901,7 @@ def _local_storage(
 def prepare_environment(
     environ: MutableMapping[str, str] = os.environ,
 ) -> dict[str, str]:
-    """Acerta as variáveis que o delta-rs lê.
+    """[public] Acerta as variáveis que o delta-rs lê.
 
     Exporta ``NO_PROXY`` a partir de ``no_proxy`` quando a maiúscula está ausente ou vazia: o
     cliente HTTP do delta-rs lê ``NO_PROXY`` antes de ``no_proxy``, e vazia ela anula as exceções e

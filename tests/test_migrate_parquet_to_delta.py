@@ -1,6 +1,6 @@
 """``scripts/migrate_parquet_to_delta.py``: a migração adiantada, sobre o pacote, na base fictícia.
 
-Os testes escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` (marcador ``local``): a base de
+Os testes que gravam, marcados ``local``, escrevem sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``: a base de
 ``tests/source_db_projetado.py`` numa pasta da sessão e as tabelas Delta em outras, uma raiz por
 teste, com a pasta temporária do processo apontada para a pasta do teste, onde o motor DuckDB de
 cada chamada de ``import_table`` abre o banco. Eles conferem a linha de comando sobre a base
@@ -34,8 +34,6 @@ from client_model import Base
 from conftest import LocalLocation
 from serialize_db.execution import Database
 from serialize_db.parquet_import import ImportReport, PartitionReport
-
-pytestmark = pytest.mark.local
 
 TABLES = Base.metadata.tables
 OUTSIDE_MODEL = ["alembic_version", "meta_update_status", "schema.json"]
@@ -81,6 +79,7 @@ def rewrite_first_chunk(
     )
 
 
+@pytest.mark.local
 def test_main_migrates_the_whole_base(
     base: source.SourceBase,
     folder: Path,
@@ -158,6 +157,7 @@ def test_main_migrates_the_whole_base(
     assert "in_progress" not in document
 
 
+@pytest.mark.local
 def test_main_confers_only_the_requested_partitions(
     base: source.SourceBase,
     folder: Path,
@@ -194,6 +194,7 @@ def test_main_confers_only_the_requested_partitions(
     assert conferred == ["2026-02-28"]
 
 
+@pytest.mark.local
 def test_main_refuses_a_requested_partition_absent_from_the_source(
     base: source.SourceBase,
     folder: Path,
@@ -226,6 +227,7 @@ def test_main_refuses_a_requested_partition_absent_from_the_source(
     assert list(root.glob("**/_delta_log")) == []
 
 
+@pytest.mark.local
 def test_main_ignores_the_listed_partitions(
     base: source.SourceBase,
     folder: Path,
@@ -285,6 +287,7 @@ def test_main_ignores_the_listed_partitions(
     assert migrate.partition_rows(db, TABLES["cad_operacoes"], "2026-03-31") == 0
 
 
+@pytest.mark.local
 def test_report_keeps_the_progress_of_an_interrupted_load(
     base: source.SourceBase,
     folder: Path,
@@ -323,6 +326,7 @@ def test_report_keeps_the_progress_of_an_interrupted_load(
     assert document["environment"]["arguments"]["tables"] == ["cad_operacoes"]
 
 
+@pytest.mark.local
 def test_main_refuses_a_model_with_violations(
     base: source.SourceBase,
     folder: Path,
@@ -332,11 +336,12 @@ def test_main_refuses_a_model_with_violations(
     tabela fora do modelo, um ``--metadata`` que não importa, um valor de ``--partitions`` fora
     da regra da partição e ``--partitions`` com ``--ignore-partitions`` são erros de uso."""
     never_written = folder / "nunca-gravada"
+    # A origem inexistente prova que o modelo é recusado antes de qualquer leitura dela.
     arguments = [
         "--metadata",
         "reference_model.model_db_projetado:Base.metadata",
         "--source",
-        str(base.root),
+        str(folder / "inexistente"),
         "--root",
         str(never_written),
     ]
@@ -359,6 +364,7 @@ def test_main_refuses_a_model_with_violations(
             ]
         )
     assert refusal.value.code == 2
+    assert "tabelas fora do modelo: nada" in capsys.readouterr().err
     assert not never_written.exists()
 
     # O --metadata que não importa sai como erro de uso, sem traceback.
@@ -416,6 +422,7 @@ def test_main_refuses_a_model_with_violations(
     assert not never_written.exists()
 
 
+@pytest.mark.local
 def test_empty_environment_variable_counts_as_absent(
     base: source.SourceBase,
     folder: Path,
