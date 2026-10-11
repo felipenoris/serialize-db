@@ -295,14 +295,15 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `tests/test_audit.py`, `tests/test_probes.py`, `tests/test_execution.py`, `tests/test_reader.py`
   e `tests/conftest.py`), o estudo (`tests/proof_of_concept/test_redshift.py` e a docstring de
   `tests/proof_of_concept/test_stdlib.py`) e as sondas `probes/operacao/probe_parallel_gain.py`,
-  que importa `publication_statements`, `control_read` e `published_ddl`, e
+  que chama `publication_statements`, `control_read` e `published_ddl` pelo módulo, e
   `probes/operacao/probe_unload_parallel.py`, que importa `unload_text`; e os textos que os citam:
   `docs/tecnologias.md` (`partition_query`, `partition_text`, `published_ddl` e
   `reconcile_published`), `probes/README.md` (`publication_statements`) e o `CLAUDE.md` (a regra
   "Model-level errors" de "Docstrings" e o índice de `src/serialize_db/` e de `tests/emulator.py`).
   `physical_memory`, de `resources`, cumpre o mesmo critério, com docstring `[protected]` e chamada
-  em `src/` só pelo próprio módulo (o script de migração e `tests/test_resources.py` a importam), e
-  ficou fora da contagem do cartão: entra na renomeação se o usuário confirmar. Sem docstring, as
+  em `src/` só pelo próprio módulo, e ficou fora da contagem do cartão; o usuário escolheu
+  "Prefixar" também para ela em 2026-10-11 (`decisions.md`, na mesma seção), e a renomeação muda
+  o script de migração e `tests/test_resources.py`, que a importam. Sem docstring, as
   constantes `RETENTION` (`delta`) e `ARROW_ONLY` (`engine`), o alias `Task` (`_pool`) e os loggers
   (`log`, `command_log`) também são só do próprio módulo e ficaram fora do cartão.
 

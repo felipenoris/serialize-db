@@ -2422,8 +2422,7 @@ The cards of PR #157, asked one at a time, each with its case before the options
   `engine.redshift`, the six SQL functions of `audit`, which the evaluation's case 2 had already
   called private, and `required_parameters` in `sql`. The card's reason: none of the 24 is in the
   public API, and the rule of 2026-10-11 lets the tests read private names. `physical_memory` of
-  `resources` meets the same criterion and was left out of the card's count; it enters the rename
-  only on the user's word (`OPEN_QUESTIONS.md`).
+  `resources`, left out of the card's count, had a card of its own (below).
 - The rules of the lessons of PRs #126, #128 and #149 (06:22 UTC, "Levar", the recommended
   option): the three rules enter the working rules of `CLAUDE.md` (the DuckDB version bump waits
   for the PyPI extension wheels; a command repeated after a connection drop is read with the
@@ -2431,8 +2430,14 @@ The cards of PR #157, asked one at a time, each with its case before the options
   relies on it), and the clause "the rule lives here because `CLAUDE.md` is at its size budget"
   leaves the three lessons. The reason held at #126 and #128, with `CLAUDE.md` at 76,799 bytes,
   and not at #149, at 64,099; `CLAUDE.md` went from 67,974 to 69,192 bytes.
+- The `_` prefix of `physical_memory` of `resources` (16:39 UTC, "Prefixar", the recommended
+  option): it meets the criterion of the 24 names, with a `[protected]` docstring and only its
+  own module calling it in `src/`, and was left out of that card's count; it takes the prefix and
+  opens with `[private]` in the same PR, and the migration script, which writes
+  `memory_total_mb` of its report with it, and `tests/test_resources.py` import the new name. The
+  card's reason: it is the case of the 24, among which are names the probes use.
 
 `CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24, of the shallow clone and of
 the lessons of #126, #128 and #149), `lessons.md`, `src/serialize_db/delta.py`,
 `src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md` (the
-rename of the 24 names).
+rename of the 24 names and of `physical_memory`).
