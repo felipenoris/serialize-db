@@ -72,7 +72,7 @@ from serialize_db.resources import (
     available_memory,
     environment_limits,
     peak_rss_mb,
-    physical_memory,
+    _physical_memory,
 )
 
 # ---------------------------------------------------------------- o relatório
@@ -212,7 +212,7 @@ def describe_environment(
         "python": platform.python_version(),
         "cpus": os.cpu_count(),
         "cpus_available": available_cpus(),
-        "memory_total_mb": round(physical_memory() / 2**20),
+        "memory_total_mb": round(_physical_memory() / 2**20),
         "memory_available_mb": round(available_memory() / 2**20),
         "packages": {name: importlib.metadata.version(name) for name in packages},
         "duckdb_limits": environment_limits(),

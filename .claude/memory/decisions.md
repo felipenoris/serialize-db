@@ -2415,9 +2415,9 @@ The cards of PR #157, asked one at a time, each with its case before the options
   which the card asked again. `test_export_swap_reads_the_memory_once_before_the_commit`
   fails on the previous code.
 - The `_` prefix of the names only their own module calls (06:13 UTC, "Prefixar", the
-  recommended option): the 24 names the item of `OPEN_QUESTIONS.md` lists take the `_` prefix of
-  the level rule and open with `[private]`, in a new PR after PR #157 merges; an import from
-  outside the package breaks. They are 11 of the 16 names that left `__all__` on 2026-10-10,
+  recommended option): the 24 names of the section below take the `_` prefix of the level rule
+  and open with `[private]`, in a new PR after PR #157 merges; an import from outside the
+  package breaks. They are 11 of the 16 names that left `__all__` on 2026-10-10,
   where the evaluation's prefix question had named 2, and 13 that were never in `__all__`: six in
   `engine.redshift`, the six SQL functions of `audit`, which the evaluation's case 2 had already
   called private, and `required_parameters` in `sql`. The card's reason: none of the 24 is in the
@@ -2439,5 +2439,121 @@ The cards of PR #157, asked one at a time, each with its case before the options
 
 `CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24, of the shallow clone and of
 the lessons of #126, #128 and #149), `lessons.md`, `src/serialize_db/delta.py`,
-`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md` (the
-rename of the 24 names and of `physical_memory`).
+`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, and the rename of the 24
+names and of `physical_memory` (the section below).
+
+## The `_` prefix of the names only their own module calls, applied (2026-10-11)
+
+The cards "Prefixar" of 06:13 and 16:39 UTC (the section above) were applied after PR #157
+merged: the 24 names a `grep -w` over `src/` found on 2026-10-11 with a `[protected]` docstring
+and no caller in `src/` outside their own module, and `physical_memory`, take the `_` prefix and
+their docstrings open with `[private]`, the fields of `_PublishedColumn` included. No alias keeps
+an old name, so an import of one from outside the package breaks, which the card of case 1 of
+2026-10-10 had ruled out for the names leaving `__all__` ("nenhuma importação muda").
+
+- `parquet_import`: `_partition_query`.
+- `engine.redshift`: `_sandbox_prefix`, `_schema_from_row_description`, `_login_of`,
+  `_driver_connect` (the seam the tests replace with the stand-in), `_unload_text`,
+  `_table_from_cursor`, `_compiled_for_cursor` and `_literal_text`.
+- `audit`: the six SQL function classes `_partition_text`, `_json_valid`, `_text_bytes`,
+  `_json_bytes`, `_partition_value_valid` and `_is_finite`, whose `name` keeps the SQL function's
+  name, so the generated SQL does not change.
+- `delta`: `_schema_diff`.
+- `publication`: `_PublishedColumn`, `_control_ddl`, `_control_read`, `_published_ddl`,
+  `_publication_statements`, `_unpublication_statements` and `_reconcile_published`.
+- `sql`: `_required_parameters`.
+- `resources`: `_physical_memory`.
+
+The callers outside each module read the private names, as the card's reason gave the rule of
+2026-10-11: the tests (`tests/test_engine_redshift.py`, `tests/test_publication.py`,
+`tests/test_parquet_import.py`, `tests/test_audit.py`, `tests/test_probes.py`,
+`tests/test_execution.py`, `tests/test_reader.py`, `tests/test_resources.py` and
+`tests/conftest.py`), the study (`tests/proof_of_concept/test_redshift.py` and the docstring of
+`tests/proof_of_concept/test_stdlib.py`), the probes `probes/operacao/probe_parallel_gain.py` and
+`probes/operacao/probe_unload_parallel.py`, and `scripts/migrate_parquet_to_delta.py`. Some of
+them read a private name of a module other than the one they test: `delta._schema_diff` in
+`tests/test_engine_redshift.py`, and `redshift._driver_connect`, replaced by the publication,
+reader and execution suites and by `tests/conftest.py`, as `tests/test_execution.py` already read
+`cli._audit_engine` and `probes/credentials.py` `redshift._workgroup_login`. `docs/tecnologias.md`,
+`probes/README.md` and `CLAUDE.md` ("Model-level errors" and the index of `src/serialize_db/` and
+of `tests/emulator.py`) name the new names; the dated records (the older entries of this file,
+the theme files and `lessons.md`) keep the old ones, as with `prod` and `dev`. The constants, the
+alias and the loggers only their own module uses stay unprefixed (`OPEN_QUESTIONS.md`).
+
+`src/serialize_db/`, `tests/`, `probes/operacao/`, `scripts/migrate_parquet_to_delta.py`,
+`docs/tecnologias.md`, `probes/README.md`, `CLAUDE.md`, `OPEN_QUESTIONS.md`.
+
+## The intended use as a criterion of the public level (2026-10-11)
+
+The user asked (2026-10-11, 17:45 UTC), in the thread of the final review of PRs #155 and #156,
+for the criterion in the rule of the levels: "Marque nos critérios de escolha entre
+public/protected/private que um dos critérios para marcar público envolve avaliação da intenção de
+uso do nome (função, classe, etc.) pelos usuários do pacote." The rule of 2026-09-21 read only who
+calls a name: client code, another module of the library, or only its own module. With the
+criterion, a function, a class or a constant that the evaluation of its intended use finds the
+package's users call, build or read to write their pipelines is public, whether or not another
+module of the library also uses it, and protected and private keep the names with no use intended
+for them. The other criterion of the public level is the rule of 2026-10-10, a type a public
+function returns is public (the section "The public API after the evaluation of 2026-10-10"). The
+request came while the evaluation the user asked at 17:41 UTC ran: whether a client pipeline needs
+any name marked private or protected, functions, names and constants alike.
+
+`CLAUDE.md` ("Naming conventions").
+
+## The public `partition_values` (2026-10-11)
+
+The evaluation the user asked at 17:41 UTC, `api-publica/avaliacao-nomes-nao-publicos.md` in the
+Claude project's library, read every protected and private name against what a client pipeline does
+by the public API (the tutorial of `docs/index.md`, `docs/operacao.md`, `tests/test_pipeline.py` and
+`tests/client_model/`) and found two names with a client use the public API lacks:
+`delta.partition_values` and `delta._schema_diff`. Asked on a card whether `partition_values`
+becomes public ("Pública", recommended, or "Protegida"), the user chose "Pública" (18:05 UTC): the
+function lists the partition values with a file in a loaded version of a Delta table, which an
+incremental pipeline compares between its input and its output and a pipeline reads to check its
+output after `run.publish_delta`, and `run.previous_partitions` gives only the values up to the
+run's partition and refuses a run without one. The name enters the `__all__` of `delta` with the
+public docstring, the module docstring names it in the table's cycle, and `docs/index.md` beside
+`run.previous_partitions`; no import path changes.
+`tests/test_delta.py::test_partition_values_lists_the_partitions_with_files` fails without the
+`sorted` of the set.
+
+`src/serialize_db/delta.py`, `docs/index.md`, `tests/test_delta.py`.
+
+## The mark of a name public by its intended use (2026-10-11)
+
+The user asked (2026-10-11, 18:06 UTC), right after choosing the public `partition_values`: "Crie
+uma marca na docstring dos nomes que estamos decidindo como públicas considerando a intenção por
+uso de clientes. Coloque esta regra nos nossos critérios. Assim poderemos saber futuramente o
+motivo de determinados nomes terem sido marcados como públicos." The mark is `[uso do cliente]`,
+right after the level tag, a wording the user did not name: a docstring opens with
+`[public] [uso do cliente]` when the evaluation of the name's intended use made it public and the
+code that calls it would leave it protected or private, and its prose says the client's use.
+`partition_values` is the first.
+`tests/test_package.py::test_the_client_use_mark_follows_only_the_public_tag` refuses the mark
+anywhere but right after `[public]`, and the tag test refuses `[public]` on a name that is not
+public.
+
+`CLAUDE.md` ("Naming conventions", "Docstrings"), `src/serialize_db/delta.py`,
+`tests/test_package.py`.
+
+## The public `schema_diff` (2026-10-11)
+
+The evaluation the user asked at 17:41 UTC found a second name with a client use ("The public
+`partition_values` (2026-10-11)"): `delta._schema_diff`, the diff between the model and a loaded
+version of a Delta table, which writes nothing. `run.publish_delta` calls `reconcile` on each table
+it publishes before writing it, so a destructive model change (a removed column, a changed type,
+`NOT NULL` on a nullable column) shows only there, as `SchemaDiffRefused`, after the pipeline ran,
+and a call to `reconcile` before the run writes the additive part to the table. Asked on a card
+whether the function becomes public ("Pública", recommended, or "Privada"), the user chose "Pública"
+(18:16 UTC). For this name the choice reverses case 1 of 2026-10-10 ("Tirar os 16", in "The public
+API after the evaluation of 2026-10-10") and the "Prefixar" of 06:13 UTC ("The `_` prefix of the
+names only their own module calls, applied (2026-10-11)"), as the card said: the function returns to
+the `__all__` of `delta` as `schema_diff`, its docstring opens with `[public] [uso do cliente]`, the
+second name with the mark, and says the client's use, the module docstring and `docs/index.md` name
+it beside `reconcile`, and `tests/test_engine_redshift.py` reads the public name. `SchemaDiff`, the
+type it returns, was already public.
+`tests/test_delta.py::test_schema_diff_reads_the_diff_without_writing` fails when the function
+commits or misses a removed column.
+
+`src/serialize_db/delta.py`, `docs/index.md`, `tests/test_delta.py`,
+`tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md`.

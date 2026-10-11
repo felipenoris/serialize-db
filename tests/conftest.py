@@ -885,14 +885,14 @@ def redshift_driver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No substituto local, a conexão de ``emulator.connect()`` no lugar do ``redshift_connector``,
-    pela porta ``driver_connect`` do motor; no ambiente alvo, nada muda."""
+    pela porta ``_driver_connect`` do motor; no ambiente alvo, nada muda."""
     if not emulator_enabled():
         return
     import emulator
 
     from serialize_db.engine import redshift
 
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: emulator.connect())
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: emulator.connect())
 
 
 def describe_error(

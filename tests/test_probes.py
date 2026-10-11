@@ -2647,7 +2647,7 @@ def test_parallel_gain_history_keeps_the_control_writes_and_their_times() -> Non
 
 def test_parallel_gain_ordered_statements_follow_the_three_orders() -> None:
     """``ordered_statements`` da sonda de paralelismo recebe os comandos da primeira publicação como
-    ``publication_statements`` os dá, o ``CREATE TABLE`` primeiro e o ``INSERT`` da linha de
+    ``_publication_statements`` os dá, o ``CREATE TABLE`` primeiro e o ``INSERT`` da linha de
     controle por último: na ordem da publicação eles ficam como estão, com a linha de controle
     antes do ``COPY`` o ``INSERT`` passa para logo depois do ``CREATE TABLE``, e com as tabelas
     criadas antes o ``CREATE TABLE`` sai; ``ORDERINGS`` começa pela ordem da publicação."""
@@ -2656,7 +2656,7 @@ def test_parallel_gain_ordered_statements_follow_the_three_orders() -> None:
         "s3://bucket/poc1/publicacao/paralelo-linha-antes-1/cad_paralelo_a/2026-08-31/1.manifest",
         ("id_lancamento", "id_conta", "data_base", "valor", "historico"),
     )
-    statements = publication.publication_statements(
+    statements = publication._publication_statements(
         "esquema",
         "poc1",
         table,

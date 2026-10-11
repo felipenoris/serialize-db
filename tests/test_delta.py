@@ -10,14 +10,15 @@ Eles conferem a criação idempotente; a substituição da partição, a versão
 tabela sem partição, que as mensagens chamam de tabela inteira, e o conflito de dois escritores; o
 registro de um arquivo como o ``UNLOAD`` grava, as recusas das conferências, a releitura que desfaz
 o commit e as estatísticas que podam; a coluna ``Double`` com valor não finito sem mínimo e máximo,
-num arquivo em Snappy; o ``max_key`` sem os arquivos de zero linhas; a reconciliação aditiva, a dos
-comentários e a recusa da destrutiva; a reescrita num commit; a diferença de versões pelo log e a
-recusa do log limpo; o arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que preserva
-os snapshots; a compactação; a exportação nos dois modos, com pastas novas acima do destino e com a
-barra final; o manifesto do ``COPY`` por versão e por lista de colunas do rodapé; a cópia profunda
-com o esquema da versão copiada; os caminhos fora da raiz recusados antes de gravar; a pasta copiada
-que abre na mesma versão; a memória recusada lida antes do commit; e os limites do ambiente em cada
-conexão do DuckDB. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
+num arquivo em Snappy; o ``max_key`` sem os arquivos de zero linhas; o diff do esquema sem commit; a
+reconciliação aditiva, a dos comentários e a recusa da destrutiva; a reescrita num commit; as
+partições com arquivo numa versão; a diferença de versões pelo log e a recusa do log limpo; o
+arquivo de controle dos snapshots e os canais dele; o ``vacuum`` que preserva os snapshots; a
+compactação; a exportação nos dois modos, com pastas novas acima do destino e com a barra final; o
+manifesto do ``COPY`` por versão e por lista de colunas do rodapé; a cópia profunda com o esquema da
+versão copiada; os caminhos fora da raiz recusados antes de gravar; a pasta copiada que abre na
+mesma versão; a memória recusada lida antes do commit; e os limites do ambiente em cada conexão do
+DuckDB. A extensão ``delta`` do DuckDB precisa estar na pasta de extensões
 (``SERIALIZE_DB_DUCKDB_EXTENSIONS``, senão ``.duckdb/`` na raiz do repositório).
 """
 
@@ -863,6 +864,28 @@ def evolved(
     return sa.Table("cad_operacoes", sa.MetaData(), *columns, comment=comment, info=OPERACOES.info)
 
 
+def test_schema_diff_reads_the_diff_without_writing(
+    storage: Storage,
+    uri: str,
+) -> None:
+    """Uma renomeação com ``NOT NULL`` relaxado: a coluna nova e o ``NOT NULL`` relaxado no diff
+    aditivo, a coluna removida no destrutivo, e nenhum commit; o modelo da tabela não tem diff."""
+    publish(storage, uri, "2026-08-31", 1, 10)  # 1
+    renamed = sa.Column("detalhe", sa.String(200))
+    model = evolved(drop=["descricao"], nullable=["data"], add=[renamed])
+    diff = delta.schema_diff(model, delta.open_table(uri, storage))
+    assert [field.name for field in diff.add] == ["detalhe"]
+    assert diff.relax == ("data",)
+    assert diff.destructive == ("descricao: removida do modelo",)
+    assert diff.changes
+    assert delta.open_table(uri, storage).version() == 1
+
+    # O modelo com que a tabela foi gravada.
+    unchanged = delta.schema_diff(OPERACOES, delta.open_table(uri, storage))
+    assert not unchanged.changes
+    assert unchanged.destructive == ()
+
+
 def test_reconcile_adds_nullable_column_and_relaxes_not_null(
     storage: Storage,
     uri: str,
@@ -975,6 +998,33 @@ def test_rewrite_in_one_commit_keeps_previous_version_readable(
 
 
 # ---------------------------------------------------------------- o log, os snapshots e a operação
+
+
+def test_partition_values_lists_the_partitions_with_files(
+    storage: Storage,
+    uri: str,
+) -> None:
+    """Os valores com arquivo na versão aberta, em ordem de texto e cada um uma vez; a versão
+    anterior pela própria lista; a partição apagada fora dela; na tabela sem partição, ``[]`` sem
+    arquivo e ``[None]`` com arquivo."""
+    publish(storage, uri, "2026-08-31", 1, 10)  # 1
+    publish(storage, uri, "2026-07-31", 11, 10)  # 2
+    appended = rows("2026-08-31", 21, 5)
+    write_deltalake(delta.open_table(uri, storage), appended, mode="append")  # 3, outro arquivo
+    current = delta.open_table(uri, storage)
+    assert delta.partition_values(current, "data_str") == ["2026-07-31", "2026-08-31"]
+    first = delta.open_table(uri, storage, 1)
+    assert delta.partition_values(first, "data_str") == ["2026-08-31"]
+    delta.open_table(uri, storage).delete("\"data_str\" = '2026-07-31'")  # 4
+    after_delete = delta.open_table(uri, storage)
+    assert delta.partition_values(after_delete, "data_str") == ["2026-08-31"]
+
+    # A tabela sem partição.
+    canais = storage.uri_of("prd/dom_canais")
+    delta.create_table(canais, CANAIS, storage)
+    assert delta.partition_values(delta.open_table(canais, storage), None) == []
+    delta.publish_partition(canais, CANAIS, None, channels([1], ["app"]), METADATA, storage)
+    assert delta.partition_values(delta.open_table(canais, storage), None) == [None]
 
 
 def test_version_diff_counts_data_changes_only(

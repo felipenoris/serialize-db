@@ -504,7 +504,7 @@ def test_redshift_reader_compiles_with_the_environment_prefix(
     ``unload_to`` antes de qualquer comando no servidor e fecha a conexão no ``close``; o
     ambiente fora da regra da partição é ``ContractError``."""
     connection = FakeConnection()
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connection)
     reader = open_redshift(Base.metadata, "prd", CONFIG)
     assert reader.environment == "prd"
     assert reader.reader_id.startswith("reader-")
@@ -545,7 +545,7 @@ def test_open_redshift_reads_the_configuration_from_the_environment(
         logins.append(login)
         return connection
 
-    monkeypatch.setattr(redshift, "driver_connect", recording_connect)
+    monkeypatch.setattr(redshift, "_driver_connect", recording_connect)
     for name, value in (
         ("HOST", "host"),
         ("USER", "usuario"),
@@ -573,7 +573,7 @@ def test_database_open_redshift_unloads_under_staging(
     stream não gravou inclusive."""
     rows = account_rows(["A", "B"])
     connection = FakeConnection(db.storage, unload_rows=rows)
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connection)
     with db.open_redshift(CONFIG) as reader:
         with reader.stream(sa.select(ACCOUNTS)) as batches:
             assert batches.read_all().num_rows == 2

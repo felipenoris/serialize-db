@@ -1089,7 +1089,7 @@ def unload_text(
     ``destination``, com manifesto verboso e ``PARALLEL OFF``, a contrabarra e a aspa simples
     dobradas no literal (leituras de 2026-09-23). O texto devolvido carrega a cláusula de
     credenciais: ele vai só para ``session.execute``, nunca para o relatório."""
-    return redshift.unload_text(select, destination, credentials, parallel=False)
+    return redshift._unload_text(select, destination, credentials, parallel=False)
 
 
 def read_manifest(
@@ -1170,10 +1170,10 @@ def unbound_parameters(
     statement: sa.sql.ClauseElement,
 ) -> list[str]:
     """Os ``bindparam`` do statement ainda sem valor, pelo guarda do pacote
-    (``sql.required_parameters``): sob ``literal_binds``, ``compiled.binds`` sai vazio e o
+    (``sql._required_parameters``): sob ``literal_binds``, ``compiled.binds`` sai vazio e o
     ``bindparam`` sem valor vira ``NULL`` calado, até num ``IN`` de lista (sonda local de
     2026-09-23)."""
-    return sorted(sql.required_parameters(statement))
+    return sorted(sql._required_parameters(statement))
 
 
 def footer_statistics(
@@ -1544,7 +1544,7 @@ def test_row_description_oids_and_type_modifier(
     redshift_session: RedshiftSession,
 ) -> None:
     """O OID e o ``type_modifier`` de cada coluna de um resultado: a tabela de
-    ``schema_from_row_description`` do motor Redshift.
+    ``_schema_from_row_description`` do motor Redshift.
 
     O ``cursor.description`` do ``redshift_connector`` 2.1.16 devolve só o nome e o OID; o
     ``type_modifier`` fica em ``cursor.ps["row_desc"]``, e o driver o usa para decodificar o
@@ -1751,9 +1751,9 @@ def test_unload_footer_statistics_with_nan(
 def finite_text(
     expression: str,
 ) -> str:
-    """O ``is_finite`` da auditoria para o Redshift, aplicado a ``expression``: o texto que o motor
+    """O ``_is_finite`` da auditoria para o Redshift, aplicado a ``expression``: o texto que o motor
     roda."""
-    return str(audit.is_finite(sa.literal_column(expression)).compile(dialect=REDSHIFT_NAMED))
+    return str(audit._is_finite(sa.literal_column(expression)).compile(dialect=REDSHIFT_NAMED))
 
 
 def as_text(
@@ -1771,7 +1771,7 @@ def test_audit_sql_under_search_path_and_nan_comparison(
     O ``ddl`` de ``serialize_db.schema`` e o ``audit_sql`` citam as tabelas sem esquema, e o motor
     conta com o ``search_path`` no esquema do datashare depois do ``USE``, que passou no ambiente
     alvo em 2026-09-23; o caso roda numa conexão própria, com o ``SET search_path`` do ``connect``
-    do motor Redshift. O ``is_finite`` do Redshift é a comparação estrita com os infinitos. Em
+    do motor Redshift. O ``_is_finite`` do Redshift é a comparação estrita com os infinitos. Em
     2026-09-23 a constante comparou o ``NaN`` igual a si mesmo; na varredura da tabela, ``NOT IN
     ('NaN'::float8, ...)`` contou só o infinito e levou o ``NaN`` ao ``CAST`` para
     ``NUMERIC(38, 6)``, e a comparação estrita deixou o ``NaN`` fora da soma, mas a negação dela

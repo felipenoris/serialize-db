@@ -160,30 +160,30 @@ class PublicationStatus:
 
 
 @dataclasses.dataclass(frozen=True)
-class PublishedColumn:
-    """[protected] Uma coluna de uma tabela publicada, como ``svv_all_columns`` a lista; para
-    ``reconcile_published``.
+class _PublishedColumn:
+    """[private] Uma coluna de uma tabela publicada, como ``svv_all_columns`` a lista; para
+    ``_reconcile_published``.
 
     Exemplo:
 
     .. code-block:: python
 
-        PublishedColumn("preco", "numeric", None, 18, 2)
+        _PublishedColumn("preco", "numeric", None, 18, 2)
     """
 
     name: str
-    """[protected] O nome da coluna, o ``column_name`` do catálogo."""
+    """[private] O nome da coluna, o ``column_name`` do catálogo."""
     data_type: str
-    """[protected] O tipo, o ``data_type`` do catálogo, como ``bigint``, ``numeric`` ou
+    """[private] O tipo, o ``data_type`` do catálogo, como ``bigint``, ``numeric`` ou
     ``character varying``."""
     length: int | None
-    """[protected] A largura do texto, o ``character_maximum_length``; ``None`` quando o catálogo
+    """[private] A largura do texto, o ``character_maximum_length``; ``None`` quando o catálogo
     não a traz."""
     precision: int | None
-    """[protected] A precisão numérica, o ``numeric_precision``; ``None`` quando o catálogo não a
+    """[private] A precisão numérica, o ``numeric_precision``; ``None`` quando o catálogo não a
     traz."""
     scale: int | None
-    """[protected] A escala numérica, o ``numeric_scale``; ``None`` quando o catálogo não a traz."""
+    """[private] A escala numérica, o ``numeric_scale``; ``None`` quando o catálogo não a traz."""
 
 
 # ---------------------------------------------------------------- o texto dos comandos
@@ -205,10 +205,10 @@ def _qualified(
     return f"{quoted(schema)}.{quoted(name)}"
 
 
-def control_ddl(
+def _control_ddl(
     schema: str,
 ) -> str:
-    """[protected] O ``CREATE TABLE`` da tabela de controle, sem ``IF NOT EXISTS``: só o usuário o
+    """[private] O ``CREATE TABLE`` da tabela de controle, sem ``IF NOT EXISTS``: só o usuário o
     roda, uma vez, e a segunda chamada falha com a mensagem do servidor; para
     ``create_publications_table``.
 
@@ -216,7 +216,7 @@ def control_ddl(
 
     .. code-block:: python
 
-        control_ddl("sbx_aco_decon")
+        _control_ddl("sbx_aco_decon")
         # CREATE TABLE "sbx_aco_decon"."serialize_db_publications" (table_name VARCHAR(127), ...)
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
@@ -228,12 +228,12 @@ def control_ddl(
     )
 
 
-def control_read(
+def _control_read(
     schema: str,
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[protected] O ``select`` da linha de controle da tabela; para ``publish_redshift`` e
+    """[private] O ``select`` da linha de controle da tabela; para ``publish_redshift`` e
     ``unpublish_redshift``, que o rodam como o primeiro comando da transação, e para
     ``publication_status``, que o roda fora de transação.
 
@@ -241,7 +241,7 @@ def control_read(
 
     .. code-block:: python
 
-        control_read("sbx_aco_decon", "prd", Lancamento.__table__)
+        _control_read("sbx_aco_decon", "prd", Lancamento.__table__)
         # SELECT delta_version FROM "sbx_aco_decon"."serialize_db_publications"
         # WHERE table_name = 'prd_cad_lancamentos'
 
@@ -258,19 +258,19 @@ def control_read(
     )
 
 
-def published_ddl(
+def _published_ddl(
     schema: str,
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[protected] O ``CREATE TABLE`` da tabela publicada: o DDL do contrato com a chave primária
-    informativa e as cláusulas físicas do modelo; para ``publication_statements``.
+    """[private] O ``CREATE TABLE`` da tabela publicada: o DDL do contrato com a chave primária
+    informativa e as cláusulas físicas do modelo; para ``_publication_statements``.
 
     Exemplo:
 
     .. code-block:: python
 
-        print(published_ddl("sbx_aco_decon", "prd", Lancamento.__table__))
+        print(_published_ddl("sbx_aco_decon", "prd", Lancamento.__table__))
         # CREATE TABLE "sbx_aco_decon"."prd_cad_lancamentos" (
         #     "id_lancamento" BIGINT NOT NULL,
         #     ...
@@ -312,7 +312,7 @@ def _partition_delete(
     return f"DELETE FROM {published} WHERE {quoted(partition_by)} = {literal(value)}"
 
 
-def publication_statements(
+def _publication_statements(
     schema: str,
     environment: str,
     table: sa.Table,
@@ -323,7 +323,7 @@ def publication_statements(
     execution_id: str,
     credentials: str,
 ) -> list[str]:
-    """[protected] Os comandos da transação depois da leitura da linha de controle, um por
+    """[private] Os comandos da transação depois da leitura da linha de controle, um por
     ``execute``, sem ``BEGIN`` e ``COMMIT``: na primeira publicação o ``CREATE TABLE`` da tabela
     publicada; a staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e,
     quando ela tem manifestos, o ``DELETE`` da staging, um ``COPY ... MANIFEST FILLRECORD`` por
@@ -337,8 +337,8 @@ def publication_statements(
 
         manifest = delta.CopyManifest("s3://bucket/prd/publicacao/exec-42/.../1.manifest",
                                       ("id_lancamento", "id_conta", "data_base", "valor"))
-        publication_statements("sbx_aco_decon", "prd", Lancamento.__table__, ["2026-08-31"],
-                               {"2026-08-31": [manifest]}, 58, 57, "exec-42", "IAM_ROLE default")
+        _publication_statements("sbx_aco_decon", "prd", Lancamento.__table__, ["2026-08-31"],
+                                {"2026-08-31": [manifest]}, 58, 57, "exec-42", "IAM_ROLE default")
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
     :param environment: o ambiente, que prefixa o nome da tabela publicada,
@@ -364,7 +364,7 @@ def publication_statements(
     staging = quoted(f"{name}_staging")
     statements = []
     if published_version is None:
-        statements.append(published_ddl(schema, environment, table))
+        statements.append(_published_ddl(schema, environment, table))
     statements.append(staging_ddl(table, staging, columns_without_partition(table), temporary=True))
     for value in partitions:
         statements.append(_partition_delete(published, table, value))
@@ -395,13 +395,13 @@ def publication_statements(
     return statements
 
 
-def unpublication_statements(
+def _unpublication_statements(
     schema: str,
     environment: str,
     table: sa.Table,
     published_version: int,
 ) -> list[str]:
-    """[protected] Os comandos da despublicação depois da leitura da linha de controle: o
+    """[private] Os comandos da despublicação depois da leitura da linha de controle: o
     ``DROP TABLE`` da tabela publicada e o ``DELETE`` da linha, condicionado à versão lida; para
     ``unpublish_redshift`` e para ``publish_redshift``, que despublica a tabela publicada num diff
     destrutivo antes de recriá-la.
@@ -410,7 +410,7 @@ def unpublication_statements(
 
     .. code-block:: python
 
-        unpublication_statements("sbx_aco_decon", "prd", Lancamento.__table__, 58)
+        _unpublication_statements("sbx_aco_decon", "prd", Lancamento.__table__, 58)
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
     :param environment: o ambiente, que prefixa o nome da tabela publicada,
@@ -432,7 +432,7 @@ def unpublication_statements(
 
 def _expected_column(
     column: sa.Column,
-) -> PublishedColumn:
+) -> _PublishedColumn:
     """[private] A coluna do contrato como ``svv_all_columns`` a listaria, na família do tipo."""
     # O texto do tipo é o nome, com um número entre parênteses (a largura) ou dois (a precisão e
     # a escala): "BIGINT", "VARCHAR(20)", "DECIMAL(18, 2)".
@@ -441,12 +441,12 @@ def _expected_column(
     type_name, first_number, second_number = match.groups()
     family = _TYPE_FAMILIES[type_name.lower()]
     if family in ("varchar", "char"):
-        return PublishedColumn(column.name, family, _optional_int(first_number), None, None)
+        return _PublishedColumn(column.name, family, _optional_int(first_number), None, None)
     if family == "decimal":
-        return PublishedColumn(
+        return _PublishedColumn(
             column.name, family, None, _optional_int(first_number), _optional_int(second_number)
         )
-    return PublishedColumn(column.name, family, None, None, None)
+    return _PublishedColumn(column.name, family, None, None, None)
 
 
 def _optional_int(
@@ -460,24 +460,24 @@ def _optional_int(
 
 
 def _in_family(
-    column: PublishedColumn,
-) -> PublishedColumn:
+    column: _PublishedColumn,
+) -> _PublishedColumn:
     """[private] A coluna publicada com o tipo na família, para a comparação."""
     family = _TYPE_FAMILIES.get(column.data_type.lower(), column.data_type.lower())
     if family in ("varchar", "char"):
         return dataclasses.replace(column, data_type=family, precision=None, scale=None)
     if family == "decimal":
         return dataclasses.replace(column, data_type=family, length=None)
-    return PublishedColumn(column.name, family, None, None, None)
+    return _PublishedColumn(column.name, family, None, None, None)
 
 
-def reconcile_published(
+def _reconcile_published(
     schema: str,
     environment: str,
     table: sa.Table,
-    columns: Sequence[PublishedColumn],
+    columns: Sequence[_PublishedColumn],
 ) -> tuple[list[str], list[str]]:
-    """[protected] O diff entre o contrato e a tabela publicada; para ``publish_redshift``.
+    """[private] O diff entre o contrato e a tabela publicada; para ``publish_redshift``.
 
     Aditivo: a coluna anulável nova. Destrutivo: a coluna removida, a coluna ``NOT NULL`` nova, o
     tipo que mudou e a largura de ``VARCHAR(n)``, a precisão ou a escala que mudaram, porque o
@@ -487,15 +487,15 @@ def reconcile_published(
 
     .. code-block:: python
 
-        statements, destructive = reconcile_published("sbx_aco_decon", "prd",
-                                                      Lancamento.__table__, columns)
+        statements, destructive = _reconcile_published("sbx_aco_decon", "prd",
+                                                       Lancamento.__table__, columns)
 
     :param schema: o esquema do Redshift, o ``schema`` de ``RedshiftConfig``.
     :param environment: o ambiente, que prefixa o nome da tabela publicada,
         ``<ambiente>_<tabela>``.
     :param table: a tabela do modelo.
     :param columns: as colunas da tabela publicada como ``svv_all_columns`` as lista, com nome,
-        tipo, largura, precisão e escala, em ``PublishedColumn``.
+        tipo, largura, precisão e escala, em ``_PublishedColumn``.
     :return: os ``ALTER TABLE ... ADD COLUMN`` do diff aditivo, no fim da tabela, e uma frase por
         diferença destrutiva, que despublica a tabela para a transação da mesma publicação
         recriá-la.
@@ -599,7 +599,7 @@ def _read_control(
     table: sa.Table,
 ) -> int | None:
     """[private] A versão publicada da tabela na linha de controle, ou ``None`` sem linha."""
-    rows = connection.rows(control_read(schema, environment, table))
+    rows = connection.rows(_control_read(schema, environment, table))
     return int(rows[0][0]) if rows else None
 
 
@@ -608,7 +608,7 @@ def _published_columns(
     config: RedshiftConfig,
     environment: str,
     table: sa.Table,
-) -> list[PublishedColumn]:
+) -> list[_PublishedColumn]:
     """[private] As colunas da tabela publicada em ``svv_all_columns``, na ordem; vazia quando a
     tabela não existe."""
     name = _published_name(environment, table)
@@ -627,7 +627,7 @@ def _published_columns(
     columns = []
     for column_name, data_type, length, precision, scale in rows:
         columns.append(
-            PublishedColumn(
+            _PublishedColumn(
                 str(column_name),
                 str(data_type),
                 _optional_int(length),
@@ -677,7 +677,7 @@ def _unpublish_table(
         if published is None:
             connection.rollback()
             return None
-        drop, delete_control = unpublication_statements(
+        drop, delete_control = _unpublication_statements(
             config.schema, environment, table, published
         )
         connection.execute(drop)
@@ -711,7 +711,7 @@ def _reconcile(
     columns = _published_columns(connection, config, environment, table)
     if not columns:
         return
-    statements, destructive = reconcile_published(config.schema, environment, table, columns)
+    statements, destructive = _reconcile_published(config.schema, environment, table, columns)
     if destructive:
         log.warning(
             "%s: diff destrutivo na tabela publicada (%s); a tabela é despublicada e "
@@ -815,7 +815,7 @@ def _publication_transaction(
             delta_db.uri(table), table, published, version, delta_db.storage
         )
         manifests = _write_manifests(delta_db, table, with_files, execution_id, version)
-        statements = publication_statements(
+        statements = _publication_statements(
             config.schema,
             environment,
             table,
@@ -915,7 +915,7 @@ def create_publications_table(
     """
     connection = _Connection(config)
     try:
-        connection.execute(control_ddl(config.schema))
+        connection.execute(_control_ddl(config.schema))
     finally:
         connection.close()
 

@@ -8,9 +8,10 @@ o valor de uma partição, ``None`` numa tabela sem partição; o valor segue
 pasta.
 
 O ciclo de uma tabela começa no modelo: ``table_exists`` diz se há tabela na pasta,
-``create_table`` a cria na versão 0 e ``open_table`` a abre numa versão; ``schema_diff`` lê o diff
-entre o modelo e o esquema dela, ``reconcile`` aplica o diff aditivo e recusa o destrutivo, que só
-``rewrite`` resolve, num commit.
+``create_table`` a cria na versão 0, ``open_table`` a abre numa versão e ``partition_values`` lista
+as partições com arquivo nela; ``schema_diff`` lê o diff entre o modelo e o esquema dela sem gravar
+nada, e ``reconcile`` aplica o diff aditivo e recusa o destrutivo, que só ``rewrite`` resolve, num
+commit.
 
 Uma partição entra por um de dois caminhos. ``register_files``, o caminho dos motores, registra no
 log os arquivos que outro escritor gravou na pasta da tabela, depois das conferências do rodapé de
@@ -119,11 +120,13 @@ __all__ = [
     "export_parquet",
     "history",
     "open_table",
+    "partition_values",
     "publish_partition",
     "read_snapshots",
     "reconcile",
     "register_files",
     "rewrite",
+    "schema_diff",
     "set_channel",
     "snapshot",
     "snapshot_versions",
@@ -1344,8 +1347,13 @@ def schema_diff(
     table: sa.Table,
     dt: DeltaTable,
 ) -> SchemaDiff:
-    """[protected] O diff entre o esquema do contrato e o da versão carregada, sem alterar nada;
-    para ``reconcile``.
+    """[public] [uso do cliente] O diff entre o esquema do contrato e o da versão carregada, sem
+    alterar nada.
+
+    O pipeline a usa antes da execução para saber se
+    ``serialize_db.execution.Execution.publish_delta`` aceita o modelo novo: ``reconcile``, que
+    ``publish_delta`` chama em cada tabela que publica, aplica a parte aditiva deste diff e recusa
+    com ``serialize_db.errors.SchemaDiffRefused`` o diff que tem parte destrutiva.
 
     Aditivos: coluna nova anulável (ou ``NOT NULL`` numa tabela ainda sem dados), ``NOT NULL``
     relaxado, ``CheckConstraint`` nova, comentário de tabela ou de coluna divergente. Destrutivos:
@@ -1357,10 +1365,12 @@ def schema_diff(
 
     .. code-block:: python
 
-        schema_diff(Operacao.__table__, open_table(uri, storage)).changes   # False
+        diff = schema_diff(Operacao.__table__, open_table(uri, storage))
+        diff.destructive   # ("descricao: removida do modelo",): só rewrite resolve
+        diff.changes       # True quando reconcile tem o que acrescentar
 
     :param table: a tabela do modelo.
-    :param dt: a tabela aberta por ``open_table``.
+    :param dt: a tabela aberta por ``open_table``, na versão lida.
     :return: o diff, separado em aditivo e destrutivo.
     :raises serialize_db.errors.ContractError: uma ``CheckConstraint`` do modelo sem nome, porque o
         Delta guarda o ``CHECK`` pelo nome.
@@ -1741,10 +1751,27 @@ def partition_values(
     dt: DeltaTable,
     partition_by: str | None,
 ) -> list[str | None]:
-    """[protected] Os valores de partição com algum arquivo na versão carregada, em ordem de texto;
-    numa tabela sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Para o
-    motor Redshift, a publicação e a carga de ``serialize_db.parquet_import``, que carregam uma
-    partição por vez."""
+    """[public] [uso do cliente] Os valores de partição com algum arquivo na versão carregada, em
+    ordem de texto.
+
+    O pipeline a usa para saber que partições uma tabela tem, como as da entrada que ainda faltam
+    na saída; ``serialize_db.execution.Execution.previous_partitions`` dá só os valores até a
+    partição da execução. A leitura é a das ações ``add`` da versão, sem abrir arquivo de dados: a
+    partição cujos arquivos um ``delete`` tirou do log fica de fora.
+
+    Exemplo:
+
+    .. code-block:: python
+
+        partition_values(open_table(uri, storage), "data_str")      # ["2026-07-31", "2026-08-31"]
+        partition_values(open_table(uri, storage, 1), "data_str")   # ["2026-08-31"]
+
+    :param dt: a tabela aberta por ``open_table``, na versão lida.
+    :param partition_by: a coluna de partição, ``table_options(table).partition_by``; ``None`` numa
+        tabela sem partição.
+    :return: os valores em ordem de texto, cada um uma vez; numa tabela sem partição, ``[None]``
+        quando ela tem arquivo e ``[]`` quando não tem.
+    """
     actions = pa.table(dt.get_add_actions(flatten=True))
     if actions.num_rows == 0:
         return []

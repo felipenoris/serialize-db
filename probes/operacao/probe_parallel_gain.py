@@ -32,7 +32,7 @@ anteriores. Cada seção de ``--only`` compara a forma em série, a primeira, co
   trocando a versão publicada pela outra de duas versões do Delta com as mesmas linhas: a da
   partição escrita de novo antes dessas medidas e a de antes, publicada fora delas; e a primeira
   publicação das quatro pela própria sonda, em quatro conexões, com os comandos de
-  ``publication_statements`` em três ordens, a da publicação (o ``CREATE TABLE``, a carga e o
+  ``_publication_statements`` em três ordens, a da publicação (o ``CREATE TABLE``, a carga e o
   ``INSERT`` da linha de controle), a linha de controle logo depois do ``CREATE TABLE``, antes da
   staging e do ``COPY``, e as tabelas criadas e confirmadas antes da transação, fora do tempo, com
   as tabelas e as linhas de controle removidas depois de cada medida; as três ordens separam a
@@ -1387,7 +1387,7 @@ def first_publication_statements(
     execution_id: str,
 ) -> list[str]:
     """Os comandos da primeira publicação da tabela na versão atual do Delta, como
-    ``publication_statements`` os dá: o ``CREATE TABLE`` primeiro, a staging, a partição e o
+    ``_publication_statements`` os dá: o ``CREATE TABLE`` primeiro, a staging, a partição e o
     ``INSERT`` da linha de controle por último, com os manifestos gravados em
     ``<ambiente>/publicacao/<execução>/`` e a cláusula de credenciais montada agora."""
     uri = db.uri(table)
@@ -1396,7 +1396,7 @@ def first_publication_statements(
     manifests = delta.copy_manifest(
         uri, version, [PARTITION], db.storage.uri_of(folder), db.storage
     )
-    return publication.publication_statements(
+    return publication._publication_statements(
         config.schema,
         db.environment,
         table,
@@ -1453,7 +1453,7 @@ def publish_one_in_order(
     COMMAND_LOG.debug("%s em %.3f s", "conexão", time.perf_counter() - started)
     try:
         execute_logged(connection, "BEGIN")
-        execute_logged(connection, publication.control_read(config.schema, db.environment, table))
+        execute_logged(connection, publication._control_read(config.schema, db.environment, table))
         statements = first_publication_statements(db, config, table, execution_id)
         for text in ordered_statements(statements, ordering):
             execute_logged(connection, text)
@@ -1512,7 +1512,7 @@ def ordering_variant(
     if ordering.created_before:
         creates = []
         for table in TABLES:
-            creates.append(publication.published_ddl(config.schema, db.environment, table))
+            creates.append(publication._published_ddl(config.schema, db.environment, table))
         execute_all(config, creates)
     execution_id = f"paralelo-{name}-{uuid.uuid4().hex[:8]}"
     measured = functools.partial(publish_in_order, db, config, execution_id, ordering)

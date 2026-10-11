@@ -3,7 +3,8 @@ nível na abertura de cada docstring.
 
 O ``pdoc`` só documenta os submódulos que o ``__all__`` do pacote lista. Cada docstring de
 ``src/serialize_db/`` abre com ``[public]``, ``[protected]`` ou ``[private]``, o nível do nome que
-documenta. O teste não grava arquivo.
+documenta, e a marca ``[uso do cliente]``, a do nome que a avaliação da intenção de uso tornou
+público, só aparece logo depois de ``[public]``. O teste não grava arquivo.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import serialize_db
 
 SOURCE_ROOT = pathlib.Path(serialize_db.__file__).parent
 TAGS = {"public": "[public]", "protected": "[protected]", "private": "[private]"}
+CLIENT_USE = "[uso do cliente]"
 
 
 def packages() -> list[ModuleType]:
@@ -193,3 +195,23 @@ def test_every_docstring_opens_with_the_level_of_its_name(
             wrong.append(f"linha {docstring.lineno}: {TAGS[level]}")
     assert wrong == []
     assert len(found) == sum(1 for node in ast.walk(tree) if is_docstring(node))
+
+
+@pytest.mark.parametrize(
+    "path", source_files(), ids=lambda path: str(path.relative_to(SOURCE_ROOT))
+)
+def test_the_client_use_mark_follows_only_the_public_tag(
+    path: pathlib.Path,
+) -> None:
+    """A marca ``[uso do cliente]`` aparece só na abertura ``[public] [uso do cliente]``: nunca
+    depois de outra etiqueta nem no meio do texto."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    opening = f"{TAGS['public']} {CLIENT_USE}"
+    wrong = []
+    for node in ast.walk(tree):
+        if not is_docstring(node):
+            continue
+        text = node.value.value
+        if CLIENT_USE in text and not text.startswith(opening):
+            wrong.append(f"linha {node.lineno}")
+    assert wrong == []

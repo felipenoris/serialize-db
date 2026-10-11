@@ -99,7 +99,7 @@ def available_memory() -> int:
         folga do cgroup, o limite menos o uso, com o cache de arquivos de volta e menos a memória
         compartilhada (``shmem``), que o kernel conta no cache e não devolve sem swap.
     """
-    readings = [physical_memory()]
+    readings = [_physical_memory()]
     if sys.platform == "win32":
         readings.append(_windows_memory_status().ullAvailPhys)
     system = _meminfo_available()
@@ -111,10 +111,10 @@ def available_memory() -> int:
     return min(readings)
 
 
-def physical_memory() -> int:
-    """[protected] A memória física da máquina, em bytes: ``ullTotalPhys`` de
-    ``GlobalMemoryStatusEx`` no Windows e ``os.sysconf`` nos outros sistemas; para o relatório de
-    ``scripts/migrate_parquet_to_delta.py``."""
+def _physical_memory() -> int:
+    """[private] A memória física da máquina, em bytes: ``ullTotalPhys`` de
+    ``GlobalMemoryStatusEx`` no Windows e ``os.sysconf`` nos outros sistemas; para
+    ``available_memory`` e para o relatório de ``scripts/migrate_parquet_to_delta.py``."""
     if sys.platform == "win32":
         return _windows_memory_status().ullTotalPhys
     return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")

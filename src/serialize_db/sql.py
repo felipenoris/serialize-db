@@ -219,10 +219,10 @@ def prefixed(
 # ---------------------------------------------------------------- os parâmetros sem valor
 
 
-def required_parameters(
+def _required_parameters(
     statement: sa.sql.ClauseElement,
 ) -> set[str]:
-    """[protected] Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós;
+    """[private] Os nomes dos ``bindparam`` sem valor do statement, pelo percurso de todos os nós;
     o guarda que ``bound_statement`` aplica antes de compilar, no caminho dos motores.
 
     Sob ``literal_binds``, ``compiled.binds`` sai vazio e o ``bindparam`` sem valor vira ``NULL``
@@ -261,7 +261,7 @@ def bound_statement(
     tabelas do contrato são as do ``MetaData`` da primeira ``sa.Table`` que o statement cita.
     """
     values = dict(params or {})
-    required = required_parameters(statement)
+    required = _required_parameters(statement)
     if required != set(values):
         raise SqlError(
             f"parâmetros do statement {sorted(required)} e do dicionário "
