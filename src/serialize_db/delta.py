@@ -1,4 +1,4 @@
-"""A camada de tabela: as tabelas Delta do banco, gravadas e lidas pelo delta-rs.
+"""[public] A camada de tabela: as tabelas Delta do banco, gravadas e lidas pelo delta-rs.
 
 As primitivas que abrem uma tabela recebem ``uri``, a pasta da tabela sob a raiz do banco, e o
 ``Storage`` da raiz, que dá as opções do delta-rs a cada chamada e o sistema de arquivos que lê os
@@ -158,7 +158,7 @@ CURRENT_CHANNEL = "current"
 
 @dataclasses.dataclass(frozen=True)
 class RegisteredFile:
-    """Um arquivo que outro escritor gravou dentro da pasta da tabela, como o ``COPY ...
+    """[public] Um arquivo que outro escritor gravou dentro da pasta da tabela, como o ``COPY ...
     RETURN_STATS`` do DuckDB ou o manifesto do ``UNLOAD`` o descrevem.
 
     Exemplo:
@@ -171,19 +171,20 @@ class RegisteredFile:
     """
 
     path: str
-    """Relativo à pasta da tabela, como o log o guarda."""
+    """[public] Relativo à pasta da tabela, como o log o guarda."""
     size: int
-    """O tamanho em bytes."""
+    """[public] O tamanho em bytes."""
     rows: int
-    """As linhas que o escritor declarou, conferidas contra o rodapé."""
+    """[public] As linhas que o escritor declarou, conferidas contra o rodapé."""
     stats: Mapping[str, Mapping[str, object]]
-    """``{"min": {coluna: valor}, "max": {...}, "null_count": {...}}``, com os valores tipados; uma
-    coluna sem estatística fica de fora."""
+    """[public] ``{"min": {coluna: valor}, "max": {...}, "null_count": {...}}``, com os valores
+    tipados; uma coluna sem estatística fica de fora."""
 
 
 @dataclasses.dataclass(frozen=True)
 class SchemaDiff:
-    """O diff entre o modelo e o esquema de uma tabela Delta, separado em aditivo e destrutivo.
+    """[public] O diff entre o modelo e o esquema de uma tabela Delta, separado em aditivo e
+    destrutivo.
 
     Exemplo:
 
@@ -194,30 +195,32 @@ class SchemaDiff:
     """
 
     add: tuple[pa.Field, ...]
-    """As colunas novas: anuláveis, ou ``NOT NULL`` numa tabela ainda sem dados."""
+    """[public] As colunas novas: anuláveis, ou ``NOT NULL`` numa tabela ainda sem dados."""
     relax: tuple[str, ...]
-    """As colunas cujo ``NOT NULL`` o modelo relaxou."""
+    """[public] As colunas cujo ``NOT NULL`` o modelo relaxou."""
     checks: tuple[str, ...]
-    """Os nomes das ``CheckConstraint`` do modelo que a tabela não tem."""
+    """[public] Os nomes das ``CheckConstraint`` do modelo que a tabela não tem."""
     description: str | None
-    """O comentário da tabela quando difere da ``description`` do Delta; ``None`` quando igual."""
+    """[public] O comentário da tabela quando difere da ``description`` do Delta; ``None`` quando
+    igual."""
     comments: tuple[str, ...]
-    """As colunas cujo comentário difere do do esquema Delta."""
+    """[public] As colunas cujo comentário difere do do esquema Delta."""
     destructive: tuple[str, ...]
-    """Uma frase por diferença que só ``rewrite`` resolve: coluna ``NOT NULL`` nova numa tabela
-    com dados, ``NOT NULL`` numa coluna anulável, remoção (a renomeação aparece como remoção e
-    coluna nova) e mudança de tipo."""
+    """[public] Uma frase por diferença que só ``rewrite`` resolve: coluna ``NOT NULL`` nova numa
+    tabela com dados, ``NOT NULL`` numa coluna anulável, remoção (a renomeação aparece como remoção
+    e coluna nova) e mudança de tipo."""
 
     @property
     def changes(self) -> bool:
-        """Se o diff aditivo tem alguma coisa a aplicar."""
+        """[public] Se o diff aditivo tem alguma coisa a aplicar."""
         additive = (self.add, self.relax, self.checks, self.comments)
         return any(additive) or self.description is not None
 
 
 @dataclasses.dataclass(frozen=True)
 class CopyManifest:
-    """Um manifesto do ``COPY ... MANIFEST`` do Redshift e as colunas que cada arquivo dele tem.
+    """[public] Um manifesto do ``COPY ... MANIFEST`` do Redshift e as colunas que cada arquivo dele
+    tem.
 
     Exemplo:
 
@@ -228,9 +231,9 @@ class CopyManifest:
     """
 
     uri: str
-    """A URI do manifesto."""
+    """[public] A URI do manifesto."""
     columns: tuple[str, ...]
-    """Os nomes das colunas de cada arquivo do manifesto, na ordem do rodapé: a lista do
+    """[public] Os nomes das colunas de cada arquivo do manifesto, na ordem do rodapé: a lista do
     ``COPY``, que leva cada coluna do arquivo à de mesmo nome da tabela."""
 
 
@@ -240,7 +243,7 @@ class CopyManifest:
 def _options(
     storage: Storage,
 ) -> dict[str, str] | None:
-    """As opções do delta-rs do armazenamento, ou ``None`` na pasta local."""
+    """[private] As opções do delta-rs do armazenamento, ou ``None`` na pasta local."""
     return storage.storage_options() or None
 
 
@@ -248,8 +251,8 @@ def checked_value(
     table: sa.Table,
     value: str | None,
 ) -> str | None:
-    """O valor de partição conferido: obrigatório e na regra da partição numa tabela particionada,
-    ``None`` numa tabela sem partição; protegida, para o ``export_partition`` dos motores, que o
+    """[protected] O valor de partição conferido: obrigatório e na regra da partição numa tabela
+    particionada, ``None`` numa tabela sem partição; para o ``export_partition`` dos motores, que o
     confere antes de gravar o arquivo."""
     partition_by = table_options(table).partition_by
     if partition_by is None:
@@ -266,7 +269,7 @@ def create_table(
     table: sa.Table,
     storage: Storage,
 ) -> DeltaTable:
-    """A tabela Delta do modelo, criada na versão 0 se ainda não existe.
+    """[public] A tabela Delta do modelo, criada na versão 0 se ainda não existe.
 
     ``DeltaTable.create(mode="ignore")`` com ``delta_schema(table)``, a coluna de partição, o nome
     da tabela, o comentário da tabela em ``description`` e as retenções: o log por 3.650 dias e os
@@ -302,7 +305,7 @@ def open_table(
     storage: Storage,
     version: int | None = None,
 ) -> DeltaTable:
-    """A tabela Delta carregada numa versão.
+    """[public] A tabela Delta carregada numa versão.
 
     ``serialize_db.execution.Execution`` a chama uma vez por tabela na abertura e guarda o objeto
     e a versão; as primitivas que recebem ``dt`` (``max_key``, ``schema_diff``) leem esse objeto.
@@ -325,7 +328,7 @@ def table_exists(
     uri: str,
     storage: Storage,
 ) -> bool:
-    """Se há uma tabela Delta na pasta.
+    """[public] Se há uma tabela Delta na pasta.
 
     Exemplo:
 
@@ -345,8 +348,8 @@ def _logged_statistic(
     name: str,
     aggregate: Callable[[pa.ChunkedArray], pa.Scalar],
 ) -> object | None:
-    """O agregado de uma estatística das ações ``add``, como o ``pc.max`` de ``max.<coluna>``;
-    ``None`` quando não há ação ou quando algum arquivo não tem a estatística."""
+    """[private] O agregado de uma estatística das ações ``add``, como o ``pc.max`` de
+    ``max.<coluna>``; ``None`` quando não há ação ou quando algum arquivo não tem a estatística."""
     if actions.num_rows == 0 or name not in actions.column_names:
         return None
     column = actions.column(name)
@@ -359,7 +362,7 @@ def max_key(
     dt: DeltaTable,
     column: str,
 ) -> int:
-    """O maior valor de ``column`` na versão carregada, de que
+    """[public] O maior valor de ``column`` na versão carregada, de que
     ``serialize_db.execution.Execution.next_ids`` parte para a chave sequencial.
 
     O máximo de ``max.<coluna>`` das ações ``add``, sem ler dados; a varredura da coluna quando um
@@ -400,7 +403,7 @@ def commit_metadata(
     input_versions: Mapping[str, int],
     snapshot: str | None = None,
 ) -> dict[str, str]:
-    """Os metadados que a execução grava em cada commit, todos texto.
+    """[public] Os metadados que a execução grava em cada commit, todos texto.
 
     Exemplo:
 
@@ -432,7 +435,7 @@ def commit_metadata(
 def _as_arrow(
     data: object,
 ) -> pa.Table | pa.RecordBatchReader:
-    """Os dados como ``pa.Table`` ou leitor: um lote vira tabela, e um objeto com
+    """[private] Os dados como ``pa.Table`` ou leitor: um lote vira tabela, e um objeto com
     ``__arrow_c_stream__``, como o ``BatchStream`` de um motor, vira leitor."""
     if isinstance(data, (pa.Table, pa.RecordBatchReader)):
         return data
@@ -444,9 +447,9 @@ def _as_arrow(
 def _writer_properties(
     columns_without_min_max: Collection[str],
 ) -> WriterProperties | None:
-    """As propriedades do escritor que tiram o mínimo e o máximo das colunas, no rodapé e no log,
-    que o delta-rs copia do rodapé, com o Snappy da escrita sem propriedades; ``None`` mantém o
-    padrão."""
+    """[private] As propriedades do escritor que tiram o mínimo e o máximo das colunas, no rodapé e
+    no log, que o delta-rs copia do rodapé, com o Snappy da escrita sem propriedades; ``None``
+    mantém o padrão."""
     if not columns_without_min_max:
         return None
     no_statistics = ColumnProperties(statistics_enabled="NONE")
@@ -461,7 +464,7 @@ def _partition_predicate(
     partition_by: str | None,
     value: str | None,
 ) -> str | None:
-    """O predicado da substituição da partição, ``"<coluna>" = '<valor>'``; ``None`` sem
+    """[private] O predicado da substituição da partição, ``"<coluna>" = '<valor>'``; ``None`` sem
     partição."""
     if partition_by is None:
         return None
@@ -471,8 +474,8 @@ def _partition_predicate(
 def partition_label(
     value: str | None,
 ) -> str:
-    """A partição nas mensagens e no log: ``partição <valor>``, ou ``tabela inteira`` sem valor,
-    na tabela sem partição e na releitura da tabela inteira; protegida, a carga de
+    """[protected] A partição nas mensagens e no log: ``partição <valor>``, ou ``tabela inteira``
+    sem valor, na tabela sem partição e na releitura da tabela inteira; a carga de
     ``serialize_db.parquet_import``, o motor Redshift e a linha de comando a usam."""
     if value is None:
         return "tabela inteira"
@@ -488,8 +491,8 @@ def publish_partition(
     storage: Storage,
     columns_without_min_max: Collection[str] = (),
 ) -> int:
-    """Substitui a partição da tabela Delta pelos dados num commit, pelo escritor do delta-rs,
-    que grava arquivos novos na pasta da partição.
+    """[public] Substitui a partição da tabela Delta pelos dados num commit, pelo escritor do
+    delta-rs, que grava arquivos novos na pasta da partição.
 
     ``write_deltalake(mode="overwrite", predicate=...)`` sobre o objeto ``DeltaTable``, que depois
     da escrita está na versão do próprio commit mesmo com o commit de outro escritor no meio.
@@ -544,8 +547,8 @@ def publish_partition(
 def _stat_converter(
     field_type: pa.DataType,
 ) -> Callable[[str], object] | None:
-    """A conversão do texto do ``RETURN_STATS`` para o valor que o log guarda, ou ``None`` quando o
-    tipo fica sem mínimo e máximo.
+    """[private] A conversão do texto do ``RETURN_STATS`` para o valor que o log guarda, ou ``None``
+    quando o tipo fica sem mínimo e máximo.
 
     Inteiro, data e ``Double`` transcrevem exato. O texto entra como o DuckDB o grava no rodapé:
     acima de 256 bytes, o mínimo é o prefixo de até 256 bytes em fronteira de caractere, e o máximo
@@ -568,7 +571,7 @@ def _stat_converter(
 def _return_stats_path(
     filename: str,
 ) -> str:
-    """O caminho de um arquivo que o ``RETURN_STATS`` do DuckDB devolve, com ``/``."""
+    """[private] O caminho de um arquivo que o ``RETURN_STATS`` do DuckDB devolve, com ``/``."""
     # No Windows, o DuckDB junta a pasta da partição ao destino do COPY com \.
     if sys.platform == "win32":
         return filename.replace("\\", "/")
@@ -579,7 +582,8 @@ def _relative_file(
     filename: str,
     uri: str,
 ) -> str:
-    """O caminho de um arquivo relativo à pasta da tabela, como o log o guarda, com ``/``."""
+    """[private] O caminho de um arquivo relativo à pasta da tabela, como o log o guarda, com
+    ``/``."""
     path = _return_stats_path(filename)
     prefix = uri.rstrip("/") + "/"
     if not path.startswith(prefix):
@@ -592,9 +596,9 @@ def file_from_return_stats(
     table: sa.Table,
     uri: str,
 ) -> RegisteredFile:
-    """O arquivo que o ``COPY ... (RETURN_STATS)`` do DuckDB gravou dentro da pasta da tabela;
-    protegida, para o ``export_partition`` do motor DuckDB, a carga de
-    ``serialize_db.parquet_import`` e ``rewrite``, que o registram por ``register_files``.
+    """[protected] O arquivo que o ``COPY ... (RETURN_STATS)`` do DuckDB gravou dentro da pasta da
+    tabela; para o ``export_partition`` do motor DuckDB, a carga de ``serialize_db.parquet_import``
+    e ``rewrite``, que o registram por ``register_files``.
 
     ``row`` é a linha do ``RETURN_STATS`` como dicionário (``filename``, ``count``,
     ``file_size_bytes``, ``column_statistics``). O ``null_count`` entra de toda coluna do contrato,
@@ -627,9 +631,9 @@ def _footer_statistics(
     footer: pq.ParquetFile,
     index: int,
 ) -> tuple[int | None, object, object]:
-    """A soma dos nulos e o mínimo e o máximo da coluna ``index`` nos grupos de linhas do rodapé;
-    a soma fica ``None`` quando algum grupo não tem a contagem de nulos, porque o leitor não pode
-    supor zero, e o mínimo e o máximo ficam ``None`` quando algum grupo não os tem."""
+    """[private] A soma dos nulos e o mínimo e o máximo da coluna ``index`` nos grupos de linhas do
+    rodapé; a soma fica ``None`` quando algum grupo não tem a contagem de nulos, porque o leitor não
+    pode supor zero, e o mínimo e o máximo ficam ``None`` quando algum grupo não os tem."""
     nulls = 0
     counted = True
     minimum = None
@@ -663,8 +667,8 @@ def file_from_footer(
     rows: int,
     table: sa.Table,
 ) -> RegisteredFile:
-    """O arquivo que outro escritor gravou dentro da pasta da tabela, como o ``UNLOAD`` do
-    Redshift, descrito pelo rodapé Parquet dele; protegida, para o motor Redshift.
+    """[protected] O arquivo que outro escritor gravou dentro da pasta da tabela, como o ``UNLOAD``
+    do Redshift, descrito pelo rodapé Parquet dele; para o motor Redshift.
 
     ``path`` é relativo à pasta da tabela, ``size`` e ``rows`` são os que o manifesto declara. O
     ``null_count`` entra de toda coluna do contrato com a contagem de nulos em todos os grupos de
@@ -700,7 +704,7 @@ def file_from_footer(
 def _exact_statistic(
     field_type: pa.DataType,
 ) -> bool:
-    """Se o mínimo e o máximo do tipo entram no log como limites seguros: inteiro, data e
+    """[private] Se o mínimo e o máximo do tipo entram no log como limites seguros: inteiro, data e
     ``Double``, exatos, e o texto, como o DuckDB o trunca (``_stat_converter``)."""
     return _stat_converter(field_type) is not None
 
@@ -708,7 +712,7 @@ def _exact_statistic(
 def _json_value(
     value: object,
 ) -> object:
-    """O valor como o log o guarda: a data em ``AAAA-MM-DD``; os demais como chegam."""
+    """[private] O valor como o log o guarda: a data em ``AAAA-MM-DD``; os demais como chegam."""
     if isinstance(value, datetime.date):
         return value.isoformat()
     return value
@@ -717,7 +721,8 @@ def _json_value(
 def _finite(
     value: object,
 ) -> bool:
-    """Se o valor pode entrar no JSON do log: um ``float`` infinito ou ``NaN`` não pode."""
+    """[private] Se o valor pode entrar no JSON do log: um ``float`` infinito ou ``NaN`` não
+    pode."""
     return not isinstance(value, float) or math.isfinite(value)
 
 
@@ -726,8 +731,8 @@ def _action_stats(
     contract: pa.Schema,
     columns_without_min_max: Collection[str],
 ) -> str:
-    """O JSON de estatísticas da ação: ``numRecords``, o ``nullCount`` que o arquivo declara e o
-    mínimo e o máximo dos tipos de ``_exact_statistic``, sem as colunas de
+    """[private] O JSON de estatísticas da ação: ``numRecords``, o ``nullCount`` que o arquivo
+    declara e o mínimo e o máximo dos tipos de ``_exact_statistic``, sem as colunas de
     ``columns_without_min_max`` e sem um extremo não finito, que o JSON não representa."""
     minimum: dict[str, object] = {}
     maximum: dict[str, object] = {}
@@ -760,7 +765,7 @@ def _add_action(
     value: str | None,
     columns_without_min_max: Collection[str],
 ) -> AddAction:
-    """A ação ``add`` de um arquivo conferido: caminho relativo, tamanho, partição e
+    """[private] A ação ``add`` de um arquivo conferido: caminho relativo, tamanho, partição e
     estatísticas."""
     partition_values = {partition_by: value} if partition_by else {}
     return AddAction(
@@ -779,7 +784,7 @@ def _add_action(
 def _physical_types(
     field_type: pa.DataType,
 ) -> frozenset[str]:
-    """Os tipos físicos do Parquet que os leitores leem como o tipo lógico da coluna.
+    """[private] Os tipos físicos do Parquet que os leitores leem como o tipo lógico da coluna.
 
     O ``UNLOAD`` do Redshift grava o timestamp em ``INT96`` e o decimal em
     ``FIXED_LEN_BYTE_ARRAY``; o DuckDB e o delta-rs gravam os dois em ``INT64``, e o decimal de
@@ -803,8 +808,8 @@ def _physical_types(
 def _check_relative_path(
     file: RegisteredFile,
 ) -> None:
-    """O caminho relativo à pasta da tabela: o log nunca guarda um caminho absoluto, uma URI nem
-    um ``..``, e uma pasta copiada abre na mesma versão."""
+    """[private] O caminho relativo à pasta da tabela: o log nunca guarda um caminho absoluto, uma
+    URI nem um ``..``, e uma pasta copiada abre na mesma versão."""
     parts = file.path.split("/")
     absolute = file.path.startswith("/") or "://" in file.path
     if not file.path or absolute or ".." in parts:
@@ -816,8 +821,8 @@ def _check_file_size(
     table_path: str,
     file: RegisteredFile,
 ) -> None:
-    """O arquivo existe em ``<pasta da tabela>/<path>``, o caminho que o leitor resolve, com o
-    tamanho que a ação declara."""
+    """[private] O arquivo existe em ``<pasta da tabela>/<path>``, o caminho que o leitor resolve,
+    com o tamanho que a ação declara."""
     found = storage.size(storage.join(table_path, file.path))
     if found != file.size:
         raise RegistrationRefused(
@@ -831,7 +836,8 @@ def _check_footer_schema(
     contract: pa.Schema,
     partition_by: str | None,
 ) -> None:
-    """O esquema do rodapé contra o do contrato, pelo nome de cada coluna de primeiro nível.
+    """[private] O esquema do rodapé contra o do contrato, pelo nome de cada coluna de primeiro
+    nível.
 
     Nenhuma coluna do contrato ausente, porque o leitor a leria nula sem erro; o tipo físico entre
     os que os leitores leem como o lógico; a coluna de partição fora do arquivo, porque ela vive na
@@ -886,7 +892,7 @@ def _check_partition_path(
     partition_by: str | None,
     value: str | None,
 ) -> None:
-    """O arquivo dentro da pasta ``<coluna>=<valor>/`` da partição registrada."""
+    """[private] O arquivo dentro da pasta ``<coluna>=<valor>/`` da partição registrada."""
     if partition_by is None:
         return
     parts = file.path.split("/")
@@ -898,7 +904,7 @@ def _footer_null_count(
     footer: pq.ParquetFile,
     index: int,
 ) -> int:
-    """A soma dos nulos da coluna ``index`` nos grupos de linhas do rodapé; um grupo sem a
+    """[private] A soma dos nulos da coluna ``index`` nos grupos de linhas do rodapé; um grupo sem a
     estatística conta zero."""
     nulls = 0
     for group in range(footer.metadata.num_row_groups):
@@ -913,9 +919,9 @@ def _check_not_null(
     file: RegisteredFile,
     contract: pa.Schema,
 ) -> None:
-    """Nenhum nulo nas colunas ``NOT NULL`` do contrato, pela contagem de nulos de cada grupo de
-    linhas do rodapé: o DuckDB grava toda coluna como ``optional``, e o leitor devolveria o nulo
-    que o ``write_deltalake`` recusaria. Um grupo sem estatística da coluna não é conferido."""
+    """[private] Nenhum nulo nas colunas ``NOT NULL`` do contrato, pela contagem de nulos de cada
+    grupo de linhas do rodapé: o DuckDB grava toda coluna como ``optional``, e o leitor devolveria o
+    nulo que o ``write_deltalake`` recusaria. Um grupo sem estatística da coluna não é conferido."""
     names = footer.schema_arrow.names
     for field in contract:
         if field.nullable or field.name not in names:
@@ -929,7 +935,8 @@ def _check_file_rows(
     footer: pq.ParquetFile,
     file: RegisteredFile,
 ) -> None:
-    """As linhas do rodapé iguais às que o arquivo declara, que viram o ``numRecords`` da ação."""
+    """[private] As linhas do rodapé iguais às que o arquivo declara, que viram o ``numRecords`` da
+    ação."""
     if footer.metadata.num_rows != file.rows:
         raise RegistrationRefused(
             f"{file.path}: {footer.metadata.num_rows} linhas no rodapé, {file.rows} declaradas"
@@ -940,7 +947,8 @@ def _check_row_counts(
     total: int,
     expected_rows: int | None,
 ) -> None:
-    """A soma das linhas dos arquivos igual à contagem da fonte, quando o chamador a tem."""
+    """[private] A soma das linhas dos arquivos igual à contagem da fonte, quando o chamador a
+    tem."""
     if expected_rows is not None and total != expected_rows:
         raise RegistrationRefused(f"{total} linhas nos arquivos, {expected_rows} na fonte")
 
@@ -953,7 +961,7 @@ def _check_file(
     partition_by: str | None,
     value: str | None,
 ) -> None:
-    """As conferências de um arquivo, com um GET do rodapé no S3."""
+    """[private] As conferências de um arquivo, com um GET do rodapé no S3."""
     _check_relative_path(file)
     _check_file_size(storage, table_path, file)
     footer = pq.ParquetFile(storage.open_input_file(storage.join(table_path, file.path)))
@@ -972,7 +980,8 @@ def _commit_actions(
     metadata: Mapping[str, str],
     schema: object | None = None,
 ) -> None:
-    """Um commit ``overwrite`` das ações: da partição de ``value``, ou da tabela inteira sem ele.
+    """[private] Um commit ``overwrite`` das ações: da partição de ``value``, ou da tabela inteira
+    sem ele.
 
     ``schema`` é o esquema Delta do commit; ``None`` mantém o da tabela. ``CommitFailedError``, o
     de outro registro da mesma partição a partir da mesma versão, sobe como ``ExecutionConflict``,
@@ -1006,8 +1015,8 @@ def register_files(
     expected_rows: int | None = None,
     columns_without_min_max: Collection[str] = (),
 ) -> int:
-    """Registra no log, num commit ``overwrite`` da partição, arquivos que outro escritor gravou
-    dentro da pasta da tabela.
+    """[public] Registra no log, num commit ``overwrite`` da partição, arquivos que outro escritor
+    gravou dentro da pasta da tabela.
 
     ``create_write_transaction`` grava a ação como a recebe, e os leitores obedecem à ação, não ao
     arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo:
@@ -1085,8 +1094,8 @@ def register_files(
 
 @dataclasses.dataclass(frozen=True)
 class _Reading:
-    """O que um leitor viu na partição: as linhas e o menor e o maior valor de cada coluna da
-    chave, ``None`` quando não há o que ler."""
+    """[private] O que um leitor viu na partição: as linhas e o menor e o maior valor de cada coluna
+    da chave, ``None`` quando não há o que ler."""
 
     rows: int
     minimum: tuple[object, ...]
@@ -1097,7 +1106,8 @@ def _partition_filter(
     partition_by: str | None,
     value: str | None,
 ) -> str:
-    """O ``WHERE`` da partição no texto do DuckDB; vazio sem partição ou na tabela inteira."""
+    """[private] O ``WHERE`` da partição no texto do DuckDB; vazio sem partição ou na tabela
+    inteira."""
     if partition_by is None or value is None:
         return ""
     return f" WHERE {quoted(partition_by)} = {literal(value)}"
@@ -1112,7 +1122,7 @@ def _duckdb_reading(
     storage: Storage,
     config: Mapping[str, object],
 ) -> _Reading:
-    """A leitura pelo ``delta_scan`` do DuckDB, numa conexão própria com os limites de
+    """[private] A leitura pelo ``delta_scan`` do DuckDB, numa conexão própria com os limites de
     ``config``."""
     measures = ["count(*)"]
     for name in keys:
@@ -1140,7 +1150,7 @@ def _arrow_reading(
     value: str | None,
     keys: tuple[str, ...],
 ) -> _Reading:
-    """A leitura pelo dataset Arrow do delta-rs, lote a lote, com a memória de um lote."""
+    """[private] A leitura pelo dataset Arrow do delta-rs, lote a lote, com a memória de um lote."""
     partition_by = table_options(table).partition_by
     condition = None
     if partition_by is not None and value is not None:
@@ -1162,8 +1172,8 @@ def _collect_extremes(
     lows: dict[str, list[object]],
     highs: dict[str, list[object]],
 ) -> None:
-    """Acrescenta a ``lows`` e a ``highs`` o menor e o maior valor de cada coluna do lote; uma
-    coluna só de nulos no lote não acrescenta nada."""
+    """[private] Acrescenta a ``lows`` e a ``highs`` o menor e o maior valor de cada coluna do lote;
+    uma coluna só de nulos no lote não acrescenta nada."""
     for name in lows:
         extremes = pc.min_max(batch.column(name))
         if extremes["min"].is_valid:
@@ -1177,8 +1187,9 @@ def _log_reading(
     value: str | None,
     keys: tuple[str, ...],
 ) -> _Reading:
-    """O que o log declara na partição: a soma de ``numRecords`` e o menor mínimo e o maior máximo
-    registrados de cada coluna da chave, ``None`` quando algum arquivo não tem a estatística."""
+    """[private] O que o log declara na partição: a soma de ``numRecords`` e o menor mínimo e o
+    maior máximo registrados de cada coluna da chave, ``None`` quando algum arquivo não tem a
+    estatística."""
     actions = pa.table(dt.get_add_actions(flatten=True))
     partition_by = table_options(table).partition_by
     if partition_by is not None and value is not None and actions.num_rows:
@@ -1200,7 +1211,7 @@ def _read_back_problems(
     arrow_reading: _Reading,
     duckdb_reading: _Reading,
 ) -> list[str]:
-    """As diferenças entre os leitores, o log e a contagem esperada.
+    """[private] As diferenças entre os leitores, o log e a contagem esperada.
 
     As linhas iguais nos quatro; o menor e o maior valor de cada coluna da chave iguais nos dois
     leitores; e o mínimo e o máximo registrados no log, das colunas de ``_exact_statistic``, como
@@ -1243,7 +1254,7 @@ def read_back(
     expected_rows: int,
     storage: Storage,
 ) -> None:
-    """Relê a versão recém-commitada pelos dois leitores e a desfaz quando eles discordam.
+    """[public] Relê a versão recém-commitada pelos dois leitores e a desfaz quando eles discordam.
 
     O delta-rs, pelo dataset Arrow, e o ``delta_scan`` do DuckDB, numa conexão própria, contam as
     linhas e leem o menor e o maior valor de cada coluna da primeira chave do modelo na partição.
@@ -1280,8 +1291,8 @@ def _read_back(
     storage: Storage,
     config: Mapping[str, object],
 ) -> None:
-    """``read_back`` com os limites do DuckDB já lidos, que ``register_files`` e ``rewrite`` leem
-    antes do commit, para a recusa do ambiente cair sem nada gravado."""
+    """[private] ``read_back`` com os limites do DuckDB já lidos, que ``register_files`` e
+    ``rewrite`` leem antes do commit, para a recusa do ambiente cair sem nada gravado."""
     dt = open_table(uri, storage)
     version = dt.version()
     keys = table_options(table).keys[0]
@@ -1306,14 +1317,14 @@ def _read_back(
 def _comment(
     field: pa.Field,
 ) -> str:
-    """O comentário de um campo Arrow, vazio quando não há."""
+    """[private] O comentário de um campo Arrow, vazio quando não há."""
     return (field.metadata or {}).get(b"comment", b"").decode("utf-8")
 
 
 def _has_data(
     dt: DeltaTable,
 ) -> bool:
-    """Se a versão carregada tem algum arquivo de dados."""
+    """[private] Se a versão carregada tem algum arquivo de dados."""
     return pa.table(dt.get_add_actions(flatten=True)).num_rows > 0
 
 
@@ -1321,7 +1332,7 @@ def _new_checks(
     table: sa.Table,
     dt: DeltaTable,
 ) -> list[str]:
-    """As ``CheckConstraint`` do modelo que a tabela Delta não tem, pelo nome; sem nome é
+    """[private] As ``CheckConstraint`` do modelo que a tabela Delta não tem, pelo nome; sem nome é
     ``ContractError``, porque o Delta guarda o ``CHECK`` pelo nome."""
     configuration = dt.metadata().configuration
     names = []
@@ -1339,7 +1350,7 @@ def schema_diff(
     table: sa.Table,
     dt: DeltaTable,
 ) -> SchemaDiff:
-    """O diff entre o esquema do contrato e o da versão carregada, sem alterar nada.
+    """[public] O diff entre o esquema do contrato e o da versão carregada, sem alterar nada.
 
     Aditivos: coluna nova anulável (ou ``NOT NULL`` numa tabela ainda sem dados), ``NOT NULL``
     relaxado, ``CheckConstraint`` nova, comentário de tabela ou de coluna divergente. Destrutivos:
@@ -1406,7 +1417,7 @@ def _check_constraint_texts(
     table: sa.Table,
     names: Collection[str],
 ) -> dict[str, str]:
-    """O texto SQL de cada ``CheckConstraint`` do modelo cujo nome está em ``names``."""
+    """[private] O texto SQL de cada ``CheckConstraint`` do modelo cujo nome está em ``names``."""
     texts = {}
     for constraint in table.constraints:
         if isinstance(constraint, sa.CheckConstraint) and constraint.name in names:
@@ -1419,7 +1430,7 @@ def reconcile(
     table: sa.Table,
     storage: Storage,
 ) -> SchemaDiff:
-    """Aplica o diff aditivo entre o modelo e a tabela.
+    """[public] Aplica o diff aditivo entre o modelo e a tabela.
 
     Cada parte é um commit só de metadados: ``add_columns`` com o campo do esquema Delta do
     contrato, comentário incluído; ``drop_column_not_null``; ``add_constraint``;
@@ -1468,7 +1479,8 @@ def _check_expressions(
     table: sa.Table,
     expressions: Mapping[str, str],
 ) -> None:
-    """As chaves de ``expressions`` são colunas do contrato: um nome errado seria ignorado."""
+    """[private] As chaves de ``expressions`` são colunas do contrato: um nome errado seria
+    ignorado."""
     unknown = sorted(set(expressions) - set(table.c.keys()))
     if unknown:
         raise ContractError(f"{table.name}: expressions para colunas fora do modelo: {unknown}")
@@ -1479,8 +1491,8 @@ def _rewrite_select(
     expressions: Mapping[str, str],
     source: str,
 ) -> str:
-    """O ``SELECT`` do contrato sobre a versão atual: cada coluna em ``CAST`` para o tipo do DuckDB,
-    com a expressão de ``expressions`` ou o nome da coluna."""
+    """[private] O ``SELECT`` do contrato sobre a versão atual: cada coluna em ``CAST`` para o tipo
+    do DuckDB, com a expressão de ``expressions`` ou o nome da coluna."""
     columns = []
     for column in table.columns:
         expression = expressions.get(column.name, quoted(column.name))
@@ -1494,8 +1506,8 @@ def _nonfinite_by_partition(
     table: sa.Table,
     select: str,
 ) -> dict[str | None, tuple[str, ...]]:
-    """As colunas ``Double`` com valor não finito em cada partição do ``SELECT``, que ficam sem
-    mínimo e máximo no log (issue #59)."""
+    """[private] As colunas ``Double`` com valor não finito em cada partição do ``SELECT``, que
+    ficam sem mínimo e máximo no log (issue #59)."""
     doubles = double_columns(table)
     if not doubles:
         return {}
@@ -1525,8 +1537,9 @@ def _copy_rewrite(
     table: sa.Table,
     select: str,
 ) -> list[dict]:
-    """O ``COPY ... RETURN_STATS`` da tabela inteira para arquivos novos na pasta dela: particionado
-    por ``PARTITION_BY``, que tira a coluna de partição dos arquivos, ou um arquivo só."""
+    """[private] O ``COPY ... RETURN_STATS`` da tabela inteira para arquivos novos na pasta dela:
+    particionado por ``PARTITION_BY``, que tira a coluna de partição dos arquivos, ou um arquivo
+    só."""
     partition_by = table_options(table).partition_by
     if partition_by is None:
         target = f"{uri.rstrip('/')}/rewrite_{uuid.uuid4().hex}.parquet"
@@ -1549,8 +1562,8 @@ def _written_partition(
     row: Mapping[str, object],
     partition_by: str | None,
 ) -> str | None:
-    """O valor de partição de um arquivo do ``COPY ... PARTITION_BY``, de ``partition_keys``;
-    ``None`` numa tabela sem partição."""
+    """[private] O valor de partição de um arquivo do ``COPY ... PARTITION_BY``, de
+    ``partition_keys``; ``None`` numa tabela sem partição."""
     if partition_by is None:
         return None
     partition_keys = dict(row["partition_keys"] or {})
@@ -1564,7 +1577,7 @@ def _rewritten_actions(
     storage: Storage,
     nonfinite: Mapping[str | None, tuple[str, ...]],
 ) -> tuple[list[AddAction], int]:
-    """As ações dos arquivos que o ``COPY`` da reescrita gravou, cada arquivo depois das
+    """[private] As ações dos arquivos que o ``COPY`` da reescrita gravou, cada arquivo depois das
     conferências de ``register_files``, e a soma das linhas deles."""
     partition_by = table_options(table).partition_by
     contract = arrow_schema(table)
@@ -1586,8 +1599,8 @@ def rewrite(
     storage: Storage,
     expressions: Mapping[str, str] | None = None,
 ) -> int:
-    """Reescreve a tabela inteira com o esquema do contrato num único commit, sem predicado, sem a
-    tabela inteira na memória do processo.
+    """[public] Reescreve a tabela inteira com o esquema do contrato num único commit, sem
+    predicado, sem a tabela inteira na memória do processo.
 
     O ``COPY ... PARTITION_BY ... RETURN_STATS`` do DuckDB lê a versão atual por ``delta_scan`` e
     grava arquivos novos na pasta da tabela, que entram num ``create_write_transaction(mode=
@@ -1653,7 +1666,8 @@ def _partition_of(
     file_action: Mapping[str, object],
     partition_by: str | None,
 ) -> str | None:
-    """O valor de partição de uma ação ``add`` ou ``remove`` do log; ``None`` sem partição."""
+    """[private] O valor de partição de uma ação ``add`` ou ``remove`` do log; ``None`` sem
+    partição."""
     if partition_by is None:
         return None
     return file_action.get("partitionValues", {}).get(partition_by)
@@ -1663,8 +1677,8 @@ def _changed_partitions(
     log_text: str,
     partition_by: str | None,
 ) -> set[str | None]:
-    """As partições das ações ``add`` e ``remove`` com ``dataChange`` verdadeiro num arquivo do
-    log; a compactação grava ``dataChange`` falso e não conta."""
+    """[private] As partições das ações ``add`` e ``remove`` com ``dataChange`` verdadeiro num
+    arquivo do log; a compactação grava ``dataChange`` falso e não conta."""
     changed: set[str | None] = set()
     for line in log_text.splitlines():
         if not line.strip():
@@ -1683,7 +1697,8 @@ def version_diff(
     table: sa.Table,
     storage: Storage,
 ) -> set[str | None]:
-    """As partições com dados alterados nos commits depois de ``published`` até ``current``.
+    """[public] As partições com dados alterados nos commits depois de ``published`` até
+    ``current``.
 
     Lê os arquivos ``_delta_log/<versão>.json`` pelo ``Storage`` e recolhe a partição das ações
     ``add`` e ``remove`` com ``dataChange`` verdadeiro; a compactação grava ``dataChange`` falso e
@@ -1729,8 +1744,8 @@ def partition_values(
     dt: DeltaTable,
     partition_by: str | None,
 ) -> list[str | None]:
-    """Os valores de partição com algum arquivo na versão carregada, em ordem de texto; numa tabela
-    sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Protegida, para o
+    """[protected] Os valores de partição com algum arquivo na versão carregada, em ordem de texto;
+    numa tabela sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Para o
     motor Redshift, a publicação e a carga de ``serialize_db.parquet_import``, que carregam uma
     partição por vez."""
     actions = pa.table(dt.get_add_actions(flatten=True))
@@ -1747,8 +1762,8 @@ def _in_partitions(
     partition_columns: list[str],
     partitions: list[str] | None,
 ) -> bool:
-    """Se a ação ``add`` está numa das partições pedidas; toda ação está, com ``partitions=None``
-    ou numa tabela sem partição."""
+    """[private] Se a ação ``add`` está numa das partições pedidas; toda ação está, com
+    ``partitions=None`` ou numa tabela sem partição."""
     if partitions is None or not partition_columns:
         return True
     return action[f"partition.{partition_columns[0]}"] in partitions
@@ -1758,7 +1773,7 @@ def _file_columns(
     storage: Storage,
     path: str,
 ) -> tuple[str, ...]:
-    """Os nomes das colunas do arquivo, na ordem do rodapé; no S3, o rodapé vem por GET de
+    """[private] Os nomes das colunas do arquivo, na ordem do rodapé; no S3, o rodapé vem por GET de
     intervalo."""
     with storage.open_input_file(path) as source:
         return tuple(pq.read_schema(source).names)
@@ -1771,8 +1786,8 @@ def copy_manifest(
     destination: str,
     storage: Storage,
 ) -> list[CopyManifest]:
-    """Grava os manifestos do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão nas
-    partições pedidas, um manifesto por lista de colunas dos arquivos.
+    """[public] Grava os manifestos do ``COPY ... MANIFEST`` do Redshift com os arquivos da versão
+    nas partições pedidas, um manifesto por lista de colunas dos arquivos.
 
     O ``COPY`` de Parquet leva as colunas do arquivo às da tabela pela posição, e os arquivos de
     uma tabela Delta nem sempre têm as mesmas colunas na mesma ordem: o arquivo anterior a uma
@@ -1842,7 +1857,7 @@ def read_snapshots(
     storage: Storage,
     environment: str,
 ) -> tuple[dict, str | None]:
-    """O arquivo de controle dos snapshots do ambiente e a impressão digital dele.
+    """[public] O arquivo de controle dos snapshots do ambiente e a impressão digital dele.
 
     Exemplo:
 
@@ -1870,8 +1885,8 @@ def snapshot(
     name: str,
     versions: Mapping[str, int],
 ) -> dict:
-    """Grava no arquivo de controle do ambiente a entrada ``{name: versions}`` de um snapshot do
-    banco.
+    """[public] Grava no arquivo de controle do ambiente a entrada ``{name: versions}`` de um
+    snapshot do banco.
 
     A escrita é condicional: ``Storage.create_text`` no primeiro snapshot, e ``if_match`` com a
     impressão da leitura nos seguintes. A entrada é imutável: nenhuma função do pacote muda as
@@ -1915,8 +1930,8 @@ def _write_control(
     control: Mapping,
     fingerprint: str | None,
 ) -> None:
-    """Grava o arquivo de controle na escrita condicional: ``create_text`` quando ele ainda não
-    existe, ``write_text`` com ``if_match`` e a impressão da leitura depois."""
+    """[private] Grava o arquivo de controle na escrita condicional: ``create_text`` quando ele
+    ainda não existe, ``write_text`` com ``if_match`` e a impressão da leitura depois."""
     text = json.dumps(control, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     path = storage.join(environment, CONTROL_FILE)
     if fingerprint is None:
@@ -1930,8 +1945,8 @@ def archive_snapshot(
     environment: str,
     name: str,
 ) -> dict:
-    """Move a entrada do snapshot de ``snapshots`` para a chave irmã ``archived`` do arquivo de
-    controle, na escrita condicional.
+    """[public] Move a entrada do snapshot de ``snapshots`` para a chave irmã ``archived`` do
+    arquivo de controle, na escrita condicional.
 
     A entrada arquivada deixa de prender as versões no ``vacuum``, que lê só ``snapshots``, e
     continua a ocupar o nome: ``snapshot`` o recusa, porque ele dá a pasta
@@ -1970,7 +1985,7 @@ def channels_pointing(
     control: Mapping,
     snapshot: str,
 ) -> list[str]:
-    """Os canais que apontam o snapshot, em ordem de nome; protegida, para ``archive_snapshot`` e
+    """[protected] Os canais que apontam o snapshot, em ordem de nome; para ``archive_snapshot`` e
     ``serialize-db archive``, que recusam o snapshot de um canal."""
     pointing = []
     for name, target in control.get("channels", {}).items():
@@ -1985,8 +2000,8 @@ def set_channel(
     name: str,
     snapshot: str,
 ) -> dict:
-    """Aponta o canal ``name`` do ambiente para o snapshot, na escrita condicional do arquivo de
-    controle, sob a chave irmã ``channels``.
+    """[public] Aponta o canal ``name`` do ambiente para o snapshot, na escrita condicional do
+    arquivo de controle, sob a chave irmã ``channels``.
 
     O canal ``default`` é o snapshot que o leitor Delta lê sem argumento e que
     ``serialize-db publish_redshift --channel default`` publica; só esta função, por
@@ -2035,7 +2050,7 @@ def channel_snapshot(
     control: Mapping,
     name: str,
 ) -> str:
-    """O snapshot que o canal aponta no arquivo de controle.
+    """[public] O snapshot que o canal aponta no arquivo de controle.
 
     Exemplo:
 
@@ -2071,7 +2086,7 @@ def snapshot_versions(
     control: Mapping,
     name: str,
 ) -> dict[str, int]:
-    """As versões de um snapshot presente em ``snapshots`` do arquivo de controle.
+    """[public] As versões de um snapshot presente em ``snapshots`` do arquivo de controle.
 
     Exemplo:
 
@@ -2105,7 +2120,7 @@ def vacuum_keeping_snapshots(
     apply: bool = False,
     full: bool = False,
 ) -> list[str]:
-    """O ``vacuum`` da tabela que preserva os arquivos das versões dos snapshots do banco.
+    """[public] O ``vacuum`` da tabela que preserva os arquivos das versões dos snapshots do banco.
 
     Exemplo:
 
@@ -2151,7 +2166,7 @@ def compact(
     partitions: list[str],
     storage: Storage,
 ) -> dict:
-    """Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs.
+    """[public] Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs.
 
     Entram juntos os arquivos que cabem no tamanho alvo, a propriedade ``delta.targetFileSize`` da
     tabela ou 100 MB sem ela. Sem nada a juntar, como na partição com um arquivo só, não grava nem
@@ -2196,7 +2211,7 @@ def history(
     uri: str,
     storage: Storage,
 ) -> list[dict]:
-    """Os commits da tabela, do mais recente ao mais antigo.
+    """[public] Os commits da tabela, do mais recente ao mais antigo.
 
     Exemplo:
 
@@ -2225,7 +2240,7 @@ def history(
 def _commit_record(
     entry: Mapping[str, object],
 ) -> dict:
-    """Um commit do ``history`` do delta-rs: a versão, a operação, o instante em UTC e os
+    """[private] Um commit do ``history`` do delta-rs: a versão, a operação, o instante em UTC e os
     metadados da biblioteca que ele tem."""
     instant = datetime.datetime.fromtimestamp(entry["timestamp"] / 1000, datetime.timezone.utc)
     record = {"version": entry["version"], "operation": entry["operation"], "timestamp": instant}
@@ -2238,15 +2253,15 @@ def _commit_record(
 def _present(
     values: Mapping[str, object] | None,
 ) -> dict[str, object]:
-    """As entradas com valor de um dicionário de estatísticas da ação, ou vazio."""
+    """[private] As entradas com valor de um dicionário de estatísticas da ação, ou vazio."""
     return {name: value for name, value in (values or {}).items() if value is not None}
 
 
 def _copied_file(
     action: Mapping[str, object],
 ) -> RegisteredFile:
-    """O arquivo de uma ação ``add`` da origem, como ``register_files`` o descreve: o caminho
-    relativo, o tamanho, as linhas e as estatísticas da própria ação."""
+    """[private] O arquivo de uma ação ``add`` da origem, como ``register_files`` o descreve: o
+    caminho relativo, o tamanho, as linhas e as estatísticas da própria ação."""
     return RegisteredFile(
         path=str(action["path"]),
         size=int(action["size_bytes"]),
@@ -2264,8 +2279,8 @@ def _count_rows(
     storage: Storage,
     config: Mapping[str, object],
 ) -> tuple[int, int]:
-    """As linhas da tabela pelos dois leitores: o dataset do delta-rs e o ``delta_scan``, numa
-    conexão com os limites de ``config``."""
+    """[private] As linhas da tabela pelos dois leitores: o dataset do delta-rs e o ``delta_scan``,
+    numa conexão com os limites de ``config``."""
     by_delta = open_table(uri, storage).to_pyarrow_dataset().count_rows()
     connection = storage.duckdb_connect(config=config)
     try:
@@ -2279,7 +2294,7 @@ def _actions_by_partition(
     dt: DeltaTable,
     partition_by: str | None,
 ) -> dict[str | None, list]:
-    """As ações ``add`` da versão, com os structs de estatísticas, agrupadas pelo valor da
+    """[private] As ações ``add`` da versão, com os structs de estatísticas, agrupadas pelo valor da
     partição; uma tabela sem partição fica toda sob ``None``."""
     by_partition: dict[str | None, list] = {}
     for action in pa.table(dt.get_add_actions(flatten=False)).to_pylist():
@@ -2295,10 +2310,10 @@ def _copy_destination(
     source: DeltaTable,
     storage: Storage,
 ) -> set[str]:
-    """A tabela do destino da cópia e os caminhos que ela já registra: criada com o esquema, a
-    partição, o nome, a descrição e as propriedades da origem quando não existe; aberta quando
-    existe, para continuar uma cópia interrompida, e recusada quando registra um arquivo que a
-    versão de origem não lista, porque guarda outra tabela."""
+    """[private] A tabela do destino da cópia e os caminhos que ela já registra: criada com o
+    esquema, a partição, o nome, a descrição e as propriedades da origem quando não existe; aberta
+    quando existe, para continuar uma cópia interrompida, e recusada quando registra um arquivo que
+    a versão de origem não lista, porque guarda outra tabela."""
     metadata = source.metadata()
     if not table_exists(destination, storage):
         DeltaTable.create(
@@ -2328,8 +2343,8 @@ def _schema_differences(
     copied: pa.Schema,
     expected: pa.Schema,
 ) -> list[str]:
-    """As colunas em que o esquema da cópia difere do da versão copiada: ausente de um dos dois,
-    ou com outro tipo, nulidade ou comentário."""
+    """[private] As colunas em que o esquema da cópia difere do da versão copiada: ausente de um dos
+    dois, ou com outro tipo, nulidade ou comentário."""
     differences = []
     for field in expected:
         if field.name not in copied.names:
@@ -2350,10 +2365,10 @@ def _copy_partition(
     group: list,
     storage: Storage,
 ) -> None:
-    """Copia os arquivos das ações ``add`` de uma partição da versão aberta em ``source``, de
-    ``uri`` para o mesmo caminho relativo sob ``destination``, e os registra na tabela do destino
-    num commit ``overwrite`` com o esquema da versão, como ``register_files``; a partição vai ao
-    log ``serialize_db.delta`` com o número de arquivos e o tempo da cópia."""
+    """[private] Copia os arquivos das ações ``add`` de uma partição da versão aberta em ``source``,
+    de ``uri`` para o mesmo caminho relativo sob ``destination``, e os registra na tabela do destino
+    num commit ``overwrite`` com o esquema da versão, como ``register_files``; a partição vai ao log
+    ``serialize_db.delta`` com o número de arquivos e o tempo da cópia."""
     source_path = storage.relative(uri)
     target_path = storage.relative(destination)
     metadata = source.metadata()
@@ -2394,7 +2409,7 @@ def deep_copy(
     destination: str,
     storage: Storage,
 ) -> int:
-    """Uma tabela nova em ``destination`` com os arquivos, o esquema, a partição, o nome, a
+    """[public] Uma tabela nova em ``destination`` com os arquivos, o esquema, a partição, o nome, a
     descrição e as propriedades de uma versão, pela cópia dos arquivos de cada partição e o
     registro deles.
 
@@ -2480,7 +2495,7 @@ def _export_by_copy(
     destination: str,
     storage: Storage,
 ) -> list[str]:
-    """Os arquivos que o log lista, copiados sem ler dados, no mesmo layout
+    """[private] Os arquivos que o log lista, copiados sem ler dados, no mesmo layout
     ``<coluna>=<valor>/``."""
     source_path = storage.relative(uri)
     target_path = storage.relative(destination)
@@ -2498,8 +2513,8 @@ def _export_by_rewrite(
     destination: str,
     storage: Storage,
 ) -> list[str]:
-    """A versão reescrita pelo ``COPY`` particionado do DuckDB: um arquivo por partição, sem a
-    coluna de partição dentro dele."""
+    """[private] A versão reescrita pelo ``COPY`` particionado do DuckDB: um arquivo por partição,
+    sem a coluna de partição dentro dele."""
     partition_by = table_options(table).partition_by
     select = f"SELECT * FROM delta_scan({literal(uri)}, version := {dt.version()})"
     # Os limites lidos antes de criar a pasta: a memória que o ambiente recusa não deixa pasta.
@@ -2529,10 +2544,10 @@ def export_parquet(
     version: int | None = None,
     mode: Literal["copy", "rewrite"] = "copy",
 ) -> list[str]:
-    """Exporta uma versão da tabela Delta para arquivos Parquet sem o log, em ``destination``:
-    nas pastas ``<coluna>=<valor>/`` numa tabela particionada; numa tabela sem partição, nos
-    caminhos que os arquivos têm na tabela no modo ``copy`` e em ``data.parquet`` no modo
-    ``rewrite``.
+    """[public] Exporta uma versão da tabela Delta para arquivos Parquet sem o log, em
+    ``destination``: nas pastas ``<coluna>=<valor>/`` numa tabela particionada; numa tabela sem
+    partição, nos caminhos que os arquivos têm na tabela no modo ``copy`` e em ``data.parquet`` no
+    modo ``rewrite``.
 
     Exemplo:
 

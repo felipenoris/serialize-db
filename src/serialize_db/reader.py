@@ -1,4 +1,4 @@
-"""O acesso de leitura à base, com o modelo: o leitor Delta e o leitor Redshift.
+"""[public] O acesso de leitura à base, com o modelo: o leitor Delta e o leitor Redshift.
 
 ``DeltaReader`` abre um DuckDB no processo com uma view por tabela do modelo sobre a versão de um
 snapshot da base Delta, e ``RedshiftReader`` roda o mesmo statement nas tabelas publicadas
@@ -73,7 +73,7 @@ log = logging.getLogger("serialize_db.reader")
 
 
 def _new_reader_id() -> str:
-    """``reader-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
+    """[private] ``reader-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     return f"reader-{today}-{uuid.uuid4().hex[:8]}"
 
@@ -81,8 +81,9 @@ def _new_reader_id() -> str:
 def _check_select(
     statement_or_sql: sa.sql.ClauseElement | str,
 ) -> None:
-    """A regra de leitura comum: um statement Core que não é ``Select`` nem ``CompoundSelect`` é
-    ``ContractError`` antes de chamar o motor; um texto pronto roda como está."""
+    """[private] A regra de leitura comum: um statement Core que não é ``Select`` nem
+    ``CompoundSelect`` é ``ContractError`` antes de chamar o motor; um texto pronto roda como
+    está."""
     if isinstance(statement_or_sql, str):
         return
     if not isinstance(statement_or_sql, (sa.Select, sa.CompoundSelect)):
@@ -97,8 +98,8 @@ def _check_select(
 
 @dataclasses.dataclass(frozen=True)
 class _Source:
-    """De onde o leitor Delta lê: o snapshot (``None`` no canal ``current``), a versão e a URI de
-    cada tabela do modelo com view, e o texto da origem para as mensagens."""
+    """[private] De onde o leitor Delta lê: o snapshot (``None`` no canal ``current``), a versão e a
+    URI de cada tabela do modelo com view, e o texto da origem para as mensagens."""
 
     snapshot: str | None
     versions: dict[str, int]
@@ -109,8 +110,8 @@ class _Source:
 def _current_source(
     delta_db: Database,
 ) -> _Source:
-    """A versão atual de cada tabela do modelo que existe no ambiente, como ``Execution`` na
-    abertura."""
+    """[private] A versão atual de cada tabela do modelo que existe no ambiente, como ``Execution``
+    na abertura."""
     versions = {}
     uris = {}
     for table in delta_db.tables():
@@ -126,7 +127,7 @@ def _snapshot_source(
     name: str,
     entry: Mapping[str, int],
 ) -> _Source:
-    """As versões da entrada do snapshot, nas tabelas do modelo que ela tem."""
+    """[private] As versões da entrada do snapshot, nas tabelas do modelo que ela tem."""
     versions = {}
     uris = {}
     for table in delta_db.tables():
@@ -141,8 +142,8 @@ def _archived_source(
     name: str,
     entry: Mapping[str, int],
 ) -> _Source:
-    """As cópias de ``arquivo/<nome>/<tabela>`` das tabelas do modelo que a entrada arquivada tem,
-    na versão atual de cada cópia, que não muda depois do ``archive``."""
+    """[private] As cópias de ``arquivo/<nome>/<tabela>`` das tabelas do modelo que a entrada
+    arquivada tem, na versão atual de cada cópia, que não muda depois do ``archive``."""
     storage = delta_db.storage
     versions = {}
     uris = {}
@@ -160,8 +161,8 @@ def _resolve_source(
     snapshot: str | None,
     channel: str | None,
 ) -> _Source:
-    """As versões pelo modo pedido: o canal ``current``, o snapshot pelo nome, vivo ou arquivado,
-    ou o snapshot do canal, o ``default`` sem argumento."""
+    """[private] As versões pelo modo pedido: o canal ``current``, o snapshot pelo nome, vivo ou
+    arquivado, ou o snapshot do canal, o ``default`` sem argumento."""
     if snapshot is not None and channel is not None:
         raise ContractError(
             f"open_delta recebe snapshot={snapshot!r} ou channel={channel!r}, não os dois"
@@ -181,8 +182,8 @@ def _resolve_source(
 
 
 class _ReaderStream:
-    """O ``BatchStream`` do motor com o leitor Delta preso até o ``close``: o leitor fora de uma
-    variável, como em ``db.open_delta().stream(...)``, não é coletado enquanto o stream está
+    """[private] O ``BatchStream`` do motor com o leitor Delta preso até o ``close``: o leitor fora
+    de uma variável, como em ``db.open_delta().stream(...)``, não é coletado enquanto o stream está
     aberto, e o finalizador dele não fecha o motor debaixo da consulta."""
 
     def __init__(
@@ -195,7 +196,8 @@ class _ReaderStream:
         self.schema = stream.schema
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último lote."""
+        """[private] O próximo lote; ``StopIteration`` no fim, e o erro da consulta depois do último
+        lote."""
         return self._stream.read_next_batch()
 
     def __iter__(self) -> Iterator[pa.RecordBatch]:
@@ -203,7 +205,7 @@ class _ReaderStream:
         yield from self._stream
 
     def read_all(self) -> pa.Table:
-        """Os lotes que faltam numa ``pa.Table``."""
+        """[private] Os lotes que faltam numa ``pa.Table``."""
         return self._stream.read_all()
 
     def __arrow_c_stream__(
@@ -215,7 +217,7 @@ class _ReaderStream:
         return batches.__arrow_c_stream__(requested_schema)
 
     def close(self) -> None:
-        """Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
+        """[private] Fecha o stream do motor e solta o leitor, que a coleta fecha quando nada mais o
         segura."""
         self._stream.close()
         self._reader = None
@@ -234,8 +236,8 @@ class _ReaderStream:
 
 
 class DeltaReader:
-    """O leitor da base Delta: um DuckDB no processo com uma view por tabela do modelo, presa à
-    versão do snapshot lido.
+    """[public] O leitor da base Delta: um DuckDB no processo com uma view por tabela do modelo,
+    presa à versão do snapshot lido.
 
     Exemplo:
 
@@ -253,7 +255,7 @@ class DeltaReader:
         channel: str | None = None,
         config: DuckDBConfig | None = None,
     ) -> None:
-        """Lê as versões, abre o motor e cria as views; ``db.open_delta`` é a entrada.
+        """[public] Lê as versões, abre o motor e cria as views; ``db.open_delta`` é a entrada.
 
         :param delta_db: o banco Delta lido, com a raiz, o ambiente e os modelos.
         :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
@@ -273,16 +275,16 @@ class DeltaReader:
         """
         source = _resolve_source(delta_db, snapshot, channel)
         self.snapshot = source.snapshot
-        """O snapshot lido; ``None`` no canal ``current``."""
+        """[public] O snapshot lido; ``None`` no canal ``current``."""
         self.versions = source.versions
-        """A versão de cada tabela com view, pelo nome da tabela; no snapshot arquivado, a versão
-        de cada cópia em ``<raiz>/<ambiente>/arquivo/<nome>/``. A tabela do modelo ausente do
+        """[public] A versão de cada tabela com view, pelo nome da tabela; no snapshot arquivado, a
+        versão de cada cópia em ``<raiz>/<ambiente>/arquivo/<nome>/``. A tabela do modelo ausente do
         snapshot não tem view."""
         self.materialized: dict[str, list[str] | None] = {}
-        """As tabelas copiadas para o banco local por ``materialize``, com as partições de cada
-        uma; ``None`` na tabela inteira."""
+        """[public] As tabelas copiadas para o banco local por ``materialize``, com as partições de
+        cada uma; ``None`` na tabela inteira."""
         self.reader_id = _new_reader_id()
-        """O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, que nomeia o banco
+        """[public] O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, que nomeia o banco
         temporário e a pasta de transbordo do motor."""
         self._delta_db = delta_db
         self._uris = source.uris
@@ -305,12 +307,12 @@ class DeltaReader:
         self,
         table: sa.Table,
     ) -> None:
-        """A view de uma tabela, numa sessão a mais do motor, fechada no fim."""
+        """[private] A view de uma tabela, numa sessão a mais do motor, fechada no fim."""
         with self._engine.new_session() as session:
             session.ingest(table, self._uris[table.name], self.versions[table.name])
 
     def _open_views(self) -> None:
-        """Uma view por tabela do modelo presente nas versões, as tabelas em paralelo."""
+        """[private] Uma view por tabela do modelo presente nas versões, as tabelas em paralelo."""
         tasks = []
         for table in self._delta_db.tables():
             if table.name in self.versions:
@@ -324,7 +326,7 @@ class DeltaReader:
         self,
         name: str,
     ) -> None:
-        """A tabela do modelo sem view é ``ContractError`` com a origem das versões."""
+        """[private] A tabela do modelo sem view é ``ContractError`` com a origem das versões."""
         if name not in self.versions:
             raise ContractError(
                 f"{name}: a tabela do modelo não tem view no leitor, porque não "
@@ -335,7 +337,7 @@ class DeltaReader:
         self,
         name: str,
     ) -> str:
-        """``TABLE`` depois de uma materialização, ``VIEW`` antes dela."""
+        """[private] ``TABLE`` depois de uma materialização, ``VIEW`` antes dela."""
         with self._lock:
             return "TABLE" if name in self.materialized else "VIEW"
 
@@ -345,9 +347,9 @@ class DeltaReader:
         where: str,
         partitions: list[str] | None,
     ) -> None:
-        """A troca da view, ou da tabela de uma materialização anterior, por ``CREATE TABLE ... AS
-        SELECT * FROM delta_scan(...)``, numa transação de uma sessão a mais; a falha devolve o
-        objeto anterior pelo ``ROLLBACK``."""
+        """[private] A troca da view, ou da tabela de uma materialização anterior, por
+        ``CREATE TABLE ... AS         SELECT * FROM delta_scan(...)``, numa transação de uma sessão
+        a mais; a falha devolve o objeto anterior pelo ``ROLLBACK``."""
         name = quoted(table.name)
         select = f"SELECT * FROM {delta_scan(self._uris[table.name], self.versions[table.name])}"
         with self._engine.new_session() as session, session.session() as connection:
@@ -373,8 +375,8 @@ class DeltaReader:
         *tables: sa.Table,
         partitions: list[str] | None = None,
     ) -> None:
-        """Copia as tabelas para o banco local do leitor: o nome do modelo passa a ser uma tabela
-        com os dados da versão lida, ou só das partições pedidas.
+        """[public] Copia as tabelas para o banco local do leitor: o nome do modelo passa a ser uma
+        tabela com os dados da versão lida, ou só das partições pedidas.
 
         Cada tabela troca numa transação, e as tabelas correm em paralelo, cada uma numa sessão a
         mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do
@@ -416,8 +418,8 @@ class DeltaReader:
         self,
         statement_or_sql: sa.sql.ClauseElement | str,
     ) -> None:
-        """A regra de leitura comum e, num statement Core, a view de cada tabela do modelo que
-        ele cita; o texto pronto recebe o erro de catálogo do DuckDB."""
+        """[private] A regra de leitura comum e, num statement Core, a view de cada tabela do modelo
+        que ele cita; o texto pronto recebe o erro de catálogo do DuckDB."""
         _check_select(statement_or_sql)
         if isinstance(statement_or_sql, str):
             return
@@ -430,7 +432,7 @@ class DeltaReader:
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
     ) -> pa.Table:
-        """O resultado inteiro como ``pa.Table``, pelo motor.
+        """[public] O resultado inteiro como ``pa.Table``, pelo motor.
 
         Exemplo:
 
@@ -461,8 +463,8 @@ class DeltaReader:
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
     ) -> BatchStream:
-        """Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a memória
-        limitada a 64 MiB de lotes.
+        """[public] Os lotes da consulta enquanto ela roda, pelo ``DuckDBEngine.stream``, com a
+        memória limitada a 64 MiB de lotes.
 
         Exemplo:
 
@@ -495,8 +497,8 @@ class DeltaReader:
 
     @contextlib.contextmanager
     def session(self) -> Iterator[duckdb.DuckDBPyConnection]:
-        """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
-        é consulta, como uma tabela temporária ao lado das views.
+        """[public] A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando
+        que não é consulta, como uma tabela temporária ao lado das views.
 
         Exemplo:
 
@@ -517,10 +519,10 @@ class DeltaReader:
     # ------------------------------------------------------------ o encerramento
 
     def close(self) -> None:
-        """Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco temporário,
-        com as tabelas materializadas, e a pasta de transbordo. O DuckDB só devolve a memória
-        aqui: num caderno, o leitor sem ``with`` segura a memória até esta chamada. A segunda
-        chamada não faz nada.
+        """[public] Fecha o motor: cancela o comando em curso, fecha a conexão e apaga o banco
+        temporário, com as tabelas materializadas, e a pasta de transbordo. O DuckDB só devolve a
+        memória aqui: num caderno, o leitor sem ``with`` segura a memória até esta chamada. A
+        segunda chamada não faz nada.
 
         Exemplo:
 
@@ -546,8 +548,8 @@ class DeltaReader:
 
 
 class RedshiftReader:
-    """O leitor da base publicada no Redshift: as tabelas ``<ambiente>_<tabela>`` do esquema,
-    numa sessão do motor Redshift com o prefixo do ambiente.
+    """[public] O leitor da base publicada no Redshift: as tabelas ``<ambiente>_<tabela>`` do
+    esquema, numa sessão do motor Redshift com o prefixo do ambiente.
 
     Exemplo:
 
@@ -567,7 +569,8 @@ class RedshiftReader:
         config: RedshiftConfig | None = None,
         unload_to: str | None = None,
     ) -> None:
-        """Abre a sessão no esquema; ``open_redshift`` e ``db.open_redshift`` são as entradas.
+        """[public] Abre a sessão no esquema; ``open_redshift`` e ``db.open_redshift`` são as
+        entradas.
 
         :param metadata: o ``MetaData`` dos modelos do cliente, cujas tabelas os statements citam.
         :param environment: o ambiente publicado, ``prd`` ou ``dsv``, que prefixa o nome das
@@ -591,12 +594,12 @@ class RedshiftReader:
         from serialize_db.engine.redshift import RedshiftConfig, RedshiftEngine
 
         self.environment = check_partition_value(environment)
-        """O ambiente publicado, o prefixo ``<ambiente>_`` das tabelas."""
+        """[public] O ambiente publicado, o prefixo ``<ambiente>_`` das tabelas."""
         self.metadata = metadata
-        """O ``MetaData`` dos modelos."""
+        """[public] O ``MetaData`` dos modelos."""
         self.reader_id = _new_reader_id()
-        """O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, a pasta dos arquivos do
-        ``UNLOAD`` sob ``unload_to``."""
+        """[public] O identificador do leitor, ``reader-<AAAA-MM-DD>-<uuid8>``, a pasta dos arquivos
+        do ``UNLOAD`` sob ``unload_to``."""
         if config is None:
             config = RedshiftConfig.from_environment()
         storage = None
@@ -613,7 +616,7 @@ class RedshiftReader:
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
     ) -> pa.Table:
-        """O resultado inteiro como ``pa.Table``, pelo cursor do driver, que materializa o
+        """[public] O resultado inteiro como ``pa.Table``, pelo cursor do driver, que materializa o
         resultado no cliente: o caminho dos resultados pequenos.
 
         Exemplo:
@@ -646,7 +649,7 @@ class RedshiftReader:
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
     ) -> BatchStream:
-        """Os lotes da consulta lidos dos arquivos do ``UNLOAD ... PARALLEL OFF`` dela em
+        """[public] Os lotes da consulta lidos dos arquivos do ``UNLOAD ... PARALLEL OFF`` dela em
         ``<unload_to>/<id do leitor>/stream/<uuid>/``, dois lotes à frente do cliente: o caminho
         dos resultados grandes.
 
@@ -680,8 +683,8 @@ class RedshiftReader:
         return self._engine.stream(statement_or_sql, params, batch_size)
 
     def session(self) -> contextlib.AbstractContextManager[object]:
-        """A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando que não
-        é consulta, como uma tabela temporária.
+        """[public] A conexão crua do motor, com o lock tomado pelo bloco: o caminho de um comando
+        que não é consulta, como uma tabela temporária.
 
         Exemplo:
 
@@ -696,8 +699,8 @@ class RedshiftReader:
         return self._engine.session()
 
     def close(self) -> None:
-        """Fecha a sessão e esvazia a pasta ``<unload_to>/<id do leitor>/``, nada fora dela; sem
-        ``unload_to``, só fecha a sessão. A segunda chamada não faz nada.
+        """[public] Fecha a sessão e esvazia a pasta ``<unload_to>/<id do leitor>/``, nada fora
+        dela; sem ``unload_to``, só fecha a sessão. A segunda chamada não faz nada.
 
         Exemplo:
 
@@ -725,8 +728,8 @@ def open_redshift(
     config: RedshiftConfig | None = None,
     unload_to: str | None = None,
 ) -> RedshiftReader:
-    """Abre o leitor da base publicada no Redshift para o cliente que tem o modelo e não a raiz
-    Delta; o time que tem o ``Database`` entra por ``db.open_redshift``.
+    """[public] Abre o leitor da base publicada no Redshift para o cliente que tem o modelo e não a
+    raiz Delta; o time que tem o ``Database`` entra por ``db.open_redshift``.
 
     Exemplo:
 

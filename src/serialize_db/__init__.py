@@ -1,4 +1,4 @@
-"""Banco analítico em tabelas Delta Lake, com o DuckDB e o Redshift como motores.
+"""[public] Banco analítico em tabelas Delta Lake, com o DuckDB e o Redshift como motores.
 
 .. include:: ../../docs/index.md
 """

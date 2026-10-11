@@ -2245,3 +2245,26 @@ on 2026-10-09, with no read failing (`aws-s3.md`), about 63 minutes each.
 
 `suite_alvo.sh`, `SUITE_ALVO.md`, `probes/README.md`, `duckdb.md`, `aws-s3.md`,
 `environments.md`, `OPEN_QUESTIONS.md`
+
+## The level tag opens every docstring (2026-10-11)
+
+The user asked (2026-10-11, 00:02 UTC), on the card about the engine classes out of `__all__` but
+documented by pdoc ("pode manter no pdoc como está"), that every docstring carry `[public]`,
+`[protected]` or `[private]`, so the reader of the source and the reader of the pdoc site see the
+level of each name; asked where and how far, he answered (00:34 UTC): at the opening of the
+docstring, and every docstring the assistant classifies.
+
+- Every docstring of `src/serialize_db/` opens with the tag of its level, before the summary: a
+  module by its package's `__all__` and the `_` prefix, a module-level name by the module's
+  `__all__` and the prefix, a class member or attribute by its own prefix bounded by the class's
+  level; a dunder takes the class's level and a nested function is private. `_pool.py` and
+  `_files.py` are private modules whose unprefixed functions are protected, because other modules
+  of the package call them.
+- A protected docstring keeps who uses it ("para o motor Redshift") and loses the word
+  "protegida", which the tag now says.
+- The names the API cards move (the 16 of case 1 out of `__all__`, the four engine classes of
+  case 2 into it) carry the tag of the current `__all__` until that commit changes both.
+- `tests/test_package.py` checks the tag of every docstring against the level the rule gives.
+
+`CLAUDE.md` ("Docstrings", "Naming conventions"), `tests/test_package.py`, every module of
+`src/serialize_db/`

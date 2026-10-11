@@ -1,4 +1,5 @@
-"""As exceções da biblioteca, num módulo sem dependências, que os outros importam sem ciclo.
+"""[public] As exceções da biblioteca, num módulo sem dependências, que os outros importam sem
+ciclo.
 
 ``ContractError`` é a dos dados, do modelo e da configuração fora do contrato de ``schema``;
 ``SqlError`` a do texto SQL de ``sql``; ``ConflictError``, ``RegistrationRefused``,
@@ -27,7 +28,7 @@ __all__ = [
 
 
 class ContractError(ValueError):
-    """Dados, modelo ou configuração fora do contrato.
+    """[public] Dados, modelo ou configuração fora do contrato.
 
     A mensagem nomeia a tabela e a coluna e diz o que o cliente faz antes de chamar de novo:
     arredondar, truncar, serializar, declarar ``String(n)``. Na configuração, nomeia o que falta
@@ -46,7 +47,7 @@ class ContractError(ValueError):
 
 
 class SqlError(ValueError):
-    """Um statement que não vira texto executável, ou um texto cujos parâmetros não fecham.
+    """[public] Um statement que não vira texto executável, ou um texto cujos parâmetros não fecham.
 
     A mensagem nomeia o parâmetro de nome inválido, os parâmetros em falta ou sobrando ou o
     sentinela que ficou no texto; o cliente renomeia o ``bindparam``, completa o dicionário ou lê
@@ -62,7 +63,8 @@ class SqlError(ValueError):
 
 
 class ConflictError(Exception):
-    """A escrita condicional foi recusada: outro escritor criou ou mudou o arquivo desde a leitura.
+    """[public] A escrita condicional foi recusada: outro escritor criou ou mudou o arquivo desde a
+    leitura.
 
     Vem de ``Storage.create_text`` e de ``Storage.write_text`` com ``if_match``, nos dois
     armazenamentos: no S3, o 412 do ``IfNoneMatch`` ou do ``IfMatch``, ou o 409 de outra operação
@@ -79,7 +81,8 @@ class ConflictError(Exception):
 
 
 class ExecutionConflict(Exception):
-    """Outra execução gravou a mesma partição, ou avançou a tabela com dados desde a abertura.
+    """[public] Outra execução gravou a mesma partição, ou avançou a tabela com dados desde a
+    abertura.
 
     É o ``CommitFailedError`` do delta-rs num ``overwrite`` ou num registro de arquivos, a versão
     fixada que ficou para trás e, na publicação no Redshift, a linha de controle que mudou desde a
@@ -98,8 +101,8 @@ class ExecutionConflict(Exception):
 
 
 class RegistrationRefused(Exception):
-    """Uma conferência de ``register_files`` reprovou antes do commit, ou a releitura reprovou
-    depois dele e ``restore`` voltou a versão anterior.
+    """[public] Uma conferência de ``register_files`` reprovou antes do commit, ou a releitura
+    reprovou depois dele e ``restore`` voltou a versão anterior.
 
     A mensagem nomeia a conferência e, nas de cada arquivo, o arquivo; os arquivos ficam órfãos na
     pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)``
@@ -118,9 +121,9 @@ class RegistrationRefused(Exception):
 
 
 class SchemaDiffRefused(Exception):
-    """O diff entre o modelo e a tabela Delta é destrutivo: remoção (uma renomeação é uma remoção
-    e uma coluna nova), mudança de tipo, ``NOT NULL`` numa coluna anulável ou coluna ``NOT NULL``
-    nova numa tabela com dados. A mensagem lista cada diferença e aponta ``rewrite``.
+    """[public] O diff entre o modelo e a tabela Delta é destrutivo: remoção (uma renomeação é uma
+    remoção e uma coluna nova), mudança de tipo, ``NOT NULL`` numa coluna anulável ou coluna
+    ``NOT NULL`` nova numa tabela com dados. A mensagem lista cada diferença e aponta ``rewrite``.
 
     Exemplo:
 
@@ -132,7 +135,7 @@ class SchemaDiffRefused(Exception):
 
 
 class LogUnavailable(Exception):
-    """Um arquivo do log entre duas versões não existe; a mensagem manda publicar a tabela
+    """[public] Um arquivo do log entre duas versões não existe; a mensagem manda publicar a tabela
     inteira, porque as partições alteradas não podem ser lidas do log.
 
     Exemplo:
@@ -145,9 +148,9 @@ class LogUnavailable(Exception):
 
 
 class SandboxError(ValueError):
-    """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, uma
-    tabela sem versão fixada no ``ingest``, porque não existe no ambiente, uma coluna do resultado
-    do motor Redshift num tipo fora do contrato, o motor Redshift sem as credenciais que o
+    """[public] Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido,
+    uma tabela sem versão fixada no ``ingest``, porque não existe no ambiente, uma coluna do
+    resultado do motor Redshift num tipo fora do contrato, o motor Redshift sem as credenciais que o
     ``COPY`` e o ``UNLOAD`` pedem ou com a sessão numa transação que o cliente abriu, ou a memória
     lida do ambiente que não dá 1 MiB de ``memory_limit`` ao DuckDB.
 
@@ -174,7 +177,7 @@ class SandboxError(ValueError):
 
 
 class AuditFailed(Exception):
-    """A auditoria reprovou, ou ``publish_delta`` foi chamado sem a auditoria aprovada das
+    """[public] A auditoria reprovou, ou ``publish_delta`` foi chamado sem a auditoria aprovada das
     partições.
 
     A execução encerra sem tocar o Delta; a mensagem nomeia a tabela, as partições e as
@@ -191,9 +194,9 @@ class AuditFailed(Exception):
 
 
 class PublicationError(Exception):
-    """A publicação no Redshift não pode começar: a tabela de controle ``serialize_db_publications``
-    não existe no esquema, ou uma tabela do modelo não tem versão a publicar, porque não está no
-    snapshot pedido ou não existe no ambiente.
+    """[public] A publicação no Redshift não pode começar: a tabela de controle
+    ``serialize_db_publications`` não existe no esquema, ou uma tabela do modelo não tem versão a
+    publicar, porque não está no snapshot pedido ou não existe no ambiente.
 
     A mensagem diz o que o operador faz: ``serialize-db publish_redshift --init`` cria a tabela
     de controle uma vez, e, no ``serialize-db publish_redshift``, ``--tables`` deixa de fora a

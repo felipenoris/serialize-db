@@ -1,4 +1,4 @@
-"""As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada.
+"""[public] As CPUs e a memória que o processo pode usar, lidas do ambiente a cada chamada.
 
 O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem destas leituras, não
 de um valor fixo no código: o motor DuckDB lê ``available_cpus`` e ``memory_limit_setting`` na
@@ -64,7 +64,7 @@ _MEMORY_FRACTION = 0.5
 
 
 def available_cpus() -> int:
-    """As CPUs que o processo pode usar.
+    """[public] As CPUs que o processo pode usar.
 
     Exemplo:
 
@@ -84,8 +84,8 @@ def available_cpus() -> int:
 
 
 def available_memory() -> int:
-    """A memória que o processo ainda pode usar. A memória que os processos da máquina já ocupam,
-    o próprio incluído, fica de fora.
+    """[public] A memória que o processo ainda pode usar. A memória que os processos da máquina já
+    ocupam, o próprio incluído, fica de fora.
 
     Exemplo:
 
@@ -113,8 +113,8 @@ def available_memory() -> int:
 
 
 def physical_memory() -> int:
-    """A memória física da máquina, em bytes: ``ullTotalPhys`` de ``GlobalMemoryStatusEx`` no
-    Windows e ``os.sysconf`` nos outros sistemas; protegida, para o relatório de
+    """[protected] A memória física da máquina, em bytes: ``ullTotalPhys`` de
+    ``GlobalMemoryStatusEx`` no Windows e ``os.sysconf`` nos outros sistemas; para o relatório de
     ``scripts/migrate_parquet_to_delta.py``."""
     if sys.platform == "win32":
         return _windows_memory_status().ullTotalPhys
@@ -122,10 +122,10 @@ def physical_memory() -> int:
 
 
 def environment_limits() -> dict[str, object]:
-    """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada, para as conexões
-    de ``serialize_db.delta``, do DuckDB local com que o motor Redshift troca os arquivos da
-    partição com ``Double`` não finito e do script de migração; o motor DuckDB lê os mesmos
-    valores por ``available_cpus`` e ``memory_limit_setting`` quando a configuração os omite.
+    """[protected] O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada, para
+    as conexões de ``serialize_db.delta``, do DuckDB local com que o motor Redshift troca os
+    arquivos da partição com ``Double`` não finito e do script de migração; o motor DuckDB lê os
+    mesmos valores por ``available_cpus`` e ``memory_limit_setting`` quando a configuração os omite.
 
     Exemplo:
 
@@ -144,8 +144,8 @@ def environment_limits() -> dict[str, object]:
 
 
 def memory_limit_setting() -> str:
-    """O ``memory_limit`` do DuckDB lido do ambiente, metade da memória que o processo ainda pode
-    usar, em MiB; protegida, para o motor DuckDB, que a lê só quando a configuração omite o
+    """[protected] O ``memory_limit`` do DuckDB lido do ambiente, metade da memória que o processo
+    ainda pode usar, em MiB; para o motor DuckDB, que a lê só quando a configuração omite o
     ``memory_limit``.
 
     :return: o valor com unidade, ``"6761MiB"`` num contêiner com 13,2 GiB disponíveis.
@@ -165,8 +165,8 @@ def memory_limit_setting() -> str:
 
 
 def peak_rss_mb() -> float:
-    """O pico de memória residente do próprio processo até agora. Num processo filho, a leitura é
-    a do filho, não a do pai.
+    """[public] O pico de memória residente do próprio processo até agora. Num processo filho, a
+    leitura é a do filho, não a do pai.
 
     Exemplo:
 
@@ -191,7 +191,7 @@ def peak_rss_mb() -> float:
 
 
 class _MemoryStatus(ctypes.Structure):
-    """O ``MEMORYSTATUSEX`` que ``GlobalMemoryStatusEx`` preenche no Windows."""
+    """[private] O ``MEMORYSTATUSEX`` que ``GlobalMemoryStatusEx`` preenche no Windows."""
 
     _fields_ = [
         ("dwLength", ctypes.c_ulong),
@@ -207,7 +207,8 @@ class _MemoryStatus(ctypes.Structure):
 
 
 class _ProcessMemoryCounters(ctypes.Structure):
-    """O ``PROCESS_MEMORY_COUNTERS`` que ``K32GetProcessMemoryInfo`` preenche no Windows."""
+    """[private] O ``PROCESS_MEMORY_COUNTERS`` que ``K32GetProcessMemoryInfo`` preenche no
+    Windows."""
 
     _fields_ = [
         ("cb", ctypes.c_ulong),
@@ -224,7 +225,8 @@ class _ProcessMemoryCounters(ctypes.Structure):
 
 
 def _windows_memory_status() -> _MemoryStatus:
-    """A memória física do Windows, a total e a disponível, de ``GlobalMemoryStatusEx``."""
+    """[private] A memória física do Windows, a total e a disponível, de
+    ``GlobalMemoryStatusEx``."""
     status = _MemoryStatus()
     status.dwLength = ctypes.sizeof(status)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -234,8 +236,8 @@ def _windows_memory_status() -> _MemoryStatus:
 
 
 def _windows_peak_working_set() -> int:
-    """O pico do conjunto de trabalho do processo no Windows, a memória residente dele, em bytes,
-    de ``K32GetProcessMemoryInfo``."""
+    """[private] O pico do conjunto de trabalho do processo no Windows, a memória residente dele, em
+    bytes, de ``K32GetProcessMemoryInfo``."""
     counters = _ProcessMemoryCounters()
     counters.cb = ctypes.sizeof(counters)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -249,7 +251,8 @@ def _windows_peak_working_set() -> int:
 
 
 def _meminfo_available() -> int | None:
-    """``MemAvailable`` de ``/proc/meminfo``, em bytes; ``None`` sem o arquivo, fora do Linux."""
+    """[private] ``MemAvailable`` de ``/proc/meminfo``, em bytes; ``None`` sem o arquivo, fora do
+    Linux."""
     path = _PROC / "meminfo"
     if not path.is_file():
         return None
@@ -260,8 +263,8 @@ def _meminfo_available() -> int | None:
 
 
 def _cgroup_memory_room() -> int | None:
-    """A menor folga de memória nos cgroups do processo, em bytes: o limite menos o uso, com o
-    cache de arquivos de volta, menos a memória compartilhada contada nele; ``None`` quando
+    """[private] A menor folga de memória nos cgroups do processo, em bytes: o limite menos o uso,
+    com o cache de arquivos de volta, menos a memória compartilhada contada nele; ``None`` quando
     nenhuma pasta dá limite e uso."""
     rooms = []
     for folder, version in _cgroup_folders("memory"):
@@ -277,7 +280,7 @@ def _cgroup_memory_room() -> int | None:
 
 
 def _cgroup_cpu_quota() -> float | None:
-    """A menor cota de CPU nos cgroups do processo, em CPUs; ``None`` sem cota."""
+    """[private] A menor cota de CPU nos cgroups do processo, em CPUs; ``None`` sem cota."""
     quotas = []
     for folder, version in _cgroup_folders("cpu"):
         if version == 2:
@@ -292,7 +295,7 @@ def _cgroup_cpu_quota() -> float | None:
 def _cpu_quota_v2(
     folder: Path,
 ) -> float | None:
-    """A cota de ``cpu.max`` no cgroup v2, em CPUs: ``"max 100000"`` sem cota e
+    """[private] A cota de ``cpu.max`` no cgroup v2, em CPUs: ``"max 100000"`` sem cota e
     ``"150000 100000"`` com uma cota de 1,5 CPU; ``None`` sem cota."""
     fields = _read_fields(folder / "cpu.max")
     if len(fields) != 2 or fields[0] == "max":
@@ -303,8 +306,8 @@ def _cpu_quota_v2(
 def _cpu_quota_v1(
     folder: Path,
 ) -> float | None:
-    """A cota do cgroup v1, ``cpu.cfs_quota_us`` sobre ``cpu.cfs_period_us``, em CPUs; ``None``
-    sem cota, que o v1 escreve como -1."""
+    """[private] A cota do cgroup v1, ``cpu.cfs_quota_us`` sobre ``cpu.cfs_period_us``, em CPUs;
+    ``None`` sem cota, que o v1 escreve como -1."""
     quota = _read_number(folder / "cpu.cfs_quota_us")
     period = _read_number(folder / "cpu.cfs_period_us")
     if quota is None or period is None or quota <= 0:
@@ -315,9 +318,9 @@ def _cpu_quota_v1(
 def _cgroup_folders(
     controller: str,
 ) -> list[tuple[Path, int]]:
-    """As pastas do cgroup do processo para o controlador, com a versão, da dele até a raiz
-    montada: ``/sys/fs/cgroup/<caminho>`` no v2 e ``/sys/fs/cgroup/<controlador>/<caminho>`` no v1,
-    pelas linhas de ``/proc/self/cgroup``; vazia fora do Linux."""
+    """[private] As pastas do cgroup do processo para o controlador, com a versão, da dele até a
+    raiz montada: ``/sys/fs/cgroup/<caminho>`` no v2 e ``/sys/fs/cgroup/<controlador>/<caminho>`` no
+    v1, pelas linhas de ``/proc/self/cgroup``; vazia fora do Linux."""
     path = _PROC / "self" / "cgroup"
     if not path.is_file():
         return []
@@ -340,8 +343,8 @@ def _folder_chain(
     mount: Path,
     relative: str,
 ) -> list[Path]:
-    """A pasta do cgroup sob a montagem e as ancestrais dela até a montagem; só a montagem quando a
-    pasta não existe, no contêiner que monta o próprio cgroup como raiz."""
+    """[private] A pasta do cgroup sob a montagem e as ancestrais dela até a montagem; só a montagem
+    quando a pasta não existe, no contêiner que monta o próprio cgroup como raiz."""
     folder = mount / relative.lstrip("/")
     if not folder.is_dir():
         return [mount]
@@ -354,7 +357,7 @@ def _folder_chain(
 def _read_fields(
     path: Path,
 ) -> list[str]:
-    """As palavras do arquivo; vazia quando ele não existe."""
+    """[private] As palavras do arquivo; vazia quando ele não existe."""
     if not path.is_file():
         return []
     return path.read_text().split()
@@ -363,7 +366,7 @@ def _read_fields(
 def _read_number(
     path: Path,
 ) -> int | None:
-    """O número do arquivo; ``None`` quando ele não existe ou diz ``max``, sem limite."""
+    """[private] O número do arquivo; ``None`` quando ele não existe ou diz ``max``, sem limite."""
     fields = _read_fields(path)
     if not fields or fields[0] == "max":
         return None
@@ -374,7 +377,7 @@ def _stat_value(
     path: Path,
     key: str,
 ) -> int:
-    """O valor de ``key`` num ``memory.stat``; 0 quando o arquivo ou a chave faltam."""
+    """[private] O valor de ``key`` num ``memory.stat``; 0 quando o arquivo ou a chave faltam."""
     if not path.is_file():
         return 0
     for line in path.read_text().splitlines():

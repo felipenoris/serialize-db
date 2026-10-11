@@ -1,4 +1,4 @@
-"""Os motores da execução e a interface comum a eles.
+"""[public] Os motores da execução e a interface comum a eles.
 
 ``Engine`` é o protocolo que ``serialize_db.execution`` usa, com a mesma forma nos dois motores:
 ``serialize_db.engine.duckdb`` e ``serialize_db.engine.redshift``. Cada motor guarda uma sessão por
@@ -54,7 +54,7 @@ ARROW_ONLY = (
 
 
 class BatchStream(Protocol):
-    """Os lotes de uma consulta, lidos na ordem dela enquanto ela roda.
+    """[public] Os lotes de uma consulta, lidos na ordem dela enquanto ela roda.
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
@@ -70,10 +70,10 @@ class BatchStream(Protocol):
     """
 
     schema: pa.Schema
-    """O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
+    """[public] O esquema Arrow dos lotes, conhecido na abertura, antes do primeiro lote."""
 
     def read_next_batch(self) -> pa.RecordBatch:
-        """O próximo lote, na ordem da consulta.
+        """[public] O próximo lote, na ordem da consulta.
 
         O erro que a consulta ou a leitura encontra sobe depois do último lote entregue.
 
@@ -90,7 +90,7 @@ class BatchStream(Protocol):
     def __iter__(self) -> Iterator[pa.RecordBatch]: ...
 
     def read_all(self) -> pa.Table:
-        """Os lotes que faltam numa ``pa.Table``.
+        """[public] Os lotes que faltam numa ``pa.Table``.
 
         Exemplo:
 
@@ -102,8 +102,8 @@ class BatchStream(Protocol):
         """
 
     def close(self) -> None:
-        """Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream; a sessão
-        continua usável.
+        """[public] Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream; a
+        sessão continua usável.
 
         Exemplo:
 
@@ -124,7 +124,7 @@ class BatchStream(Protocol):
 
 
 class Appender(Protocol):
-    """O acréscimo em lotes a uma tabela do sandbox, inserido no ``close``.
+    """[public] O acréscimo em lotes a uma tabela do sandbox, inserido no ``close``.
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
@@ -139,14 +139,14 @@ class Appender(Protocol):
     """
 
     rows: int
-    """As linhas gravadas até agora; depois de um ``close`` sem erro, as acrescentadas à
+    """[public] As linhas gravadas até agora; depois de um ``close`` sem erro, as acrescentadas à
     tabela."""
 
     def write(
         self,
         data: pa.RecordBatch | pa.Table,
     ) -> None:
-        """Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
+        """[public] Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
         gravação, que bloqueia quando está cheia.
 
         Exemplo:
@@ -162,8 +162,8 @@ class Appender(Protocol):
         """
 
     def close(self) -> None:
-        """Insere na tabela os lotes gravados, numa transação: um erro não deixa linha. A segunda
-        chamada não faz nada.
+        """[public] Insere na tabela os lotes gravados, numa transação: um erro não deixa linha. A
+        segunda chamada não faz nada.
 
         Exemplo:
 
@@ -183,7 +183,7 @@ class Appender(Protocol):
 
 @runtime_checkable
 class Engine(Protocol):
-    """A interface dos dois motores; ``Execution`` só depende dela.
+    """[public] A interface dos dois motores; ``Execution`` só depende dela.
 
     O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
@@ -202,12 +202,12 @@ class Engine(Protocol):
     """
 
     execution_id: str
-    """O identificador da execução, na regra da partição
+    """[public] O identificador da execução, na regra da partição
     (``serialize_db.schema.PARTITION_VALUE``)."""
 
     def session(self) -> contextlib.AbstractContextManager[object]:
-        """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
-        chamada dentro do bloco não trava.
+        """[public] A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma
+        primitiva chamada dentro do bloco não trava.
 
         Exemplo:
 
@@ -220,8 +220,8 @@ class Engine(Protocol):
         """
 
     def new_session(self) -> Engine:
-        """Uma sessão a mais sobre o mesmo banco, com o seu lock, para o que roda em paralelo:
-        vê o que a sessão principal confirmou e não as tabelas temporárias dela.
+        """[public] Uma sessão a mais sobre o mesmo banco, com o seu lock, para o que roda em
+        paralelo: vê o que a sessão principal confirmou e não as tabelas temporárias dela.
 
         Exemplo:
 
@@ -248,8 +248,8 @@ class Engine(Protocol):
         partitions: list[str] | None = None,
         materialize: bool = False,
     ) -> None:
-        """Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o nome do
-        modelo.
+        """[public] Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o
+        nome do modelo.
 
         Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado, é recusada na
         carga por cada motor à sua maneira, e só a view do motor DuckDB a traz: o modelo tem de
@@ -281,8 +281,8 @@ class Engine(Protocol):
         uri: str,
         version: int | None,
     ) -> sa.FromClause:
-        """A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo no
-        sandbox.
+        """[public] A versão fixada da tabela como origem de consulta, sem ocupar o nome do modelo
+        no sandbox.
 
         Exemplo:
 
@@ -304,7 +304,7 @@ class Engine(Protocol):
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
     ) -> BatchStream:
-        """Os lotes da consulta, lidos na ordem dela enquanto o cliente trabalha no lote
+        """[public] Os lotes da consulta, lidos na ordem dela enquanto o cliente trabalha no lote
         anterior.
 
         Exemplo:
@@ -332,7 +332,7 @@ class Engine(Protocol):
         statement_or_sql: sa.sql.ClauseElement | str,
         params: Mapping[str, object] | None = None,
     ) -> pa.Table:
-        """O resultado inteiro como ``pa.Table``, sob o lock.
+        """[public] O resultado inteiro como ``pa.Table``, sob o lock.
 
         Exemplo:
 
@@ -354,8 +354,8 @@ class Engine(Protocol):
         self,
         table: sa.Table,
     ) -> None:
-        """Cria no sandbox a tabela vazia do modelo, pelo DDL do motor, para os dados que não vêm
-        do ``ingest``.
+        """[public] Cria no sandbox a tabela vazia do modelo, pelo DDL do motor, para os dados que
+        não vêm do ``ingest``.
 
         Exemplo:
 
@@ -372,7 +372,7 @@ class Engine(Protocol):
         table: sa.Table,
         queue_depth: int = 2,
     ) -> Appender:
-        """O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
+        """[public] O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
         ``ingest`` com ``materialize=True`` ou por ``create_table``, e os insere no ``close``.
 
         Dois appenders na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas,
@@ -401,7 +401,7 @@ class Engine(Protocol):
         table: sa.Table,
         data: pa.Table | pa.RecordBatch | pa.RecordBatchReader | Iterable[pa.RecordBatch],
     ) -> int:
-        """Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
+        """[public] Acrescenta os lotes a uma tabela do sandbox pelo ``appender``.
 
         Dois ``append`` na mesma tabela ao mesmo tempo, ou um ``append`` e um ``UPDATE`` dela,
         entram os dois, como no ``appender``.
@@ -432,7 +432,7 @@ class Engine(Protocol):
         key_scope: KeyScope | None = None,
         referenced: Mapping[str, tuple[str, int]] | None = None,
     ) -> AuditReport:
-        """Roda as verificações do contrato sobre a tabela do sandbox.
+        """[public] Roda as verificações do contrato sobre a tabela do sandbox.
 
         Exemplo:
 
@@ -471,7 +471,7 @@ class Engine(Protocol):
         expected_rows: int | None = None,
         columns_without_min_max: Collection[str] = (),
     ) -> int:
-        """Leva a partição do sandbox ao Delta num commit.
+        """[public] Leva a partição do sandbox ao Delta num commit.
 
         O motor grava a partição em arquivos novos na pasta dela na tabela Delta, e o commit os
         registra no log da tabela.
@@ -504,8 +504,8 @@ class Engine(Protocol):
         """
 
     def cleanup(self) -> None:
-        """Fecha a sessão e apaga o que a execução criou no sandbox; numa sessão a mais, fecha
-        só ela. A segunda chamada não faz nada.
+        """[public] Fecha a sessão e apaga o que a execução criou no sandbox; numa sessão a mais,
+        fecha só ela. A segunda chamada não faz nada.
 
         Exemplo:
 
@@ -521,9 +521,9 @@ class Engine(Protocol):
 def batches_of(
     data: object,
 ) -> Iterator[pa.RecordBatch]:
-    """Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de lotes; protegida,
-    para o ``append`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError`` antes de
-    qualquer gravação."""
+    """[protected] Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de
+    lotes; para o ``append`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError``
+    antes de qualquer gravação."""
     if isinstance(data, pa.Table):
         return iter(data.to_batches())
     if isinstance(data, pa.RecordBatch):
@@ -545,7 +545,7 @@ def batches_of(
 def checked_batches(
     data: pa.RecordBatch | pa.Table,
 ) -> list[pa.RecordBatch]:
-    """Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; protegida, para o ``write`` dos
+    """[protected] Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; para o ``write`` dos
     appenders. Outro tipo é ``ContractError``."""
     if isinstance(data, pa.Table):
         return data.to_batches()
@@ -558,8 +558,8 @@ def take(
     source: queue.Queue,
     stop: threading.Event,
 ) -> object | None:
-    """O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o ``stop`` em
-    vez de ficar preso num ``get`` sem fim; protegida, para as threads dos motores. ``None`` quando
+    """[protected] O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o
+    ``stop`` em vez de ficar preso num ``get`` sem fim; para as threads dos motores. ``None`` quando
     ``stop`` chega com a fila vazia; nenhum item da fila é ``None``."""
     while True:
         try:

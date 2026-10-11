@@ -197,6 +197,13 @@ The standard every public function, method and class follows (user decision of 2
 - **Layout.** A summary line saying what the function does or returns, the behavior as prose, an
   `Exemplo:` block opened by `.. code-block:: python` (or `shell`) on the public interface, and the
   fields last, after a blank line.
+- **Level tag.** Every docstring opens with `[public]`, `[protected]` or `[private]`, the level of
+  the name it documents, before the summary (user decision of 2026-10-11): a module by its
+  package's `__all__` and the `_` prefix, a module-level name by the module's `__all__` and the
+  prefix, a class member or attribute by its own prefix bounded by the class's level (a dunder takes
+  the class's level, a nested function is private). A protected docstring names who uses it ("para
+  o motor Redshift") and no longer says "protegida". `tests/test_package.py` checks every file of
+  `src/serialize_db/`.
 - **Fields.** `:param name:` for every parameter pdoc shows, in signature order, except `self` and
   `cls` (`*parts` is `:param parts:`); `:return:` when the annotation is not `None`, and for a
   context manager what `with` gives; one `:raises Exc:` per exception the function raises
@@ -662,7 +669,8 @@ English. The library's own metadata is English. Each module separates three leve
 the interface client code imports, which `pdoc` documents; protected, used by another module of the
 library; private, used only inside its module. The module's `__all__` lists the public names and
 only those, so a module with a protected name declares `__all__` and `pdoc` leaves the protected
-one out; protected is unprefixed all the same, and private carries the `_` prefix. A package's
+one out; protected is unprefixed all the same, and private carries the `_` prefix; every
+docstring opens with its level's tag ("Docstrings"). A package's
 `__all__` also lists its public submodules, the only ones `pdoc` documents (`serialize_db.engine`
 lists `duckdb` and `redshift`; `tests/test_package.py` checks every package). A key under
 `_serialize_db/` carries no prefix (`snapshots` in `_serialize_db/snapshots.json`); everything else
