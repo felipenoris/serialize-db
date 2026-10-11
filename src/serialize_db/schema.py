@@ -405,7 +405,7 @@ def sequential_key(
     table: sa.Table,
 ) -> sa.Column | None:
     """A chave primária inteira de uma coluna, a chave sequencial que ``next_ids`` preenche;
-    ``None`` quando a chave primária é outra."""
+    ``None`` quando a chave primária é outra. Protegida, para a auditoria e os motores."""
     primary = list(table.primary_key.columns)
     if len(primary) != 1 or not isinstance(primary[0].type, sa.Integer):
         return None
@@ -416,7 +416,8 @@ def double_columns(
     table: sa.Table,
 ) -> list[str]:
     """Os nomes das colunas ``Double``, as que podem guardar ``NaN`` e infinito, que ficam sem
-    mínimo e máximo no Delta (issue #59)."""
+    mínimo e máximo no Delta (issue #59). Protegida, para a auditoria e a carga de
+    ``serialize_db.parquet_import``."""
     names = []
     for column in table.columns:
         if isinstance(column.type, sa.Double):
@@ -435,7 +436,8 @@ def foreign_keys_by_columns(
     table: sa.Table,
 ) -> list[sa.ForeignKeyConstraint]:
     """As chaves estrangeiras na ordem das colunas locais: o SQLAlchemy as guarda num conjunto, e
-    a ordem fixa a das mensagens de ``check_models`` e das verificações da auditoria."""
+    a ordem fixa a das mensagens de ``check_models`` e das verificações da auditoria. Protegida,
+    para a auditoria."""
     return sorted(table.foreign_key_constraints, key=_local_column_names)
 
 
@@ -443,10 +445,11 @@ PARTITION_VALUE = r"[0-9A-Za-z][0-9A-Za-z_.-]*"
 """A regra da partição, que vale também para o ``execution_id``: letra ou dígito no início,
 depois letras, dígitos, ``_``, ``.`` e ``-``.
 
-O valor vira nome de pasta e literal SQL. A aspa simples fecharia o literal ``'<valor>'`` do
-predicado da substituição, e o delta-rs grava ``:``, ``%``, ``'`` ou um acento codificados por
-porcentagem no nome da pasta, que o ``COPY`` do DuckDB gravaria sem codificar; com a regra, o
-valor codificado é o próprio valor."""
+O valor vira nome de pasta e literal SQL, e a regra deixa fora o que quebraria um dos dois: a
+aspa simples fecharia o literal ``'<valor>'`` do predicado da substituição, e ``:``, ``%``, ``'``
+ou um acento sairiam codificados por porcentagem no nome da pasta que o delta-rs grava e sem
+codificar no que o ``COPY`` do DuckDB grava; com a regra, o valor codificado é o próprio
+valor."""
 
 _PARTITION_VALUE = re.compile(PARTITION_VALUE)
 
@@ -539,13 +542,17 @@ def quoted(
 def literal(
     value: str,
 ) -> str:
-    """O literal SQL de um texto, entre aspas simples e com a aspa simples dobrada.
+    """O literal SQL de um texto, entre aspas simples e com a aspa simples dobrada; protegida, para
+    ``serialize_db.storage``, os motores e a carga de ``serialize_db.parquet_import``.
 
     Exemplo:
 
     .. code-block:: python
 
         literal("d'agua")   # "'d''agua'"
+
+    :param value: o texto.
+    :return: o literal, para dentro de um comando SQL.
     """
     return "'" + value.replace("'", "''") + "'"
 

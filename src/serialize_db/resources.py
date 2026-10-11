@@ -3,16 +3,17 @@
 O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem destas leituras, não
 de um valor fixo no código: o motor DuckDB lê ``available_cpus`` e ``memory_limit_setting`` na
 abertura, e ``environment_limits``, que ``serialize_db.engine.duckdb`` publica, monta os dois para
-as conexões de ``serialize_db.delta``, da troca do motor Redshift e do script de migração; a
-memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de
-``memory_limit`` ao DuckDB, é recusada com ``SandboxError``.
-No Linux, as leituras respeitam o cgroup do processo,
-v1 e v2, com que um contêiner limita as CPUs e a memória abaixo das da máquina, e o menor limite
-no caminho do cgroup até a raiz é o que vale. No Windows, a memória é a disponível que a API do
-sistema informa, lida pelo ``ctypes``; nos outros sistemas fora do Linux, é a física. Fora do
-Linux, as CPUs são as que o Python lê. ``peak_rss_mb`` lê o pico de memória residente do próprio
-processo, a medida que o script de migração, os subcomandos de operação e a publicação imprimem
-por tabela.
+as conexões de ``serialize_db.delta``, do DuckDB local com que o motor Redshift troca os arquivos
+da partição com ``Double`` não finito e do script de migração; a memória que o processo ainda
+pode usar abaixo de 2 MiB, ou negativa, que não dá 1 MiB de ``memory_limit`` ao DuckDB, é
+recusada com ``SandboxError``.
+
+No Linux, as leituras respeitam o cgroup do processo, v1 e v2, com que um contêiner limita as CPUs
+e a memória abaixo das da máquina, e o menor limite no caminho do cgroup até a raiz é o que vale.
+No Windows, a memória é a disponível que a API do sistema informa, lida pelo ``ctypes``; nos outros
+sistemas fora do Linux, é a física. Fora do Linux, as CPUs são as que o Python lê. ``peak_rss_mb``
+lê o pico de memória residente do próprio processo, a medida que o script de migração, os
+subcomandos de operação e a publicação imprimem por tabela.
 
 Exemplo:
 
@@ -92,12 +93,12 @@ def available_memory() -> int:
 
         available_memory() / 2**30   # 14.7 numa máquina de 16 GiB com pouco em uso
 
-    :return: em bytes, a menor entre a física, a disponível no sistema (no Windows,
-        ``ullAvailPhys`` de ``GlobalMemoryStatusEx``, que conta como livre a lista de espera, as
-        páginas em cache que o sistema reaproveita; no Linux, ``MemAvailable`` de
-        ``/proc/meminfo``, que conta como livre o cache de arquivos que o kernel devolve) e a
-        folga do cgroup (o limite menos o uso, com o cache de arquivos de volta, menos a memória
-        compartilhada, ``shmem``, que o kernel conta no cache e não devolve sem swap).
+    :return: em bytes, a menor de três leituras: a memória física; a disponível no sistema, no
+        Windows ``ullAvailPhys`` de ``GlobalMemoryStatusEx``, que conta como livre a lista de
+        espera (as páginas em cache que o sistema reaproveita), e no Linux ``MemAvailable`` de
+        ``/proc/meminfo``, que conta como livre o cache de arquivos que o kernel devolve; e a
+        folga do cgroup, o limite menos o uso, com o cache de arquivos de volta e menos a memória
+        compartilhada (``shmem``), que o kernel conta no cache e não devolve sem swap.
     """
     readings = [physical_memory()]
     if sys.platform == "win32":
@@ -122,9 +123,9 @@ def physical_memory() -> int:
 
 def environment_limits() -> dict[str, object]:
     """O ``threads`` e o ``memory_limit`` do DuckDB lidos do ambiente na chamada, para as conexões
-    de ``serialize_db.delta``, da troca do motor Redshift e do script de migração; o motor DuckDB
-    lê os mesmos valores por ``available_cpus`` e ``memory_limit_setting`` quando a configuração
-    os omite.
+    de ``serialize_db.delta``, do DuckDB local com que o motor Redshift troca os arquivos da
+    partição com ``Double`` não finito e do script de migração; o motor DuckDB lê os mesmos
+    valores por ``available_cpus`` e ``memory_limit_setting`` quando a configuração os omite.
 
     Exemplo:
 

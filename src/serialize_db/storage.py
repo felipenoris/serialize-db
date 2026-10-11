@@ -4,9 +4,10 @@
 do ``pyarrow.fs`` que lista, lê, copia e apaga nos dois armazenamentos, e o caminho da raiz nele.
 Os métodos recebem caminhos relativos à raiz, montados com ``/`` por ``join``; ``relative`` leva
 uma URI sob a raiz ao caminho relativo. Dois grupos de métodos têm um ramo por armazenamento: a
-escrita condicional do arquivo de controle (``create_text`` e ``write_text``), ``put_object`` do
-``boto3`` com ``IfNoneMatch`` ou ``IfMatch`` no S3, porque o ``pyarrow.fs`` não tem a condição nem
-devolve a etag, e ``O_EXCL`` ou a impressão digital com ``os.replace`` na pasta local; e a cópia, a
+leitura e a escrita condicional do arquivo de controle (``read_text``, ``create_text`` e
+``write_text``), ``get_object`` e ``put_object`` do ``boto3``, este com ``IfNoneMatch`` ou
+``IfMatch``, no S3, porque o ``pyarrow.fs`` não tem a condição nem devolve a etag, e a leitura do
+arquivo, ``O_EXCL`` ou a impressão digital com ``os.replace`` na pasta local; e a cópia, a
 transferência gerenciada do ``boto3`` no S3, porque o ``CopyObject`` único do ``copy_file`` do
 PyArrow é abandonado pelo SDK da AWS depois de 3 segundos sem resposta num objeto grande.
 
@@ -627,10 +628,11 @@ class Storage:
         mudado desde a leitura.
 
         No S3, ``put_object``, com ``IfMatch=<etag>`` quando a condição vem, atômico no servidor.
-        Na pasta local, a comparação da impressão digital seguida de ``os.replace`` de um arquivo
-        temporário, que não é atômica entre processos e basta à pasta local, o ambiente dos testes
-        e do desenvolvimento; o arquivo substituído mantém o modo, o novo nasce como em
-        ``create_text``, e a escrita ou a troca que falha não deixa o temporário na pasta.
+        Na pasta local, a impressão digital do arquivo é comparada e um arquivo temporário entra
+        no lugar dele por ``os.replace``; a sequência não é atômica entre processos, o que basta à
+        pasta local, o ambiente dos testes e do desenvolvimento. O arquivo substituído mantém o
+        modo, o novo nasce como em ``create_text``, e a escrita ou a troca que falha não deixa o
+        temporário na pasta.
 
         Exemplo:
 
@@ -803,6 +805,8 @@ class Storage:
             connection.execute(f"SELECT count(*) FROM delta_scan('{uri}')")
 
         :param connection: a conexão aberta do DuckDB que recebe as extensões e o secret.
+        :raises duckdb.Error: uma extensão ausente da pasta configurada na conexão, ou o secret
+            recusado.
         :raises botocore.exceptions.NoCredentialsError: no S3, a cadeia do ``boto3`` não achou
             credencial.
         """

@@ -1,14 +1,15 @@
 """As exceções da biblioteca, num módulo sem dependências, que os outros importam sem ciclo.
 
 ``ContractError`` é a dos dados, do modelo e da configuração fora do contrato de ``schema``;
-``SqlError`` a do texto SQL de ``sql``; ``ConflictError``, ``ExecutionConflict``,
-``RegistrationRefused``, ``SchemaDiffRefused`` e ``LogUnavailable`` as de ``storage`` e ``delta``,
-que a execução deixa chegar ao cliente; ``SandboxError`` a do sandbox, dos motores de ``engine``
-e dos limites de ``resources``; ``AuditFailed`` a da auditoria reprovada em ``execution``; e
-``PublicationError`` a da publicação no Redshift de ``publication``. A linha de comando sai com 1
-em ``AuditFailed`` e no ``ContractError`` da carga de ``serialize-db import``, e com 2 em
-``ContractError``, ``ConflictError``, ``ExecutionConflict`` e ``PublicationError`` nos demais
-casos.
+``SqlError`` a do texto SQL de ``sql``; ``ConflictError``, ``RegistrationRefused``,
+``SchemaDiffRefused`` e ``LogUnavailable`` as de ``storage`` e ``delta``, que a execução deixa
+chegar ao cliente; ``ExecutionConflict`` a do commit concorrente, de ``delta``, de ``execution`` e
+de ``publication``; ``SandboxError`` a do sandbox, dos motores de ``engine`` e dos limites de
+``resources``; ``AuditFailed`` a da auditoria reprovada em ``execution``; e ``PublicationError``
+a da publicação no Redshift de ``publication``. A linha de comando sai com 1 em ``AuditFailed`` e
+no ``ContractError`` da carga de ``serialize-db import``, e com 2 em ``ContractError``,
+``ConflictError``, ``ExecutionConflict`` e ``PublicationError`` nos demais casos; as outras sobem
+com o traceback. A lista dos casos de cada código está em ``serialize_db.cli``.
 """
 
 __all__ = [
@@ -101,7 +102,8 @@ class RegistrationRefused(Exception):
     depois dele e ``restore`` voltou a versão anterior.
 
     A mensagem nomeia a conferência e, nas de cada arquivo, o arquivo; os arquivos ficam órfãos na
-    pasta da tabela até um ``vacuum(full=True)``. ``deep_copy`` também a levanta, no destino que
+    pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)``
+    (``serialize-db vacuum --full --apply``). ``deep_copy`` também a levanta, no destino que
     registra um arquivo fora da versão copiada, no destino cujo esquema difere do da versão sem
     partição copiada que o trocasse, e na contagem da cópia diferente da soma das ações.
 
@@ -116,9 +118,9 @@ class RegistrationRefused(Exception):
 
 
 class SchemaDiffRefused(Exception):
-    """O diff entre o modelo e a tabela Delta é destrutivo: renomeação, remoção, mudança de tipo,
-    ``NOT NULL`` numa coluna anulável ou coluna ``NOT NULL`` nova numa tabela com dados. A mensagem
-    lista cada diferença e aponta ``rewrite``.
+    """O diff entre o modelo e a tabela Delta é destrutivo: remoção (uma renomeação é uma remoção
+    e uma coluna nova), mudança de tipo, ``NOT NULL`` numa coluna anulável ou coluna ``NOT NULL``
+    nova numa tabela com dados. A mensagem lista cada diferença e aponta ``rewrite``.
 
     Exemplo:
 
@@ -143,14 +145,17 @@ class LogUnavailable(Exception):
 
 
 class SandboxError(ValueError):
-    """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, o
-    motor Redshift sem as credenciais que o ``COPY`` e o ``UNLOAD`` pedem ou com a sessão numa
-    transação que o cliente abriu, ou a memória lida do ambiente que não dá 1 MiB de
-    ``memory_limit`` ao DuckDB.
+    """Um nome já ocupado no sandbox, um objeto do sandbox que não serve ao que foi pedido, uma
+    tabela sem versão fixada no ``ingest``, porque não existe no ambiente, uma coluna do resultado
+    do motor Redshift num tipo fora do contrato, o motor Redshift sem as credenciais que o
+    ``COPY`` e o ``UNLOAD`` pedem ou com a sessão numa transação que o cliente abriu, ou a memória
+    lida do ambiente que não dá 1 MiB de ``memory_limit`` ao DuckDB.
 
     A mensagem nomeia o objeto: o nome que ``create_table`` achou ocupado, a tabela que o
     ``appender`` não achou no sandbox, ou a view do ``ingest``, que não recebe lotes; o cliente lê
-    a versão fixada por ``run.pinned_delta(table)`` sem ocupar nome. O ``append``, o ``appender``,
+    a versão fixada por ``run.pinned_delta(table)`` sem ocupar nome. No resultado de ``query`` e
+    de ``stream`` do motor Redshift, a mensagem nomeia a coluna de outro OID, ou de ``NUMERIC``
+    sem modificador, que o contrato não tem. O ``append``, o ``appender``,
     o ``ingest`` e o ``pinned_delta`` do motor Redshift recusam a sessão numa transação do
     cliente, que o ``COMMIT`` deles confirmaria junto, e a mensagem pede o ``COMMIT`` ou o
     ``ROLLBACK`` dela antes. Sem ``iam_role`` na configuração, as credenciais vêm da sessão

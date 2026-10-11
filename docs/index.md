@@ -3,7 +3,7 @@ publicação. Os modelos SQLAlchemy do cliente são o contrato de esquema: a
 biblioteca deriva deles o esquema Arrow e Delta, o DDL de cada motor, a conversão dos lotes de
 dados e a conferência dos próprios modelos.
 
-Esta página explica o funcionamento geral do pacote, traz o tutorial de uso, o uso das threads, a
+Esta página explica o funcionamento geral do pacote, traz o tutorial de uso, o multithreading, a
 retenção dos arquivos removidos e a tabela de mapeamento de tipos. A referência de cada módulo, com
 os argumentos, o retorno e as exceções de cada função, está no menu: `serialize_db.schema`,
 `serialize_db.sql`, `serialize_db.storage`, `serialize_db.delta`, `serialize_db.audit`,
@@ -23,11 +23,11 @@ biblioteca faz com cada um.
   `Base.metadata`.
 - **A fonte da verdade são as tabelas Delta Lake**, em disco local ou no S3. O esquema Delta de cada
   tabela sai do modelo.
-- **O DuckDB e o Redshift são sandboxes**: cada execução leva ao sandbox as tabelas de entrada,
+- **O DuckDB e o Redshift são sandboxes.** Cada execução leva ao sandbox as tabelas de entrada,
   como view ou cópia do `delta_scan` no DuckDB e por `COPY` numa tabela do DDL do modelo no
-  Redshift, roda o pipeline, que grava as de saída em tabelas do DDL do modelo, audita e publica
-  no Delta.
-  O DDL de cada motor sai do modelo pela tabela de tipos abaixo, sem os dialetos do SQLAlchemy.
+  Redshift. O pipeline roda no sandbox e grava as tabelas de saída em tabelas do DDL do modelo; a
+  execução as audita e as publica no Delta. O DDL de cada motor sai do modelo pela tabela de tipos
+  abaixo, sem os dialetos do SQLAlchemy.
 - **Os dados atravessam a fronteira em lotes Arrow** (`pyarrow.RecordBatch`, `pyarrow.Table` ou
   `pyarrow.RecordBatchReader`), e `serialize_db.schema.cast` leva cada lote ao esquema do contrato
   ou o recusa com a instrução ao cliente.
@@ -40,23 +40,31 @@ biblioteca faz com cada um.
 - **Todo identificador que a biblioteca emite vai entre aspas duplas**: nomes de coluna como `to` e
   `timestamp` são palavras reservadas do DuckDB e do Redshift.
 
-O pacote tem o módulo de esquema, `serialize_db.schema`, o de texto SQL,
-`serialize_db.sql`, com a linha de comando `serialize-db schema` e `serialize-db sql`, a camada
-de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3, a auditoria,
-`serialize_db.audit`, os dois motores, `serialize_db.engine.duckdb` e
-`serialize_db.engine.redshift`, a execução, `serialize_db.execution`, com `serialize-db run` e
-`serialize-db audit`, a publicação para os clientes no Redshift, `serialize_db.publication`,
-com `serialize-db publish_redshift`, a carga inicial da base Parquet atual,
-`serialize_db.parquet_import`, com `serialize-db import`, a operação, `serialize-db snapshot`,
-`vacuum`, `compact`, `archive`, `export`, `history` e `channel`, com o runbook na página de
-`serialize_db.cli`, e o acesso de leitura à base com o modelo, `serialize_db.reader`, por
-`db.open_delta()` e `db.open_redshift()`.
+Os módulos do pacote, com o subcomando de `serialize-db` que os roda:
+
+- o esquema, `serialize_db.schema`, e o texto SQL, `serialize_db.sql`, com `serialize-db schema` e
+  `serialize-db sql`;
+- a camada de tabela, `serialize_db.storage` e `serialize_db.delta`, na pasta local e no S3;
+- a auditoria, `serialize_db.audit`;
+- os dois motores, `serialize_db.engine.duckdb` e `serialize_db.engine.redshift`, e os limites que
+  eles leem da máquina, `serialize_db.resources`;
+- a execução, `serialize_db.execution`, com `serialize-db run` e `serialize-db audit`;
+- a publicação para os clientes no Redshift, `serialize_db.publication`, com
+  `serialize-db publish_redshift`;
+- a carga inicial da base Parquet atual, `serialize_db.parquet_import`, com `serialize-db import`;
+- a operação, `serialize-db snapshot`, `vacuum`, `compact`, `archive`, `export`, `history` e
+  `channel`, com o runbook na página de `serialize_db.cli`;
+- o acesso de leitura à base com o modelo, `serialize_db.reader`, por `db.open_delta()` e
+  `db.open_redshift()`;
+- as exceções, `serialize_db.errors`.
 
 ### Origem e destino dos dados
 
 Cada tabela Delta fica em `<raiz>/<ambiente>/<tabela>`, e o ambiente (`prd`, `dsv`) também prefixa
-a tabela publicada no Redshift, `<ambiente>_<tabela>`. Cada operação lê de uma origem e grava num
-destino:
+a tabela publicada no Redshift, `<ambiente>_<tabela>`. A versão fixada de uma tabela é a versão que
+a execução lê na abertura e usa até o fim; um snapshot é a entrada do arquivo de controle com a
+versão de cada tabela do ambiente num instante; um canal, como `default`, é um nome que aponta para
+um snapshot. Cada operação lê de uma origem e grava num destino:
 
 | Operação | Origem | Destino |
 | --- | --- | --- |
@@ -104,23 +112,27 @@ uv sync
 
 O projeto cliente pede o Python 3.13 ou mais novo, como o pacote (`uv init --python 3.13`); com um
 `requires-python` que aceita versões anteriores, o `uv add` recusa o pacote. As dependências que o
-`uv sync` instala são as de execução, nas versões fixadas em `pyproject.toml`: `sqlalchemy`,
-`pyarrow`, `deltalake`, `duckdb`, `boto3`, que no S3 faz a escrita condicional do arquivo de
-controle e a cópia dos arquivos do `archive` e do `export`, dá a chave da sessão AWS ao segredo do
-DuckDB e à cláusula de credenciais do `COPY` e do `UNLOAD` sem `iam_role` e pede a credencial
-temporária do grupo de trabalho do Redshift, os dialetos `duckdb-engine` e `sqlalchemy-redshift`,
-que compilam o texto SQL de cada motor, e `redshift-connector`, o driver do motor Redshift, da
-publicação e do leitor Redshift. Os grupos de
-`pyproject.toml`, `dev` entre eles, servem ao desenvolvimento do pacote e nunca vão para o projeto
-cliente. O pacote não importa o pandas: o cliente que converte o resultado com `to_pandas`, como no
-tutorial, declara o pandas no próprio projeto.
+`uv sync` instala são as de execução, nas versões fixadas em `pyproject.toml`:
+
+- `sqlalchemy`, `pyarrow`, `deltalake` e `duckdb`;
+- `boto3`, que no S3 faz a escrita condicional do arquivo de controle e a cópia dos arquivos do
+  `archive` e do `export`, dá a chave da sessão AWS ao segredo do DuckDB e à cláusula de
+  credenciais do `COPY` e do `UNLOAD` sem `iam_role`, e pede a credencial temporária do grupo de
+  trabalho do Redshift;
+- os dialetos `duckdb-engine` e `sqlalchemy-redshift`, que compilam o texto SQL de cada motor;
+- `redshift-connector`, o driver do motor Redshift, da publicação e do leitor Redshift.
+
+Os grupos de `pyproject.toml`, `dev` entre eles, servem ao desenvolvimento do pacote e nunca vão
+para o projeto cliente. O pacote não importa o pandas: o cliente que converte o resultado com
+`to_pandas`, como no tutorial, declara o pandas no próprio projeto.
 
 No repositório, o `uv sync` instala o Python 3.13, o pacote e o grupo `dev`, o dos testes, que o
 `uv` inclui por padrão; `uv sync --no-dev` instala só o pacote e as dependências de execução.
 
 O S3 precisa da região em `AWS_REGION` ou `AWS_DEFAULT_REGION`, e as credenciais vêm da cadeia
 padrão do ambiente; as extensões `delta` e, no S3, `httpfs` do DuckDB vêm da pasta de
-`SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual, sem download. O
+`SERIALIZE_DB_DUCKDB_EXTENSIONS`, ou de `.duckdb/` ao lado do ambiente virtual quando existe, ou
+da pasta padrão do DuckDB, sem download. O
 DuckDB lê o S3 com a chave que a cadeia do `boto3` resolve, e a execução e o leitor Delta a trocam
 antes de cada comando quando o `boto3` a renova; um comando só mais longo que a validade da chave
 ainda falha.
@@ -238,7 +250,8 @@ CREATE TABLE "exec_42_cad_operacoes" (
 As colunas são as mesmas nos dois motores; o `Double` é `DOUBLE` no DuckDB e `DOUBLE PRECISION` no
 Redshift, e a `sort_key` vira `SORTKEY` só no Redshift. O `CREATE TABLE` leva colunas, tipos e
 `NOT NULL`; as chaves ficam para a auditoria, e o comentário de cada coluna vai no esquema Delta.
-`serialize_db.schema.sql_type` dá o nome de um tipo num motor, para um `CAST` ou um `ALTER TABLE`,
+`serialize_db.schema.sql_type` dá o nome do tipo de uma coluna num motor, para um `CAST` ou um
+`ALTER TABLE`,
 e `serialize_db.schema.quoted` cita um identificador. `temporary=True` faz `ddl` emitir
 `CREATE TEMP TABLE`, a tabela que dura a sessão: no DuckDB só a conexão que a criou a vê, e um
 `cursor()` é outra conexão.
@@ -362,7 +375,8 @@ a string vazia para as tabelas do contrato ou `exec_<id>_` para o sandbox de uma
 
 `serialize_db.storage.Storage` é a raiz do banco, uma pasta local ou um prefixo `s3://`, e cada
 primitiva de `serialize_db.delta` recebe a URI da pasta da tabela e o `Storage`. A tabela nasce do
-modelo, e cada partição entra num commit que a substitui, com os metadados da execução:
+modelo, e cada partição entra num commit que a substitui, com os metadados da execução (`batch` é
+o lote convertido na seção anterior):
 
 ```python
 from serialize_db import delta, schema
@@ -372,7 +386,7 @@ storage = Storage.for_uri("s3://bucket/projeto/delta")
 uri = storage.uri_of("prd/cad_operacoes")
 delta.create_table(uri, table, storage)                         # versão 0, repetível
 metadata = delta.commit_metadata("exec-2026-09-05", {"cad_contratos": 88})
-version = delta.publish_partition(uri, table, "2026-08-31", schema.cast(data, table), metadata, storage)
+version = delta.publish_partition(uri, table, "2026-08-31", schema.cast(batch, table), metadata, storage)
 delta.version_diff(uri, version - 1, version, table, storage)   # {"2026-08-31"}
 ```
 
@@ -383,9 +397,11 @@ segunda não commita. `serialize_db.delta.register_files` registra no log os arq
 escritor gravou dentro da pasta da tabela, como o `COPY` do DuckDB, depois de conferir o rodapé de
 cada um, e relê a versão pelos dois leitores, desfazendo o commit numa diferença.
 
-`serialize_db.delta.reconcile` aplica ao log o que o modelo acrescentou (coluna anulável,
-`NOT NULL` relaxado, comentários) e recusa com `serialize_db.errors.SchemaDiffRefused` o que só
-`serialize_db.delta.rewrite` resolve, num commit: renomeação, remoção e mudança de tipo. A coluna
+`serialize_db.delta.reconcile` aplica ao log o que o modelo acrescentou (coluna anulável, ou
+`NOT NULL` numa tabela ainda sem dados, `NOT NULL` relaxado, `CheckConstraint` nova, comentários)
+e recusa com `serialize_db.errors.SchemaDiffRefused` o que só `serialize_db.delta.rewrite`
+resolve, num commit: remoção (a renomeação é uma remoção e uma coluna nova), mudança de tipo,
+`NOT NULL` numa coluna anulável e coluna `NOT NULL` nova numa tabela com dados. A coluna
 nova entra em qualquer posição do modelo: os arquivos gravados antes dela não a têm, e todo leitor,
 o `COPY` do Redshift inclusive, liga cada coluna do arquivo à de mesmo nome e lê a nova nula neles.
 `serialize_db.delta.snapshot` marca as versões de um snapshot do banco no arquivo de controle do
@@ -398,13 +414,12 @@ arquivamento.
 `serialize_db.parquet_import` leva a base Parquet de hoje, uma pasta por tabela sob a raiz de
 origem, `<origem>/<tabela>/`, com as partições Hive `<coluna>=<valor>/`, para as tabelas Delta do
 ambiente, `<raiz>/<ambiente>/<tabela>`, uma partição por commit, sem tocar a origem.
-`serialize_db.parquet_import.import_table` cria a tabela do contrato, pula as partições já no log
-da tabela Delta, confere cada uma das outras (o valor do caminho na coluna de origem, os nulos das
-colunas `NOT NULL`, os textos acima do limite que `cast` e a auditoria medem) e a grava pelo `COPY`
-do DuckDB num arquivo novo da pasta da partição, na ordem da `sort_key`, registrando o arquivo no
-log da tabela;
-`serialize_db.parquet_import.import_report` confere contagem e somas por partição entre a origem e o
-Delta:
+`serialize_db.parquet_import.import_table` cria a tabela do contrato e pula as partições já no log
+da tabela Delta. Cada uma das outras é conferida (o valor do caminho na coluna de origem, os nulos
+das colunas `NOT NULL`, os textos acima do limite que `cast` e a auditoria medem), gravada pelo
+`COPY` do DuckDB num arquivo novo da pasta da partição, na ordem da `sort_key`, e registrada no log
+da tabela. `serialize_db.parquet_import.import_report` confere contagem e somas por partição entre
+a origem e o Delta:
 
 ```python
 from serialize_db import parquet_import
@@ -447,7 +462,10 @@ serialize-db import --root s3://bucket/projeto/delta --environment prd \
 `serialize_db.Database` junta a raiz, o ambiente e os modelos, e `serialize_db.Execution` é o ciclo
 de uma execução: a entrada do `with` abre as tabelas do ambiente, fixa a versão de cada uma e cria
 o sandbox, e o fim do bloco o descarta. Entre os dois, o pipeline traz as tabelas, roda a lógica,
-audita e publica no Delta:
+audita e publica no Delta. Os exemplos daqui em diante usam modelos do pipeline declarados como
+`Operacao`: `Lancamento` e `Projetado`, particionados por `data_base_str`, e `Conta`, sem
+partição; `project` é a função do pipeline que transforma cada lote lido num lote da tabela de
+saída:
 
 ```python
 import sqlalchemy as sa
@@ -483,7 +501,8 @@ O terceiro argumento do `Execution`, opcional, é a partição da execução, `r
 na abertura e no fim da execução. `run.audit` e `run.publish_delta` recebem as partições por
 argumento.
 
-`run.publish_delta` exige a auditoria aprovada das partições na própria execução e recusa com
+`run.publish_delta` exige a auditoria aprovada das partições na própria execução, salvo com
+`audit=False`, que dispensa a exigência com um aviso no log, e recusa com
 `serialize_db.errors.ExecutionConflict` a tabela em que outra execução gravou dados depois da
 abertura. Cada partição sai do sandbox num arquivo que o motor grava na pasta da partição na tabela
 Delta e entra no log da tabela por `serialize_db.delta.register_files`, depois das conferências.
@@ -550,16 +569,18 @@ versão fixada sem ocupar nome.
 Redshift, o `append`, o `appender`, o `ingest` e o `pinned_delta` recusam com `SandboxError` a
 sessão numa transação que o cliente abriu por essa conexão, cujo trabalho o `COMMIT` deles
 confirmaria junto. A execução usa sempre os limites da máquina;
-`DuckDBConfig(threads=..., memory_limit=...)` os troca só no motor construído à mão.
+`DuckDBConfig(threads=..., memory_limit=...)` os troca no motor construído à mão, em
+`db.open_delta(config=...)` e em `import_table` e `import_report` (`config=`).
 
 ### Auditar antes de publicar no Delta
 
 `run.audit(table, partitions)` roda no motor as verificações que `serialize_db.audit.checks`
-deriva do modelo: nulo em coluna `NOT NULL`, texto acima de `String(n)` em bytes, texto numa coluna
-`Text` ou documento JSON acima de 65.535 bytes, JSON inválido, a partição fora da coluna de origem
-e do padrão de nome de pasta, a chave repetida na partição e, quando a chave não inclui a
-partição, contra as demais partições da versão fixada, e o órfão de chave estrangeira com
-`foreign_keys=True`. Ele devolve o `AuditReport` aprovado e levanta
+deriva do modelo: nulo em coluna `NOT NULL`, texto acima de `String(n)` em bytes, texto de uma
+coluna `Uuid` acima de 36 bytes, texto numa coluna `Text` ou documento JSON acima de 65.535 bytes,
+JSON inválido, a partição fora da coluna de origem e do padrão de nome de pasta, a chave repetida
+na partição e, quando a chave não inclui a coluna de partição, contra as demais partições da
+versão fixada (a chave com a coluna de `partition_source` só com `key_scope="table"`), e o órfão
+de chave estrangeira com `foreign_keys=True`. Ele devolve o `AuditReport` aprovado e levanta
 `serialize_db.errors.AuditFailed` na reprovação. O relatório traz o SQL de cada verificação, até 20
 linhas de amostra das reprovadas, as somas de controle e as colunas `Double` com `NaN` ou infinito,
 que `run.publish_delta` grava sem mínimo e máximo. `serialize_db.audit.audit_sql(table, "redshift")`
@@ -647,8 +668,8 @@ with Execution(db, "duckdb") as run:
 
 `run.audit(table, None)` confere a tabela inteira do sandbox, e `run.publish_delta(table)`, sem
 `partitions`, grava a tabela num commit que substitui a versão anterior. `run.next_ids` dá os ids
-acima do maior da versão fixada, que avança a cada `run.publish_delta` da tabela, a partir de 1 na
-tabela nova.
+acima do maior da versão fixada, lido uma vez por tabela na execução, a partir de 1 na tabela
+nova; a execução seguinte parte do maior que a publicação gravou.
 
 Na primeira carga a tabela ainda não existe: `run.ingest` e `run.pinned_delta` a recusam com
 `serialize_db.errors.SandboxError`, os dados entram na tabela de `run.sandbox.create_table` por
@@ -730,8 +751,9 @@ inteira na mesma publicação.
 
 `serialize_db.reader` lê a base para quem tem o modelo, com o mesmo statement Core nas duas origens
 e o resultado em Arrow. `db.open_delta()` abre um DuckDB no processo com uma view por tabela do
-modelo sobre o snapshot do canal `default`; `snapshot=` lê um snapshot pelo nome, o arquivado pela
-cópia em `<raiz>/<ambiente>/arquivo/<nome>/`, e `channel="current"` a versão atual de cada tabela.
+modelo presente no snapshot do canal `default`; `snapshot=` lê um snapshot pelo nome, o arquivado
+pela cópia em `<raiz>/<ambiente>/arquivo/<nome>/`, e `channel="current"` a versão atual de cada
+tabela do modelo que existe no ambiente.
 `db.open_redshift()` e `serialize_db.reader.open_redshift` leem as tabelas publicadas
 `<ambiente>_<tabela>`, a segunda para o cliente sem a raiz Delta:
 
@@ -765,8 +787,9 @@ Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é c
 snapshot; no Redshift, cada tabela é publicada na sua transação, e uma consulta que junta duas
 tabelas durante uma publicação pode ler versões diferentes. O leitor roda só `Select` e
 `CompoundSelect`; um comando, como uma tabela temporária, vai pela conexão de `session()`. O
-`delta_scan` poda as partições por `=`, por `BETWEEN` e pelo `IN` ao lado de um intervalo, e abre
-todos os arquivos com um `IN` de mais de um valor sozinho. O DuckDB só devolve a memória no
+`delta_scan` poda as partições por `=` e por intervalo, e abre todos os arquivos com um `IN` de
+mais de um valor sozinho; por isso o filtro de `partitions` é `BETWEEN` o menor e o maior valor
+`AND` o `IN` da lista. O DuckDB só devolve a memória no
 `close`; o leitor sem `close` apaga a pasta temporária quando é coletado, e o `stream` e a `session`
 o seguram até o `close` e o fim do bloco, também o leitor fora de uma variável, como em
 `db.open_delta().stream(...)`.

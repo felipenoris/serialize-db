@@ -47,27 +47,27 @@ Exemplo:
         --statements pipeline.queries:STATEMENTS sql/
     serialize-db sql check --metadata pipeline.models:Base.metadata \\
         --statements pipeline.queries:STATEMENTS sql/
-    serialize-db run --root s3://bucket/delta --environment prd --partition 2026-08-31 \\
+    serialize-db run --root s3://bucket/projeto/delta --environment prd --partition 2026-08-31 \\
         --metadata pipeline.models:Base.metadata pipeline.mensal:main
-    serialize-db run --root s3://bucket/delta --environment prd \\
+    serialize-db run --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata pipeline.dominios:main
     serialize-db audit --metadata pipeline.models:Base.metadata --table cad_lancamentos --sql
-    serialize-db import --root s3://bucket/delta --environment prd \\
-        --metadata pipeline.models:Base.metadata --source s3://bucket/db_projetado
+    serialize-db import --root s3://bucket/projeto/delta --environment prd \\
+        --metadata pipeline.models:Base.metadata --source s3://bucket/projeto/db_projetado
     serialize-db publish_redshift --init
-    serialize-db publish_redshift --root s3://bucket/delta --environment prd \\
+    serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --channel default
-    serialize-db publish_redshift --root s3://bucket/delta --environment prd \\
+    serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --snapshot 2026T2 --tables cad_lancamentos
-    serialize-db publish_redshift --root s3://bucket/delta --environment prd \\
+    serialize-db publish_redshift --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --status
-    serialize-db snapshot --root s3://bucket/delta --environment prd \\
+    serialize-db snapshot --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --name 2026T3
-    serialize-db channel --root s3://bucket/delta --environment prd \\
+    serialize-db channel --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --name default --snapshot 2026T3
-    serialize-db vacuum --root s3://bucket/delta --environment prd \\
+    serialize-db vacuum --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --apply
-    serialize-db history --root s3://bucket/delta --environment prd \\
+    serialize-db history --root s3://bucket/projeto/delta --environment prd \\
         --metadata pipeline.models:Base.metadata --table cad_lancamentos
 
 O código de saída:
@@ -75,8 +75,9 @@ O código de saída:
 - 0 quando o comando termina.
 - 1 quando ``check`` encontra diferença, com o diff impresso; quando a auditoria reprova, também
   pelo valor fora do contrato que o ``ingest`` da auditoria recusa, impresso com o erro do banco;
-  e quando a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem,
-  ou uma diferença de contagem ou soma.
+  quando a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem,
+  ou uma diferença de contagem ou soma; e numa exceção sem tratamento, como ``SandboxError`` ou
+  ``RegistrationRefused``, com o traceback.
 - 2 no erro de uso: o motor fora de ``duckdb`` e ``redshift`` e ``--partitions`` na auditoria de uma
   tabela sem partição; ``--partitions`` com ``--ignore-partitions`` na carga; a configuração do
   Redshift sem conexão ou com a porta que não é número; a tabela fora do modelo ou sem Delta; a
@@ -239,7 +240,7 @@ def _add_database_arguments(
         "--metadata",
         required=True,
         type=_resolve_metadata,
-        help="o MetaData dos modelos, como pipeline.models:Base.metadata",
+        help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
     )
     parser.add_argument(
         "--root",
@@ -281,7 +282,8 @@ def _add_run_parser(
         "--execution-id",
         type=_name_argument,
         default=None,
-        help="o identificador da execução; sem ele, exec-<AAAA-MM-DD>-<uuid8>",
+        help="o identificador da execução, nos metadados de cada commit e no nome dos arquivos; "
+        "sem ele, exec-<AAAA-MM-DD>-<uuid8>, com a data em UTC",
     )
     run.add_argument(
         "pipeline", type=_resolve_function, help="modulo:funcao que recebe a execução aberta"
@@ -304,7 +306,8 @@ def _add_publish_redshift_parser(
         "--metadata",
         type=_resolve_metadata,
         default=None,
-        help="modulo:atributo com o MetaData dos modelos; dispensado por --init",
+        help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata; "
+        "dispensado por --init",
     )
     publish.add_argument(
         "--root",
@@ -349,8 +352,8 @@ def _add_publish_redshift_parser(
         "--execution-id",
         type=_name_argument,
         default=None,
-        help="o identificador gravado na linha de controle; sem ele, "
-        "publicacao-<AAAA-MM-DD>-<uuid8>",
+        help="o identificador gravado na linha de controle, que dá a pasta dos manifestos do "
+        "COPY; sem ele, publicacao-<AAAA-MM-DD>-<uuid8>, com a data em UTC",
     )
     publish.add_argument(
         "--init",
@@ -358,7 +361,9 @@ def _add_publish_redshift_parser(
         help="cria a tabela de controle serialize_db_publications, uma vez",
     )
     publish.add_argument(
-        "--status", action="store_true", help="mostra a versão publicada e a atual de cada tabela"
+        "--status",
+        action="store_true",
+        help="mostra a versão publicada, a atual e as partições pendentes de cada tabela",
     )
     publish.add_argument(
         "--unpublish",
@@ -432,7 +437,10 @@ def _add_operation_parsers(
     )
     _add_database_arguments(channel)
     channel.add_argument(
-        "--name", type=_name_argument, default=None, help="o canal, como default; com --snapshot"
+        "--name",
+        type=_name_argument,
+        default=None,
+        help="o canal apontado, como default, com --snapshot; sem os dois, lista os canais",
     )
     channel.add_argument(
         "--snapshot",
@@ -443,11 +451,19 @@ def _add_operation_parsers(
     channel.set_defaults(handler=_channel)
 
     vacuum = commands.add_parser(
-        "vacuum", help="os arquivos fora da retenção e das versões dos snapshots"
+        "vacuum",
+        help="lista, ou apaga com --apply, os arquivos fora da retenção e das versões dos "
+        "snapshots",
     )
     _add_database_arguments(vacuum)
-    vacuum.add_argument("--apply", action="store_true", help="apaga os arquivos listados")
-    vacuum.add_argument("--full", action="store_true", help="inclui os arquivos órfãos")
+    vacuum.add_argument(
+        "--apply", action="store_true", help="apaga os arquivos listados; sem ela, só lista"
+    )
+    vacuum.add_argument(
+        "--full",
+        action="store_true",
+        help="inclui os arquivos órfãos, que nenhuma versão do log referencia",
+    )
     vacuum.add_argument(
         "--retention-hours",
         type=int,
@@ -479,7 +495,8 @@ def _add_operation_parsers(
         "--name",
         required=True,
         type=_name_argument,
-        help="o snapshot arquivado, registrado em snapshots",
+        help="o snapshot arquivado, registrado em snapshots e apontado por nenhum canal; a cópia "
+        "vai para <raiz>/<ambiente>/arquivo/<nome>/<tabela>",
     )
     archive.set_defaults(handler=_archive)
 
@@ -500,12 +517,12 @@ def _add_operation_parsers(
         choices=["copy", "rewrite"],
         default="copy",
         help="copy copia os arquivos que o log da versão lista; rewrite grava um arquivo por "
-        "partição pelo COPY do DuckDB",
+        "partição pelo COPY do DuckDB; padrão copy",
     )
     export.set_defaults(handler=_export)
 
     history = commands.add_parser(
-        "history", help="os commits de uma tabela com os metadados da biblioteca"
+        "history", help="lista os commits de uma tabela com os metadados da biblioteca"
     )
     _add_database_arguments(history)
     history.add_argument(
@@ -518,12 +535,16 @@ def _add_audit_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
     """``serialize-db audit``: o texto das verificações ou a auditoria da versão atual do Delta."""
-    audit_command = commands.add_parser("audit", help="a auditoria de uma tabela")
+    audit_command = commands.add_parser(
+        "audit",
+        help="audita uma tabela na versão atual do Delta, ou imprime o texto das verificações "
+        "com --sql",
+    )
     audit_command.add_argument(
         "--metadata",
         required=True,
         type=_resolve_metadata,
-        help="modulo:atributo com o MetaData dos modelos",
+        help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
     )
     audit_command.add_argument("--table", required=True, help="a tabela do modelo auditada")
     audit_command.add_argument(
@@ -531,7 +552,8 @@ def _add_audit_parser(
         nargs="+",
         type=_name_argument,
         default=None,
-        help="as partições auditadas; sem ela, a tabela inteira",
+        help="as partições auditadas; sem ela, a tabela inteira; erro de uso numa tabela sem "
+        "partição",
     )
     audit_command.add_argument(
         "--foreign-keys",
@@ -584,34 +606,46 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_import_parser(commands)
     _add_operation_parsers(commands)
 
-    schema_command = commands.add_parser("schema", help="os arquivos de esquema dos modelos")
+    schema_command = commands.add_parser(
+        "schema", help="grava ou confere os arquivos de esquema dos modelos"
+    )
     schema_actions = schema_command.add_subparsers(dest="action", required=True)
     for action, handler, help_text in (
-        ("write", _schema_write, "grava os arquivos"),
-        ("check", _schema_check, "compara sem gravar"),
+        ("write", _schema_write, "grava os arquivos na pasta"),
+        (
+            "check",
+            _schema_check,
+            "compara os versionados com a geração nova, sem gravar; 1 na diferença",
+        ),
     ):
         action_parser = schema_actions.add_parser(action, help=help_text)
         action_parser.add_argument(
             "--metadata",
             required=True,
             type=_resolve_metadata,
-            help="modulo:atributo com o MetaData dos modelos",
+            help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
         )
         action_parser.add_argument("directory", help="a pasta dos arquivos de esquema")
         action_parser.set_defaults(handler=handler)
 
-    sql_command = commands.add_parser("sql", help="o texto SQL dos statements em cada motor")
+    sql_command = commands.add_parser(
+        "sql", help="grava ou confere o texto SQL dos statements em cada motor"
+    )
     sql_actions = sql_command.add_subparsers(dest="action", required=True)
     for action, handler, help_text in (
-        ("write", _sql_write, "grava os arquivos"),
-        ("check", _sql_check, "compara sem gravar"),
+        ("write", _sql_write, "grava os arquivos na pasta"),
+        (
+            "check",
+            _sql_check,
+            "compara os versionados com a geração nova, sem gravar; 1 na diferença",
+        ),
     ):
         action_parser = sql_actions.add_parser(action, help=help_text)
         action_parser.add_argument(
             "--metadata",
             required=True,
             type=_resolve_metadata,
-            help="modulo:atributo com o MetaData dos modelos",
+            help="modulo:atributo com o MetaData dos modelos, como pipeline.models:Base.metadata",
         )
         action_parser.add_argument(
             "--statements",

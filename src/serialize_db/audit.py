@@ -17,7 +17,9 @@ As verificações:
   conta à parte os não finitos, uma leitura que não reprova;
 - **chave_<colunas>**: a chave repetida nas partições da execução, uma consulta por chave;
 - **chave_<colunas>_tabela**: a chave repetida entre as partições da execução e as demais da
-  versão fixada, quando a chave não inclui a coluna de partição nem a de ``partition_source``;
+  versão fixada, numa tabela particionada com as partições da execução e numa chave sem a coluna
+  de partição; a chave com a coluna de ``partition_source`` só com ``key_scope="table"``, e
+  nenhuma com ``key_scope="partition"``;
 - **orfao_<colunas>**: a chave estrangeira sem a linha referenciada, só com ``foreign_keys=True``.
 
 As funções que mudam de nome entre os motores são subclasses de ``FunctionElement`` com uma regra
@@ -62,7 +64,10 @@ from serialize_db.schema import (
 __all__ = ["AuditReport", "Check", "CheckResult", "KeyScope", "audit_sql", "checks"]
 
 KeyScope = Literal["partition", "table"]
-"""O escopo da unicidade: ``"partition"`` confere a chave só nas partições da execução."""
+"""O escopo da unicidade na verificação ``chave_<colunas>_tabela``: ``"partition"`` confere a
+chave só nas partições da execução; ``"table"`` a confere contra as demais partições da versão
+fixada também na chave com a coluna de ``partition_source``; ``None`` confere contra a versão
+fixada só a chave sem a coluna de partição e sem a de ``partition_source``."""
 
 # O teto de linhas de amostra de cada verificação reprovada, no relatório e no log.
 SAMPLE_ROWS = 20

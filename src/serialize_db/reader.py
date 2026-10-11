@@ -11,9 +11,10 @@ O leitor Delta lê, sem argumento, o snapshot do canal ``default`` do ambiente, 
 ``serialize-db channel`` move; ``snapshot=`` lê um snapshot pelo nome, o arquivado pela cópia em
 ``<raiz>/<ambiente>/arquivo/<nome>/``; ``channel="current"`` lê a versão atual de cada tabela.
 Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é consistente num
-snapshot. O ``delta_scan`` poda as partições por ``=``, por ``BETWEEN`` e pelo ``IN`` ao lado de
-um intervalo, e abre todos os arquivos com um ``IN`` de mais de um valor sozinho; ``materialize``
-copia uma tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas
+snapshot. O ``delta_scan`` poda as partições por ``=`` e por intervalo, e abre todos os arquivos
+com um ``IN`` de mais de um valor sozinho; por isso o filtro das partições é ``BETWEEN`` o menor e
+o maior valor ``AND`` o ``IN`` da lista, como no ``ingest`` dos motores. ``materialize`` copia uma
+tabela, ou parte das partições dela, para o banco local. O leitor Redshift lê as tabelas
 que ``serialize_db.publication`` publica, cada uma na sua transação: uma consulta que junta duas
 tabelas durante uma publicação pode ler versões diferentes.
 
@@ -258,8 +259,8 @@ class DeltaReader:
         :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
             ``<raiz>/<ambiente>/arquivo/<nome>/``. ``None`` lê o canal.
         :param channel: o canal do ambiente, ``"default"``, o mesmo que sem argumento, ou
-            ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente.
-            ``None`` com ``snapshot`` ``None`` é o canal ``default``.
+            ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente;
+            ``None`` sem ``snapshot`` lê o canal ``default``.
         :param config: a configuração do DuckDB; ``None`` é ``DuckDBConfig()``, os limites lidos
             do ambiente e uma pasta temporária nova, apagada no ``close``.
         :raises ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem o canal, com o
@@ -377,7 +378,8 @@ class DeltaReader:
 
         Cada tabela troca numa transação, e as tabelas correm em paralelo, cada uma numa sessão a
         mais. Uma chamada seguinte troca a tabela de novo. O filtro das partições é o do
-        ``ingest`` do motor, o intervalo ao lado do ``IN``. A cópia é o ``SELECT *`` da versão:
+        ``ingest`` do motor: ``BETWEEN`` o menor e o maior valor, que o ``delta_scan`` poda,
+        ``AND`` o ``IN`` da lista. A cópia é o ``SELECT *`` da versão:
         uma coluna da versão que o modelo não tem entra na tabela, como na view.
 
         Exemplo:
@@ -572,13 +574,13 @@ class RedshiftReader:
             tabelas publicadas.
         :param config: a configuração do Redshift; ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*`` (``RedshiftConfig.from_environment``).
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
-            leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa ``stream``
-            fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo ``workgroup``
-            ou pelo ``host``, e na do substituto local das suítes, só uma pasta
-            ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam
-            nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
-            ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; o leitor grava
+            em ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` deixa
+            ``stream`` fora, e o leitor não toca arquivo algum. O ``UNLOAD`` grava só no S3,
+            então só uma pasta ``s3://bucket/prefixo`` serve, na conexão com o Redshift, pelo
+            ``workgroup`` ou pelo ``host``, e na do substituto local das suítes: os arquivos
+            ficam nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
+            ``stream`` falhar, sem arquivo gravado. A pasta local serve só à conexão de mentira
             dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem
             conexão: sem ``workgroup``, e sem ``host``, ``user`` e ``password``; ou, sem
@@ -737,14 +739,14 @@ def open_redshift(
     :param environment: o ambiente publicado, ``prd`` ou ``dsv``.
     :param config: a configuração do Redshift; ``None`` lê as variáveis
         ``SERIALIZE_DB_REDSHIFT_*``.
-    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
-        leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` deixa
-        ``stream`` fora, e o leitor não toca arquivo algum. Na conexão com o Redshift, pelo
-        ``workgroup`` ou pelo ``host``, e na do substituto local das suítes, só uma pasta
-        ``s3://bucket/prefixo`` serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam nela
-        até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro ``stream``
-        falhar, sem arquivo gravado. Uma pasta local só serve à conexão de mentira dos testes do
-        pacote, que grava o arquivo pelo armazenamento do leitor.
+    :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; o leitor grava em
+        ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` deixa
+        ``stream`` fora, e o leitor não toca arquivo algum. O ``UNLOAD`` grava só no S3, então só
+        uma pasta ``s3://bucket/prefixo`` serve, na conexão com o Redshift, pelo ``workgroup`` ou
+        pelo ``host``, e na do substituto local das suítes: os arquivos ficam nela até o ``close``
+        do stream e o do leitor, e uma pasta local faz o primeiro ``stream`` falhar, sem arquivo
+        gravado. A pasta local serve só à conexão de mentira dos testes do pacote, que grava o
+        arquivo pelo armazenamento do leitor.
     :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia
         ``<unload_to>/<id do leitor>/``.
     :raises ContractError: o ambiente fora da regra da partição, ou a configuração sem

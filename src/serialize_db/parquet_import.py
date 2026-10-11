@@ -7,35 +7,42 @@ A origem é a base atual em Parquet: uma pasta por tabela sob a raiz de origem (
 origem, e a raiz Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``.
 
 ``import_table`` cria a tabela Delta do contrato, descobre as partições da pasta da tabela na
-origem, pula as que já estão no log da tabela Delta e, para cada uma das outras, num motor
-DuckDB próprio da chamada, aberto com os limites lidos do ambiente e fechado no fim: confere no
-rodapé do primeiro arquivo da pasta, o que dá ao DuckDB o esquema da leitura, que ele tem as
-colunas do contrato; lê a pasta inteira por ``read_parquet`` sem ``hive_partitioning`` (que
-converteria ``data_str`` a ``DATE``), leva cada coluna ao tipo do contrato por ``CAST`` (as chaves
-de ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos) e põe o valor
-do caminho na coluna de partição; confere numa consulta que a coluna de origem da partição
-(``data``, ``data_base``) é igual ao valor do caminho em toda linha, que nenhuma coluna
-``NOT NULL`` tem nulo e que nenhum texto passa do limite da coluna em bytes, o de ``cast`` e da
-auditoria, e conta os valores não finitos de cada coluna ``Double``; grava a partição na ordem da
-``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo da pasta dela na tabela Delta e o
-registra por ``serialize_db.delta.register_files``, com as conferências do rodapé, a releitura e
-as colunas não finitas sem mínimo e máximo (issue #59). Uma partição fora do contrato é
-``ContractError`` antes de qualquer gravação, com a tabela, a partição e a coluna, e o arquivo
-quando é o primeiro que não tem uma coluna do contrato; a chamada seguinte recomeça dela. Uma
-coluna do contrato ausente de um arquivo depois do primeiro, ou um valor que não converte para o
-tipo do contrato, falha na conferência ou no ``COPY`` com o erro do DuckDB, também sem commit; o
-da coluna ausente nomeia o arquivo. As entradas da pasta da tabela fora do padrão, e as da raiz
-de origem fora do modelo (``alembic_version``, ``meta_update_status``, ``schema.json``), ficam
-fora da carga e entram no relatório.
+origem, pula as que já estão no log da tabela Delta e grava cada uma das outras num motor DuckDB
+próprio da chamada, aberto com os limites lidos do ambiente e fechado no fim. Por partição, em
+ordem:
+
+- a conferência, no rodapé do primeiro arquivo da pasta, o que dá ao DuckDB o esquema da leitura,
+  de que ele tem as colunas do contrato;
+- a leitura da pasta inteira por ``read_parquet`` sem ``hive_partitioning`` (que converteria
+  ``data_str`` a ``DATE``), com cada coluna levada ao tipo do contrato por ``CAST`` (as chaves de
+  ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos) e o valor do
+  caminho na coluna de partição;
+- a conferência, numa consulta, de que a coluna de origem da partição (``data``, ``data_base``) é
+  igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum
+  texto passa do limite da coluna em bytes, o de ``cast`` e da auditoria, e a contagem dos valores
+  não finitos de cada coluna ``Double``;
+- a gravação da partição na ordem da ``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo
+  da pasta dela na tabela Delta, e o registro por ``serialize_db.delta.register_files``, com as
+  conferências do rodapé, a releitura e as colunas não finitas sem mínimo e máximo (issue #59).
+
+Uma partição fora do contrato é ``ContractError`` antes de qualquer gravação, com a tabela, a
+partição e a coluna, e o arquivo quando é o primeiro que não tem uma coluna do contrato; a
+chamada seguinte recomeça dela. Uma coluna do contrato ausente de um arquivo depois do primeiro,
+ou um valor que não converte para o tipo do contrato, falha na conferência ou no ``COPY`` com o
+erro do DuckDB, também sem commit; o da coluna ausente nomeia o arquivo. As entradas da pasta da
+tabela fora do padrão ficam fora da carga e entram no relatório (``ImportReport.skipped``); as da
+raiz de origem fora do modelo (``alembic_version``, ``meta_update_status``, ``schema.json``)
+ficam fora da carga, e ``entries_outside_the_model`` as lista para ``serialize-db import`` e o
+script de migração.
 
 ``import_report`` compara contagem e somas por partição entre a origem, lida pasta a pasta como a
 carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e as ``Double`` da
 mesma forma só nos valores finitos, com os não finitos contados à parte, porque a soma em ponto
 flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um infinito para ``DECIMAL`` falha. O
 relatório traz também as conversões de tipo de cada partição, lidas no rodapé do primeiro arquivo da
-pasta. A carga só termina quando ``matches`` é verdadeiro; ``serialize-db import`` roda as duas, com
-as mesmas partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição pedida
-que a origem não tem, recusada em toda tabela antes de qualquer gravação.
+pasta. A carga está completa quando ``matches`` é verdadeiro; ``serialize-db import`` roda as duas,
+com as mesmas partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição
+pedida que a origem não tem, recusada em toda tabela antes de qualquer gravação.
 
 Exemplo:
 
@@ -134,7 +141,7 @@ class PartitionReport:
     conversions: tuple[str, ...] = ()
     """Uma frase por coluna cujo tipo no rodapé do primeiro arquivo da partição na origem difere
     do contrato, como ``"carimbo: INT96 -> timestamp[us]"``; vazio quando a partição falta na
-    origem."""
+    origem ou a pasta dela não tem arquivo ``.parquet`` direto."""
 
     @property
     def matches(self) -> bool:

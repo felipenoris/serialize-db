@@ -2,26 +2,37 @@
 
 As primitivas que abrem uma tabela recebem ``uri``, a pasta da tabela sob a raiz do banco, e o
 ``Storage`` da raiz, que dá as opções do delta-rs a cada chamada e o sistema de arquivos que lê os
-rodapés e o log. A coluna de partição sai de ``table_options(table)``, e ``value`` é o valor de uma
-partição, ``None`` numa tabela sem partição; o valor segue ``schema.PARTITION_VALUE``, porque entra
-no predicado como literal e vira nome de pasta.
+rodapés e o log. A coluna de partição sai de ``serialize_db.schema.table_options``, e ``value`` é
+o valor de uma partição, ``None`` numa tabela sem partição; o valor segue
+``serialize_db.schema.PARTITION_VALUE``, porque entra no predicado como literal e vira nome de
+pasta.
 
-O ciclo de uma tabela: ``create_table`` a cria do modelo, ``reconcile`` aplica o diff aditivo do
-modelo e recusa o destrutivo, que só ``rewrite`` resolve, num commit. Uma partição entra por um de
-dois caminhos: ``register_files`` registra no log os arquivos que outro escritor gravou na pasta da
-tabela, depois das conferências do rodapé de cada arquivo e com a releitura pelos dois leitores
-depois do commit, e é o caminho dos motores; ``publish_partition`` grava os dados pelo escritor do
-delta-rs, que confere tudo e paga a memória, e é o do motor Redshift para a partição com ``Double``
-não finito, cujo rodapé do ``UNLOAD`` deixa o ``NaN`` fora do máximo. ``version_diff`` lê no log as
-partições alteradas entre duas versões, ``copy_manifest`` monta os manifestos do ``COPY`` do
-Redshift, um por lista de colunas dos arquivos, e ``snapshot`` marca no arquivo de controle do
-ambiente as versões de um snapshot do banco, que ``vacuum_keeping_snapshots`` preserva;
-``set_channel`` aponta um canal do ambiente para um snapshot, e ``channel_snapshot`` e
-``snapshot_versions`` leem o canal e as versões para o leitor e a publicação. ``compact``,
-``deep_copy`` e ``export_parquet`` são a operação: ``compact`` junta os arquivos pequenos das
-partições na própria tabela, ``deep_copy`` copia uma versão para uma tabela nova noutra pasta,
-como a do arquivo de um snapshot (``<ambiente>/arquivo/<nome>/<tabela>``), e ``export_parquet``
-grava uma versão em arquivos Parquet sem o log, noutra pasta.
+O ciclo de uma tabela começa no modelo: ``table_exists`` diz se há tabela na pasta,
+``create_table`` a cria na versão 0 e ``open_table`` a abre numa versão; ``schema_diff`` lê o diff
+entre o modelo e o esquema dela, ``reconcile`` aplica o diff aditivo e recusa o destrutivo, que só
+``rewrite`` resolve, num commit.
+
+Uma partição entra por um de dois caminhos. ``register_files``, o caminho dos motores, registra no
+log os arquivos que outro escritor gravou na pasta da tabela, depois das conferências do rodapé de
+cada arquivo, e ``read_back`` relê a versão pelos dois leitores depois do commit.
+``publish_partition`` grava os dados pelo escritor do delta-rs, que confere tudo e paga a memória;
+é o caminho do motor Redshift para a partição com ``Double`` não finito, cujo rodapé do ``UNLOAD``
+deixa o ``NaN`` fora do máximo. ``commit_metadata`` monta os metadados que cada commit leva, e
+``max_key`` lê o maior valor de uma chave sem ler dados.
+
+O log e os snapshots: ``version_diff`` lê no log as partições alteradas entre duas versões,
+``history`` lista os commits com os metadados da biblioteca, e ``copy_manifest`` monta os
+manifestos do ``COPY`` do Redshift, um por lista de colunas dos arquivos. ``snapshot`` marca no
+arquivo de controle do ambiente as versões de um snapshot do banco, que
+``vacuum_keeping_snapshots`` preserva e ``archive_snapshot`` move para ``archived``;
+``set_channel`` aponta um canal do ambiente para um snapshot, e ``read_snapshots``,
+``channel_snapshot`` e ``snapshot_versions`` leem o arquivo, o canal e as versões para o leitor e
+a publicação.
+
+A operação: ``compact`` junta os arquivos pequenos das partições na própria tabela, ``deep_copy``
+copia uma versão para uma tabela nova noutra pasta, como a do arquivo de um snapshot
+(``<ambiente>/arquivo/<nome>/<tabela>``), e ``export_parquet`` grava uma versão em arquivos
+Parquet sem o log, noutra pasta.
 
 Exemplo, numa pasta local:
 
@@ -291,7 +302,10 @@ def open_table(
     storage: Storage,
     version: int | None = None,
 ) -> DeltaTable:
-    """A tabela numa versão; a execução abre cada tabela uma vez e guarda o objeto e a versão.
+    """A tabela Delta carregada numa versão.
+
+    ``serialize_db.execution.Execution`` a chama uma vez por tabela na abertura e guarda o objeto
+    e a versão; as primitivas que recebem ``dt`` (``max_key``, ``schema_diff``) leem esse objeto.
 
     Exemplo:
 
@@ -345,7 +359,8 @@ def max_key(
     dt: DeltaTable,
     column: str,
 ) -> int:
-    """O maior valor de ``column`` na versão carregada, o início de ``next_ids``.
+    """O maior valor de ``column`` na versão carregada, de que
+    ``serialize_db.execution.Execution.next_ids`` parte para a chave sequencial.
 
     O máximo de ``max.<coluna>`` das ações ``add``, sem ler dados; a varredura da coluna quando um
     arquivo não tem a estatística, porque a estatística registrada é verdadeira ou omitida, nunca
@@ -457,8 +472,8 @@ def partition_label(
     value: str | None,
 ) -> str:
     """A partição nas mensagens e no log: ``partição <valor>``, ou ``tabela inteira`` sem valor,
-    na tabela sem partição e na releitura da tabela inteira; protegida, a carga, o motor
-    Redshift e a linha de comando a usam."""
+    na tabela sem partição e na releitura da tabela inteira; protegida, a carga de
+    ``serialize_db.parquet_import``, o motor Redshift e a linha de comando a usam."""
     if value is None:
         return "tabela inteira"
     return f"partição {value}"
@@ -489,10 +504,11 @@ def publish_partition(
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param table: a tabela do modelo.
-    :param value: o valor da partição, na regra de ``schema.PARTITION_VALUE``; ``value=None`` numa
-        tabela sem partição substitui a tabela.
+    :param value: o valor da partição, na regra de ``serialize_db.schema.PARTITION_VALUE``;
+        ``value=None`` numa tabela sem partição substitui a tabela.
     :param data: uma ``pa.Table``, um lote, um ``RecordBatchReader`` ou um objeto com
-        ``__arrow_c_stream__``, já passado por ``cast`` e com a coluna de partição.
+        ``__arrow_c_stream__``, já passado por ``serialize_db.schema.cast`` e com a coluna de
+        partição.
     :param metadata: os metadados do commit, de ``commit_metadata``.
     :param storage: o armazenamento da raiz do banco.
     :param columns_without_min_max: as colunas que saem sem mínimo e máximo no rodapé e no log, as
@@ -576,7 +592,9 @@ def file_from_return_stats(
     table: sa.Table,
     uri: str,
 ) -> RegisteredFile:
-    """O arquivo que o ``COPY ... (RETURN_STATS)`` do DuckDB gravou dentro da pasta da tabela.
+    """O arquivo que o ``COPY ... (RETURN_STATS)`` do DuckDB gravou dentro da pasta da tabela;
+    protegida, para o ``export_partition`` do motor DuckDB, a carga de
+    ``serialize_db.parquet_import`` e ``rewrite``, que o registram por ``register_files``.
 
     ``row`` é a linha do ``RETURN_STATS`` como dicionário (``filename``, ``count``,
     ``file_size_bytes``, ``column_statistics``). O ``null_count`` entra de toda coluna do contrato,
@@ -992,12 +1010,15 @@ def register_files(
     dentro da pasta da tabela.
 
     ``create_write_transaction`` grava a ação como a recebe, e os leitores obedecem à ação, não ao
-    arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo: o
-    arquivo existe com o tamanho declarado; o esquema do rodapé tem cada coluna do contrato, na
-    ordem dele, num tipo físico que os leitores leem como o lógico, e não tem a coluna de partição
-    nem coluna fora do contrato, a aninhada inclusive, cuja folha pode repetir o nome de uma
-    coluna do contrato; as colunas ``NOT NULL`` não têm nulo na contagem do rodapé; o caminho está
-    na pasta da partição; as linhas do rodapé são as declaradas.
+    arquivo; por isso cada arquivo passa antes pelas conferências do rodapé, um GET por arquivo:
+
+    - o arquivo existe com o tamanho declarado;
+    - o esquema do rodapé tem cada coluna do contrato, na ordem dele, num tipo físico que os
+      leitores leem como o lógico, e não tem a coluna de partição nem coluna fora do contrato, a
+      aninhada inclusive, cuja folha pode repetir o nome de uma coluna do contrato;
+    - as colunas ``NOT NULL`` não têm nulo na contagem do rodapé;
+    - o caminho está na pasta da partição;
+    - as linhas do rodapé são as declaradas.
 
     A ação leva ``numRecords``, o ``nullCount`` e o mínimo e o máximo das colunas inteiras, de data,
     ``Double`` e texto. Depois do commit, ``read_back`` relê a versão pelos dois leitores e a
@@ -1014,8 +1035,8 @@ def register_files(
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param table: a tabela do modelo.
     :param files: os arquivos que o escritor declarou, com o caminho relativo à pasta da tabela.
-    :param value: o valor da partição, na regra de ``schema.PARTITION_VALUE``; ``None`` numa
-        tabela sem partição.
+    :param value: o valor da partição, na regra de ``serialize_db.schema.PARTITION_VALUE``;
+        ``None`` numa tabela sem partição.
     :param metadata: os metadados do commit, de ``commit_metadata``.
     :param storage: o armazenamento da raiz do banco.
     :param expected_rows: a contagem da fonte, quando o chamador a tem, que a soma das linhas
@@ -1026,12 +1047,14 @@ def register_files(
     :raises ContractError: ``value`` ausente numa tabela particionada, presente numa tabela sem
         partição ou fora da regra.
     :raises ValueError: ``uri`` fora da raiz de ``storage``.
-    :raises RegistrationRefused: uma conferência reprovou, sem commit, e o arquivo fica órfão até
-        ``vacuum(full=True)``; ou a releitura reprovou e desfez o commit.
+    :raises RegistrationRefused: uma conferência reprovou, sem commit, e o arquivo fica órfão na
+        pasta da tabela até ``vacuum_keeping_snapshots(..., full=True)`` (``serialize-db vacuum
+        --full``); ou a releitura reprovou e desfez o commit.
     :raises ExecutionConflict: um segundo registro da mesma partição a partir da mesma versão.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
         2 MiB, ou negativa, lida antes do commit para a conexão da releitura
-        (``environment_limits``), sem nada gravado.
+        (``environment_limits``); nada entra no log, e o arquivo do escritor fica órfão na pasta
+        da tabela.
     """
     value = checked_value(table, value)
     partition_by = table_options(table).partition_by
@@ -1224,9 +1247,10 @@ def read_back(
 
     O delta-rs, pelo dataset Arrow, e o ``delta_scan`` do DuckDB, numa conexão própria, contam as
     linhas e leem o menor e o maior valor de cada coluna da primeira chave do modelo na partição.
-    A releitura pega o que as conferências do rodapé não veem, um leitor que não lê o arquivo como
-    o outro (o ``parquet.field.id`` no esquema Delta fez o ``delta_scan`` ler toda coluna como nula
-    com a contagem certa), e uma estatística do log que podaria o arquivo certo.
+    A releitura pega o que as conferências do rodapé não veem: um leitor que não lê o arquivo como
+    o outro, e uma estatística do log que podaria o arquivo certo. O ``parquet.field.id`` no
+    esquema Delta fez o ``delta_scan`` ler toda coluna como nula, com a contagem certa, e só a
+    releitura o viu.
 
     Exemplo:
 
@@ -1242,7 +1266,8 @@ def read_back(
     :raises RegistrationRefused: uma diferença entre os leitores, o log e ``expected_rows``,
         depois de ``restore(version - 1)``; a mensagem traz as leituras.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-        2 MiB, ou negativa, na abertura da conexão do DuckDB (``environment_limits``).
+        2 MiB, ou negativa, lida por ``environment_limits`` no início da chamada, antes de qualquer
+        leitura.
     """
     _read_back(uri, table, value, expected_rows, storage, environment_limits())
 
@@ -1561,8 +1586,8 @@ def rewrite(
     storage: Storage,
     expressions: Mapping[str, str] | None = None,
 ) -> int:
-    """Reescreve a tabela inteira com o esquema do contrato num único commit, sem predicado, com
-    memória constante.
+    """Reescreve a tabela inteira com o esquema do contrato num único commit, sem predicado, sem a
+    tabela inteira na memória do processo.
 
     O ``COPY ... PARTITION_BY ... RETURN_STATS`` do DuckDB lê a versão atual por ``delta_scan`` e
     grava arquivos novos na pasta da tabela, que entram num ``create_write_transaction(mode=
@@ -1582,12 +1607,13 @@ def rewrite(
     :param table: a tabela do modelo.
     :param storage: o armazenamento da raiz do banco.
     :param expressions: por coluna do contrato, a expressão SQL do DuckDB sobre a versão atual que
-        a preenche: o nome antigo numa renomeação, o valor de uma coluna ``NOT NULL`` nova. Uma
-        coluna do contrato ausente da versão atual e fora de ``expressions`` é ``BinderException``
-        do DuckDB, antes de qualquer commit. ``None`` preenche cada coluna pelo próprio nome.
+        a preenche: o nome antigo numa renomeação, o valor de uma coluna ``NOT NULL`` nova;
+        ``None`` preenche cada coluna pelo próprio nome.
     :return: a versão do commit.
     :raises ContractError: uma chave de ``expressions`` fora das colunas do modelo, que seria
         ignorada.
+    :raises duckdb.BinderException: uma coluna do contrato ausente da versão atual e fora de
+        ``expressions``, antes de qualquer commit; o cliente a acrescenta a ``expressions``.
     :raises ValueError: ``uri`` fora da raiz de ``storage``, antes de qualquer escrita.
     :raises RegistrationRefused: uma conferência de ``register_files`` reprovou um arquivo novo,
         sem commit; ou a releitura reprovou e desfez o commit.
@@ -1705,7 +1731,8 @@ def partition_values(
 ) -> list[str | None]:
     """Os valores de partição com algum arquivo na versão carregada, em ordem de texto; numa tabela
     sem partição, ``[None]`` quando ela tem arquivo e ``[]`` quando não tem. Protegida, para o
-    motor Redshift, a publicação e a carga inicial, que carregam uma partição por vez."""
+    motor Redshift, a publicação e a carga de ``serialize_db.parquet_import``, que carregam uma
+    partição por vez."""
     actions = pa.table(dt.get_add_actions(flatten=True))
     if actions.num_rows == 0:
         return []
@@ -1767,8 +1794,8 @@ def copy_manifest(
     :param uri: a URI da pasta da tabela Delta cujos arquivos os manifestos listam, sob a raiz
         do banco.
     :param version: a versão cujos arquivos entram.
-    :param partitions: os valores das partições pedidas, todas com ``None``; numa tabela sem
-        partição, todo arquivo entra.
+    :param partitions: os valores das partições pedidas; ``None`` pede todas, e numa tabela sem
+        partição todo arquivo entra.
     :param destination: a URI da pasta dos manifestos sob a raiz, em
         ``<ambiente>/publicacao/`` na publicação ou em ``<ambiente>/staging/`` no ``ingest`` do
         motor Redshift; um manifesto existente com o mesmo nome é substituído, e o ``COPY`` usa
@@ -1858,14 +1885,16 @@ def snapshot(
 
     :param storage: o armazenamento da raiz do banco.
     :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
-    :param name: o nome do snapshot, pela regra da partição (``schema.PARTITION_VALUE``).
+    :param name: o nome do snapshot, pela regra da partição
+        (``serialize_db.schema.PARTITION_VALUE``).
     :param versions: a versão de cada tabela, pelo nome da tabela; as versões marcadas são as que
         ``vacuum_keeping_snapshots`` preserva.
     :return: o controle novo.
     :raises ContractError: o nome fora da regra da partição, antes de ler o arquivo de controle;
         ou um nome presente em ``snapshots`` ou em ``archived``, porque o nome dá a pasta
         ``<ambiente>/arquivo/<nome>/``, com o ``serialize-db channel`` na mensagem.
-    :raises ConflictError: outro escritor entre a leitura e a escrita.
+    :raises serialize_db.errors.ConflictError: outro escritor gravou o arquivo de controle entre
+        a leitura e a escrita; nada foi gravado.
     """
     check_partition_value(name)
     control, fingerprint = read_snapshots(storage, environment)
@@ -1920,7 +1949,8 @@ def archive_snapshot(
     :return: o controle novo.
     :raises ValueError: o nome ausente de ``snapshots``, ou o snapshot que um canal aponta, que
         ``set_channel`` move antes.
-    :raises ConflictError: outro escritor entre a leitura e a escrita.
+    :raises serialize_db.errors.ConflictError: outro escritor gravou o arquivo de controle entre
+        a leitura e a escrita; nada foi gravado.
     """
     control, fingerprint = read_snapshots(storage, environment)
     if name not in control["snapshots"]:
@@ -1970,7 +2000,8 @@ def set_channel(
 
     :param storage: o armazenamento da raiz do banco.
     :param environment: o ambiente, a pasta sob a raiz do banco com o arquivo de controle.
-    :param name: o nome do canal, pela regra da partição (``schema.PARTITION_VALUE``); o canal
+    :param name: o nome do canal, pela regra da partição
+        (``serialize_db.schema.PARTITION_VALUE``); o canal
         ``current`` é reservado, a versão atual de cada tabela, e não fica no arquivo.
     :param snapshot: o nome do snapshot, presente em ``snapshots``.
     :return: o controle novo.
@@ -1978,7 +2009,8 @@ def set_channel(
         antes de ler o arquivo de controle.
     :raises ValueError: o snapshot ausente de ``snapshots``, o arquivado inclusive, porque o
         ``vacuum`` deixa de preservar as versões dele.
-    :raises ConflictError: outro escritor entre a leitura e a escrita.
+    :raises serialize_db.errors.ConflictError: outro escritor gravou o arquivo de controle entre
+        a leitura e a escrita; nada foi gravado.
     """
     check_partition_value(name)
     if name == CURRENT_CHANNEL:
@@ -2015,9 +2047,9 @@ def channel_snapshot(
     :param control: o arquivo de controle, como ``read_snapshots`` o devolve.
     :param name: o nome do canal.
     :return: o nome do snapshot.
-    :raises ContractError: o canal ausente; a mensagem traz o ``serialize-db channel`` que o cria
-        e o canal ``current``, que lê a versão atual sem canal no arquivo. O próprio ``current``
-        também, porque não aponta snapshot.
+    :raises ContractError: o canal ausente do arquivo de controle, com o ``serialize-db channel``
+        que o cria na mensagem; ou o canal ``current``, que não aponta snapshot e lê a versão atual
+        de cada tabela sem passar pelo arquivo.
     """
     # O canal reservado não fica no arquivo, e set_channel recusa criá-lo.
     if name == CURRENT_CHANNEL:
@@ -2083,8 +2115,9 @@ def vacuum_keeping_snapshots(
         vacuum_keeping_snapshots(uri, control, "cad_lancamentos", storage)   # a lista, sem apagar
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
-    :param control: o arquivo de controle, como ``read_snapshots`` o devolve; ``keep_versions``
-        sai das versões da tabela em ``control["snapshots"]``.
+    :param control: o arquivo de controle, como ``read_snapshots`` o devolve; as versões da tabela
+        em ``control["snapshots"]`` são as que o ``vacuum`` preserva, com os arquivos delas (o
+        ``keep_versions`` do delta-rs).
     :param table_name: o nome da tabela nas entradas do controle.
     :param storage: o armazenamento da raiz do banco.
     :param retention_hours: a retenção em horas, aceita abaixo da
@@ -2118,13 +2151,13 @@ def compact(
     partitions: list[str],
     storage: Storage,
 ) -> dict:
-    """Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs, os que
-    cabem juntos no tamanho alvo, a propriedade ``delta.targetFileSize`` da tabela ou 100 MB sem
-    ela; sem nada a juntar, como na partição com um arquivo só, não grava nem commita.
+    """Junta os arquivos pequenos das partições pelo ``optimize.compact`` do delta-rs.
 
-    A reescrita sai pelo escritor do delta-rs: os arquivos de outro escritor que ela junta perdem o
-    ``INT96`` e o ``FIXED_LEN_BYTE_ARRAY`` e ganham estatística em toda coluna. O commit grava
-    ``dataChange`` falso, e ``version_diff`` não o conta.
+    Entram juntos os arquivos que cabem no tamanho alvo, a propriedade ``delta.targetFileSize`` da
+    tabela ou 100 MB sem ela. Sem nada a juntar, como na partição com um arquivo só, não grava nem
+    commita. A reescrita sai pelo escritor do delta-rs: os arquivos de outro escritor que ela junta
+    perdem o ``INT96`` e o ``FIXED_LEN_BYTE_ARRAY`` e ganham estatística em toda coluna. O commit
+    grava ``dataChange`` falso, e ``version_diff`` não o conta.
 
     Exemplo:
 
@@ -2134,8 +2167,9 @@ def compact(
 
     :param uri: a URI da pasta da tabela, sob a raiz do banco.
     :param table: a tabela do modelo.
-    :param partitions: os valores das partições, na regra de ``schema.PARTITION_VALUE``; numa
-        tabela sem partição, ignorados, e a tabela inteira é compactada.
+    :param partitions: os valores das partições, na regra de
+        ``serialize_db.schema.PARTITION_VALUE``; numa tabela sem partição, ignorados, e a tabela
+        inteira é compactada.
     :param storage: o armazenamento da raiz do banco.
     :return: as métricas do ``optimize.compact``, como ``numFilesAdded``, ``numFilesRemoved`` e
         ``totalConsideredFiles``, os arquivos lidos nas partições.
@@ -2176,10 +2210,11 @@ def history(
     :param storage: o armazenamento da raiz do banco.
     :return: um dicionário por commit, com ``version``, ``operation``, ``timestamp`` (o instante,
         em UTC) e os metadados da biblioteca que o commit tem (``serialize_db_execution_id``,
-        ``serialize_db_input_versions``, ``serialize_db_snapshot``), que só os commits das
-        partições de uma execução levam; os de ``create_table``, ``reconcile``, ``rewrite`` e
-        ``deep_copy``, o ``restore`` de ``read_back``, os de ``vacuum`` e os de ``OPTIMIZE`` vêm
-        sem eles.
+        ``serialize_db_input_versions``, ``serialize_db_snapshot``): os commits das partições de
+        uma execução levam os três, e os da carga de ``serialize_db.parquet_import.import_table``
+        levam os dois primeiros, com o ``execution_id`` ``carga-<uuid8>`` e ``{}`` nas versões
+        lidas; os de ``create_table``, ``reconcile``, ``rewrite`` e ``deep_copy``, o ``restore`` de
+        ``read_back``, os de ``vacuum`` e os de ``OPTIMIZE`` vêm sem eles.
     """
     commits = []
     for entry in open_table(uri, storage).history():
@@ -2494,8 +2529,10 @@ def export_parquet(
     version: int | None = None,
     mode: Literal["copy", "rewrite"] = "copy",
 ) -> list[str]:
-    """Exporta uma versão da tabela Delta para arquivos Parquet sem o log, em ``destination``,
-    nas pastas ``<coluna>=<valor>/`` numa tabela particionada.
+    """Exporta uma versão da tabela Delta para arquivos Parquet sem o log, em ``destination``:
+    nas pastas ``<coluna>=<valor>/`` numa tabela particionada; numa tabela sem partição, nos
+    caminhos que os arquivos têm na tabela no modo ``copy`` e em ``data.parquet`` no modo
+    ``rewrite``.
 
     Exemplo:
 
@@ -2517,8 +2554,8 @@ def export_parquet(
     :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``, nos dois modos,
         antes de qualquer escrita.
     :raises serialize_db.errors.SandboxError: no modo ``rewrite``, a memória que o processo ainda
-        pode usar abaixo de 2 MiB, ou negativa, na abertura da conexão do DuckDB
-        (``environment_limits``).
+        pode usar abaixo de 2 MiB, ou negativa, lida por ``environment_limits`` antes de criar a
+        pasta do destino, que então não é criada.
     """
     # Os dois caminhos conferidos antes de gravar: o COPY particionado do DuckDB grava onde
     # recebe, fora da raiz também.

@@ -3,22 +3,25 @@ derivadas do Delta, e a tabela de controle ``serialize_db_publications``.
 
 A tabela de controle é uma só para todos os ambientes, criada uma vez no esquema pelo usuário
 (``create_publications_table`` ou ``serialize-db publish_redshift --init``); o pipeline não a
-cria, e ``publish_redshift`` recusa publicar sem ela, antes de qualquer escrita. A publicação de
-cada tabela é uma transação, numa conexão própria: ``BEGIN``; a leitura da linha de controle, que
-identifica a versão publicada e fixa o snapshot da transação; sem linha, a primeira publicação, com
-a tabela publicada criada e todas as partições; com linha, ``version_diff`` entre a versão lida e a
-pedida, a menor e a maior delas, o que também volta a tabela a um snapshot anterior ao publicado;
-por partição, ``DELETE`` da partição e, quando a versão pedida a tem, um ``COPY ... MANIFEST`` por
+cria, e ``publish_redshift`` recusa publicar sem ela, antes de qualquer escrita. As versões vêm de
+um snapshot do arquivo de controle, por ``serialize-db publish_redshift`` com ``--snapshot`` ou
+``--channel``, ou são as atuais.
+
+Cada tabela publica numa conexão própria, e as tabelas correm num pool. Antes da transação, a
+tabela publicada que já existe é reconciliada com o contrato, fora de transação: as colunas novas
+são acrescentadas; um diff destrutivo despublica a tabela, e a transação a recria com todas as
+partições. A transação é, em ordem: ``BEGIN``; a leitura da linha de controle, que identifica a
+versão publicada e fixa o snapshot da transação; sem linha, a primeira publicação, com a tabela
+publicada criada e todas as partições; com linha, ``version_diff`` entre a versão lida e a pedida,
+a menor e a maior delas, o que também volta a tabela a um snapshot anterior ao publicado; por
+partição, ``DELETE`` da partição e, quando a versão pedida a tem, um ``COPY ... MANIFEST`` por
 lista de colunas dos arquivos, com a lista, numa staging temporária e ``INSERT ... SELECT`` com o
-valor; e por último o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão
-lida, cujas 0 linhas, como o ``1023`` e a tabela publicada que outra primeira publicação criou,
-saem como ``ExecutionConflict``. Os manifestos do ``COPY`` ficam em
+valor; por último, o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão
+lida. As 0 linhas desse ``UPDATE``, o ``1023`` e a tabela publicada que outra primeira publicação
+criou saem como ``ExecutionConflict``. Os manifestos do ``COPY`` ficam em
 ``<raiz>/<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``, e a publicação não os apaga.
-As tabelas correm num pool, uma conexão por tabela.
 ``unpublish_redshift`` apaga a tabela publicada e a linha de controle numa transação, e
-``publication_status`` compara a versão publicada com a atual. As versões vêm de um snapshot do
-arquivo de controle, por ``serialize-db publish_redshift`` com ``--snapshot`` ou ``--channel``, ou
-são as atuais.
+``publication_status`` compara a versão publicada com a atual.
 
 Cada ``COPY`` leva a cláusula de credenciais do motor Redshift montada logo antes do seu
 ``execute``, com a chave que a cadeia de credenciais serve naquele momento; nenhum texto que a
@@ -950,8 +953,8 @@ def publish_redshift(
     :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo; o padrão 1
         publica uma por vez. Com mais de um, a primeira publicação de uma tabela pode esperar
         cerca de 20 s no ``INSERT`` da linha de controle, como em dez das 21 repetições das
-        sondas de 2026-10-05 a 2026-10-10, só com o ``CREATE TABLE`` na transação; o usuário
-        aceitou a espera em 2026-10-10 (``docs/index.md``, seção "Multithreading").
+        sondas de 2026-10-05 a 2026-10-10, só nas publicações cuja transação criou a tabela; o
+        usuário aceitou a espera em 2026-10-10 (``docs/index.md``, seção "Multithreading").
     :param versions: a versão do Delta por nome de tabela, as de um snapshot do arquivo de
         controle (``delta.snapshot_versions``); ``None`` publica a versão atual de cada tabela.
     :return: ``{tabela: versão publicada}``.

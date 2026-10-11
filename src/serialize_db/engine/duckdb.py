@@ -2,15 +2,15 @@
 
 O banco nasce em ``temp_directory``, num arquivo de nome ``<execution_id>`` e extensão ``duckdb``, e
 ``cleanup`` o apaga com a pasta de transbordo. O motor guarda uma conexão, a sessão da execução, e
-um ``threading.RLock`` que toda primitiva toma pelo tempo do seu comando: uma tabela temporária que
-o pipeline crie vale para os comandos seguintes, de qualquer thread, e nenhuma primitiva espera pelo
-código do cliente com o lock tomado. ``session()`` dá a conexão crua ao bloco, com o lock tomado e
-reentrante na mesma thread; ``new_session()`` abre um motor sobre ``cursor()`` da conexão, uma
-sessão a mais sobre o mesmo banco, com o seu lock. Os limites da instância saem do ambiente na
-abertura, quando a configuração os omite (``available_cpus`` e ``memory_limit_setting`` de
-``serialize_db.resources``, os valores de ``environment_limits``): ``threads`` são as CPUs que o
-processo pode usar, e ``memory_limit`` é metade da memória que ele ainda pode usar, recusada com
-``SandboxError`` quando não dá 1 MiB.
+um ``threading.RLock`` que cada primitiva que usa a sessão toma pelo tempo do seu comando;
+``create_table`` e a abertura do ``appender`` usam um cursor à parte, sem o lock. Uma tabela
+temporária que o pipeline crie vale para os comandos seguintes, de qualquer thread, e nenhuma
+primitiva espera pelo código do cliente com o lock tomado. ``session()`` dá a conexão crua ao bloco,
+com o lock tomado e reentrante na mesma thread; ``new_session()`` abre um motor sobre ``cursor()``
+da conexão, uma sessão a mais sobre o mesmo banco, com o seu lock. Os limites da instância que a
+configuração omite saem do ambiente na abertura: ``threads`` são as CPUs que o processo pode usar e
+``memory_limit`` é metade da memória que ele ainda pode usar, os valores de
+``serialize_db.resources.environment_limits``, recusada com ``SandboxError`` quando não dá 1 MiB.
 
 No S3, o motor segura a credencial do ``boto3`` e, na entrada de cada sessão, recria o secret do
 S3 quando a chave dela trocou: o secret guarda a chave da criação, e o ``delta_scan`` não o
@@ -31,12 +31,13 @@ As primitivas:
 - ``appender`` confere a tabela na abertura, grava os lotes num arquivo numa thread auxiliar e, no
   ``close``, os insere num único ``INSERT ... BY NAME``; ``append`` é a forma por tabela;
 - ``audit`` roda as verificações de ``serialize_db.audit`` e monta o ``AuditReport``;
-- ``export_partition`` leva uma partição do sandbox ao Delta, por ``register_files`` do arquivo do
-  ``COPY ... RETURN_STATS``.
+- ``export_partition`` leva uma partição do sandbox ao Delta, por
+  ``serialize_db.delta.register_files`` do arquivo do ``COPY ... RETURN_STATS``.
 
-Um statement Core é compilado pela cópia prefixada de ``sql.prefixed``, com todo nome entre aspas,
-pelo dialeto do DuckDB no estilo ``qmark``, com os valores do cliente dados por ``params`` e a lista
-posicional na ordem do compilador; um texto pronto passa por ``sql.bind``.
+Um statement Core é compilado sobre a cópia que ``serialize_db.sql.prefixed`` faz com o prefixo
+vazio, todo nome entre aspas, pelo dialeto do DuckDB no estilo ``qmark``, com os valores do cliente
+dados por ``params`` e a lista posicional na ordem do compilador; um texto pronto passa por
+``serialize_db.sql.bind``, que recusa o sentinela ``{prefix}``.
 
 Exemplo:
 
@@ -258,9 +259,9 @@ def _produce(
     Nunca espera pelo cliente: o lock sai quando o resultado acaba, quando ``stop`` chega ou quando
     o ``interrupt`` do ``close`` cancela a consulta. O fim é marcado ainda com o lock tomado, e o
     ``close`` nunca cancela o comando seguinte da sessão. A entrada da sessão que falha, na
-    recriação do secret do S3, marca o fim com o erro, sem o lock, que ela não tomou. Recebe só o
-    que usa, nunca o stream, para um stream abandonado ser coletado e o ``__del__`` ligar o
-    ``stop``.
+    recriação do secret do S3, marca o fim com o erro depois de o ``with`` do lock soltá-lo.
+    Recebe só o que usa, nunca o stream, para um stream abandonado ser coletado e o ``__del__``
+    ligar o ``stop``.
     """
     with contextlib.ExitStack() as stack:
         try:
@@ -654,24 +655,29 @@ class DuckDBConfig:
     .. code-block:: python
 
         DuckDBConfig(temp_directory="/dados/sandbox")
-        DuckDBConfig(database=":memory:")   # em memória, só por pedido
+        DuckDBConfig(database=":memory:")   # banco em memória, sem arquivo
     """
 
     database: str | None = None
-    """``None``: o arquivo de nome ``<execution_id>`` e extensão ``duckdb`` em ``temp_directory``,
-    apagado em ``cleanup``; ``":memory:"`` só por pedido; outro caminho é usado e mantido."""
+    """``None`` é o arquivo ``<execution_id>.duckdb`` em ``temp_directory``, apagado em ``cleanup``
+    com o ``.wal`` dele; ``":memory:"`` abre o banco em memória, sem arquivo; outro caminho é usado
+    como está e fica depois do ``cleanup``."""
     threads: int | None = None
     """As threads da instância; ``None`` são as CPUs que o processo pode usar na abertura
-    (``available_cpus``)."""
+    (``serialize_db.resources.available_cpus``)."""
     memory_limit: str | None = None
     """Com unidade (``"4GiB"``); ``None`` é metade da memória que o processo ainda pode usar na
     abertura (``environment_limits``), recusada com ``SandboxError`` quando não dá 1 MiB. O valor
     aplicado vai ao log ``serialize_db.engine.duckdb``."""
     temp_directory: str | None = None
-    """A pasta do banco, do transbordo do DuckDB e dos arquivos de ``stream`` e ``appender``;
-    ``None`` é uma pasta nova de ``tempfile.mkdtemp``, apagada em ``cleanup``."""
+    """A pasta do banco, do transbordo do DuckDB e da subpasta ``<execution_id>_transbordo`` dos
+    arquivos de ``stream`` e ``appender``, apagada em ``cleanup`` mesmo com a pasta informada;
+    ``None`` é uma pasta nova de ``tempfile.mkdtemp`` (prefixo ``serialize_db_``), apagada em
+    ``cleanup``."""
     extension_directory: str | None = None
-    """A pasta das extensões; ``None`` é a que ``Storage.duckdb_connect`` resolve."""
+    """A pasta das extensões do DuckDB; ``None`` é a de ``SERIALIZE_DB_DUCKDB_EXTENSIONS`` ou, sem
+    a variável, a ``.duckdb/`` ao lado do ambiente virtual quando existe, senão a padrão do DuckDB
+    (``serialize_db.storage.Storage.duckdb_connect``)."""
 
 
 def _connection_settings(
@@ -741,7 +747,8 @@ class DuckDBEngine:
         """
         self._config = config
         self.execution_id = check_partition_value(execution_id)
-        """O identificador da execução, na regra da partição (``schema.PARTITION_VALUE``)."""
+        """O identificador da execução, na regra da partição
+        (``serialize_db.schema.PARTITION_VALUE``)."""
         self._storage = storage
         self._lock = threading.RLock()
         self._owner: int | None = None
@@ -807,9 +814,7 @@ class DuckDBEngine:
         aberta.
 
         Uma transação que o cliente abre no bloco não se compõe com o ``ingest`` com
-        ``materialize=True``, que abre a sua: o ``BEGIN`` dele é recusado, o ``ROLLBACK`` desfaz a
-        transação do cliente, e o ``COMMIT`` do cliente falha em seguida. Ela também não vê a
-        tabela que ``create_table`` cria depois do primeiro comando dela que lê ou muda o banco.
+        ``materialize=True`` nem vê a tabela de ``create_table``, como essas primitivas descrevem.
 
         Exemplo:
 
@@ -900,7 +905,7 @@ class DuckDBEngine:
 
             engine.spool_path("stream")   # ".../exec-2026-09-05_transbordo/stream_<uuid>.arrow"
 
-        :param kind: o início do nome do arquivo, ``stream`` ou ``appender``.
+        :param kind: o início do nome do arquivo; o motor passa ``stream`` e ``appender``.
         :return: o caminho ``<kind>_<uuid>.arrow`` na pasta de transbordo.
         """
         return os.path.join(self._spool_folder, f"{kind}_{uuid.uuid4().hex}.arrow")
@@ -961,7 +966,7 @@ class DuckDBEngine:
     ) -> str:
         """O ``WHERE`` das partições: o intervalo delas ao lado do ``IN``, porque o ``delta_scan``
         poda por ``=`` e por intervalo e abre todos os arquivos com um ``IN`` de mais de um
-        valor; protegido, para o leitor Delta, que monta o ``CREATE TABLE`` da materialização.
+        valor; protegida, para o leitor Delta, que monta o ``CREATE TABLE`` da materialização.
 
         Exemplo:
 
@@ -1002,12 +1007,12 @@ class DuckDBEngine:
         partitions: list[str] | None = None,
         materialize: bool = False,
     ) -> None:
-        """Uma view com o nome do modelo sobre a versão fixada da tabela Delta ou, com
-        ``materialize=True``, a tabela do modelo criada pelo DDL e carregada do ``delta_scan`` por
-        um ``INSERT ... BY NAME``, numa transação: os tipos e o ``NOT NULL`` do contrato valem na
-        tabela.
+        """Cria no sandbox, com o nome do modelo, uma view sobre a versão fixada da tabela Delta
+        ou, com ``materialize=True``, a tabela do modelo carregada dessa versão.
 
-        Um commit na tabela depois da abertura não muda o que a view lê.
+        A materialização cria a tabela pelo DDL do modelo e a carrega do ``delta_scan`` por um
+        ``INSERT ... BY NAME``, numa transação: os tipos e o ``NOT NULL`` do contrato valem na
+        tabela. Um commit na tabela depois da abertura não muda o que a view lê.
 
         Exemplo:
 
@@ -1017,8 +1022,8 @@ class DuckDBEngine:
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da pasta da tabela Delta de origem.
-        :param version: a versão fixada da tabela, lida por
-            ``delta_scan(uri, version := v)``; ``None``, a tabela sem versão no Delta.
+        :param version: a versão fixada da tabela, lida por ``delta_scan(uri, version := v)``;
+            ``None`` diz que a tabela ainda não existe no Delta, e a ingestão a recusa.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
             ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: ``True`` copia os dados para a tabela do modelo no sandbox; com
@@ -1110,7 +1115,8 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            engine.query(sa.select(tabela).where(tabela.c.data_str == sa.bindparam("p")),
+            table = Lancamento.__table__
+            engine.query(sa.select(table).where(table.c.data_base_str == sa.bindparam("p")),
                          {"p": "2026-08-31"})
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
@@ -1133,13 +1139,14 @@ class DuckDBEngine:
         params: Mapping[str, object] | None = None,
         batch_size: int = 100_000,
     ) -> DuckDBStream:
-        """Os lotes da consulta enquanto ela roda, com a memória limitada a 64 MiB de lotes.
+        """Os lotes da consulta, lidos na ordem dela enquanto o cliente trabalha no lote anterior,
+        com a memória limitada a 64 MiB de lotes guardados.
 
         Exemplo:
 
         .. code-block:: python
 
-            with engine.stream(sa.select(tabela), batch_size=100_000) as stream:
+            with engine.stream(sa.select(Lancamento.__table__), batch_size=100_000) as stream:
                 for batch in stream:
                     work(batch)
 
@@ -1150,16 +1157,18 @@ class DuckDBEngine:
             statement ou dos marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote, passado ao leitor Arrow do DuckDB
             (``to_arrow_reader``).
-        :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` cancela a
+        :return: o ``serialize_db.engine.BatchStream`` dos lotes, gerenciador de contexto; o
+            ``close`` cancela a
             consulta que ainda roda e apaga o arquivo de transbordo.
         :raises SqlError: os nomes de ``params`` não fecham com os parâmetros do statement ou do
             texto, ou o texto ainda traz o sentinela ``{prefix}``.
         :raises duckdb.Error: a consulta que falha antes do primeiro lote; o erro depois dele
             sobe na leitura seguinte ao último lote entregue, como ``OSError`` do leitor Arrow
             com a mensagem do DuckDB. Com mais de uma thread, o erro da consulta pode chegar como
-            ``INTERRUPT Error: Interrupted!``, sem a causa: o DuckDB 1.5.5 às vezes troca pela
-            interrupção o erro que outra thread da consulta acha. A mesma consulta num motor com
-            ``DuckDBConfig(threads=1)`` mostra a causa.
+            ``INTERRUPT Error: Interrupted!``, sem a causa: o DuckDB 1.5.5 trocou pela
+            interrupção o erro que outra thread da consulta achou em 3 de 21 execuções
+            (2026-09-28). A mesma consulta num motor com ``DuckDBConfig(threads=1)`` mostra a
+            causa.
         """
         text, arguments = self._compiled(statement_or_sql, params)
         return DuckDBStream(self, text, arguments, batch_size)
@@ -1169,7 +1178,9 @@ class DuckDBEngine:
         table: sa.Table,
     ) -> None:
         """Cria a tabela vazia do modelo pelo DDL do DuckDB, num cursor à parte, sem o lock da
-        sessão: não espera a consulta de um ``stream`` aberto antes, e a sessão vê a tabela no
+        sessão.
+
+        A criação não espera a consulta de um ``stream`` aberto antes, e a sessão vê a tabela no
         comando seguinte. Uma transação que o cliente abriu em ``session()`` e que já leu ou mudou
         o banco antes da criação só vê a tabela depois de terminar: dentro dela, o comando sobre
         a tabela levanta ``duckdb.CatalogException``.
@@ -1215,7 +1226,8 @@ class DuckDBEngine:
         :param table: a tabela do modelo, já criada no sandbox.
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
-        :return: o ``Appender`` da tabela, que guarda os lotes num arquivo Arrow IPC da pasta de
+        :return: o ``serialize_db.engine.Appender`` da tabela, que guarda os lotes num arquivo
+            Arrow IPC da pasta de
             transbordo até o ``close`` e os insere num único ``INSERT ... BY NAME``.
         :raises SandboxError: a tabela que não existe no sandbox, ou o nome que uma view do
             ``ingest`` ocupa.
@@ -1366,9 +1378,10 @@ class DuckDBEngine:
         :param table: a tabela do modelo, no sandbox.
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
             sandbox.
-        :param uri: a URI da tabela fixada pela execução; com ``version``, dá a versão
-            fixada, que as chaves fora da partição comparam, e o ``max_key`` do
-            ``skip_when``.
+        :param uri: a URI da tabela Delta da execução; com ``version``, a verificação
+            ``chave_<colunas>_tabela`` compara as chaves das partições da execução com as das
+            demais partições dessa versão, e é dispensada sem rodar quando o menor valor da chave
+            primária inteira de uma coluna na execução passa do maior registrado no log da versão.
         :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a verificação
             ``chave_<colunas>_tabela`` não roda.
         :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
@@ -1379,7 +1392,7 @@ class DuckDBEngine:
         :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
-            ``Execution.audit`` levanta ``AuditFailed``.
+            ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição.
         """
         pinned = None
@@ -1453,12 +1466,12 @@ class DuckDBEngine:
         expected_rows: int | None = None,
         columns_without_min_max: Collection[str] = (),
     ) -> int:
-        """Leva a partição do sandbox ao Delta.
+        """Leva a partição do sandbox ao Delta num commit.
 
         A partição sai por ``COPY ... (RETURN_STATS)`` num arquivo novo na pasta da tabela Delta,
         ``<coluna>=<valor>/<execution_id>_<uuid>.parquet`` (sem ``<coluna>=<valor>/`` numa tabela
-        sem partição), e entra no log da tabela por ``register_files``, com as conferências, o
-        commit e a releitura, em memória constante.
+        sem partição), e entra no log da tabela por ``serialize_db.delta.register_files``, com as
+        conferências, o commit e a releitura, sem a partição inteira na memória do processo.
 
         Exemplo:
 
@@ -1470,7 +1483,7 @@ class DuckDBEngine:
         :param table: a tabela do modelo, no sandbox.
         :param uri: a URI da pasta da tabela Delta de destino, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
-        :param metadata: os metadados do commit, de ``delta.commit_metadata``.
+        :param metadata: os metadados do commit, de ``serialize_db.delta.commit_metadata``.
         :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
             registrados; sem ela, a contagem do sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
@@ -1478,12 +1491,16 @@ class DuckDBEngine:
         :return: a versão do commit.
         :raises ContractError: o valor fora da regra da partição, ``None`` numa tabela
             particionada, ou um valor numa tabela sem partição.
-        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, ou a
-            releitura desfez o commit.
+        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, e o
+            arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
+            ``full=True``; ou a releitura desfez o commit.
         :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
-        :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
+        :raises ValueError: ``uri`` fora da raiz do armazenamento, antes do ``COPY``, sem arquivo
+            gravado.
         :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
-            negativa, lida no registro antes do commit (``environment_limits``), sem nada gravado.
+            negativa, lida no registro antes do commit (``environment_limits``); sem commit, o
+            arquivo do ``COPY`` fica órfão na pasta da partição até um ``vacuum`` com
+            ``full=True``.
         """
         # O valor conferido antes do COPY: o arquivo de um valor recusado no registro ficaria
         # na pasta da tabela, fora do log.
@@ -1533,11 +1550,7 @@ class DuckDBEngine:
 
         .. code-block:: python
 
-            engine = DuckDBEngine(DuckDBConfig(), "exec-2026-09-05", storage)
-            try:
-                engine.ingest(Operacao.__table__, uri, 3)
-            finally:
-                engine.cleanup()
+            engine.cleanup()   # o with do motor chama cleanup na saída
         """
         if self._closed:
             return

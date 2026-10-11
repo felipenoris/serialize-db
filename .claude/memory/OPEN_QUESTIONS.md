@@ -32,8 +32,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
   `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
   retenção. A mesma pergunta vale para a regra de ciclo de vida que `docs/operacao.md`, seção
-  "Arquivo", espera na pasta `arquivo/`: a passagem dos arquivos dela à classe de armazenamento mais
-  barata. As sondas da operação também apagam a pasta delas sob a raiz da suíte no fim de cada
+  "Arquivamento de um snapshot", espera na pasta `arquivo/`: a passagem dos arquivos dela à classe
+  de armazenamento mais barata. As sondas da operação também apagam a pasta delas sob a raiz da
+  suíte no fim de cada
   rodada: 19.293 MB em 2026-10-05, 19.284 MB na segunda rodada de 2026-10-07, 19.293 MB em
   2026-10-09 às 05:18, 19.289 MB às 21:50, 19.612 MB em 2026-10-10 às 03:58 e 12.021 MB às
   18:20, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos relatórios. Cada rodada deixa ao

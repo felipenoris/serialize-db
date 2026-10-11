@@ -556,6 +556,7 @@ def read_sql(
         ``exec_<id>_`` para o sandbox da execução; obrigatório, porque quem chama sabe o alvo.
     :return: o texto do arquivo ``<name>.duckdb.sql`` ou ``<name>.redshift.sql`` de
         ``directory``.
+    :raises FileNotFoundError: o arquivo ausente de ``directory``.
     """
     path = os.path.join(directory, f"{name}.{dialect}.sql")
     with open(path, encoding="utf-8") as handle:

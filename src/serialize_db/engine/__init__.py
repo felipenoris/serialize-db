@@ -139,7 +139,8 @@ class Appender(Protocol):
     """
 
     rows: int
-    """As linhas gravadas até agora; depois do ``close``, as acrescentadas à tabela."""
+    """As linhas gravadas até agora; depois de um ``close`` sem erro, as acrescentadas à
+    tabela."""
 
     def write(
         self,
@@ -155,9 +156,9 @@ class Appender(Protocol):
             appender.write(batch)
 
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
-        :raises ContractError: ``data`` de outro tipo, recusado nessa chamada só; ou um lote que o
-            ``cast`` recusa, ou com colunas diferentes das do primeiro lote, e então o appender
-            não insere nada.
+        :raises ContractError: ``data`` de outro tipo, recusado sem afetar o appender, que segue
+            recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas diferentes das do
+            primeiro lote, e então o ``close`` não insere nada.
         """
 
     def close(self) -> None:
@@ -201,7 +202,8 @@ class Engine(Protocol):
     """
 
     execution_id: str
-    """O identificador da execução, na regra da partição (``schema.PARTITION_VALUE``)."""
+    """O identificador da execução, na regra da partição
+    (``serialize_db.schema.PARTITION_VALUE``)."""
 
     def session(self) -> contextlib.AbstractContextManager[object]:
         """A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma primitiva
@@ -261,7 +263,8 @@ class Engine(Protocol):
 
         :param table: a tabela do modelo, cujo nome a ingestão ocupa no sandbox.
         :param uri: a URI da pasta da tabela Delta de origem.
-        :param version: a versão fixada da tabela; ``None``, a tabela sem versão no Delta.
+        :param version: a versão fixada da tabela; ``None`` diz que a tabela ainda não existe no
+            Delta, e a ingestão a recusa.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
             ``None`` lê todas, e a lista vazia, nenhuma.
         :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, o
@@ -441,9 +444,10 @@ class Engine(Protocol):
         :param table: a tabela do modelo, no sandbox.
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
             sandbox.
-        :param uri: a URI da tabela fixada pela execução; com ``version``, dá a versão
-            fixada, que as chaves fora da partição comparam, e o ``max_key`` do
-            ``skip_when``.
+        :param uri: a URI da tabela Delta da execução; com ``version``, a verificação
+            ``chave_<colunas>_tabela`` compara as chaves das partições da execução com as das
+            demais partições dessa versão, e é dispensada sem rodar quando o menor valor da chave
+            primária inteira de uma coluna na execução passa do maior registrado no log da versão.
         :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a verificação
             ``chave_<colunas>_tabela`` não roda.
         :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
@@ -454,7 +458,7 @@ class Engine(Protocol):
         :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
         :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
-            ``Execution.audit`` levanta ``AuditFailed``.
+            ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
         :raises ContractError: um valor de ``partitions`` fora da regra da partição.
         """
 
@@ -482,7 +486,7 @@ class Engine(Protocol):
         :param table: a tabela do modelo, no sandbox.
         :param uri: a URI da pasta da tabela Delta de destino, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
-        :param metadata: os metadados do commit, de ``delta.commit_metadata``.
+        :param metadata: os metadados do commit, de ``serialize_db.delta.commit_metadata``.
         :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
             registrados; sem ela, a contagem do sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
@@ -490,10 +494,13 @@ class Engine(Protocol):
         :return: a versão do commit.
         :raises ContractError: o valor fora da regra da partição, ``None`` numa tabela
             particionada, ou um valor numa tabela sem partição.
-        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, ou a
-            releitura desfez o commit.
+        :raises RegistrationRefused: uma conferência dos arquivos reprovou, sem commit, e os
+            arquivos gravados ficam órfãos na pasta da partição; ou a releitura desfez o commit.
         :raises ExecutionConflict: outro commit na mesma partição a partir da mesma versão.
-        :raises ValueError: ``uri`` fora da raiz do armazenamento, no registro dos arquivos.
+        :raises ValueError: ``uri`` fora da raiz do armazenamento.
+        :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
+            negativa, lida no registro antes do commit (``environment_limits``), sem commit; os
+            arquivos gravados ficam órfãos na pasta da partição.
         """
 
     def cleanup(self) -> None:

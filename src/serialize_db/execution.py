@@ -98,7 +98,10 @@ class Database:
     manifestos da publicação no Redshift (``publication_prefix``) e as cópias dos snapshots
     arquivados (``archive_prefix``). ``storage`` nasce no primeiro uso, e a pasta local relativa
     vira absoluta: ``uri`` parte da raiz normalizada, a URI que o delta-rs e o DuckDB recebem. Os
-    prefixos são caminhos relativos à raiz, os que os métodos de ``Storage`` recebem.
+    prefixos são caminhos relativos à raiz, os que os métodos de ``Storage`` recebem. A construção
+    acerta as variáveis que o delta-rs lê (``serialize_db.storage.prepare_environment``:
+    ``NO_PROXY`` a partir de ``no_proxy``, e a região copiada entre ``AWS_REGION`` e
+    ``AWS_DEFAULT_REGION``), e as que mudaram vão ao log ``serialize_db.execution``.
 
     Exemplo:
 
@@ -282,14 +285,14 @@ class Database:
 
         :param config: a configuração do Redshift; ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*``.
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``, sob a qual o
-            leitor grava em ``<id do leitor>/`` e que o ``close`` esvazia; ``None`` é
-            ``<raiz>/<ambiente>/staging``. Na conexão com o Redshift, pelo ``workgroup`` ou pelo
-            ``host``, e na do substituto local das suítes, só uma pasta ``s3://bucket/prefixo``
-            serve, porque o ``UNLOAD`` grava só no S3: os arquivos ficam nela até o ``close`` do
-            stream e o do leitor, e uma pasta local, como o padrão de uma raiz local, faz o
-            primeiro ``stream`` falhar, sem arquivo gravado. Uma pasta local só serve à conexão
-            de mentira dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; o leitor grava
+            em ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` é
+            ``<raiz>/<ambiente>/staging``. O ``UNLOAD`` grava só no S3, então só uma pasta
+            ``s3://bucket/prefixo`` serve, na conexão com o Redshift, pelo ``workgroup`` ou pelo
+            ``host``, e na do substituto local das suítes: os arquivos ficam nela até o ``close``
+            do stream e o do leitor. Com uma raiz local, o padrão é uma pasta local, e o primeiro
+            ``stream`` falha, sem arquivo gravado; a pasta local serve só à conexão de mentira
+            dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
             pasta do leitor.
         :raises ContractError: a configuração sem conexão, sem ``workgroup`` e sem ``host``,
@@ -670,7 +673,9 @@ class Execution:
         :raises ContractError: um valor fora da regra da partição, ou ``partitions`` numa tabela
             sem partição.
         :raises SandboxError: a tabela sem versão fixada, que não existe no ambiente, ou o nome
-            dela já ocupado no sandbox.
+            dela já ocupado no sandbox; no motor Redshift, também a sessão numa transação que o
+            cliente abriu por ``BEGIN``, antes de qualquer comando, e, sem ``iam_role``, a sessão
+            ``boto3`` sem credenciais para o ``COPY``.
         """
         checked = _checked_partitions(partitions)
         with self._step("ingest"):
@@ -784,11 +789,11 @@ class Execution:
             run.audit(Projetado.__table__, ["2026-08-31"], foreign_keys=True)
 
         :param table: a tabela do modelo, carregada no sandbox.
-        :param partitions: as partições da execução, pela regra da partição;
-            ``partitions=None`` audita a tabela inteira do sandbox. Numa tabela sem partição a
-            lista não filtra, a auditoria é da tabela inteira e a aprovação fica sob a lista, que
-            ``publish_delta``, que só aceita ``None`` nessa tabela, não procura: a tabela sem
-            partição é auditada com ``None``.
+        :param partitions: as partições da execução, pela regra da partição, as que a auditoria
+            verifica e a aprovação cobre; ``None`` audita a tabela inteira do sandbox. A tabela sem
+            partição é auditada com ``None``: ``publish_delta`` só aceita ``None`` nela e procura
+            a aprovação sob ``None``; uma lista nessa tabela não filtra nada e deixa a aprovação
+            onde ``publish_delta`` não a procura.
         :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
             chave estrangeira, a chave sem a linha referenciada, procurada na tabela do sandbox ou
             na versão fixada da referenciada.
@@ -957,14 +962,15 @@ class Execution:
         ``<raiz>/<ambiente>/<tabela>``.
 
         As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
-        por tabela, ``create_table`` se não existe, ``reconcile`` e ``export_partition`` por
-        partição: o motor grava a partição na pasta dela na tabela Delta, e o commit registra no
+        por tabela: ``create_table`` se não existe, ``reconcile`` e ``export_partition`` por
+        partição. O motor grava a partição na pasta dela na tabela Delta, e o commit registra no
         log da tabela o arquivo gravado, com a contagem da auditoria em ``expected_rows`` e as
         colunas ``Double`` com valor não finito sem mínimo e máximo (todas as ``Double`` com
         ``audit=False``); no motor Redshift, a partição com essas colunas volta por
-        ``publish_partition``, que grava o arquivo de novo. As tabelas correm num pool de
-        ``max_workers``: na primeira falha nada novo começa, o que está em curso termina, e a
-        exceção leva o resultado de cada tabela numa nota.
+        ``publish_partition``, que grava o arquivo de novo.
+
+        As tabelas correm num pool de ``max_workers``: na primeira falha nada novo começa, o que
+        está em curso termina, e a exceção leva o resultado de cada tabela numa nota.
 
         Exemplo:
 
@@ -993,8 +999,10 @@ class Execution:
             ou a releitura reprovou depois dele e a tabela voltou à versão anterior.
         :raises LogUnavailable: um arquivo do log entre a versão fixada e a atual não existe.
         :raises SandboxError: a memória que o processo ainda pode usar abaixo de 2 MiB, ou
-            negativa, lida no registro de cada partição antes do commit (``environment_limits``),
-            sem nada gravado.
+            negativa, lida por ``environment_limits`` no registro de cada partição, antes do
+            commit: nada entra no log, e o arquivo que o motor gravou fica órfão na pasta da
+            partição até um ``vacuum`` com ``full=True``; no motor Redshift, também sem
+            ``iam_role``, a sessão ``boto3`` sem credenciais para o ``UNLOAD``.
         """
         checked = _checked_partitions(partitions)
         tasks = []
@@ -1028,11 +1036,14 @@ class Execution:
 
         :param name: o nome do snapshot, pela regra da partição, ausente de ``snapshots`` e de
             ``archived`` no arquivo de controle do ambiente.
-        :raises ContractError: o nome fora da regra da partição, ou já usado em ``snapshots`` ou
-            em ``archived``, na chamada e antes de qualquer commit que venha depois dela, com o
-            ``serialize-db channel`` na mensagem; a segunda chamada na execução já marcada, com o
-            nome marcado na mensagem; o nome que outro escritor grava depois da chamada é
-            recusado na saída do ``with``, depois dos commits.
+        :raises ContractError: na chamada, antes de qualquer commit, o nome fora da regra da
+            partição, ou já usado em ``snapshots`` ou em ``archived``, com o
+            ``serialize-db channel`` na mensagem, e a segunda chamada na execução já marcada, com
+            o nome marcado na mensagem; na saída do ``with``, depois dos commits, o nome que outro
+            escritor gravou depois da chamada.
+        :raises serialize_db.errors.ConflictError: na saída do ``with``, depois dos commits, outro
+            escritor gravou o arquivo de controle entre a leitura e a escrita da entrada, que não
+            foi gravada.
         """
         check_partition_value(name)
         # O nome já usado é recusado agora, antes dos commits da execução; a saída o confere de
