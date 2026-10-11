@@ -8,7 +8,7 @@ o valor de uma partição, ``None`` numa tabela sem partição; o valor segue
 pasta.
 
 O ciclo de uma tabela começa no modelo: ``table_exists`` diz se há tabela na pasta,
-``create_table`` a cria na versão 0 e ``open_table`` a abre numa versão; ``schema_diff`` lê o diff
+``create_table`` a cria na versão 0 e ``open_table`` a abre numa versão; ``_schema_diff`` lê o diff
 entre o modelo e o esquema dela, ``reconcile`` aplica o diff aditivo e recusa o destrutivo, que só
 ``rewrite`` resolve, num commit.
 
@@ -1340,11 +1340,11 @@ def _new_checks(
     return names
 
 
-def schema_diff(
+def _schema_diff(
     table: sa.Table,
     dt: DeltaTable,
 ) -> SchemaDiff:
-    """[protected] O diff entre o esquema do contrato e o da versão carregada, sem alterar nada;
+    """[private] O diff entre o esquema do contrato e o da versão carregada, sem alterar nada;
     para ``reconcile``.
 
     Aditivos: coluna nova anulável (ou ``NOT NULL`` numa tabela ainda sem dados), ``NOT NULL``
@@ -1357,7 +1357,7 @@ def schema_diff(
 
     .. code-block:: python
 
-        schema_diff(Operacao.__table__, open_table(uri, storage)).changes   # False
+        _schema_diff(Operacao.__table__, open_table(uri, storage)).changes   # False
 
     :param table: a tabela do modelo.
     :param dt: a tabela aberta por ``open_table``.
@@ -1447,7 +1447,7 @@ def reconcile(
     :raises serialize_db.errors.ContractError: uma ``CheckConstraint`` do modelo sem nome.
     """
     dt = open_table(uri, storage)
-    diff = schema_diff(table, dt)
+    diff = _schema_diff(table, dt)
     if diff.destructive:
         raise SchemaDiffRefused(
             f"{table.name}: diff destrutivo, só por rewrite(uri, table, storage, expressions): "

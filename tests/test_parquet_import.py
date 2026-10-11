@@ -204,8 +204,8 @@ def test_partition_query_casts_to_the_contract(
     ``cad_contratos`` roda com ``to`` entre aspas."""
     table = TABLES["cad_lancamentos"]
     folder_uri = f"{base.root}/cad_lancamentos/data_base_str=2026-01-31"
-    query = parquet_import.partition_query(folder_uri, table, "2026-01-31")
-    contracts_query = parquet_import.partition_query(
+    query = parquet_import._partition_query(folder_uri, table, "2026-01-31")
+    contracts_query = parquet_import._partition_query(
         f"{base.root}/cad_contratos/data_str=2026-02-28", TABLES["cad_contratos"], "2026-02-28"
     )
     with DuckDBEngine(config, "consulta", db.storage) as engine, engine.session() as connection:

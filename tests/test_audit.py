@@ -5,7 +5,7 @@ de cada motor e sem a cláusula ``FILTER``, que o Redshift não tem; o texto do 
 DuckDB em memória sobre o DDL do contrato; o escopo da chave pela coluna de partição e pela de
 ``partition_source``, com ``key_scope`` e o ``skip_when`` da chave primária inteira; as chaves
 estrangeiras só com ``foreign_keys=True``; a recusa do valor de partição fora da regra; e o texto do
-``is_finite`` do Redshift sobre o ``NaN``, os infinitos, um número e o nulo, rodando no DuckDB.
+``_is_finite`` do Redshift sobre o ``NaN``, os infinitos, um número e o nulo, rodando no DuckDB.
 """
 
 from __future__ import annotations
@@ -170,12 +170,12 @@ def test_rows_check_measures_uuid_text() -> None:
 
 
 def test_redshift_is_finite_under_the_postgresql_rule() -> None:
-    """O ``is_finite`` do Redshift dá falso ao ``NaN`` e aos infinitos, verdadeiro ao número e nulo
+    """O ``_is_finite`` do Redshift dá falso ao ``NaN`` e aos infinitos, verdadeiro ao número e nulo
     ao nulo pela regra do PostgreSQL, que o DuckDB segue: o ``NaN`` igual a si mesmo e acima de todo
     número. O que o Redshift faz com o ``NaN`` na varredura de uma tabela só o ambiente alvo mostra
     (``test_audit_sql_under_search_path_and_nan_comparison`` em
     ``tests/proof_of_concept/test_redshift.py``)."""
-    finite = audit.is_finite(sa.column("valor"))
+    finite = audit._is_finite(sa.column("valor"))
     dialect = RedshiftDialect_redshift_connector(paramstyle="named")
     text = str(finite.compile(dialect=dialect))
     values = pa.table({"valor": pa.array([float("nan"), float("inf"), float("-inf"), 1.5, None])})

@@ -63,8 +63,8 @@ from serialize_db.engine.redshift import (
     RedshiftConfig,
     RedshiftEngine,
     mask,
-    sandbox_prefix,
-    schema_from_row_description,
+    _sandbox_prefix,
+    _schema_from_row_description,
 )
 from serialize_db.errors import ContractError, RegistrationRefused, SandboxError, SqlError
 from serialize_db.resources import environment_limits
@@ -368,7 +368,7 @@ class FakeConnection:
 def engine_over_driver(
     storage: Storage | None = None,
 ) -> RedshiftEngine:
-    """O motor da suíte sobre o ``driver_connect`` já substituído, com o ``staging/`` da execução
+    """O motor da suíte sobre o ``_driver_connect`` já substituído, com o ``staging/`` da execução
     na raiz local."""
     root = storage if storage is not None else Storage.for_uri("/tmp/sem-uso")
     return RedshiftEngine(CONFIG, EXECUTION_ID, root, f"prd/staging/{EXECUTION_ID}")
@@ -380,7 +380,7 @@ def fake_engine(
     storage: Storage | None = None,
 ) -> RedshiftEngine:
     """O motor sobre a conexão de mentira, com o ``staging/`` da execução na raiz local."""
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connection)
     return engine_over_driver(storage)
 
 
@@ -420,23 +420,23 @@ def test_config_from_environment() -> None:
         region="sa-east-1",
     )
     assert RedshiftConfig.from_environment({}) == RedshiftConfig()
-    assert redshift.login_of(CONFIG) == {
+    assert redshift._login_of(CONFIG) == {
         "host": "host",
         "port": 5439,
         "user": "usuario",
         "password": "senha",
     }
     with pytest.raises(ContractError, match="workgroup"):
-        redshift.login_of(RedshiftConfig())
+        redshift._login_of(RedshiftConfig())
 
 
 def test_sandbox_prefix_normalizes_and_limits() -> None:
     """``[a-z0-9_]`` e o espaço para o nome da tabela dentro dos 127 bytes."""
-    assert sandbox_prefix("exec-2026-09-05") == PREFIX
-    assert sandbox_prefix("Correção.Agosto") == "exec_corre__o_agosto_"
-    assert sandbox_prefix("x" * 58).endswith("_")
+    assert _sandbox_prefix("exec-2026-09-05") == PREFIX
+    assert _sandbox_prefix("Correção.Agosto") == "exec_corre__o_agosto_"
+    assert _sandbox_prefix("x" * 58).endswith("_")
     with pytest.raises(ContractError, match="127"):
-        sandbox_prefix("x" * 59)
+        _sandbox_prefix("x" * 59)
 
 
 def test_credentials_clause_and_mask(
@@ -515,7 +515,7 @@ def test_copy_insert_unload_text() -> None:
 
     # O UNLOAD com as aspas e a barra do literal dobradas.
     select = "select \"texto\" from \"t\" where \"texto\" = 'd''agua' and x = 'barra \\\\ n'"
-    unloaded = redshift.unload_text(
+    unloaded = redshift._unload_text(
         select, "s3://b/prd/t/data_base_str=2026-08-31/e_1", credentials, parallel=False
     )
     assert unloaded == (
@@ -525,7 +525,7 @@ def test_copy_insert_unload_text() -> None:
         "FORMAT AS PARQUET MANIFEST VERBOSE PARALLEL OFF"
     )
     assert "PARTITION BY" not in unloaded
-    assert redshift.unload_text(select, "s3://b/x/", credentials, parallel=True).endswith(
+    assert redshift._unload_text(select, "s3://b/x/", credentials, parallel=True).endswith(
         "MANIFEST VERBOSE"
     )
 
@@ -579,7 +579,7 @@ def test_table_from_cursor_by_columns() -> None:
     cursor.ps = {"row_desc": row_desc_of(arrow_schema)}
     cursor.description = [(field.name, 0, None, None, None, None, None) for field in arrow_schema]
     cursor._rows = [list(row) for row in rows]
-    table = redshift.table_from_cursor(cursor)
+    table = redshift._table_from_cursor(cursor)
     assert table.schema.equals(arrow_schema)
     names = arrow_schema.names
     by_dicts = pa.Table.from_pylist([dict(zip(names, row)) for row in rows], schema=arrow_schema)
@@ -587,11 +587,11 @@ def test_table_from_cursor_by_columns() -> None:
 
     # O resultado vazio fica com o esquema; sem description, sem coluna.
     cursor._rows = []
-    empty = redshift.table_from_cursor(cursor)
+    empty = redshift._table_from_cursor(cursor)
     assert empty.num_rows == 0
     assert empty.schema.equals(arrow_schema)
     cursor.description = None
-    assert redshift.table_from_cursor(cursor).num_columns == 0
+    assert redshift._table_from_cursor(cursor).num_columns == 0
 
 
 def test_schema_from_row_description() -> None:
@@ -638,11 +638,11 @@ def test_schema_from_row_description() -> None:
             ("c_super", pa.string()),
         ]
     )
-    assert schema_from_row_description(row_desc).equals(expected)
+    assert _schema_from_row_description(row_desc).equals(expected)
     with pytest.raises(SandboxError, match="c_geo.*OID 3000"):
-        schema_from_row_description([{"label": b"c_geo", "type_oid": 3000, "type_modifier": -1}])
+        _schema_from_row_description([{"label": b"c_geo", "type_oid": 3000, "type_modifier": -1}])
     with pytest.raises(SandboxError, match="c_num"):
-        schema_from_row_description([{"label": b"c_num", "type_oid": 1700, "type_modifier": -1}])
+        _schema_from_row_description([{"label": b"c_num", "type_oid": 1700, "type_modifier": -1}])
 
 
 def test_stream_literal_values(
@@ -667,7 +667,7 @@ def test_stream_literal_values(
         "preco": decimal.Decimal("1.00"),
         "ids": [1, 2, 3],
     }
-    literal = redshift.literal_text(statement, params, PREFIX)
+    literal = redshift._literal_text(statement, params, PREFIX)
     assert f'FROM "{PREFIX}cad_lancamentos"' in literal
     assert "LIKE '50% d''agua \\\\ n'" in literal
     assert "\"data_base\" >= '2026-08-29'" in literal
@@ -680,7 +680,7 @@ def test_stream_literal_values(
         'SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" WHERE "area" = :area '
         'AND "id_lancamento" IN :ids AND "data_base" > :dia'
     )
-    from_text = redshift.literal_text(
+    from_text = redshift._literal_text(
         text, {"area": "a'b", "ids": [4, 5], "dia": datetime.date(2026, 1, 1)}, PREFIX
     )
     assert from_text == (
@@ -708,12 +708,12 @@ def test_stream_literal_values(
     assert len(connection.commands) == before
 
     # O query: os valores como parâmetros do driver, no estilo named, e o IN expandido.
-    compiled, values = redshift.compiled_for_cursor(statement, params, PREFIX)
+    compiled, values = redshift._compiled_for_cursor(statement, params, PREFIX)
     assert set(values) == {"padrao", "dia", "preco", "ids_1", "ids_2", "ids_3"}
     assert "(:ids_1, :ids_2, :ids_3)" in compiled
     assert ":padrao" in compiled
     text_params = {"area": "x", "ids": [1], "dia": datetime.date(2026, 1, 1)}
-    bound, bound_values = redshift.compiled_for_cursor(text, text_params, PREFIX)
+    bound, bound_values = redshift._compiled_for_cursor(text, text_params, PREFIX)
     assert f'"{PREFIX}cad_lancamentos"' in bound
     assert bound_values["area"] == "x"
 
@@ -729,19 +729,19 @@ def test_literal_text_keeps_the_colons_of_quoted_regions() -> None:
         "SELECT '12:30:00' AS t, 'a\\\\:b' AS u",
     ]
     for text in texts:
-        assert redshift.literal_text(text, None, PREFIX) == text
-        assert redshift.compiled_for_cursor(text, None, PREFIX) == (text, {})
+        assert redshift._literal_text(text, None, PREFIX) == text
+        assert redshift._compiled_for_cursor(text, None, PREFIX) == (text, {})
 
     # O marcador fora das aspas vira o literal, e o de dentro fica.
     text = (
         'SELECT "id_lancamento" FROM "{prefix}cad_lancamentos" '
         'WHERE "codigo" = \'ref :x1\' AND "id_lancamento" = :id'
     )
-    assert redshift.literal_text(text, {"id": 5}, PREFIX) == (
+    assert redshift._literal_text(text, {"id": 5}, PREFIX) == (
         f'SELECT "id_lancamento" FROM "{PREFIX}cad_lancamentos" '
         'WHERE "codigo" = \'ref :x1\' AND "id_lancamento" = 5'
     )
-    bound, values = redshift.compiled_for_cursor(text, {"id": 5}, PREFIX)
+    bound, values = redshift._compiled_for_cursor(text, {"id": 5}, PREFIX)
     assert "'ref :x1'" in bound
     assert values == {"id": 5}
 
@@ -758,11 +758,11 @@ def test_literal_text_keeps_the_backslash_before_a_colon_in_a_value() -> None:
         r"a\::b": r"'a\\::b'",
     }
     for value, literal in literal_by_value.items():
-        assert redshift.literal_text("SELECT :v AS x", {"v": value}, PREFIX) == (
+        assert redshift._literal_text("SELECT :v AS x", {"v": value}, PREFIX) == (
             f"SELECT {literal} AS x"
         )
     # Na lista do IN, cada item.
-    assert redshift.literal_text("SELECT 1 WHERE 'x' IN :v", {"v": [r"a\:b", "c"]}, PREFIX) == (
+    assert redshift._literal_text("SELECT 1 WHERE 'x' IN :v", {"v": [r"a\:b", "c"]}, PREFIX) == (
         r"SELECT 1 WHERE 'x' IN ('a\\\:b', 'c')"
     )
 
@@ -779,11 +779,11 @@ def test_literal_text_writes_nonfinite_doubles_as_float8_text() -> None:
         (2.5, "2.5"),
     ]
     for value, literal in literal_by_value:
-        from_statement = redshift.literal_text(statement, {"v": value}, PREFIX)
+        from_statement = redshift._literal_text(statement, {"v": value}, PREFIX)
         assert from_statement.endswith(f'"valor" = {literal}'), from_statement
-        from_text = redshift.literal_text("SELECT :v AS valor", {"v": value}, PREFIX)
+        from_text = redshift._literal_text("SELECT :v AS valor", {"v": value}, PREFIX)
         assert from_text == f"SELECT {literal} AS valor"
-    in_list = redshift.literal_text("SELECT 1 WHERE 0.5 IN :v", {"v": [float("nan"), 0.5]}, PREFIX)
+    in_list = redshift._literal_text("SELECT 1 WHERE 0.5 IN :v", {"v": [float("nan"), 0.5]}, PREFIX)
     assert in_list == "SELECT 1 WHERE 0.5 IN ('NaN'::float8, 0.5)"
 
 
@@ -895,7 +895,7 @@ def test_statements_serialize_on_the_single_session(
         connections.append(FakeConnection(storage))
         return connections[-1]
 
-    monkeypatch.setattr(redshift, "driver_connect", open_fake)
+    monkeypatch.setattr(redshift, "_driver_connect", open_fake)
     with engine.new_session() as other:
         other.query("SELECT 2")
     assert len(connections) == 1
@@ -911,7 +911,7 @@ def test_connection_dropped_by_the_server_is_reopened_once(
     ``search_path``, e o comando repetido; dentro de uma transação o erro sobe, com o
     ``ROLLBACK`` tentado."""
     connections = [FakeConnection(), FakeConnection()]
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connections.pop(0))
     engine = engine_over_driver()
     first = engine._connection
     first.drop_next = 1
@@ -942,7 +942,7 @@ def test_connection_dropped_at_commit_raises_without_reconnecting(
     segunda conexão; fechada a transação, a seguinte não é recusada pelo ``in_transaction`` que a
     queda deixou na conexão, e o ``BEGIN`` dela vai à conexão reaberta."""
     connections = [FakeConnection(), FakeConnection()]
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connections.pop(0))
     engine = engine_over_driver()
     first = engine._connection
     insert = 'INSERT INTO "esquema"."t" VALUES (1)'
@@ -971,7 +971,7 @@ def test_connection_dropped_in_a_client_transaction_raises_without_repeating(
     comando, que entraria fora da transação perdida; o comando seguinte, com o ``in_transaction``
     ainda o de antes da queda, vai à conexão reaberta."""
     connections = [FakeConnection(), FakeConnection()]
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connections.pop(0))
     engine = engine_over_driver()
     first = engine._connection
     insert = 'INSERT INTO "esquema"."t" VALUES (1)'
@@ -1004,7 +1004,7 @@ def test_broken_pipe_in_the_send_is_read_as_the_dropped_connection(
     transação do cliente, sobe o ``InterfaceError``, com o ``BrokenPipeError`` em ``__cause__`` e
     o comando numa nota, sem a reconexão nem a repetição."""
     connections = [FakeConnection(), FakeConnection(), FakeConnection()]
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connections.pop(0))
     engine = engine_over_driver()
     first = engine._connection
     first.drop_on = {"SELECT": broken_pipe()}
@@ -1394,7 +1394,7 @@ def test_ingest_staging_drop_reopens_the_connection_after_a_broken_pipe(
     rows = entry_rows(MONTHS[0], 1, 10)
     delta.publish_partition(uri, ENTRIES, MONTHS[0], rows, METADATA, storage)
     connections = [FakeConnection(storage), FakeConnection(storage)]
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connections.pop(0))
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connections.pop(0))
     engine = engine_over_driver(storage)
     first = engine._connection
     first.drop_on = {"COPY": dropped(), "ROLLBACK": dropped(), "DROP": broken_pipe()}
@@ -2173,7 +2173,7 @@ def test_ingest_and_pinned_delta_load_reordered_columns(
     version = delta.publish_partition(
         uri, written, "p1", text_columns_rows(written, "p1", [1, 2]), METADATA, storage
     )
-    diff = delta.schema_diff(reordered, delta.open_table(uri, storage))
+    diff = delta._schema_diff(reordered, delta.open_table(uri, storage))
     assert not diff.changes
     assert not diff.destructive
     expected = [
@@ -2687,7 +2687,7 @@ def test_nonfinite_double_reaches_the_server_by_every_text_path(
 ) -> None:
     """``nan``, ``inf`` e ``-inf`` de um ``Double`` chegam ao servidor e voltam pelos caminhos do
     texto: a constante que ``sql.render`` escreve, como no texto de uma verificação da auditoria,
-    lida pelo ``query``; o valor do cliente que ``literal_text`` põe no ``UNLOAD`` do ``stream``; e
+    lida pelo ``query``; o valor do cliente que ``_literal_text`` põe no ``UNLOAD`` do ``stream``; e
     o mesmo valor como parâmetro do driver no ``query``. O texto e o valor lido, ou a recusa do
     servidor, vão ao relatório antes das asserções. No ambiente alvo, nas quatro rodadas de
     2026-10-09, o texto que o ``render`` escrevia antes do ``float8`` (``SELECT nan AS valor``) e

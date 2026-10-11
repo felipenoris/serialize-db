@@ -238,10 +238,10 @@ def test_without_proc_windows_reads_the_memory_from_the_system() -> None:
         capture_output=True,
         text=True,
     )
-    assert resources.physical_memory() == int(completed.stdout)
+    assert resources._physical_memory() == int(completed.stdout)
     available = resources.available_memory()
     assert available > 0
-    assert available < resources.physical_memory()
+    assert available < resources._physical_memory()
     assert resources.available_cpus() == 8
 
 

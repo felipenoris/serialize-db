@@ -47,7 +47,7 @@ from serialize_db.engine.redshift import (
     RedshiftEngine,
     columns_without_partition,
     credentials_clause,
-    unload_text,
+    _unload_text,
 )
 from serialize_db.execution import Database
 from serialize_db.schema import quoted, table_options
@@ -91,7 +91,7 @@ def unload(
     storage = db.storage
     started = time.perf_counter()
     engine.execute(
-        unload_text(select, storage.uri_of(prefix), credentials_clause(engine.config), parallel)
+        _unload_text(select, storage.uri_of(prefix), credentials_clause(engine.config), parallel)
     )
     seconds = time.perf_counter() - started
     paths = engine.unloaded_paths(prefix)

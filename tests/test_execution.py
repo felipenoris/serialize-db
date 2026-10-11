@@ -1112,7 +1112,7 @@ def test_cli_run_hands_the_redshift_config_to_the_execution(
     publicação saiu dela: ``--redshift`` é um erro de uso."""
     from serialize_db.engine import redshift
 
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: IdleConnection())
     for name, value in (
         ("HOST", "host"),
         ("USER", "usuario"),
@@ -1144,7 +1144,7 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
     bytes ao nome no prefixo do sandbox."""
     from serialize_db.engine import redshift
 
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: IdleConnection())
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: IdleConnection())
     for name in ("WORKGROUP", "HOST", "USER", "PASSWORD", "PORT"):
         monkeypatch.delenv(f"SERIALIZE_DB_REDSHIFT_{name}", raising=False)
     common = base_arguments(db)

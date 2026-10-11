@@ -273,39 +273,13 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   2026-10-10, a última às 02:33 de 2026-10-10, o Glue seguia com um banco e uma tabela Parquet, e o
   Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
-- **O prefixo `_` dos nomes que só o próprio módulo chama.** A avaliação da API pública de
-  2026-10-10 (`api-publica/avaliacao-api-publica.md`, na biblioteca do projeto Claude) deixou a
-  pergunta depois das decisões (`decisions.md`, "The public API after the evaluation of
-  2026-10-10"), e o usuário escolheu "Prefixar" em 2026-10-11 (`decisions.md`, "The rules and the
-  open items of the final review of PRs #155 and #156 (2026-10-11)"): os 24 nomes abaixo ganham o
-  prefixo `_` da regra de níveis num PR novo, depois do merge do PR #157, e as docstrings passam de
-  `[protected]` a `[private]`; a importação de fora do pacote quebra, ao contrário do que o cartão
-  do caso 1 prometeu ("nenhuma importação muda"). A pergunta da avaliação citava dois,
-  `partition_query`, de `parquet_import`, e `sandbox_prefix`, de `engine.redshift`, e o caso 2
-  dela já dava como privadas as seis funções SQL de `audit` (`partition_text`, `json_valid`,
-  `text_bytes`, `json_bytes`, `partition_value_valid` e `is_finite`). Um `grep -w` em `src/`, em
-  2026-10-11, achou os outros, com docstrings `[protected]`: dos dezesseis que saíram do
-  `__all__`, `schema_diff` em `delta`, `PublishedColumn`, `control_ddl`, `control_read`,
-  `published_ddl`, `publication_statements`, `unpublication_statements` e `reconcile_published` em
-  `publication` e `schema_from_row_description` em `engine.redshift`; em `engine.redshift`, também
-  `login_of`, `driver_connect` (a porta que os testes trocam pelo substituto), `unload_text`,
-  `table_from_cursor`, `compiled_for_cursor` e `literal_text`; e `required_parameters` em `sql`.
-  A renomeação muda quem chama esses nomes de fora do módulo: os testes
-  (`tests/test_engine_redshift.py`, `tests/test_publication.py`, `tests/test_parquet_import.py`,
-  `tests/test_audit.py`, `tests/test_probes.py`, `tests/test_execution.py`, `tests/test_reader.py`
-  e `tests/conftest.py`), o estudo (`tests/proof_of_concept/test_redshift.py` e a docstring de
-  `tests/proof_of_concept/test_stdlib.py`) e as sondas `probes/operacao/probe_parallel_gain.py`,
-  que chama `publication_statements`, `control_read` e `published_ddl` pelo módulo, e
-  `probes/operacao/probe_unload_parallel.py`, que importa `unload_text`; e os textos que os citam:
-  `docs/tecnologias.md` (`partition_query`, `partition_text`, `published_ddl` e
-  `reconcile_published`), `probes/README.md` (`publication_statements`) e o `CLAUDE.md` (a regra
-  "Model-level errors" de "Docstrings" e o índice de `src/serialize_db/` e de `tests/emulator.py`).
-  `physical_memory`, de `resources`, cumpre o mesmo critério, com docstring `[protected]` e chamada
-  em `src/` só pelo próprio módulo, e ficou fora da contagem do cartão; o usuário escolheu
-  "Prefixar" também para ela em 2026-10-11 (`decisions.md`, na mesma seção), e a renomeação muda
-  o script de migração e `tests/test_resources.py`, que a importam. Sem docstring, as
-  constantes `RETENTION` (`delta`) e `ARROW_ONLY` (`engine`), o alias `Task` (`_pool`) e os loggers
-  (`log`, `command_log`) também são só do próprio módulo e ficaram fora do cartão.
+- **O prefixo `_` das constantes, do alias e dos loggers que só o próprio módulo usa.** A regra
+  de níveis dá o prefixo `_` ao nome que só o próprio módulo usa, e os 25 nomes dos cartões de
+  2026-10-11 o ganharam (`decisions.md`, "The `_` prefix of the names only their own module
+  calls, applied (2026-10-11)"). Ficaram fora dos cartões, sem docstring, as constantes
+  `RETENTION` (`delta`, que `tests/test_parquet_import.py` também lê) e `ARROW_ONLY` (`engine`),
+  o alias `Task` (`_pool`) e os loggers `log` (seis módulos) e `command_log` (`publication`).
+  Espera a palavra do usuário.
 
 ## Achados das sondas de consistência de leitura e escrita
 

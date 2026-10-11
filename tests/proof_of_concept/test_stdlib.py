@@ -69,7 +69,7 @@ def test_partition_values_in_text_order() -> None:
 
 def test_execution_identifiers() -> None:
     """Identificadores únicos e nomes válidos nos dois motores: ``uuid``, ``re`` e o instante em
-    UTC; o prefixo do sandbox é o de ``serialize_db.engine.redshift.sandbox_prefix``, que
+    UTC; o prefixo do sandbox é o de ``serialize_db.engine.redshift._sandbox_prefix``, que
     reduz o identificador a ``[a-z0-9_]`` por ``re.sub``."""
     generated = uuid.uuid4().hex[:8]
     assert re.fullmatch(r"[0-9a-f]{8}", generated)

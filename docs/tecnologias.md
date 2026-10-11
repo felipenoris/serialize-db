@@ -1913,9 +1913,9 @@ Regras da derivação:
 
 - A coluna de partição é uma coluna comum do modelo (`String(n)` com a data `AAAA-MM-DD` na base
   atual; `mes: Mapped[str] = mapped_column(String(7))` nos exemplos desta página). Na carga
-  inicial, `serialize_db.parquet_import.partition_query` a preenche com o valor do caminho da
+  inicial, `serialize_db.parquet_import._partition_query` a preenche com o valor do caminho da
   origem; no pipeline, a consulta do cliente a grava; a auditoria a confere contra
-  `partition_source` (`partition_text`: `strftime(..., '%Y-%m-%d')` no DuckDB,
+  `partition_source` (`_partition_text`: `strftime(..., '%Y-%m-%d')` no DuckDB,
   `to_char(..., 'YYYY-MM-DD')` no Redshift). O Delta não tem partição oculta.
 - `PRIMARY KEY`, `UNIQUE`, `FOREIGN KEY` e índices não existem no formato e são ignorados; a
   auditoria por consulta os verifica, como nos outros bancos. `NOT NULL` vira `nullable=False` e é
@@ -2172,7 +2172,7 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
 A carga inicial dos Parquet atuais é `serialize_db.parquet_import.import_table`, o caminho 2:
 tabela a tabela, na ordem de `import_order`, e partição a partição, o DuckDB lê a pasta da
 partição com `CAST` de cada coluna para o tipo do contrato e o valor do caminho na coluna de
-partição (`partition_query`), grava um arquivo novo na pasta `<coluna>=<valor>/` da tabela Delta
+partição (`_partition_query`), grava um arquivo novo na pasta `<coluna>=<valor>/` da tabela Delta
 por `COPY ... (RETURN_STATS)` e o registra por `register_files`, um commit por partição. As colunas
 numéricas do modelo cliente são `Double`; nenhuma passa por `Numeric(18, 2)`.
 
@@ -2359,7 +2359,7 @@ mês, `ADD COLUMN`, append com a coluna nova, `update`, `delete`, três appends 
 3. **Execução.** O pipeline roda no sandbox, com statements Core do SQLAlchemy e lógica Python;
    resultados intermediários ficam no sandbox, não no Delta.
 4. **Auditoria.** Contagens, nulos, unicidade de chaves, coluna de partição igual a
-   `partition_text(partition_source)` (`strftime(data_ref, '%Y-%m-%d')` no DuckDB,
+   `_partition_text(partition_source)` (`strftime(data_ref, '%Y-%m-%d')` no DuckDB,
    `to_char(data_ref, 'YYYY-MM-DD')` no Redshift), limites de tipo, no motor.
 5. **Publicação.** Por tabela e por partição: do DuckDB, `COPY ... TO` na subpasta da partição mais
    `register_files` (`create_write_transaction`); do Redshift, `UNLOAD` num prefixo novo dentro da
@@ -4428,7 +4428,7 @@ Não há índices. `PRIMARY KEY`, `UNIQUE` e `FOREIGN KEY` são declaradas para 
 para decorrelacionar subconsultas, ordenar e eliminar joins, e supõe que valem: uma chave primária
 duplicada faz `SELECT DISTINCT` devolver duplicatas. A regra da documentação é declará-las apenas
 quando o processo de carga garante a integridade, e a política de restrições do
-projeto declara só a `PRIMARY KEY` da tabela publicada, por `published_ddl`; o sandbox não
+projeto declara só a `PRIMARY KEY` da tabela publicada, por `_published_ddl`; o sandbox não
 declara chave, e a auditoria confere as chaves do modelo. `NOT NULL` é aplicado e vale como
 validação de carga: um `COPY` que tenta gravar `NULL` numa coluna `NOT NULL` falha.
 
@@ -5503,7 +5503,7 @@ Restrições e índices são objetos: `PrimaryKeyConstraint`, `ForeignKey` na co
 `ForeignKeyConstraint` na tabela, `UniqueConstraint`, `CheckConstraint`, `Index`. Desde a versão
 2.0, `restricao.ddl_if(dialect="redshift")` limita a emissão a um dialeto. A biblioteca não compila
 `CreateTable`: `serialize_db.schema.ddl` não escreve chave nenhuma nos DDL do sandbox, e
-`serialize_db.publication.published_ddl` escreve `PRIMARY KEY` na tabela publicada do Redshift a
+`serialize_db.publication._published_ddl` escreve `PRIMARY KEY` na tabela publicada do Redshift a
 partir de `table.primary_key`; o modelo declara a chave sem `ddl_if`:
 
 ```python
@@ -5563,7 +5563,7 @@ política de restrições dispensa a cláusula: no sandbox as chaves
 estrangeiras ficam de fora e a auditoria verifica a integridade referencial sob pedido
 (`foreign_keys=True`), com a tabela referenciada ingerida na versão fixada, antes da publicação: é a
 verificação adiada feita pelo próprio pipeline. No Redshift só a tabela publicada declara chave, a
-`PRIMARY KEY` informativa de `published_ddl`, sem `deferrable`; o sandbox não declara nenhuma.
+`PRIMARY KEY` informativa de `_published_ddl`, sem `deferrable`; o sandbox não declara nenhuma.
 
 O nome do esquema vai em `Table.schema` ou em `MetaData(schema=...)`; `BLANK_SCHEMA` exclui uma tabela
 do padrão. A opção de execução `schema_translate_map` troca nomes de esquema por conexão, útil quando
@@ -5662,7 +5662,7 @@ A reflexão devolve o que o dialeto sabe extrair. No duckdb_engine 0.17.0, `get_
 devolve vazio e índices não são refletidos, embora a função `duckdb_constraints()` do DuckDB liste a
 chave; colunas, tipos e comentários voltam corretos. A comparação entre o modelo e o armazenamento
 na biblioteca é `serialize_db.delta.reconcile` (o esquema Delta) e
-`serialize_db.publication.reconcile_published` (as tabelas publicadas, por `svv_all_columns`); ela
+`serialize_db.publication._reconcile_published` (as tabelas publicadas, por `svv_all_columns`); ela
 não reflete o DuckDB. Uma comparação pela reflexão precisaria de uma consulta ao catálogo para as
 chaves no DuckDB, como no esboço abaixo.
 

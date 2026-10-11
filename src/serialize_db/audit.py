@@ -88,8 +88,8 @@ def _by_name(
     return f"{element.name}({compiler.process(element.clauses, **kw)})"
 
 
-class partition_text(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """[protected] O texto ``AAAA-MM-DD`` de uma data: ``strftime`` no DuckDB e ``to_char`` no
+class _partition_text(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
+    """[private] O texto ``AAAA-MM-DD`` de uma data: ``strftime`` no DuckDB e ``to_char`` no
     Redshift; para os contadores de defeito da verificação de linhas."""
 
     name = "partition_text"
@@ -97,29 +97,29 @@ class partition_text(FunctionElement):  # noqa: N801 - o nome da classe é o da 
     inherit_cache = True
 
 
-compiles(partition_text)(_by_name)
+compiles(_partition_text)(_by_name)
 
 
-@compiles(partition_text, "duckdb")
+@compiles(_partition_text, "duckdb")
 def _duckdb_partition_text(
-    element: partition_text,
+    element: _partition_text,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"strftime({compiler.process(element.clauses, **kw)}, '%Y-%m-%d')"
 
 
-@compiles(partition_text, "redshift")
+@compiles(_partition_text, "redshift")
 def _redshift_partition_text(
-    element: partition_text,
+    element: _partition_text,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"to_char({compiler.process(element.clauses, **kw)}, 'YYYY-MM-DD')"
 
 
-class json_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """[protected] Se o texto é um documento JSON: ``json_valid`` no DuckDB; no Redshift, ``true``,
+class _json_valid(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
+    """[private] Se o texto é um documento JSON: ``json_valid`` no DuckDB; no Redshift, ``true``,
     porque a coluna JSON é ``SUPER``, cujo valor sempre se serializa como documento JSON, e o
     ``is_valid_json`` recusa ``SUPER`` (42883, leitura de 2026-09-23). Para os contadores de defeito
     da verificação de linhas."""
@@ -129,20 +129,20 @@ class json_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da fun�
     inherit_cache = True
 
 
-compiles(json_valid)(_by_name)
+compiles(_json_valid)(_by_name)
 
 
-@compiles(json_valid, "redshift")
+@compiles(_json_valid, "redshift")
 def _redshift_json_valid(
-    element: json_valid,
+    element: _json_valid,
     compiler: object,
     **kw: object,
 ) -> str:
     return "true"
 
 
-class text_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """[protected] O comprimento do texto em bytes, a medida do ``VARCHAR(n)`` do Redshift:
+class _text_bytes(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
+    """[private] O comprimento do texto em bytes, a medida do ``VARCHAR(n)`` do Redshift:
     ``strlen`` no DuckDB e ``octet_length`` no Redshift, porque o ``length`` dos dois conta
     caracteres. Para os contadores de defeito da verificação de linhas."""
 
@@ -151,29 +151,29 @@ class text_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da fun�
     inherit_cache = True
 
 
-compiles(text_bytes)(_by_name)
+compiles(_text_bytes)(_by_name)
 
 
-@compiles(text_bytes, "duckdb")
+@compiles(_text_bytes, "duckdb")
 def _duckdb_text_bytes(
-    element: text_bytes,
+    element: _text_bytes,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"strlen({compiler.process(element.clauses, **kw)})"
 
 
-@compiles(text_bytes, "redshift")
+@compiles(_text_bytes, "redshift")
 def _redshift_text_bytes(
-    element: text_bytes,
+    element: _text_bytes,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"octet_length({compiler.process(element.clauses, **kw)})"
 
 
-class json_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """[protected] O tamanho do documento JSON em bytes: ``strlen`` do texto no DuckDB, onde a
+class _json_bytes(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
+    """[private] O tamanho do documento JSON em bytes: ``strlen`` do texto no DuckDB, onde a
     coluna é ``JSON`` ou ``VARCHAR``, e ``json_size`` no Redshift, onde ela é ``SUPER``. Para os
     contadores de defeito da verificação de linhas."""
 
@@ -182,29 +182,29 @@ class json_bytes(FunctionElement):  # noqa: N801 - o nome da classe é o da fun�
     inherit_cache = True
 
 
-compiles(json_bytes)(_by_name)
+compiles(_json_bytes)(_by_name)
 
 
-@compiles(json_bytes, "duckdb")
+@compiles(_json_bytes, "duckdb")
 def _duckdb_json_bytes(
-    element: json_bytes,
+    element: _json_bytes,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"strlen(CAST({compiler.process(element.clauses, **kw)} AS VARCHAR))"
 
 
-@compiles(json_bytes, "redshift")
+@compiles(_json_bytes, "redshift")
 def _redshift_json_bytes(
-    element: json_bytes,
+    element: _json_bytes,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"json_size({compiler.process(element.clauses, **kw)})"
 
 
-class partition_value_valid(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """[protected] Se o valor de partição segue ``schema.PARTITION_VALUE`` por inteiro:
+class _partition_value_valid(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
+    """[private] Se o valor de partição segue ``schema.PARTITION_VALUE`` por inteiro:
     ``regexp_full_match`` no DuckDB e o operador POSIX ``~`` com as âncoras no Redshift. Para os
     contadores de defeito da verificação de linhas."""
 
@@ -213,29 +213,29 @@ class partition_value_valid(FunctionElement):  # noqa: N801 - o nome da classe �
     inherit_cache = True
 
 
-compiles(partition_value_valid)(_by_name)
+compiles(_partition_value_valid)(_by_name)
 
 
-@compiles(partition_value_valid, "duckdb")
+@compiles(_partition_value_valid, "duckdb")
 def _duckdb_partition_value_valid(
-    element: partition_value_valid,
+    element: _partition_value_valid,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"regexp_full_match({compiler.process(element.clauses, **kw)}, '{PARTITION_VALUE}')"
 
 
-@compiles(partition_value_valid, "redshift")
+@compiles(_partition_value_valid, "redshift")
 def _redshift_partition_value_valid(
-    element: partition_value_valid,
+    element: _partition_value_valid,
     compiler: object,
     **kw: object,
 ) -> str:
     return f"({compiler.process(element.clauses, **kw)} ~ '^{PARTITION_VALUE}$')"
 
 
-class is_finite(FunctionElement):  # noqa: N801 - o nome da classe é o da função SQL
-    """[protected] Se o ``Double`` é finito: ``isfinite`` no DuckDB; no Redshift, estritamente entre
+class _is_finite(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
+    """[private] Se o ``Double`` é finito: ``isfinite`` no DuckDB; no Redshift, estritamente entre
     os infinitos. Para as somas de controle da verificação de linhas.
 
     O Redshift comparou o ``NaN`` igual a si mesmo numa constante, como o PostgreSQL, e lá a
@@ -250,12 +250,12 @@ class is_finite(FunctionElement):  # noqa: N801 - o nome da classe é o da funç
     inherit_cache = True
 
 
-compiles(is_finite)(_by_name)
+compiles(_is_finite)(_by_name)
 
 
-@compiles(is_finite, "redshift")
+@compiles(_is_finite, "redshift")
 def _redshift_is_finite(
-    element: is_finite,
+    element: _is_finite,
     compiler: object,
     **kw: object,
 ) -> str:
@@ -420,24 +420,24 @@ def _defect_counters(
             counters[f"nulo_{column.name}"] = column.is_(None)
         # Text é subclasse de String e vem antes: o limite dela é o teto do VARCHAR do Redshift.
         if isinstance(column.type, sa.JSON):
-            invalid = sa.not_(json_valid(column))
+            invalid = sa.not_(_json_valid(column))
             counters[f"json_{column.name}"] = sa.and_(column.isnot(None), invalid)
-            counters[f"texto_{column.name}"] = json_bytes(column) > TEXT_LIMIT
+            counters[f"texto_{column.name}"] = _json_bytes(column) > TEXT_LIMIT
         elif isinstance(column.type, sa.Text):
-            counters[f"texto_{column.name}"] = text_bytes(column) > TEXT_LIMIT
+            counters[f"texto_{column.name}"] = _text_bytes(column) > TEXT_LIMIT
         elif isinstance(column.type, sa.String) and column.type.length:
-            counters[f"texto_{column.name}"] = text_bytes(column) > column.type.length
+            counters[f"texto_{column.name}"] = _text_bytes(column) > column.type.length
         elif isinstance(column.type, sa.Uuid):
             # O CAST leva a texto a coluna UUID nativa que o pipeline cria no DuckDB por SQL
             # (gen_random_uuid()), que o strlen não aceita e a exportação converte em VARCHAR(36).
             as_text = sa.cast(column, sa.String())
-            counters[f"texto_{column.name}"] = text_bytes(as_text) > UUID_LENGTH
+            counters[f"texto_{column.name}"] = _text_bytes(as_text) > UUID_LENGTH
     # Os contadores da partição: o valor fora da regra e o que difere da data de partition_source.
     if options.partition_by is not None:
         partition = table.c[options.partition_by]
-        counters[f"valor_{options.partition_by}"] = sa.not_(partition_value_valid(partition))
+        counters[f"valor_{options.partition_by}"] = sa.not_(_partition_value_valid(partition))
         if options.partition_source is not None:
-            derived = partition_text(table.c[options.partition_source])
+            derived = _partition_text(table.c[options.partition_source])
             counters[f"particao_{options.partition_by}"] = partition != derived
     return counters
 
@@ -450,7 +450,7 @@ def _totals(
 
     A soma de uma coluna ``Double`` corre só nos valores finitos: o ``CAST`` de um ``NaN`` ou de um
     infinito para ``DECIMAL`` falha, e o ``FILTER`` do agregado não o evita. Os não finitos são os
-    não nulos menos os finitos, sem negar ``is_finite``: na varredura de uma tabela, o Redshift não
+    não nulos menos os finitos, sem negar ``_is_finite``: na varredura de uma tabela, o Redshift não
     deu verdadeiro à negação para o ``NaN``.
     """
     sums = []
@@ -459,9 +459,9 @@ def _totals(
         as_decimal = sa.cast(column, sa.Numeric(38, 6))
         # Double deriva de Numeric e por isso vem antes do ramo das Numeric.
         if isinstance(column.type, sa.Double):
-            finite = sa.case((is_finite(column), as_decimal))
+            finite = sa.case((_is_finite(column), as_decimal))
             sums.append(sa.func.sum(finite).label(f"total_{column.name}"))
-            not_finite = sa.func.count(column) - _count_where(is_finite(column))
+            not_finite = sa.func.count(column) - _count_where(_is_finite(column))
             nonfinite.append(not_finite.label(f"naofinito_{column.name}"))
         elif isinstance(column.type, sa.Numeric):
             sums.append(sa.func.sum(as_decimal).label(f"total_{column.name}"))

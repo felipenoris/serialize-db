@@ -2415,9 +2415,9 @@ The cards of PR #157, asked one at a time, each with its case before the options
   which the card asked again. `test_export_swap_reads_the_memory_once_before_the_commit`
   fails on the previous code.
 - The `_` prefix of the names only their own module calls (06:13 UTC, "Prefixar", the
-  recommended option): the 24 names the item of `OPEN_QUESTIONS.md` lists take the `_` prefix of
-  the level rule and open with `[private]`, in a new PR after PR #157 merges; an import from
-  outside the package breaks. They are 11 of the 16 names that left `__all__` on 2026-10-10,
+  recommended option): the 24 names of the section below take the `_` prefix of the level rule
+  and open with `[private]`, in a new PR after PR #157 merges; an import from outside the
+  package breaks. They are 11 of the 16 names that left `__all__` on 2026-10-10,
   where the evaluation's prefix question had named 2, and 13 that were never in `__all__`: six in
   `engine.redshift`, the six SQL functions of `audit`, which the evaluation's case 2 had already
   called private, and `required_parameters` in `sql`. The card's reason: none of the 24 is in the
@@ -2439,5 +2439,46 @@ The cards of PR #157, asked one at a time, each with its case before the options
 
 `CLAUDE.md` ("Docstrings", "Checks"; the working rules of 2026-09-24, of the shallow clone and of
 the lessons of #126, #128 and #149), `lessons.md`, `src/serialize_db/delta.py`,
-`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, `OPEN_QUESTIONS.md` (the
-rename of the 24 names and of `physical_memory`).
+`src/serialize_db/engine/redshift.py`, `tests/test_engine_redshift.py`, and the rename of the 24
+names and of `physical_memory` (the section below).
+
+## The `_` prefix of the names only their own module calls, applied (2026-10-11)
+
+The cards "Prefixar" of 06:13 and 16:39 UTC (the section above) were applied after PR #157
+merged: the 24 names a `grep -w` over `src/` found on 2026-10-11 with a `[protected]` docstring
+and no caller in `src/` outside their own module, and `physical_memory`, take the `_` prefix and
+their docstrings open with `[private]`, the fields of `_PublishedColumn` included. No alias keeps
+an old name, so an import of one from outside the package breaks, which the card of case 1 of
+2026-10-10 had ruled out for the names leaving `__all__` ("nenhuma importação muda").
+
+- `parquet_import`: `_partition_query`.
+- `engine.redshift`: `_sandbox_prefix`, `_schema_from_row_description`, `_login_of`,
+  `_driver_connect` (the seam the tests replace with the stand-in), `_unload_text`,
+  `_table_from_cursor`, `_compiled_for_cursor` and `_literal_text`.
+- `audit`: the six SQL function classes `_partition_text`, `_json_valid`, `_text_bytes`,
+  `_json_bytes`, `_partition_value_valid` and `_is_finite`, whose `name` keeps the SQL function's
+  name, so the generated SQL does not change.
+- `delta`: `_schema_diff`.
+- `publication`: `_PublishedColumn`, `_control_ddl`, `_control_read`, `_published_ddl`,
+  `_publication_statements`, `_unpublication_statements` and `_reconcile_published`.
+- `sql`: `_required_parameters`.
+- `resources`: `_physical_memory`.
+
+The callers outside each module read the private names, as the card's reason gave the rule of
+2026-10-11: the tests (`tests/test_engine_redshift.py`, `tests/test_publication.py`,
+`tests/test_parquet_import.py`, `tests/test_audit.py`, `tests/test_probes.py`,
+`tests/test_execution.py`, `tests/test_reader.py`, `tests/test_resources.py` and
+`tests/conftest.py`), the study (`tests/proof_of_concept/test_redshift.py` and the docstring of
+`tests/proof_of_concept/test_stdlib.py`), the probes `probes/operacao/probe_parallel_gain.py` and
+`probes/operacao/probe_unload_parallel.py`, and `scripts/migrate_parquet_to_delta.py`. Some of
+them read a private name of a module other than the one they test: `delta._schema_diff` in
+`tests/test_engine_redshift.py`, and `redshift._driver_connect`, replaced by the publication,
+reader and execution suites and by `tests/conftest.py`, as `tests/test_execution.py` already read
+`cli._audit_engine` and `probes/credentials.py` `redshift._workgroup_login`. `docs/tecnologias.md`,
+`probes/README.md` and `CLAUDE.md` ("Model-level errors" and the index of `src/serialize_db/` and
+of `tests/emulator.py`) name the new names; the dated records (the older entries of this file,
+the theme files and `lessons.md`) keep the old ones, as with `prod` and `dev`. The constants, the
+alias and the loggers only their own module uses stay unprefixed (`OPEN_QUESTIONS.md`).
+
+`src/serialize_db/`, `tests/`, `probes/operacao/`, `scripts/migrate_parquet_to_delta.py`,
+`docs/tecnologias.md`, `probes/README.md`, `CLAUDE.md`, `OPEN_QUESTIONS.md`.

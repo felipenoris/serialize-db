@@ -111,7 +111,7 @@ log = logging.getLogger("serialize_db.engine.redshift")
 
 # O compilador dos statements Core: com o estilo named o dialeto não dobra o % dos literais, e o
 # marcador :nome é o que o redshift_connector lê com cursor.paramstyle = "named". O NaN e os
-# infinitos que literal_text embute saem como texto convertido para float8.
+# infinitos que _literal_text embute saem como texto convertido para float8.
 _NAMED = sql.with_float_literals(RedshiftDialect_redshift_connector(paramstyle="named"))
 
 # O teto de um identificador do Redshift, em bytes, e o espaço que o prefixo deixa ao nome da
@@ -277,10 +277,10 @@ def _workgroup_login(
     }
 
 
-def login_of(
+def _login_of(
     config: RedshiftConfig,
 ) -> dict[str, object]:
-    """[protected] Os argumentos de conexão: o par informado, ou a credencial temporária do
+    """[private] Os argumentos de conexão: o par informado, ou a credencial temporária do
     workgroup; para ``connect``."""
     if config.host and config.user and config.password:
         return {
@@ -297,10 +297,10 @@ def login_of(
     )
 
 
-def driver_connect(
+def _driver_connect(
     login: Mapping[str, object],
 ) -> object:
-    """[protected] ``redshift_connector.connect`` com os argumentos, para ``connect``; a porta que
+    """[private] ``redshift_connector.connect`` com os argumentos, para ``connect``; a porta que
     os testes trocam pelo substituto local."""
     return redshift_connector.connect(**login)
 
@@ -331,10 +331,10 @@ def connect(
             print(*row, sep=" | ")
         connection.close()
     """
-    login = dict(login_of(config))
+    login = dict(_login_of(config))
     login["database"] = config.database
     login["max_prepared_statements"] = 0
-    connection = driver_connect(login)
+    connection = _driver_connect(login)
     connection.autocommit = True
     cursor = connection.cursor()
     if config.share_database:
@@ -393,10 +393,10 @@ def mask(
     return _CREDENTIAL.sub(r"\1 '***'", text)
 
 
-def sandbox_prefix(
+def _sandbox_prefix(
     execution_id: str,
 ) -> str:
-    """[protected] O prefixo das tabelas do sandbox: ``exec_<id>_``, com o identificador em
+    """[private] O prefixo das tabelas do sandbox: ``exec_<id>_``, com o identificador em
     ``[a-z0-9_]``; só ``RedshiftEngine`` o chama.
 
     O prefixo deixa 63 bytes ao nome da tabela e aos sufixos, dentro dos 127 bytes de um
@@ -406,7 +406,7 @@ def sandbox_prefix(
 
     .. code-block:: python
 
-        sandbox_prefix("exec-2026-09-05")   # "exec_exec_2026_09_05_"
+        _sandbox_prefix("exec-2026-09-05")   # "exec_exec_2026_09_05_"
 
     :param execution_id: o identificador da execução; vira minúsculo, e cada caractere fora de
         ``[a-z0-9_]`` vira ``_``.
@@ -551,13 +551,13 @@ def copy_text(
     return f"COPY {target}{listed}\nFROM {literal(source)}\n{credentials}\n{options}"
 
 
-def unload_text(
+def _unload_text(
     select: str,
     destination: str,
     credentials: str,
     parallel: bool,
 ) -> str:
-    """[protected] O ``UNLOAD`` do ``select`` em Parquet para ``destination/``, com manifesto
+    """[private] O ``UNLOAD`` do ``select`` em Parquet para ``destination/``, com manifesto
     verboso e, sem ``parallel``, em série (``PARALLEL OFF``), na ordem do ``ORDER BY``; para
     ``RedshiftEngine`` e ``RedshiftStream``.
 
@@ -609,10 +609,10 @@ def _numeric_type(
     return pa.decimal128(precision, scale)
 
 
-def schema_from_row_description(
+def _schema_from_row_description(
     row_desc: Sequence[Mapping[str, object]],
 ) -> pa.Schema:
-    """[protected] O esquema Arrow de um resultado pelo ``row_desc`` do cursor; para
+    """[private] O esquema Arrow de um resultado pelo ``row_desc`` do cursor; para
     ``RedshiftEngine.query`` e ``RedshiftEngine.result_schema``.
 
     ``BOOLEAN`` em ``bool``; ``SMALLINT``, ``INTEGER`` e ``BIGINT`` em ``int16``, ``int32`` e
@@ -625,7 +625,7 @@ def schema_from_row_description(
 
     .. code-block:: python
 
-        schema_from_row_description([
+        _schema_from_row_description([
             {"label": b"valor", "type_oid": 1700, "type_modifier": 1179654}])
         # valor: decimal128(18, 2)
 
@@ -648,15 +648,15 @@ def schema_from_row_description(
     return pa.schema(fields)
 
 
-def table_from_cursor(
+def _table_from_cursor(
     cursor: object,
 ) -> pa.Table:
-    """[protected] A ``pa.Table`` do resultado inteiro de um cursor, montada por colunas
-    (``zip(*rows)``), com o esquema de ``schema_from_row_description``; vazia num comando sem
+    """[private] A ``pa.Table`` do resultado inteiro de um cursor, montada por colunas
+    (``zip(*rows)``), com o esquema de ``_schema_from_row_description``; vazia num comando sem
     resultado. Para ``RedshiftEngine.query``."""
     if cursor.description is None:
         return pa.table({})
-    schema = schema_from_row_description(cursor.ps["row_desc"])
+    schema = _schema_from_row_description(cursor.ps["row_desc"])
     rows = cursor.fetchall()
     # O resultado sem linha recebe uma coluna vazia por campo, que zip(*rows) não daria.
     columns = list(zip(*rows)) if rows else [() for _ in schema]
@@ -715,12 +715,12 @@ def _text_with_values(
     return sa.text(_escaped_colons(bound_text)).bindparams(*parameters)
 
 
-def compiled_for_cursor(
+def _compiled_for_cursor(
     statement_or_sql: sa.sql.ClauseElement | str,
     params: Mapping[str, object] | None,
     prefix: str,
 ) -> tuple[str, dict[str, object]]:
-    """[protected] O texto com os marcadores ``:nome`` e o dicionário do driver, para o cursor: o
+    """[private] O texto com os marcadores ``:nome`` e o dicionário do driver, para o cursor: o
     statement compilado pela cópia prefixada, com ``render_postcompile`` expandindo o ``IN`` de
     lista, ou o texto com o sentinela trocado pelo prefixo por ``sql.bind``; para
     ``RedshiftEngine.query``."""
@@ -733,12 +733,12 @@ def compiled_for_cursor(
     return str(compiled), dict(compiled.construct_params())
 
 
-def literal_text(
+def _literal_text(
     statement_or_sql: sa.sql.ClauseElement | str,
     params: Mapping[str, object] | None,
     prefix: str,
 ) -> str:
-    """[protected] O texto com os valores do cliente como literais, o que entra no ``UNLOAD``, que
+    """[private] O texto com os valores do cliente como literais, o que entra no ``UNLOAD``, que
     não recebe parâmetro; para ``RedshiftEngine.stream``. O dialeto dobra a aspa simples e a
     contrabarra, mantém o ``%`` e escreve o ``NaN`` e os infinitos como texto convertido para
     ``float8``, e as regiões citadas de um texto pronto passam intactas, ``:nome`` inclusive."""
@@ -855,7 +855,7 @@ class RedshiftStream:
         with engine.session():
             self.schema = engine.result_schema(text)
             engine.execute(
-                unload_text(
+                _unload_text(
                     text,
                     engine.storage.uri_of(self._prefix),
                     credentials_clause(engine.config),
@@ -1356,7 +1356,7 @@ class RedshiftEngine:
         self.execution_id = check_partition_value(execution_id)
         """[public] O identificador da execução, na regra da partição
         (``serialize_db.schema.PARTITION_VALUE``)."""
-        self.prefix = prefix if prefix is not None else sandbox_prefix(execution_id)
+        self.prefix = prefix if prefix is not None else _sandbox_prefix(execution_id)
         """[public] O prefixo das tabelas no esquema: ``exec_<id>_`` no sandbox, ``<ambiente>_`` no
         leitor Redshift."""
         self.storage = storage
@@ -1940,9 +1940,9 @@ class RedshiftEngine:
             statement ou do texto.
         :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato.
         """
-        text, arguments = compiled_for_cursor(statement_or_sql, params, self.prefix)
+        text, arguments = _compiled_for_cursor(statement_or_sql, params, self.prefix)
         cursor = self.execute(text, arguments or None)
-        return table_from_cursor(cursor)
+        return _table_from_cursor(cursor)
 
     def result_schema(
         self,
@@ -1963,7 +1963,7 @@ class RedshiftEngine:
         :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato.
         """
         cursor = self.execute(f"SELECT * FROM ({text}) AS t LIMIT 0")
-        return schema_from_row_description(cursor.ps["row_desc"])
+        return _schema_from_row_description(cursor.ps["row_desc"])
 
     def unloaded_paths(
         self,
@@ -2035,7 +2035,9 @@ class RedshiftEngine:
                 "stream precisa de um armazenamento para os arquivos do UNLOAD, "
                 "e o motor abriu sem ele: o leitor Redshift o recebe em unload_to"
             )
-        return RedshiftStream(self, literal_text(statement_or_sql, params, self.prefix), batch_size)
+        return RedshiftStream(
+            self, _literal_text(statement_or_sql, params, self.prefix), batch_size
+        )
 
     def create_table(
         self,
@@ -2268,7 +2270,7 @@ class RedshiftEngine:
         # O lock fica do UNLOAD à leitura do manifesto: o pg_last_unload_count() é o deste UNLOAD.
         with self.session():
             self.execute(
-                unload_text(
+                _unload_text(
                     self._partition_select(table, value),
                     self.storage.uri_of(prefix),
                     credentials_clause(self.config),

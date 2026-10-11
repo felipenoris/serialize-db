@@ -309,12 +309,12 @@ def _read_folder(
     return f"read_parquet({files}, hive_partitioning = false)"
 
 
-def partition_query(
+def _partition_query(
     folder: str,
     table: sa.Table,
     value: str | None,
 ) -> str:
-    """[protected] O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato; só
+    """[private] O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato; só
     ``import_table`` a usa, por ``_import_partition``.
 
     A pasta inteira por ``read_parquet`` sem ``hive_partitioning`` e cada coluna em ``CAST`` para
@@ -325,8 +325,8 @@ def partition_query(
 
     .. code-block:: python
 
-        partition_query("/dados/db_projetado/cad_operacoes/data_str=2026-02-28",
-                        Operacao.__table__, "2026-02-28")
+        _partition_query("/dados/db_projetado/cad_operacoes/data_str=2026-02-28",
+                         Operacao.__table__, "2026-02-28")
         # SELECT CAST("id_operacao" AS BIGINT) AS "id_operacao", ..., '2026-02-28' AS "data_str"
         # FROM read_parquet('/dados/.../data_str=2026-02-28/*.parquet', hive_partitioning = false)
 
@@ -617,7 +617,7 @@ def _import_partition(
     started = time.perf_counter()
     label = delta.partition_label(value)
     _check_first_file(source_storage, folder, table, label)
-    query = partition_query(folder, table, value)
+    query = _partition_query(folder, table, value)
     with engine.session() as connection:
         check = _check_partition(connection, query, table, value)
         if check.problems:

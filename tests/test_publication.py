@@ -61,7 +61,7 @@ from serialize_db.engine.duckdb import DuckDBConfig, DuckDBEngine
 from serialize_db.engine.redshift import RedshiftConfig, mask
 from serialize_db.errors import ExecutionConflict, PublicationError
 from serialize_db.execution import Database, Execution
-from serialize_db.publication import PublishedColumn
+from serialize_db.publication import _PublishedColumn
 from serialize_db.storage import Storage
 
 SCHEMA = "esquema"
@@ -184,7 +184,7 @@ def use_fake(
     connection: FakeConnection,
 ) -> None:
     """A conexão de mentira no lugar do driver, para toda conexão que a publicação abrir."""
-    monkeypatch.setattr(redshift, "driver_connect", lambda login: connection)
+    monkeypatch.setattr(redshift, "_driver_connect", lambda login: connection)
 
 
 def local_db(
@@ -283,7 +283,7 @@ def test_publish_requires_the_control_table(
 ) -> None:
     """Sem a tabela de controle, ``publish_redshift``, ``unpublish_redshift`` e
     ``publication_status`` levantam ``PublicationError`` com o comando de inicialização e não
-    rodam outro comando; ``control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta e a tabela
+    rodam outro comando; ``_control_ddl`` sem ``IF NOT EXISTS``; a tabela fora do Delta e a tabela
     fora de ``versions`` também são ``PublicationError``, cada uma com a sua mensagem."""
     db = local_db(local_location)
     published_entries(db, MONTHS)
@@ -304,11 +304,11 @@ def test_publish_requires_the_control_table(
     assert connection.closed
 
     # O DDL da tabela de controle, sem IF NOT EXISTS.
-    assert publication.control_ddl(SCHEMA) == (
+    assert publication._control_ddl(SCHEMA) == (
         f"CREATE TABLE {CONTROL} (table_name VARCHAR(127), delta_version BIGINT, "
         "execution_id VARCHAR(127), published_at TIMESTAMP)"
     )
-    assert "IF NOT EXISTS" not in publication.control_ddl(SCHEMA)
+    assert "IF NOT EXISTS" not in publication._control_ddl(SCHEMA)
 
     # A tabela do modelo sem Delta é recusada; create_publications_table roda o DDL.
     connection = FakeConnection()
@@ -318,14 +318,14 @@ def test_publish_requires_the_control_table(
     with pytest.raises(PublicationError, match="fora das versões pedidas"):
         publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1", versions={"outra": 1})
     publication.create_publications_table(CONFIG)
-    assert connection.texts("CREATE") == [publication.control_ddl(SCHEMA)]
+    assert connection.texts("CREATE") == [publication._control_ddl(SCHEMA)]
 
 
 def test_publication_statements_text() -> None:
     """Os comandos da primeira publicação e de uma seguinte, um por item, com a linha de controle
     por último, sem ``BEGIN``, ``COMMIT``, ``TRUNCATE`` nem ``COMPUPDATE``, nomes em duas partes e
     credenciais mascaradas; um ``COPY`` por manifesto da partição, com a lista das colunas dos
-    arquivos dele; ``control_read``, ``published_ddl`` e ``unpublication_statements``."""
+    arquivos dele; ``_control_read``, ``_published_ddl`` e ``_unpublication_statements``."""
     file_columns = tuple(column.name for column in redshift.columns_without_partition(ENTRIES))
     folder = "s3://b/prd/publicacao/exec-1/cad_lancamentos/2026-08-31"
     manifests = {
@@ -335,12 +335,12 @@ def test_publication_statements_text() -> None:
         ]
     }
     credentials = "ACCESS_KEY_ID 'AKIA' SECRET_ACCESS_KEY 'segredo' SESSION_TOKEN 'token'"
-    first = publication.publication_statements(
+    first = publication._publication_statements(
         SCHEMA, "prd", ENTRIES, [MONTHS[1]], manifests, 58, None, "exec-1", credentials
     )
     published = f'"{SCHEMA}"."prd_cad_lancamentos"'
     staging = '"prd_cad_lancamentos_staging"'
-    assert first[0] == publication.published_ddl(SCHEMA, "prd", ENTRIES)
+    assert first[0] == publication._published_ddl(SCHEMA, "prd", ENTRIES)
     assert first[0].startswith(f'CREATE TABLE {published} (\n    "id_lancamento" BIGINT NOT NULL,')
     assert '    PRIMARY KEY ("id_lancamento")\n) SORTKEY ("data_base", "id_lancamento")' in first[0]
     assert first[1].startswith(f"CREATE TEMP TABLE {staging} (")
@@ -373,7 +373,7 @@ def test_publication_statements_text() -> None:
 
     # A publicação seguinte: sem o CREATE TABLE, a partição removida só com o DELETE, e o UPDATE
     # condicionado à versão lida.
-    following = publication.publication_statements(
+    following = publication._publication_statements(
         SCHEMA, "prd", ENTRIES, [MONTHS[0], MONTHS[1]], manifests, 58, 57, "exec-2", credentials
     )
     assert following[0].startswith("CREATE TEMP TABLE")
@@ -388,7 +388,7 @@ def test_publication_statements_text() -> None:
 
     # A tabela sem partição: o DELETE inteiro e o INSERT sem literal.
     whole_table = {None: [delta.CopyManifest("s3://b/m/1.manifest", ("id_conta", "numero"))]}
-    whole = publication.publication_statements(
+    whole = publication._publication_statements(
         SCHEMA, "dsv", ACCOUNTS, [None], whole_table, 3, None, "exec-3", "IAM_ROLE default"
     )
     assert whole[2] == f'DELETE FROM "{SCHEMA}"."dsv_cad_contas"'
@@ -396,10 +396,10 @@ def test_publication_statements_text() -> None:
     assert whole[5].endswith('SELECT "id_conta", "numero" FROM "dsv_cad_contas_staging"')
 
     # A leitura da linha de controle e a despublicação.
-    assert publication.control_read(SCHEMA, "prd", ENTRIES) == (
+    assert publication._control_read(SCHEMA, "prd", ENTRIES) == (
         f"SELECT delta_version FROM {CONTROL} WHERE table_name = 'prd_cad_lancamentos'"
     )
-    assert publication.unpublication_statements(SCHEMA, "prd", ENTRIES, 58) == [
+    assert publication._unpublication_statements(SCHEMA, "prd", ENTRIES, 58) == [
         f"DROP TABLE {published}",
         f"DELETE FROM {CONTROL} WHERE table_name = 'prd_cad_lancamentos' AND delta_version = 58",
     ]
@@ -424,7 +424,7 @@ def test_publish_checks_the_version_read(
     assert publication.publish_redshift(db, CONFIG, [ENTRIES], "exec-1") == {ENTRIES.name: 2}
     assert connection.texts()[-3:] == [
         "BEGIN",
-        publication.control_read(SCHEMA, "prd", ENTRIES),
+        publication._control_read(SCHEMA, "prd", ENTRIES),
         "ROLLBACK",
     ]
 
@@ -607,33 +607,33 @@ def test_reconcile_published_add_column_and_destructive_changes() -> None:
     fim; a coluna removida, a ``NOT NULL`` nova, o tipo, a largura de ``VARCHAR(n)`` e a escala
     que mudaram são destrutivos, nas duas grafias de ``svv_all_columns``."""
     columns = [
-        PublishedColumn("id_lancamento", "bigint", None, None, None),
-        PublishedColumn("id_conta", "bigint", None, None, None),
-        PublishedColumn("data_base", "date", None, None, None),
-        PublishedColumn("carimbo", "timestamp without time zone", None, None, None),
-        PublishedColumn("valor", "double precision", None, None, None),
-        PublishedColumn("preco", "numeric", None, 18, 2),
-        PublishedColumn("area", "character varying", 10, None, None),
-        PublishedColumn("meta", "super", None, None, None),
-        PublishedColumn("to", "character varying", 2, None, None),
-        PublishedColumn("codigo", "character varying", 20, None, None),
-        PublishedColumn("data_base_str", "character varying", 10, None, None),
+        _PublishedColumn("id_lancamento", "bigint", None, None, None),
+        _PublishedColumn("id_conta", "bigint", None, None, None),
+        _PublishedColumn("data_base", "date", None, None, None),
+        _PublishedColumn("carimbo", "timestamp without time zone", None, None, None),
+        _PublishedColumn("valor", "double precision", None, None, None),
+        _PublishedColumn("preco", "numeric", None, 18, 2),
+        _PublishedColumn("area", "character varying", 10, None, None),
+        _PublishedColumn("meta", "super", None, None, None),
+        _PublishedColumn("to", "character varying", 2, None, None),
+        _PublishedColumn("codigo", "character varying", 20, None, None),
+        _PublishedColumn("data_base_str", "character varying", 10, None, None),
     ]
-    assert publication.reconcile_published(SCHEMA, "prd", ENTRIES, columns) == ([], [])
+    assert publication._reconcile_published(SCHEMA, "prd", ENTRIES, columns) == ([], [])
     spelled = [
         dataclasses.replace(columns[3], data_type="timestamp"),
         dataclasses.replace(columns[6], data_type="varchar"),
         dataclasses.replace(columns[5], data_type="decimal"),
     ]
     respelled = spelled + columns[:3] + [columns[4]] + columns[7:]
-    assert publication.reconcile_published(SCHEMA, "prd", ENTRIES, respelled) == ([], [])
+    assert publication._reconcile_published(SCHEMA, "prd", ENTRIES, respelled) == ([], [])
 
     # As colunas NOT NULL novas são destrutivas; a anulável nova sai por ADD COLUMN.
-    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES, columns[:-2])
+    statements, destructive = publication._reconcile_published(SCHEMA, "prd", ENTRIES, columns[:-2])
     assert destructive == ["codigo: coluna NOT NULL nova", "data_base_str: coluna NOT NULL nova"]
     assert statements == []
     without_area = [column for column in columns if column.name != "area"]
-    statements, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES, without_area)
+    statements, destructive = publication._reconcile_published(SCHEMA, "prd", ENTRIES, without_area)
     assert statements == [
         f'ALTER TABLE "{SCHEMA}"."prd_cad_lancamentos" ADD COLUMN "area" VARCHAR(10)'
     ]
@@ -644,8 +644,8 @@ def test_reconcile_published_add_column_and_destructive_changes() -> None:
     changed[6] = dataclasses.replace(columns[6], length=8)
     changed[5] = dataclasses.replace(columns[5], scale=4)
     changed[4] = dataclasses.replace(columns[4], data_type="real")
-    changed.append(PublishedColumn("extra", "integer", None, None, None))
-    _, destructive = publication.reconcile_published(SCHEMA, "prd", ENTRIES, changed)
+    changed.append(_PublishedColumn("extra", "integer", None, None, None))
+    _, destructive = publication._reconcile_published(SCHEMA, "prd", ENTRIES, changed)
     assert [line.split(":")[0] for line in destructive] == ["valor", "preco", "area", "extra"]
     assert destructive[-1] == "extra: removida do modelo"
 
@@ -1050,7 +1050,7 @@ def test_concurrent_publication_raises_execution_conflict(
 
     read_done = threading.Event()
     resume = threading.Event()
-    plain_connect = redshift.driver_connect
+    plain_connect = redshift._driver_connect
 
     def connect_b(
         login: dict,
@@ -1069,11 +1069,11 @@ def test_concurrent_publication_raises_execution_conflict(
         except Exception as error:  # o desfecho de B, erro ou resultado, é a leitura do teste
             outcome["error"] = error
 
-    monkeypatch.setattr(redshift, "driver_connect", connect_b)
+    monkeypatch.setattr(redshift, "_driver_connect", connect_b)
     thread = threading.Thread(target=publish_b)
     thread.start()
     assert read_done.wait(timeout=120)
-    monkeypatch.setattr(redshift, "driver_connect", plain_connect)
+    monkeypatch.setattr(redshift, "_driver_connect", plain_connect)
     assert publication.publish_redshift(db, target.config, [PROJECTED], "exec-a") == {
         PROJECTED.name: changed
     }
@@ -1189,8 +1189,8 @@ def test_reconcile_published_on_the_target(
     record("redshift.publication.svv_all_columns", [list(column) for column in columns])
     listed = []
     for name, data_type, length, precision, scale in columns:
-        listed.append(PublishedColumn(str(name), str(data_type), length, precision, scale))
-    assert publication.reconcile_published(
+        listed.append(_PublishedColumn(str(name), str(data_type), length, precision, scale))
+    assert publication._reconcile_published(
         target.config.schema, target.environment, PROJECTED, listed
     ) == ([], [])
 
