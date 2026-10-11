@@ -1,15 +1,15 @@
 """``serialize_db.sql``: parâmetro, prefixo, texto por motor, ``bind``, tabelas referenciadas e
 arquivos.
 
-Os testes correm sobre o statement de teste deste módulo, ``DRAFT_STATEMENT`` (o parâmetro, um
-``%`` e um ``:`` em literais, duas tabelas do contrato), sobre constantes com contrabarra nas
-mesmas tabelas, sobre
-os quatro statements do pipeline fictício de ``tests/client_model/statements.py``, com os arquivos
-versionados em ``tests/client_model/sql/``, sobre uma tabela cujos identificadores carregam ``:`` e
-``'`` e sobre uma com a ``key`` de uma coluna diferente do nome. Nada é gravado, exceto os testes
-marcados ``local``, que gravam os arquivos de texto SQL sob ``SERIALIZE_DB_TEST_LOCAL_ROOT``; o
-texto executa num DuckDB em memória sobre o DDL do contrato, e o statement com ``bindparam`` num
-``sqlalchemy.Connection`` do ``duckdb-engine`` criado fora da biblioteca.
+Os testes correm sobre o statement de teste deste módulo, ``TOTAL_BY_ACCOUNT`` (o parâmetro, um
+``%`` e um ``:`` em literais, duas tabelas do contrato), sobre constantes com contrabarra nas mesmas
+tabelas, sobre os quatro statements do pipeline fictício de ``tests/client_model/statements.py``,
+com os arquivos versionados em ``tests/client_model/sql/``, sobre uma tabela cujos identificadores
+carregam ``:`` e ``'`` e sobre uma com a ``key`` de uma coluna diferente do nome. Nada é gravado,
+exceto os testes marcados ``local``, que gravam os arquivos de texto SQL sob
+``SERIALIZE_DB_TEST_LOCAL_ROOT``; o texto executa num DuckDB em memória sobre o DDL do contrato, e o
+statement com ``bindparam`` num ``sqlalchemy.Connection`` do ``duckdb-engine`` criado fora da
+biblioteca.
 """
 
 from __future__ import annotations

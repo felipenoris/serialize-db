@@ -294,8 +294,9 @@ def test_materialize_swaps_the_view_for_a_table(
         assert count(reader, ENTRIES) == 20
 
         # A chamada seguinte troca as duas tabelas de novo, inteiras, num pool de dois workers.
+        # Os pools: a abertura das duas views, as duas trocas de uma tabela e a das duas.
         reader.materialize(ACCOUNTS, ENTRIES)
-        assert pool_sizes[-1] == 2
+        assert pool_sizes == [2, 1, 1, 2]
         assert reader.materialized == {ACCOUNTS.name: None, ENTRIES.name: None}
         assert count(reader, ENTRIES) == 30
         assert count(reader, ACCOUNTS) == 3

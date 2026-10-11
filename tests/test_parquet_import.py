@@ -306,7 +306,7 @@ def test_interrupted_import_resumes(
             raise RuntimeError("interrompida")
         return original(uri, table, files, value, *arguments, **options)
 
-    # O dublê sai no fim do bloco: monkeypatch.undo() desfaria também o que as fixtures trocaram.
+    # O dublê sai no fim do bloco, antes da chamada que retoma a carga.
     with monkeypatch.context() as patch:
         patch.setattr(delta, "register_files", failing_on_the_third)
         with pytest.raises(RuntimeError, match="interrompida"):
@@ -1221,7 +1221,6 @@ def test_cli_import_imports_the_base_and_reports(
 def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
     base: source.SourceBase,
     folder: Path,
-    monkeypatch: pytest.MonkeyPatch,
     cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -1256,7 +1255,6 @@ def test_cli_import_refuses_a_requested_partition_absent_from_the_source(
 def test_cli_import_ignores_the_listed_partitions(
     base: source.SourceBase,
     folder: Path,
-    monkeypatch: pytest.MonkeyPatch,
     cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:

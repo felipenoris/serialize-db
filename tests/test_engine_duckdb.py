@@ -449,7 +449,7 @@ def test_new_session_runs_beside_the_main_one(
         assert counted == 10
         other.query("CREATE TABLE da_outra AS SELECT 1 AS x")
     assert count_of(engine, "da_outra") == 1
-    with pytest.raises(duckdb.ConnectionException):
+    with pytest.raises(duckdb.ConnectionException, match="already closed"):
         other.query("SELECT 1")
     assert setup.database_file().exists()
 

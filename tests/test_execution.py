@@ -1054,7 +1054,6 @@ def test_cli_run_parses_and_exits_by_result(
 
 def test_cli_run_without_partition(
     db: Database,
-    monkeypatch: pytest.MonkeyPatch,
     cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -1073,7 +1072,6 @@ def test_cli_run_without_partition(
 
 def test_cli_run_exits_with_2_on_a_used_snapshot_name(
     db: Database,
-    monkeypatch: pytest.MonkeyPatch,
     cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -1181,7 +1179,6 @@ def test_cli_exits_with_2_on_the_redshift_config_without_connection(
 
 def test_cli_audit_prints_the_sql_and_audits_the_current_version(
     db: Database,
-    monkeypatch: pytest.MonkeyPatch,
     cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -1208,7 +1205,6 @@ def test_cli_audit_prints_the_sql_and_audits_the_current_version(
 
 def test_cli_audit_of_a_table_without_partition(
     db: Database,
-    monkeypatch: pytest.MonkeyPatch,
     cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
@@ -1285,7 +1281,6 @@ def defects_audit(
 
 def test_cli_audit_prints_the_refused_ingest_as_a_failed_audit(
     folder: Path,
-    monkeypatch: pytest.MonkeyPatch,
     cli_environment: None,
     capsys: pytest.CaptureFixture,
 ) -> None:
