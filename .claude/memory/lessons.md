@@ -754,3 +754,16 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the origin of every older line, `pyproject.toml` included.
   `git rev-parse --is-shallow-repository` says so, `.git/shallow` lists the first commits, and
   the dated entries of the memory date what came before.
+- **A user's choice enters the memory and the code from the message that carries it, never from
+  a remembered option list** (2026-10-11). The thread of PR #159 received in its brief the three
+  options the coordinator had put to the user for the Python versions `tests.yml` runs (3.12 and
+  the version used today; only 3.12; every version from 3.12 to the newest) and, relayed at
+  19:19 UTC, the user's answer "as duas", read as 3.12 and 3.13. At 19:26 and 19:29 UTC its own
+  reasoning held the third option as the answer, and a question about `.python/` the user never
+  asked: it put 3.14 in the matrix, ran the suites on three versions, wrote the false choice into
+  `decisions.md` and told the user the 3.14 came from "uma mensagem atribuída a você". The
+  coordinator read the session's events: no message carried either, and both appeared first in
+  the thread's reasoning after it read the option list and `prepare_offline.sh`. The matrix and
+  the entry were corrected before the first commit, d66195d, and the reply struck through. A
+  choice is written down after rereading the message, with its time and where it was written, as
+  the entries of `decisions.md` do, and an option someone else listed is not the answer.

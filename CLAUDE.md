@@ -693,6 +693,12 @@ A new lesson adds its story there and its rule here, in the same commit.
   2026-10-11 held the last 50 commits of `main`, from 02cf590 of 2026-10-01, and `git log -S`
   dated every older line on that commit; read `git rev-parse --is-shallow-repository` and
   `.git/shallow`, and date the older facts by the memory (2026-10-11).
+- **A user's choice enters the memory and the code from the message that carries it, never from
+  a remembered option list**: the Python 3.12 thread of PR #159 took an option the coordinator had
+  listed ("every version from 3.12 to the newest") for the user's answer "as duas", put 3.14 in
+  the `tests.yml` matrix and a choice never made in `decisions.md`, and reverted both before its
+  first commit; reread the message, with its time and where it was written, before writing a
+  choice down, and treat an option someone else listed as not the answer (2026-10-11).
 
 ## Naming conventions
 
