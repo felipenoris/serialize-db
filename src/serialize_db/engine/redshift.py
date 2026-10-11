@@ -281,7 +281,7 @@ def login_of(
     config: RedshiftConfig,
 ) -> dict[str, object]:
     """[protected] Os argumentos de conexão: o par informado, ou a credencial temporária do
-    workgroup."""
+    workgroup; para ``connect``."""
     if config.host and config.user and config.password:
         return {
             "host": config.host,
@@ -300,8 +300,8 @@ def login_of(
 def driver_connect(
     login: Mapping[str, object],
 ) -> object:
-    """[protected] ``redshift_connector.connect`` com os argumentos; a porta que os testes trocam
-    pelo substituto local."""
+    """[protected] ``redshift_connector.connect`` com os argumentos, para ``connect``; a porta que
+    os testes trocam pelo substituto local."""
     return redshift_connector.connect(**login)
 
 
@@ -348,7 +348,8 @@ def credentials_clause(
 ) -> str:
     """[protected] Como o ``COPY`` e o ``UNLOAD`` alcançam o S3: ``IAM_ROLE`` com o ARN ou
     ``default`` quando a configuração o informa, senão ``ACCESS_KEY_ID``, ``SECRET_ACCESS_KEY`` e
-    ``SESSION_TOKEN`` das credenciais congeladas da sessão ``boto3``, o caminho do ambiente alvo.
+    ``SESSION_TOKEN`` das credenciais congeladas da sessão ``boto3``, o caminho do ambiente alvo;
+    para o motor e a publicação.
 
     O texto devolvido carrega segredo: ele entra só no comando, e o comando passa por ``mask``
     antes de qualquer log ou exceção.
@@ -442,7 +443,8 @@ def relation_missing(
     """[protected] Se o erro do servidor é a relação inexistente: a mensagem ``does not exist``, que
     o Redshift responde com o SQLSTATE ``XX000``
     (``Relation <nome> does not exist in the database.``, leitura de 2026-09-24), ou o ``42P01`` do
-    PostgreSQL; os casos: o nome livre no sandbox e a tabela de controle ausente."""
+    PostgreSQL; os casos: o nome livre no sandbox, a tabela de controle ausente e a tabela publicada
+    que ainda não existe; para o motor e a publicação."""
     fields = _server_fields(error)
     return fields.get("C") == "42P01" or "does not exist" in str(fields.get("M", ""))
 
@@ -451,7 +453,8 @@ def relation_exists(
     error: BaseException,
 ) -> bool:
     """[protected] Se o erro do servidor é a relação que já existe, o SQLSTATE ``42P07`` ou a
-    mensagem que o diz; o caso: a tabela publicada que outra primeira publicação criou."""
+    mensagem que o diz; o caso: a tabela publicada que outra primeira publicação criou; para a
+    publicação."""
     fields = _server_fields(error)
     return fields.get("C") == "42P07" or "already exists" in str(fields.get("M", ""))
 
@@ -460,7 +463,7 @@ def serialization_failure(
     error: BaseException,
 ) -> bool:
     """[protected] Se o erro do servidor é a violação de isolamento serializável, o ``1023`` que a
-    segunda de duas transações sobre a mesma tabela recebe."""
+    segunda de duas transações sobre a mesma tabela recebe; para a publicação."""
     message = str(_server_fields(error).get("M", ""))
     return "1023" in message or "Serializable isolation violation" in message
 
@@ -485,8 +488,8 @@ def staging_ddl(
     temporary: bool = False,
 ) -> str:
     """[protected] O ``CREATE TABLE`` de uma staging com as ``columns`` do contrato, anuláveis, o
-    JSON em ``VARCHAR(65535)`` e sem cláusula física. ``name`` vai como está, qualificado ou entre
-    aspas por quem chama."""
+    JSON em ``VARCHAR(65535)`` e sem cláusula física; para o motor e a publicação. ``name`` vai como
+    está, qualificado ou entre aspas por quem chama."""
     lines = []
     for column in columns:
         lines.append("    " + _staging_column_ddl(column))
@@ -497,7 +500,8 @@ def staging_ddl(
 def columns_without_partition(
     table: sa.Table,
 ) -> list[sa.Column]:
-    """[protected] As colunas do contrato sem a de partição, as que um arquivo da tabela tem."""
+    """[protected] As colunas do contrato sem a de partição, as que um arquivo da tabela tem; para o
+    motor e a publicação."""
     partition_by = table_options(table).partition_by
     return [column for column in table.columns if column.name != partition_by]
 
@@ -510,7 +514,7 @@ def insert_from_staging(
 ) -> str:
     """[protected] O ``INSERT INTO <target> (<colunas>) SELECT ... FROM <staging>`` na ordem do
     contrato, com a coluna de partição preenchida por ``value`` quando ele é informado e
-    ``JSON_PARSE`` nas colunas JSON, que na staging são texto."""
+    ``JSON_PARSE`` nas colunas JSON, que na staging são texto; para o motor e a publicação."""
     partition_by = table_options(table).partition_by
     names = []
     selected = []
@@ -532,11 +536,11 @@ def copy_text(
     manifest: bool,
     columns: Sequence[str] | None = None,
 ) -> str:
-    """[protected] O ``COPY ... FORMAT AS PARQUET`` de um manifesto ou de um arquivo, com
-    ``FILLRECORD`` (o arquivo anterior a uma coluna nova entra com ela nula) e sem ``COMPUPDATE``.
-    Sem ``columns``, as colunas do arquivo entram nas da tabela por posição; com elas, na ordem do
-    arquivo, cada uma entra na de mesmo nome, e a coluna da tabela fora da lista fica nula. O texto
-    carrega a cláusula de credenciais."""
+    """[protected] O ``COPY ... FORMAT AS PARQUET`` de um manifesto ou de um arquivo, para o motor e
+    a publicação, com ``FILLRECORD`` (o arquivo anterior a uma coluna nova entra com ela nula) e sem
+    ``COMPUPDATE``. Sem ``columns``, as colunas do arquivo entram nas da tabela por posição; com
+    elas, na ordem do arquivo, cada uma entra na de mesmo nome, e a coluna da tabela fora da lista
+    fica nula. O texto carrega a cláusula de credenciais."""
     options = "FORMAT AS PARQUET FILLRECORD"
     if manifest:
         options = "FORMAT AS PARQUET MANIFEST FILLRECORD"
@@ -554,7 +558,8 @@ def unload_text(
     parallel: bool,
 ) -> str:
     """[protected] O ``UNLOAD`` do ``select`` em Parquet para ``destination/``, com manifesto
-    verboso e, sem ``parallel``, em série (``PARALLEL OFF``), na ordem do ``ORDER BY``.
+    verboso e, sem ``parallel``, em série (``PARALLEL OFF``), na ordem do ``ORDER BY``; para
+    ``RedshiftEngine`` e ``RedshiftStream``.
 
     O ``select`` entra como literal com a contrabarra e a aspa simples dobradas: o literal do
     ``UNLOAD`` trata a contrabarra como escape, e o texto que o dialeto já escapou chega intacto
@@ -648,7 +653,7 @@ def table_from_cursor(
 ) -> pa.Table:
     """[protected] A ``pa.Table`` do resultado inteiro de um cursor, montada por colunas
     (``zip(*rows)``), com o esquema de ``schema_from_row_description``; vazia num comando sem
-    resultado."""
+    resultado. Para ``RedshiftEngine.query``."""
     if cursor.description is None:
         return pa.table({})
     schema = schema_from_row_description(cursor.ps["row_desc"])
@@ -717,7 +722,8 @@ def compiled_for_cursor(
 ) -> tuple[str, dict[str, object]]:
     """[protected] O texto com os marcadores ``:nome`` e o dicionário do driver, para o cursor: o
     statement compilado pela cópia prefixada, com ``render_postcompile`` expandindo o ``IN`` de
-    lista, ou o texto com o sentinela trocado pelo prefixo por ``sql.bind``."""
+    lista, ou o texto com o sentinela trocado pelo prefixo por ``sql.bind``; para
+    ``RedshiftEngine.query``."""
     if isinstance(statement_or_sql, str):
         return sql.bind(
             statement_or_sql.replace(sql.SENTINEL, prefix), dict(params or {}), "redshift"
@@ -733,9 +739,9 @@ def literal_text(
     prefix: str,
 ) -> str:
     """[protected] O texto com os valores do cliente como literais, o que entra no ``UNLOAD``, que
-    não recebe parâmetro. O dialeto dobra a aspa simples e a contrabarra, mantém o ``%`` e escreve o
-    ``NaN`` e os infinitos como texto convertido para ``float8``, e as regiões citadas de um texto
-    pronto passam intactas, ``:nome`` inclusive."""
+    não recebe parâmetro; para ``RedshiftEngine.stream``. O dialeto dobra a aspa simples e a
+    contrabarra, mantém o ``%`` e escreve o ``NaN`` e os infinitos como texto convertido para
+    ``float8``, e as regiões citadas de um texto pronto passam intactas, ``:nome`` inclusive."""
     if isinstance(statement_or_sql, str):
         statement = _text_with_values(statement_or_sql, params, prefix)
     else:
@@ -1145,6 +1151,8 @@ class RedshiftAppender:
             o conjunto de colunas do primeiro.
         :raises serialize_db.errors.ContractError: outro tipo de dado, um valor fora do contrato ou
             um conjunto de colunas diferente do primeiro lote.
+        :raises RuntimeError: o ``write`` depois do ``close``, ou com a thread de gravação já
+            encerrada; quando ela terminou por um erro, sobe esse erro.
         """
         for batch in checked_batches(data):
             try:
@@ -1288,9 +1296,9 @@ class RedshiftEngine:
             ``new_session``; a sessão abre outra conexão, com o seu lock, vê as tabelas que a
             principal confirmou, e o seu ``cleanup`` fecha só essa conexão. ``None`` no motor
             principal.
-        :param prefix: o prefixo das tabelas do esquema que os statements citam; ``None`` é
-            ``sandbox_prefix(execution_id)``, o ``exec_<id>_`` do sandbox, e o leitor Redshift
-            passa ``<ambiente>_``, o das tabelas publicadas.
+        :param prefix: o prefixo das tabelas do esquema que os statements citam; ``None`` é o
+            ``exec_<id>_`` do sandbox, de ``execution_id``, e o leitor Redshift passa
+            ``<ambiente>_``, o das tabelas publicadas.
         :raises serialize_db.errors.ContractError: ``execution_id`` fora da regra da partição ou,
             sem ``prefix``, longo demais para o prefixo; ou a configuração sem conexão: sem
             ``workgroup``, e sem ``host``, ``user`` e ``password``.
@@ -1475,16 +1483,15 @@ class RedshiftEngine:
         """[public] Roda um comando na sessão, sob o lock.
 
         Uma conexão derrubada pelo servidor fora de transação é reaberta uma vez, pelo caminho de
-        ``connect`` (a credencial temporária do workgroup pedida de novo, ou o mesmo par
-        informado), e o comando é repetido. O motor lê a queda no ``InterfaceError`` do driver, que
-        vem da
+        ``connect`` (a credencial temporária do workgroup pedida de novo, ou o mesmo par informado),
+        e o comando é repetido. O motor lê a queda no ``InterfaceError`` do driver, que vem da
         leitura do socket fechado, e no ``OSError`` do socket, que o driver deixa sair: depois do
         ``COPY`` derrubado de um ``ingest``, o envio do ``DROP`` da staging recebeu
         ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09), e com a conversão o ``DROP``
-        reabriu a conexão nas 8 rodadas de 2026-10-10. A reconexão perde a tabela
-        temporária que o pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift``
-        avisa da perda. O driver não diz se o servidor aplicou o comando derrubado: um comando que
-        não pode entrar duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda em
+        reabriu a conexão nas 8 rodadas de 2026-10-10. A reconexão perde a tabela temporária que o
+        pipeline tenha criado na sessão, e o log ``serialize_db.engine.redshift`` avisa da perda. O
+        driver não diz se o servidor aplicou o comando derrubado: um comando que não pode entrar
+        duas vezes, como o ``COPY`` e o ``INSERT`` da carga de uma partição, roda em
         ``transaction()``, sem a repetição.
 
         Exemplo:
@@ -1739,10 +1746,9 @@ class RedshiftEngine:
         rodapé, entram por um ``COPY ... MANIFEST FILLRECORD`` por grupo, com essa lista, numa
         staging sem a coluna de partição, e um ``INSERT`` leva a staging à tabela com o valor da
         partição. O ``COPY`` lê os arquivos da versão na pasta da tabela Delta, listados nos
-        manifestos que o
-        motor grava sob o ``staging_prefix``. Um commit na tabela depois da abertura não muda o que
-        foi carregado. A transação de cada partição deixa a queda da conexão subir sem a repetição
-        de ``execute``, que carregaria a partição duas vezes.
+        manifestos que o motor grava sob o ``staging_prefix``. Um commit na tabela depois da
+        abertura não muda o que foi carregado. A transação de cada partição deixa a queda da conexão
+        subir sem a repetição de ``execute``, que carregaria a partição duas vezes.
 
         Exemplo:
 
@@ -1895,7 +1901,7 @@ class RedshiftEngine:
         text: str,
     ) -> pa.Schema:
         """[public] O esquema do resultado de um texto, pelo ``row_desc`` de
-        ``select * from (<texto>) as t         limit 0``; para o stream.
+        ``select * from (<texto>) as t limit 0``; para o stream.
 
         Exemplo:
 
@@ -1904,7 +1910,8 @@ class RedshiftEngine:
             engine.result_schema("SELECT 1 AS um").names   # ["um"]
 
         :param text: a consulta no SQL do Redshift, sem marcador de parâmetro.
-        :return: o esquema Arrow de ``schema_from_row_description``.
+        :return: o esquema Arrow do resultado, cada coluna no tipo que a descrição de linhas do
+            driver dá.
         :raises serialize_db.errors.SandboxError: uma coluna do resultado num tipo fora do contrato.
         """
         cursor = self.execute(f"SELECT * FROM ({text}) AS t LIMIT 0")
@@ -1966,8 +1973,7 @@ class RedshiftEngine:
         :param batch_size: o máximo de linhas de cada lote, lido de cada arquivo do ``UNLOAD``;
             o último lote de cada arquivo pode ser menor.
         :return: o ``serialize_db.engine.BatchStream`` dos lotes, gerenciador de contexto; o
-            ``close`` apaga os
-            arquivos do ``UNLOAD``.
+            ``close`` apaga os arquivos do ``UNLOAD``.
         :raises serialize_db.errors.ContractError: o motor sem armazenamento (``storage`` ``None``),
             antes de qualquer comando no servidor: o leitor Redshift o recebe em ``unload_to``.
         :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
@@ -2032,8 +2038,7 @@ class RedshiftEngine:
         :param queue_depth: os lotes convertidos que esperam a thread de gravação; com a fila
             cheia, o ``write`` bloqueia.
         :return: o ``serialize_db.engine.Appender`` da tabela, que guarda os lotes num Parquet do
-            ``staging/`` até o
-            ``close`` e os carrega por ``COPY ... MANIFEST``.
+            ``staging/`` até o ``close`` e os carrega por ``COPY ... MANIFEST``.
         :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
             de qualquer comando; a tabela que não existe no sandbox; ou, no ``close``, sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
@@ -2378,15 +2383,14 @@ class RedshiftEngine:
         """[public] Leva a partição do sandbox ao Delta num commit.
 
         A partição sai por ``UNLOAD ... MANIFEST VERBOSE``, sem ``PARTITION BY``, para um prefixo
-        novo por chamada na pasta da tabela Delta, ``<coluna>=<valor>/<execution_id>_<uuid>/``
-        (sem ``<coluna>=<valor>/`` numa tabela sem partição), e os arquivos entram no log da
-        tabela por ``register_files``, como o Redshift os gravou, com as conferências e a
-        releitura. O ``UNLOAD`` corre em série (``PARALLEL OFF``), num arquivo só, até 5.000.000
-        linhas, e em paralelo acima disso, o que pode dar um arquivo por slice; no ambiente alvo, a
-        partição ordenada pela ``sort_key`` saiu num arquivo só nos dois modos, até 33.239.719
-        linhas, nas cinco rodadas de 2026-10-05 a 2026-10-10. Com ``columns_without_min_max``, o
-        ``UNLOAD`` vai a
-        ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a partição volta por
+        novo por chamada na pasta da tabela Delta, ``<coluna>=<valor>/<execution_id>_<uuid>/`` (sem
+        ``<coluna>=<valor>/`` numa tabela sem partição), e os arquivos entram no log da tabela por
+        ``register_files``, como o Redshift os gravou, com as conferências e a releitura. O
+        ``UNLOAD`` corre em série (``PARALLEL OFF``), num arquivo só, até 5.000.000 linhas, e em
+        paralelo acima disso, o que pode dar um arquivo por slice; no ambiente alvo, a partição
+        ordenada pela ``sort_key`` saiu num arquivo só nos dois modos, até 33.239.719 linhas, nas
+        cinco rodadas de 2026-10-05 a 2026-10-10. Com ``columns_without_min_max``, o ``UNLOAD`` vai
+        a ``<tabela>/<coluna>=<valor>/<uuid>/`` sob o ``staging_prefix`` e a partição volta por
         ``publish_partition``, com um aviso no log ``serialize_db.engine.redshift``, porque o rodapé
         do ``UNLOAD`` deixa o ``NaN`` fora do máximo e o leitor podaria a linha (issue #59 do
         serialize-db).
@@ -2411,8 +2415,8 @@ class RedshiftEngine:
         :raises serialize_db.errors.ContractError: o valor fora da regra da partição, ``None`` numa
             tabela particionada, ou um valor numa tabela sem partição.
         :raises serialize_db.errors.RegistrationRefused: uma conferência dos arquivos reprovou, sem
-            commit, e os arquivos do ``UNLOAD`` ficam órfãos na pasta da partição até um ``vacuum``
-            com ``full=True``; ou a releitura desfez o commit.
+            commit, e os arquivos do ``UNLOAD`` ficam órfãos na pasta da partição até
+            ``vacuum_keeping_snapshots(..., full=True)``; ou a releitura desfez o commit.
         :raises serialize_db.errors.ExecutionConflict: outro commit na mesma partição a partir da
             mesma versão.
         :raises ValueError: ``uri`` fora da raiz do armazenamento, antes do ``UNLOAD``, sem arquivo
@@ -2420,14 +2424,16 @@ class RedshiftEngine:
         :raises serialize_db.errors.SandboxError: sem ``iam_role``, a sessão ``boto3`` sem
             credenciais para o ``UNLOAD``; ou a memória que o processo ainda pode usar abaixo de 2
             MiB, ou negativa, lida no registro antes do commit (sem commit, os arquivos do
-            ``UNLOAD`` ficam órfãos na pasta da partição até um ``vacuum`` com ``full=True``) e na
-            troca dos arquivos pelo ``Double`` não finito, na abertura do DuckDB
-            (``environment_limits``).
+            ``UNLOAD`` ficam órfãos na pasta da partição até
+            ``vacuum_keeping_snapshots(..., full=True)``) e na troca dos arquivos pelo ``Double``
+            não finito, na abertura do DuckDB (``serialize_db.resources.environment_limits``).
         :raises FileNotFoundError: a falta do manifesto depois de um ``UNLOAD`` de alguma linha.
         """
-        # O valor conferido antes do UNLOAD: os arquivos de um valor recusado no registro
-        # ficariam na pasta da tabela, fora do log.
+        # O valor e a raiz conferidos antes do primeiro comando: um valor recusado no registro
+        # deixaria os arquivos do UNLOAD na pasta da tabela, fora do log, e a troca, que não confere
+        # a raiz, gravaria numa tabela Delta fora dela.
         value = delta.checked_value(table, value)
+        self.storage.relative(uri)
         count = self._count(table, value)
         if columns_without_min_max:
             return self._swap(
