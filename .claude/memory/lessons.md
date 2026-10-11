@@ -748,7 +748,8 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
 - **A date read from git history is checked for a shallow clone** (2026-10-11). PRs #155 and #156
   wrote in `docs/tecnologias.md` that the project pins `redshift_connector` 2.1.17 "desde
   2026-10-01", while the `redshift` extra pinned it on 2026-09-24 and the runtime dependencies on
-  2026-09-25 (PR #95, `decisions.md`). The cloud session's clone is shallow: its history starts
-  at 02cf590, of 2026-10-01, and `git log -S` names that commit as the origin of every older
-  line, `pyproject.toml` included. `git rev-parse --is-shallow-repository` says so, and the dated
-  entries of the memory date what came before.
+  2026-09-25 (PR #95, `decisions.md`). The cloud session's clone is shallow, the last 50 commits
+  of `main`: its history starts at 02cf590, of 2026-10-01, and `git log -S` names that commit as
+  the origin of every older line, `pyproject.toml` included.
+  `git rev-parse --is-shallow-repository` says so, `.git/shallow` lists the first commits, and
+  the dated entries of the memory date what came before.

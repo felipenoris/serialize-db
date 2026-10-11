@@ -671,9 +671,10 @@ A new lesson adds its story there and its rule here, in the same commit.
 - **A double that leaves before the test ends enters through `monkeypatch.context()`**:
   `monkeypatch.undo()` in a test body also undoes the patches of the fixtures that share the
   test's `monkeypatch` (2026-10-10).
-- **A date read from git history is checked for a shallow clone**: the cloud session's clone
-  starts at 02cf590, of 2026-10-01, and `git log -S` dates every older line on it; read
-  `git rev-parse --is-shallow-repository`, and date the older facts by the memory (2026-10-11).
+- **A date read from git history is checked for a shallow clone**: the cloud session's clone of
+  2026-10-11 held the last 50 commits of `main`, from 02cf590 of 2026-10-01, and `git log -S`
+  dated every older line on that commit; read `git rev-parse --is-shallow-repository` and
+  `.git/shallow`, and date the older facts by the memory (2026-10-11).
 
 ## Naming conventions
 
