@@ -1605,8 +1605,8 @@ destination and `_export_by_rewrite` before creating the folder, the private `_r
 `_duckdb_reading` take the limits as `config` while the public `read_back` keeps reading them
 itself (the Redshift swap's `read_back` read them again after the commit until 2026-10-11, when
 `read_back` took them as `config` too; "The rules and the open items of the final review of
-PRs #155 and #156"), the callers' fields (`export_partition` of both engines, `publish_delta`,
-`initial_load`) say the refusal comes with nothing written, and
+PRs #155 and #156 (2026-10-11)"), the callers' fields (`export_partition` of both engines,
+`publish_delta`, `initial_load`) say the refusal comes with nothing written, and
 `test_the_memory_is_read_before_the_commit` asserts the version, the archive and the exported folder
 untouched, failing on the previous code (`assert 2 == 1`). `src/serialize_db/delta.py`,
 `src/serialize_db/engine/duckdb.py`, `src/serialize_db/engine/redshift.py`,
@@ -2287,9 +2287,9 @@ cases went to him as decision cards, one at a time.
   open with `[protected]`, each docstring naming who calls it. Another module calls five of them
   (`CopyManifest`, `copy_manifest`, `max_key`, `read_back`, `column_ddl`), protected by the level
   rule; only their own module calls the other eleven, which the rule makes private, and the
-  evaluation had counted only `partition_query` and `sandbox_prefix` among them. They take the
-  `_` prefix in a new PR after PR #157 ("Prefixar", in "The rules and the open items of the final
-  review of PRs #155 and #156 (2026-10-11)").
+  evaluation had counted only `partition_query` and `sandbox_prefix` among them. The eleven take
+  the `_` prefix in a new PR after PR #157 ("Prefixar", in "The rules and the open items of the
+  final review of PRs #155 and #156 (2026-10-11)").
 - Case 2 (23:57 UTC, "Públicas", against the recommendation of private classes behind the
   protocols): `DuckDBStream`, `DuckDBAppender`, `RedshiftStream` and `RedshiftAppender` enter the
   `__all__` of their engine modules, with the constructor, `read_next_batch`, `read_all`, `write`
@@ -2417,11 +2417,13 @@ The cards of PR #157, asked one at a time, each with its case before the options
 - The `_` prefix of the names only their own module calls (06:13 UTC, "Prefixar", the
   recommended option): the 24 names the item of `OPEN_QUESTIONS.md` lists take the `_` prefix of
   the level rule and open with `[private]`, in a new PR after PR #157 merges; an import from
-  outside the package breaks, and none of them is in the documented public API. They are 11 of
-  the 16 names that left `__all__` on 2026-10-10, where the evaluation had counted 2, and 13 more:
-  six in `engine.redshift`, the six SQL functions of `audit` and `required_parameters` in `sql`.
-  The card's reason: the names had already left the public API, and the rule of 2026-10-11 lets
-  the tests read private names.
+  outside the package breaks. They are 11 of the 16 names that left `__all__` on 2026-10-10,
+  where the evaluation's prefix question had named 2, and 13 that were never in `__all__`: six in
+  `engine.redshift`, the six SQL functions of `audit`, which the evaluation's case 2 had already
+  called private, and `required_parameters` in `sql`. The card's reason: none of the 24 is in the
+  public API, and the rule of 2026-10-11 lets the tests read private names. `physical_memory` of
+  `resources` meets the same criterion and was left out of the card's count; it enters the rename
+  only on the user's word (`OPEN_QUESTIONS.md`).
 - The rules of the lessons of PRs #126, #128 and #149 (06:22 UTC, "Levar", the recommended
   option): the three rules enter the working rules of `CLAUDE.md` (the DuckDB version bump waits
   for the PyPI extension wheels; a command repeated after a connection drop is read with the

@@ -86,10 +86,10 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   levantaram o `InterfaceError` em todas (`.claude/memory/redshift.md`). Desde a decisão do usuário
   de 2026-10-10 (`decisions.md`) o caso assere a queda e a reconexão e repete cada comando a cada
   1 s por até 10 s enquanto a sessão responde no mesmo pid, com os segundos esperados no relatório
-  (`waited`). Na bateria das 17:02 de 2026-10-10, a primeira com as asserções, os 12 casos das
-  quatro rodadas caíram na primeira repetição, 1 s depois do `pg_terminate_backend`, a ociosa num
-  pid novo; a terminação atrasada não voltou, e só uma rodada em que ela volte diz se os 10 s a
-  cobrem.
+  (`waited`, `esperou` antes de 2026-10-11). Na bateria das 17:02 de 2026-10-10, a primeira com as
+  asserções, os 12 casos das quatro rodadas caíram na primeira repetição, 1 s depois do
+  `pg_terminate_backend`, a ociosa num pid novo; a terminação atrasada não voltou, e só uma rodada
+  em que ela volte diz se os 10 s a cobrem.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -185,10 +185,10 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   sessões a mais 1,954 s, 1,798 s e 2,043 s; o menor tempo de cada forma entra no resumo, e um
   cache servindo as repetições mediria o cache, não o motor (regra de 2026-09-24 em `CLAUDE.md`).
   Desde o PR #155, de 2026-10-10, a sonda imprime, depois das consultas pequenas, quantas delas o
-  `sys_query_history` marca como servidas pelo cache (`result_cache_hit`), sem as leituras da
-  própria vista; a próxima bateria lê o número, e com o cache servindo as repetições a medida
-  passa a desligá-lo na sessão (`SET enable_result_cache_for_session TO off`) ou a variar os
-  valores, por decisão do usuário.
+  `sys_query_history` marca como servidas pelo cache (`result_cache_hit`), e desde o PR #157, de
+  2026-10-11, sem as leituras da própria vista; a próxima bateria lê o número, e com o cache
+  servindo as repetições a medida passa a desligá-lo na sessão
+  (`SET enable_result_cache_for_session TO off`) ou a variar os valores, por decisão do usuário.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
@@ -280,21 +280,31 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   open items of the final review of PRs #155 and #156 (2026-10-11)"): os 24 nomes abaixo ganham o
   prefixo `_` da regra de níveis num PR novo, depois do merge do PR #157, e as docstrings passam de
   `[protected]` a `[private]`; a importação de fora do pacote quebra, ao contrário do que o cartão
-  do caso 1 prometeu ("nenhuma importação muda"). A avaliação contou dois, `partition_query`, de
-  `parquet_import`, e `sandbox_prefix`, de `engine.redshift`, cujo prefixo muda
-  `tests/test_parquet_import.py`, `tests/test_engine_redshift.py` e a docstring de
-  `tests/proof_of_concept/test_stdlib.py`. Um `grep -w` em `src/`, em 2026-10-11, achou os outros,
-  com docstrings `[protected]`: dos dezesseis que saíram do `__all__`, `schema_diff` em `delta`,
-  `PublishedColumn`, `control_ddl`, `control_read`, `published_ddl`, `publication_statements`,
-  `unpublication_statements` e `reconcile_published` em `publication` e
-  `schema_from_row_description` em `engine.redshift`; em `engine.redshift`, também `login_of`,
-  `driver_connect` (a porta que os testes trocam pelo substituto), `unload_text`,
-  `table_from_cursor`, `compiled_for_cursor` e `literal_text`; as seis funções SQL de `audit`
-  (`partition_text`, `json_valid`, `text_bytes`, `json_bytes`, `partition_value_valid` e
-  `is_finite`); e `required_parameters` em `sql`. A renomeação muda os testes que leem esses nomes e
-  `probes/operacao/probe_parallel_gain.py`, que importa `publication_statements`, `control_read` e
-  `published_ddl`. Sem docstring, as constantes `RETENTION` (`delta`) e `ARROW_ONLY` (`engine`) e os
-  loggers (`log`, `command_log`) também são só do próprio módulo e ficaram fora do cartão.
+  do caso 1 prometeu ("nenhuma importação muda"). A pergunta da avaliação citava dois,
+  `partition_query`, de `parquet_import`, e `sandbox_prefix`, de `engine.redshift`, e o caso 2
+  dela já dava como privadas as seis funções SQL de `audit` (`partition_text`, `json_valid`,
+  `text_bytes`, `json_bytes`, `partition_value_valid` e `is_finite`). Um `grep -w` em `src/`, em
+  2026-10-11, achou os outros, com docstrings `[protected]`: dos dezesseis que saíram do
+  `__all__`, `schema_diff` em `delta`, `PublishedColumn`, `control_ddl`, `control_read`,
+  `published_ddl`, `publication_statements`, `unpublication_statements` e `reconcile_published` em
+  `publication` e `schema_from_row_description` em `engine.redshift`; em `engine.redshift`, também
+  `login_of`, `driver_connect` (a porta que os testes trocam pelo substituto), `unload_text`,
+  `table_from_cursor`, `compiled_for_cursor` e `literal_text`; e `required_parameters` em `sql`.
+  A renomeação muda quem chama esses nomes de fora do módulo: os testes
+  (`tests/test_engine_redshift.py`, `tests/test_publication.py`, `tests/test_parquet_import.py`,
+  `tests/test_audit.py`, `tests/test_probes.py`, `tests/test_execution.py`, `tests/test_reader.py`
+  e `tests/conftest.py`), o estudo (`tests/proof_of_concept/test_redshift.py` e a docstring de
+  `tests/proof_of_concept/test_stdlib.py`) e as sondas `probes/operacao/probe_parallel_gain.py`,
+  que importa `publication_statements`, `control_read` e `published_ddl`, e
+  `probes/operacao/probe_unload_parallel.py`, que importa `unload_text`; e os textos que os citam:
+  `docs/tecnologias.md` (`partition_query`, `partition_text`, `published_ddl` e
+  `reconcile_published`), `probes/README.md` (`publication_statements`) e o `CLAUDE.md` (a regra
+  "Model-level errors" de "Docstrings" e o índice de `src/serialize_db/` e de `tests/emulator.py`).
+  `physical_memory`, de `resources`, cumpre o mesmo critério, com docstring `[protected]` e chamada
+  em `src/` só pelo próprio módulo (o script de migração e `tests/test_resources.py` a importam), e
+  ficou fora da contagem do cartão: entra na renomeação se o usuário confirmar. Sem docstring, as
+  constantes `RETENTION` (`delta`) e `ARROW_ONLY` (`engine`), o alias `Task` (`_pool`) e os loggers
+  (`log`, `command_log`) também são só do próprio módulo e ficaram fora do cartão.
 
 ## Achados das sondas de consistência de leitura e escrita
 
