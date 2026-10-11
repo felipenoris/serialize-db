@@ -236,7 +236,7 @@ The standard every public function, method and class follows (user decision of 2
 - **Checks.** Every line stays within 100 characters, and the built site is read as the working
   rules ask: a misread field shows as a bold name holding a colon, which
   `grep -o '<strong>[^<]*:[^<]*</strong>'` over the built HTML finds, or as literal `**` opening
-  a list item, which `grep -rn '<li>\*\*'` finds.
+  a list item, which `grep -rn '<li>\*\*'` finds (user decision of 2026-10-11).
 
 ### Data (pandas / SQL)
 - Prefer vectorized operations over loops and `.apply()`.

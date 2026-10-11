@@ -2384,3 +2384,16 @@ The last cards of the "Não aplicado" items of PR #156.
 
 `tests/`, `CLAUDE.md` ("Docstrings"), `src/serialize_db/` (the `:raises` fields and the issue
 citations).
+
+## The rules and the open items of the final review of PRs #155 and #156 (2026-10-11)
+
+The cards of PR #157, asked one at a time, each with its case before the options.
+
+- The search for a misread pdoc field (05:37 UTC, "Adotar", the recommended option): the built
+  site is read with `grep -o '<strong>[^<]*:[^<]*</strong>'` and with `grep -rn '<li>\*\*'`. In
+  PR #156 the first line of the `:param version:` field of `DuckDBEngine.ingest` held the `:=` of
+  `delta_scan(uri, version := v)`, and pdoc 16 rendered
+  `**version: a versão fixada da tabela, lida por delta_scan(uri, version**: = v)` with the
+  asterisks visible; the first search found nothing, the second found the field.
+
+`CLAUDE.md` ("Docstrings", "Checks", and the working rule of 2026-09-24).
