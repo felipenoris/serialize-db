@@ -4,38 +4,41 @@ Cada subcomando roda uma rotina do pacote: a geração dos arquivos do contrato,
 pipeline, a carga inicial, a publicação no Redshift e a operação do banco Delta. O runbook abaixo
 diz quando rodar as rotinas da operação, e as opções de cada subcomando vêm depois dele.
 
-- ``schema write`` grava os arquivos de esquema dos modelos; ``schema check`` compara os
+Os subcomandos:
+
+- ``schema write`` grava os arquivos de esquema dos modelos. ``schema check`` compara os
   versionados com a geração nova, sem gravar.
-- ``sql write`` grava o texto SQL de cada statement do pipeline em cada motor; ``sql check`` o
+- ``sql write`` grava o texto SQL de cada statement do pipeline em cada motor. ``sql check`` o
   compara com a geração nova.
-- ``run`` abre uma execução, com a partição de ``--partition`` ou sem partição, e entrega a
-  ``modulo:funcao`` do pipeline.
+- ``run`` abre uma execução, com a partição de ``--partition`` ou sem partição, e a entrega à
+  função ``modulo:funcao`` do pipeline.
 - ``audit`` imprime o texto das verificações de uma tabela (``--sql``) ou roda a auditoria sobre a
   versão atual do Delta, no motor de ``--engine``.
 - ``import`` faz a carga inicial da base Parquet de origem (``--source``) nas tabelas Delta do
-  ambiente, ``<raiz>/<ambiente>/<tabela>``, as sem partição antes das particionadas, e confere
-  contagem e somas por partição.
-- ``publish_redshift`` publica o snapshot de ``--snapshot`` ou do canal de ``--channel``
-  (``current`` é a versão atual de cada tabela) nas tabelas ``<ambiente>_<tabela>`` do esquema do
-  Redshift, mostra o estado da publicação (``--status``), cria a tabela de controle (``--init``)
-  ou despublica (``--unpublish``).
+  ambiente, ``<raiz>/<ambiente>/<tabela>``. As tabelas sem partição entram antes das
+  particionadas, e a carga confere contagem e somas por partição.
+- ``publish_redshift`` publica um snapshot nas tabelas ``<ambiente>_<tabela>`` do esquema do
+  Redshift: o snapshot de ``--snapshot`` ou o do canal de ``--channel`` (``current`` é a versão
+  atual de cada tabela). Com ``--status`` mostra o estado da publicação, com ``--init`` cria a
+  tabela de controle e com ``--unpublish`` despublica.
 - ``snapshot`` grava a versão atual de cada tabela do ambiente no arquivo de controle,
   ``<raiz>/<ambiente>/_serialize_db/snapshots.json``.
-- ``channel`` aponta um canal do ambiente para um snapshot, o ``default`` que o leitor Delta lê
-  sem argumento, ou lista os canais.
-- ``vacuum`` lista, ou apaga com ``--apply``, os arquivos fora da retenção e das versões dos
-  snapshots.
+- ``channel`` aponta um canal do ambiente para um snapshot, ou lista os canais. O canal
+  ``default`` é o que o leitor Delta lê sem argumento.
+- ``vacuum`` lista os arquivos fora da retenção e das versões dos snapshots, ou os apaga com
+  ``--apply``.
 - ``compact`` junta os arquivos pequenos das partições de uma tabela.
 - ``archive`` copia as tabelas de um snapshot para ``<raiz>/<ambiente>/arquivo/<nome>/<tabela>``
-  e move a entrada para ``archived``.
+  e move a entrada do snapshot para ``archived``.
 - ``export`` grava em ``--destination`` as pastas Parquet de uma versão de uma tabela, sem o log.
 - ``history`` lista os commits de uma tabela com os metadados da biblioteca.
 
 Os modelos chegam por ``--metadata modulo:atributo``, o caminho importável do ``MetaData`` do
-cliente, e os statements por ``--statements modulo:atributo``, o caminho importável do dicionário
-``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm por padrão
-``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e ``SERIALIZE_DB_ENGINE``
-(``duckdb``); a configuração do Redshift vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``.
+cliente. Os statements chegam por ``--statements modulo:atributo``, o caminho importável do
+dicionário ``{nome: statement}`` do pipeline. ``--root``, ``--environment`` e ``--engine`` têm por
+padrão as variáveis ``SERIALIZE_DB_ROOT``, ``SERIALIZE_DB_ENVIRONMENT`` (``dsv``) e
+``SERIALIZE_DB_ENGINE`` (``duckdb``). A configuração do Redshift vem das variáveis
+``SERIALIZE_DB_REDSHIFT_*``.
 
 Exemplo:
 
@@ -73,22 +76,35 @@ Exemplo:
 O código de saída:
 
 - 0 quando o comando termina.
-- 1 quando ``check`` encontra diferença, com o diff impresso; quando a auditoria reprova, também
-  pelo valor fora do contrato que o ``ingest`` da auditoria recusa, impresso com o erro do banco;
-  quando a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem,
-  ou uma diferença de contagem ou soma; e numa exceção sem tratamento, como ``SandboxError`` ou
-  ``RegistrationRefused``, com o traceback.
-- 2 no erro de uso: o motor fora de ``duckdb`` e ``redshift`` e ``--partitions`` na auditoria de uma
-  tabela sem partição; ``--partitions`` com ``--ignore-partitions`` na carga; a configuração do
-  Redshift sem conexão ou com a porta que não é número; a tabela fora do modelo ou sem Delta; a
-  partição acima do ``String(n)`` da coluna de partição; o ``execution_id`` longo demais para o
-  prefixo do sandbox do Redshift; o ``ContractError`` do pipeline; o conflito da execução, da carga
-  e do ``archive``, na tabela ou no arquivo de controle; a publicação sem a tabela de controle, sem
-  ``--snapshot`` nem ``--channel``, do snapshot ou do canal ausente, do snapshot arquivado ou da
-  tabela fora do snapshot; o modelo fora do contrato e a origem ausente ou fora dos armazenamentos
-  da carga; o snapshot repetido ou ausente; o canal sem ``--name`` e ``--snapshot`` juntos, e o
-  canal ``current``; a compactação depois de um snapshot na versão atual; o arquivo do snapshot de
-  um canal; e o destino da exportação não vazio ou fora da raiz.
+- 1 nestas situações:
+
+  - ``check`` encontra diferença, com o diff impresso;
+  - a auditoria reprova, também pelo valor fora do contrato que o ``ingest`` da auditoria recusa,
+    impresso com o erro do banco;
+  - a carga acha uma partição fora do contrato, uma partição pedida que a origem não tem, ou uma
+    diferença de contagem ou soma;
+  - uma exceção sem tratamento, como ``SandboxError`` ou ``RegistrationRefused``, sobe com o
+    traceback.
+
+- 2 no erro de uso, nestas situações:
+
+  - o motor fora de ``duckdb`` e ``redshift``, e ``--partitions`` na auditoria de uma tabela sem
+    partição;
+  - ``--partitions`` com ``--ignore-partitions`` na carga;
+  - a configuração do Redshift sem conexão ou com a porta que não é número;
+  - a tabela fora do modelo ou sem Delta;
+  - a partição acima do ``String(n)`` da coluna de partição;
+  - o ``execution_id`` longo demais para o prefixo do sandbox do Redshift;
+  - o ``ContractError`` do pipeline;
+  - o conflito da execução, da carga e do ``archive``, na tabela ou no arquivo de controle;
+  - a publicação sem a tabela de controle, sem ``--snapshot`` nem ``--channel``, do snapshot ou do
+    canal ausente, do snapshot arquivado ou da tabela fora do snapshot;
+  - o modelo fora do contrato, e a origem ausente ou fora dos armazenamentos da carga;
+  - o snapshot repetido ou ausente;
+  - o canal sem ``--name`` e ``--snapshot`` juntos, e o canal ``current``;
+  - a compactação depois de um snapshot na versão atual;
+  - o arquivamento do snapshot de um canal;
+  - o destino da exportação não vazio ou fora da raiz.
 
 .. include:: ../../docs/operacao.md
 """
@@ -134,8 +150,10 @@ __all__ = ["main"]
 def _resolve_attribute(
     spec: str,
 ) -> object:
-    """[private] O objeto de ``modulo:atributo``, pelo ``pkgutil.resolve_name`` da biblioteca
-    padrão: importa o módulo e segue os atributos por ponto.
+    """[private] O objeto que ``modulo:atributo`` nomeia, pelo ``pkgutil.resolve_name`` da
+    biblioteca padrão. Ele importa o módulo e segue os atributos por ponto. Um texto sem os dois
+    lados, ou que não resolve, é ``argparse.ArgumentTypeError``, que o ``argparse`` imprime como
+    erro de uso.
 
     Exemplo:
 
@@ -155,7 +173,7 @@ def _resolve_attribute(
 def _resolve_metadata(
     spec: str,
 ) -> sa.MetaData:
-    """[private] O ``MetaData`` de ``modulo:atributo``, para ``--metadata``."""
+    """[private] O ``MetaData`` que ``modulo:atributo`` nomeia, o valor de ``--metadata``."""
     target = _resolve_attribute(spec)
     if not isinstance(target, sa.MetaData):
         raise argparse.ArgumentTypeError(f"{spec} não é um MetaData: {type(target).__name__}")
@@ -165,7 +183,7 @@ def _resolve_metadata(
 def _resolve_statements(
     spec: str,
 ) -> dict[str, sa.sql.ClauseElement]:
-    """[private] O dicionário ``{nome: statement}`` de ``modulo:atributo``, para
+    """[private] O dicionário ``{nome: statement}`` que ``modulo:atributo`` nomeia, o valor de
     ``--statements``."""
     target = _resolve_attribute(spec)
     if not isinstance(target, dict):
@@ -181,8 +199,8 @@ def _resolve_statements(
 def _resolve_function(
     spec: str,
 ) -> Callable[..., object]:
-    """[private] A função de ``modulo:funcao``, o pipeline que ``run`` chama com a execução
-    aberta."""
+    """[private] A função que ``modulo:funcao`` nomeia: o pipeline que ``run`` chama com a
+    execução aberta."""
     target = _resolve_attribute(spec)
     if not callable(target):
         raise argparse.ArgumentTypeError(f"{spec} não é uma função: {type(target).__name__}")
@@ -192,8 +210,8 @@ def _resolve_function(
 def _name_argument(
     text: str,
 ) -> str:
-    """[private] Um valor de partição, um ``execution_id``, um ambiente ou o nome de um snapshot ou
-    de um canal, pela regra da partição."""
+    """[private] Um valor de partição, um ``execution_id``, um ambiente, o nome de um snapshot ou o
+    nome de um canal, conferido pela regra da partição (``schema.check_partition_value``)."""
     try:
         return schema.check_partition_value(text)
     except ContractError as error:
@@ -204,8 +222,8 @@ def _root_argument(
     text: str,
 ) -> str:
     """[private] A raiz de ``--root`` ou de ``SERIALIZE_DB_ROOT``, conferida por
-    ``Storage.for_uri``: outro esquema que não uma pasta local, ``file://`` ou ``s3://``, ou o S3
-    sem região, é erro de uso, antes do subcomando."""
+    ``Storage.for_uri`` antes de o subcomando rodar. Um esquema fora de pasta local, ``file://`` e
+    ``s3://``, ou o S3 sem região, é erro de uso."""
     try:
         Storage.for_uri(text)
     except ValueError as error:
@@ -214,17 +232,17 @@ def _root_argument(
 
 
 def _environment_default() -> str:
-    """[private] O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, com
-    a variável vazia lida como ausente, ou ``dsv``."""
+    """[private] O padrão de ``--environment`` em todo subcomando: ``SERIALIZE_DB_ENVIRONMENT``, ou
+    ``dsv`` quando a variável está ausente ou vazia."""
     return os.environ.get("SERIALIZE_DB_ENVIRONMENT") or "dsv"
 
 
 def _engine_argument(
     text: str,
 ) -> str:
-    """[private] O motor de ``--engine``, ``duckdb`` ou ``redshift``. O ``argparse`` confere o
-    padrão, o de ``SERIALIZE_DB_ENGINE``, só por esta função, porque o ``choices`` não vale para o
-    padrão."""
+    """[private] O motor de ``--engine``, ``duckdb`` ou ``redshift``. Esta função confere também o
+    padrão, o valor de ``SERIALIZE_DB_ENGINE``, porque o ``choices`` do ``argparse`` não vale para
+    o padrão."""
     if text not in ("duckdb", "redshift"):
         raise argparse.ArgumentTypeError(
             f"motor {text!r}: use duckdb ou redshift, em --engine ou SERIALIZE_DB_ENGINE"
@@ -235,9 +253,11 @@ def _engine_argument(
 def _add_database_arguments(
     parser: argparse.ArgumentParser,
 ) -> None:
-    """[private] ``--metadata``, ``--root`` e ``--environment`` obrigatórios, com os padrões
-    ``SERIALIZE_DB_*``: os de ``run``, de ``import`` e das rotinas de operação. ``--root`` passa
-    por ``_root_argument`` em todo subcomando que a recebe."""
+    """[private] Acrescenta a um subcomando as opções ``--metadata``, ``--root`` e
+    ``--environment``, as de ``run``, de ``import`` e das rotinas de operação. ``--metadata`` é
+    obrigatória; ``--root`` e ``--environment`` têm por padrão as variáveis ``SERIALIZE_DB_*``, e
+    ``--root`` é obrigatória sem a dela. ``--root`` passa por ``_root_argument`` em todo subcomando
+    que a recebe."""
     root = os.environ.get("SERIALIZE_DB_ROOT")
     parser.add_argument(
         "--metadata",
@@ -265,7 +285,8 @@ def _add_database_arguments(
 def _add_run_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """[private] ``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão."""
+    """[private] O parser de ``serialize-db run``, com as variáveis ``SERIALIZE_DB_*`` como padrão
+    das opções."""
     run = commands.add_parser("run", help="executa o pipeline, de uma partição ou sem partição")
     _add_database_arguments(run)
     run.add_argument(
@@ -297,9 +318,9 @@ def _add_run_parser(
 def _add_publish_redshift_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """[private] ``serialize-db publish_redshift``: a publicação no Redshift de um snapshot, pelo
-    nome ou pelo canal, o estado, a tabela de controle e a despublicação; a conexão vem de
-    ``SERIALIZE_DB_REDSHIFT_*``."""
+    """[private] O parser de ``serialize-db publish_redshift``: a publicação no Redshift de um
+    snapshot, pelo nome ou pelo canal, o estado da publicação, a tabela de controle e a
+    despublicação. A conexão vem das variáveis ``SERIALIZE_DB_REDSHIFT_*``."""
     publish = commands.add_parser(
         "publish_redshift",
         help="publica as versões Delta de um snapshot ou canal nas tabelas <ambiente>_<tabela> "
@@ -379,8 +400,8 @@ def _add_publish_redshift_parser(
 def _add_import_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """[private] ``import``: a carga inicial da base Parquet de origem nas tabelas Delta do
-    ambiente."""
+    """[private] O parser de ``serialize-db import``: a carga inicial da base Parquet de origem nas
+    tabelas Delta do ambiente."""
     import_command = commands.add_parser(
         "import",
         help="importa a base Parquet de --source nas tabelas Delta <raiz>/<ambiente>/<tabela>",
@@ -420,8 +441,8 @@ def _add_import_parser(
 def _add_operation_parsers(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """[private] Os subcomandos da operação: ``snapshot``, ``channel``, ``vacuum``, ``compact``,
-    ``archive``, ``export`` e ``history``."""
+    """[private] Os parsers dos subcomandos da operação: ``snapshot``, ``channel``, ``vacuum``,
+    ``compact``, ``archive``, ``export`` e ``history``."""
     snapshot = commands.add_parser(
         "snapshot",
         help="grava o snapshot do banco, a versão atual de cada tabela, em "
@@ -538,8 +559,8 @@ def _add_operation_parsers(
 def _add_audit_parser(
     commands: argparse._SubParsersAction,
 ) -> None:
-    """[private] ``serialize-db audit``: o texto das verificações ou a auditoria da versão atual do
-    Delta."""
+    """[private] O parser de ``serialize-db audit``: o texto das verificações ou a auditoria da
+    versão atual do Delta."""
     audit_command = commands.add_parser(
         "audit",
         help="audita uma tabela na versão atual do Delta, ou imprime o texto das verificações "
@@ -602,7 +623,8 @@ def _add_audit_parser(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """[private] O parser da linha de comando, com um subcomando por primitiva."""
+    """[private] O parser da linha de comando inteira, com um subcomando por rotina do pacote;
+    ``schema`` e ``sql`` têm as ações ``write`` e ``check``."""
     parser = argparse.ArgumentParser(prog="serialize-db")
     commands = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(commands)
@@ -668,8 +690,8 @@ def _print_diff(
     directory: str,
     kind: str,
 ) -> int:
-    """[private] Imprime o diff dos arquivos versionados contra a geração nova; 1 quando há
-    diferença."""
+    """[private] Imprime o diff dos arquivos versionados contra a geração nova e devolve o código
+    de saída: 1 quando há diferença, 0 com a mensagem de arquivos atualizados."""
     for line in diff:
         print(line)
     if diff:
@@ -681,7 +703,8 @@ def _print_diff(
 def _schema_write(
     args: argparse.Namespace,
 ) -> int:
-    """[private] Grava os arquivos de esquema e imprime os caminhos."""
+    """[private] ``schema write``: grava os arquivos de esquema na pasta e imprime o caminho de
+    cada um."""
     for path in schema.write_schema_files(args.metadata, args.directory):
         print(path)
     return 0
@@ -690,7 +713,8 @@ def _schema_write(
 def _schema_check(
     args: argparse.Namespace,
 ) -> int:
-    """[private] Compara os arquivos de esquema versionados com a geração nova."""
+    """[private] ``schema check``: compara os arquivos de esquema versionados com a geração nova,
+    por ``_print_diff``."""
     diff = schema.check_schema_files(args.metadata, args.directory)
     return _print_diff(diff, args.directory, "esquema")
 
@@ -698,7 +722,8 @@ def _schema_check(
 def _sql_write(
     args: argparse.Namespace,
 ) -> int:
-    """[private] Grava os arquivos de texto SQL e imprime os caminhos."""
+    """[private] ``sql write``: grava os arquivos de texto SQL na pasta e imprime o caminho de
+    cada um."""
     for path in sql.write_sql_files(args.statements, args.metadata, args.directory):
         print(path)
     return 0
@@ -707,7 +732,8 @@ def _sql_write(
 def _sql_check(
     args: argparse.Namespace,
 ) -> int:
-    """[private] Compara os arquivos de texto SQL versionados com a geração nova."""
+    """[private] ``sql check``: compara os arquivos de texto SQL versionados com a geração nova,
+    por ``_print_diff``."""
     diff = sql.check_sql_files(args.statements, args.metadata, args.directory)
     return _print_diff(diff, args.directory, "texto SQL")
 
@@ -715,12 +741,18 @@ def _sql_check(
 def _run(
     args: argparse.Namespace,
 ) -> int:
-    """[private] Abre a execução, entrega-a ao pipeline e devolve o código pelo resultado: 1 na
-    auditoria reprovada, 2 no conflito na tabela e no arquivo de controle e no ``ContractError`` da
-    abertura, do pipeline ou da saída, como a configuração do Redshift sem conexão ou com a porta
-    que não é número, o ``execution_id`` longo demais para o prefixo do sandbox e o nome de snapshot
-    já usado, que ``run.snapshot`` recusa antes dos commits e a saída recusa quando outro escritor o
-    grava depois da marcação."""
+    """[private] ``serialize-db run``: abre a execução, entrega-a ao pipeline e devolve o código de
+    saída pelo resultado.
+
+    - 1 na auditoria reprovada (``AuditFailed``).
+    - 2 no conflito na tabela ou no arquivo de controle (``ExecutionConflict`` e
+      ``ConflictError``).
+    - 2 no ``ContractError`` da abertura, do pipeline ou da saída. São exemplos a configuração do
+      Redshift sem conexão ou com a porta que não é número, o ``execution_id`` longo demais para o
+      prefixo do sandbox e o nome de snapshot já usado. ``run.snapshot`` recusa o nome já usado
+      antes dos commits, e a saída da execução o recusa quando outro escritor o gravou depois da
+      marcação.
+    """
     try:
         redshift = None
         if args.engine == "redshift":
@@ -754,8 +786,8 @@ def _run(
 def _print_report(
     report: AuditReport,
 ) -> None:
-    """[private] O relatório da auditoria: o veredito de cada verificação, as amostras e as
-    leituras."""
+    """[private] Imprime o relatório da auditoria: o veredito de cada verificação com as linhas de
+    amostra, as verificações que não rodaram e as leituras por partição."""
     for result in report.results:
         verdict = "aprovada" if result.passed else f"reprovada, {result.defects} defeito(s)"
         if result.reason:
@@ -775,8 +807,8 @@ def _audit_engine(
     delta_db: Database,
     execution_id: str,
 ) -> Engine:
-    """[private] O sandbox próprio da auditoria: o motor de ``--engine``; outro nome é
-    ``ContractError``, nunca o DuckDB."""
+    """[private] O sandbox próprio da auditoria avulsa: um motor novo do tipo de ``--engine``.
+    Outro nome de motor é ``ContractError``; a função nunca cai no DuckDB por padrão."""
     if args.engine == "duckdb":
         return DuckDBEngine(DuckDBConfig(), execution_id, delta_db.storage)
     if args.engine == "redshift":
@@ -796,11 +828,11 @@ def _contract_refusals(
     engine_name: str,
 ) -> tuple[type[Exception], ...]:
     """[private] As classes dos erros com que o ``ingest`` pelo DDL do modelo recusa um valor fora
-    do contrato, no motor de ``--engine``: no DuckDB, ``duckdb.ConstraintException``, o nulo numa
-    coluna ``NOT NULL``, e ``duckdb.ConversionException``, o JSON malformado; no Redshift,
-    ``redshift_connector.Error``. No Redshift, a classe não separa a recusa de outro erro do
-    servidor, que também sai como reprovação: o substituto dá às duas recusas o ``ProgrammingError``
-    com ``XX000``."""
+    do contrato, no motor de ``--engine``. No DuckDB são ``duckdb.ConstraintException``, o nulo
+    numa coluna ``NOT NULL``, e ``duckdb.ConversionException``, o JSON malformado. No Redshift é
+    ``redshift_connector.Error``, que não separa a recusa de outro erro do servidor: o outro erro
+    também sai como reprovação. O substituto do Redshift dos testes, ``tests/emulator.py``, dá às
+    duas recusas o ``ProgrammingError`` com ``XX000``."""
     if engine_name == "redshift":
         # O driver entra só com o motor: importar o pacote não o carrega.
         import redshift_connector
@@ -813,10 +845,10 @@ def _audit_current(
     args: argparse.Namespace,
     table: sa.Table,
 ) -> int:
-    """[private] A auditoria da versão atual do Delta, num sandbox próprio do motor de ``--engine``:
-    1 na auditoria reprovada, também quando o ``ingest`` recusa um valor fora do contrato, impresso
-    com o erro do banco e sem as outras contagens; 2 na tabela sem Delta e na configuração do
-    Redshift sem conexão ou com a porta que não é número."""
+    """[private] A auditoria da versão atual do Delta, num sandbox próprio do motor de ``--engine``,
+    e o código de saída. 1 na auditoria reprovada, também quando o ``ingest`` recusa um valor fora
+    do contrato; essa recusa sai impressa com o erro do banco e sem as outras contagens. 2 na
+    tabela sem Delta e na configuração do Redshift sem conexão ou com a porta que não é número."""
     db = Database(args.root, args.environment, args.metadata)
     uri = db.uri(table)
     if not delta.table_exists(uri, db.storage):
@@ -858,9 +890,10 @@ def _audit_current(
 def _audit(
     args: argparse.Namespace,
 ) -> int:
-    """[private] ``--sql`` imprime o texto das verificações; sem ele, a auditoria da versão atual do
-    Delta. 2 na tabela fora do modelo e em ``--partitions`` numa tabela sem partição, antes de
-    abrir um motor."""
+    """[private] ``serialize-db audit``: com ``--sql``, imprime o texto das verificações; sem ele,
+    roda a auditoria da versão atual do Delta. 2 na tabela fora do modelo, em ``--partitions`` numa
+    tabela sem partição e, sem ``--sql``, na falta de ``--root`` e de ``SERIALIZE_DB_ROOT``, tudo
+    antes de abrir um motor."""
     table = args.metadata.tables.get(args.table)
     if table is None:
         print(f"serialize-db audit: a tabela {args.table} não está nos modelos", file=sys.stderr)
@@ -889,8 +922,8 @@ def _selected_tables(
     metadata: sa.MetaData,
     names: list[str] | None,
 ) -> list[sa.Table]:
-    """[private] As tabelas de ``--tables`` no modelo, ou todas; um nome fora do modelo é erro de
-    uso."""
+    """[private] As tabelas do modelo que ``--tables`` pede, ou todas as do modelo sem a opção. Um
+    nome fora do modelo é erro de uso (``argparse.ArgumentTypeError``)."""
     if names is None:
         return list(metadata.sorted_tables)
     tables = []
@@ -905,11 +938,12 @@ def _selected_tables(
 def _publish_redshift(
     args: argparse.Namespace,
 ) -> int:
-    """[private] ``--init`` cria a tabela de controle; ``--status`` mostra o estado; ``--unpublish``
-    despublica; sem os três, publica as tabelas no snapshot de ``--snapshot`` ou do canal de
-    ``--channel``, um dos dois obrigatório. 2 no erro de uso, na configuração do Redshift sem
-    conexão ou com a porta que não é número, sem a tabela de controle, no snapshot ou no canal
-    ausente, no snapshot arquivado, na tabela fora do snapshot e no conflito."""
+    """[private] ``serialize-db publish_redshift``. ``--init`` cria a tabela de controle;
+    ``--status`` mostra o estado; ``--unpublish`` despublica. Sem as três opções, publica as
+    tabelas nas versões do snapshot de ``--snapshot`` ou do canal de ``--channel``, um dos dois
+    obrigatório. 2 no erro de uso, na configuração do Redshift sem conexão ou com a porta que não
+    é número, sem a tabela de controle, no snapshot ou no canal ausente, no snapshot arquivado, na
+    tabela fora do snapshot e no conflito."""
     # Os módulos do Redshift entram só no publish_redshift: importar o pacote não carrega o
     # driver.
     from serialize_db import publication
@@ -978,9 +1012,10 @@ def _versions_to_publish(
     args: argparse.Namespace,
     tables: list[sa.Table],
 ) -> dict[str, int]:
-    """[private] As versões que ``publish_redshift`` grava: as do snapshot de ``--snapshot`` ou do
-    canal de ``--channel``, e a versão atual de cada tabela do ambiente com ``--channel current``; a
-    tabela pedida sem versão é ``PublicationError`` com a origem."""
+    """[private] As versões Delta que ``publish_redshift`` grava, por tabela: as do snapshot de
+    ``--snapshot`` ou do canal de ``--channel``, ou a versão atual de cada tabela do ambiente com
+    ``--channel current``. Uma tabela pedida sem versão nessa origem é ``PublicationError``, com a
+    origem na mensagem."""
     if args.channel == delta.CURRENT_CHANNEL:
         versions = _current_versions(delta_db)
         source = f"da versão atual do ambiente {delta_db.environment}"
@@ -1000,8 +1035,8 @@ def _versions_to_publish(
 def _publication_id(
     execution_id: str | None,
 ) -> str:
-    """[private] O ``--execution-id`` da publicação, ou ``publicacao-<AAAA-MM-DD>-<uuid8>`` sem ele,
-    com a data em UTC."""
+    """[private] O identificador da publicação: o de ``--execution-id`` ou, sem ele,
+    ``publicacao-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
     if execution_id:
         return execution_id
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -1011,8 +1046,8 @@ def _publication_id(
 def _print_statuses(
     statuses: list[PublicationStatus],
 ) -> None:
-    """[private] Uma linha por tabela: a versão publicada, ou ``nunca publicada``, a atual e as
-    partições pendentes, com a ``tabela inteira`` da tabela sem partição."""
+    """[private] Imprime uma linha por tabela: a versão publicada, ou ``nunca publicada``, a versão
+    atual e as partições pendentes. A tabela sem partição fica pendente como ``tabela inteira``."""
     for status in statuses:
         if status.published_version is None:
             published = "nunca publicada"
@@ -1028,7 +1063,7 @@ def _print_statuses(
 def _print_published(
     versions: dict[str, int],
 ) -> None:
-    """[private] Uma linha por tabela publicada: a versão do Delta que ela tem agora."""
+    """[private] Imprime uma linha por tabela publicada, com a versão Delta que ela tem agora."""
     for name, version in versions.items():
         print(f"{name}: versão {version}")
 
@@ -1036,7 +1071,8 @@ def _print_published(
 def _print_unpublished(
     versions: dict[str, int | None],
 ) -> None:
-    """[private] Uma linha por tabela despublicada: a versão que estava publicada."""
+    """[private] Imprime uma linha por tabela despublicada, com a versão que estava publicada ou
+    ``não estava publicada``."""
     for name, version in versions.items():
         if version is None:
             print(f"{name}: não estava publicada")
@@ -1050,8 +1086,8 @@ def _side_text(
     sums: Mapping[str, object],
     nonfinite: Mapping[str, int],
 ) -> str:
-    """[private] Um lado da diferença da carga: as linhas, as somas e os não finitos, ou ``ausente``
-    quando a partição falta nele."""
+    """[private] O texto de um lado da diferença da carga, a origem ou o Delta: as linhas, as somas
+    e os não finitos, ou ``ausente`` quando a partição falta nesse lado."""
     if rows is None:
         return f"{side} ausente"
     return f"{side} {rows} linhas {dict(sums)} não finitos {dict(nonfinite)}"
@@ -1061,9 +1097,9 @@ def _print_import_report(
     report: ImportReport,
     imported: list[str | None],
 ) -> None:
-    """[private] As linhas de uma tabela da carga: as partições gravadas agora, cada diferença, o
-    veredito, as conversões de tipo da maior parte das partições, uma linha por partição com outras
-    conversões, e o que ficou fora do padrão."""
+    """[private] Imprime as linhas de uma tabela da carga, nesta ordem: as partições gravadas agora,
+    cada diferença entre a origem e o Delta, o veredito, as conversões de tipo da maior parte das
+    partições, uma linha por partição com outras conversões, e o que ficou fora do padrão."""
     written = f"{report.table}: {len(imported)} partição(ões) gravada(s)"
     if imported:
         # A tabela sem partição é gravada de uma vez, com o valor None.
@@ -1099,8 +1135,8 @@ def _partitions_to_import(
     table: sa.Table,
 ) -> list[str] | None:
     """[private] As partições que a carga grava de uma tabela: as de ``--partitions``, ou ``None``
-    pela origem inteira; com ``--ignore-partitions``, as da origem fora das ignoradas, cada ignorada
-    numa linha, e a tabela sem partição entra inteira."""
+    pela origem inteira. Com ``--ignore-partitions``, as partições da origem fora das ignoradas,
+    com cada ignorada impressa numa linha; a tabela sem partição entra inteira."""
     unpartitioned = schema.table_options(table).partition_by is None
     if args.ignore_partitions is None or unpartitioned:
         return args.partitions
@@ -1115,14 +1151,19 @@ def _partitions_to_import(
 def _import(
     args: argparse.Namespace,
 ) -> int:
-    """[private] A carga inicial de cada tabela pedida, na ordem da carga, e o relatório de cada
-    uma: 1 na partição pedida que a origem não tem, recusada antes de qualquer gravação, na partição
-    fora do contrato e na diferença de contagem ou soma, 2 no modelo fora do contrato, na tabela
-    fora do modelo, na origem ausente ou fora dos armazenamentos da biblioteca e no conflito. Com
-    ``--partitions``, a tabela sem partição sai numa linha como fora do pedido, sem carga nem
-    relatório; com ``--ignore-partitions``, as partições listadas ficam fora da carga e do relatório
-    em toda tabela particionada que as tem, cada uma numa linha, e a tabela sem partição entra
-    inteira."""
+    """[private] ``serialize-db import``: a carga inicial de cada tabela pedida, na ordem da carga,
+    e o relatório de cada uma.
+
+    O código de saída: 1 na partição pedida que a origem não tem, recusada antes de qualquer
+    gravação, na partição fora do contrato e na diferença de contagem ou soma; 2 no modelo fora do
+    contrato, na tabela fora do modelo, na origem ausente ou fora dos armazenamentos da biblioteca
+    e no conflito.
+
+    Com ``--partitions``, a tabela sem partição sai numa linha como fora do pedido, sem carga nem
+    relatório. Com ``--ignore-partitions``, as partições listadas ficam fora da carga e do
+    relatório em toda tabela particionada que as tem, cada uma numa linha, e a tabela sem partição
+    entra inteira.
+    """
     problems = schema.check_models(args.metadata)
     if problems:
         print(
@@ -1177,7 +1218,7 @@ def _import(
 def _existing_tables(
     delta_db: Database,
 ) -> dict[str, tuple[sa.Table, str]]:
-    """[private] As tabelas do modelo que existem no ambiente: ``{nome: (tabela, URI)}``."""
+    """[private] As tabelas do modelo que já existem no ambiente, como ``{nome: (tabela, URI)}``."""
     found = {}
     for table in delta_db.tables():
         uri = delta_db.uri(table)
@@ -1191,8 +1232,8 @@ def _existing_table(
     delta_db: Database,
     command: str,
 ) -> tuple[sa.Table, str] | None:
-    """[private] A tabela de ``--table`` no modelo e a URI dela no ambiente, ou ``None`` com a
-    mensagem impressa quando ela não está no modelo ou não tem Delta."""
+    """[private] A tabela de ``--table`` no modelo e a URI dela no ambiente. Quando a tabela não
+    está no modelo ou não tem Delta, imprime a mensagem de erro do subcomando e devolve ``None``."""
     table = args.metadata.tables.get(args.table)
     if table is None:
         print(
@@ -1209,8 +1250,8 @@ def _existing_table(
 def _current_versions(
     delta_db: Database,
 ) -> dict[str, int]:
-    """[private] A versão atual de cada tabela do modelo que existe no ambiente: a entrada de
-    ``snapshot`` e as versões do canal ``current`` de ``publish_redshift``."""
+    """[private] A versão atual de cada tabela do modelo que existe no ambiente. É a entrada que
+    ``snapshot`` grava e as versões do canal ``current`` em ``publish_redshift``."""
     versions = {}
     for name, (_, uri) in _existing_tables(delta_db).items():
         versions[name] = delta.open_table(uri, delta_db.storage).version()
@@ -1220,8 +1261,9 @@ def _current_versions(
 def _snapshot(
     args: argparse.Namespace,
 ) -> int:
-    """[private] A entrada do snapshot com a versão atual de cada tabela do ambiente; 2 no nome
-    repetido e no conflito de escrita."""
+    """[private] ``serialize-db snapshot``: grava a entrada do snapshot com a versão atual de cada
+    tabela do ambiente e imprime a versão de cada uma. 2 no nome repetido e no conflito de
+    escrita."""
     db = Database(args.root, args.environment, args.metadata)
     versions = _current_versions(db)
     try:
@@ -1238,9 +1280,10 @@ def _snapshot(
 def _channel(
     args: argparse.Namespace,
 ) -> int:
-    """[private] Com ``--name`` e ``--snapshot``, aponta o canal e imprime o snapshot anterior e o
-    novo; sem os dois, lista os canais do ambiente. 2 com um só dos dois, no canal ``current``, no
-    snapshot ausente ou arquivado e no conflito de escrita."""
+    """[private] ``serialize-db channel``. Com ``--name`` e ``--snapshot``, aponta o canal para o
+    snapshot e imprime o snapshot anterior e o novo; sem as duas opções, lista os canais do
+    ambiente. 2 com uma só das duas opções, no canal ``current``, no snapshot ausente ou arquivado
+    e no conflito de escrita."""
     if (args.name is None) != (args.snapshot is None):
         print(
             "serialize-db channel: informe --name e --snapshot juntos, ou nenhum dos dois para "
@@ -1271,8 +1314,9 @@ def _channel(
 def _vacuum(
     args: argparse.Namespace,
 ) -> int:
-    """[private] A lista, ou a exclusão com ``--apply``, dos arquivos de cada tabela fora da
-    retenção e das versões dos snapshots."""
+    """[private] ``serialize-db vacuum``: lista, ou apaga com ``--apply``, os arquivos de cada
+    tabela fora da retenção e das versões dos snapshots, e imprime por tabela a contagem e o
+    caminho de cada um."""
     db = Database(args.root, args.environment, args.metadata)
     control, _ = delta.read_snapshots(db.storage, db.environment)
     verb = "apagado(s)" if args.apply else "a apagar"
@@ -1289,8 +1333,9 @@ def _vacuum(
 def _measure(
     started: float,
 ) -> str:
-    """[private] O tempo desde ``started`` e o pico de memória residente do processo, no formato do
-    script de migração: a medida da rotina na tabela, para dimensionar a máquina."""
+    """[private] O texto com o tempo desde ``started`` e o pico de memória residente do processo,
+    no formato do script de migração. É a medida de uma rotina numa tabela, com que o operador
+    dimensiona a máquina."""
     seconds = time.perf_counter() - started
     return f"em {seconds:.1f} s; RSS máximo do processo {peak_rss_mb():.0f} MB"
 
@@ -1298,9 +1343,9 @@ def _measure(
 def _compact(
     args: argparse.Namespace,
 ) -> int:
-    """[private] A compactação das partições pedidas, com o tempo e o pico de RSS impressos; 2 na
-    tabela fora do modelo ou sem Delta, na tabela particionada sem ``--partitions`` e no snapshot na
-    versão atual da tabela."""
+    """[private] ``serialize-db compact``: compacta as partições pedidas e imprime o tempo e o pico
+    de RSS. 2 na tabela fora do modelo ou sem Delta, na tabela particionada sem ``--partitions`` e
+    num snapshot que está na versão atual da tabela."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "compact")
     if found is None:
@@ -1340,12 +1385,14 @@ def _compact(
 def _archive(
     args: argparse.Namespace,
 ) -> int:
-    """[private] A cópia de cada tabela do snapshot para ``arquivo/<nome>/``, com o tempo e o pico
-    de RSS impressos por tabela, e a entrada movida para ``archived``; 2 no snapshot ausente de
-    ``snapshots`` ou apontado por um canal, na tabela do snapshot que já não existe na raiz e no
-    conflito de escrita, no commit da cópia de uma tabela ou no arquivo de controle. A repetição
-    depois de uma interrupção continua a cópia: ``deep_copy`` pula as partições já registradas no
-    arquivo."""
+    """[private] ``serialize-db archive``: copia cada tabela do snapshot para ``arquivo/<nome>/``,
+    imprime o tempo e o pico de RSS por tabela e move a entrada do snapshot para ``archived``.
+
+    2 no snapshot ausente de ``snapshots`` ou apontado por um canal, na tabela do snapshot que já
+    não existe na raiz, e no conflito de escrita, seja no commit da cópia de uma tabela, seja no
+    arquivo de controle. A repetição depois de uma interrupção continua a cópia: ``deep_copy``
+    pula as partições já registradas no arquivo.
+    """
     db = Database(args.root, args.environment, args.metadata)
     storage = db.storage
     control, _ = delta.read_snapshots(storage, db.environment)
@@ -1399,9 +1446,9 @@ def _archive(
 def _export(
     args: argparse.Namespace,
 ) -> int:
-    """[private] A exportação de uma versão da tabela para pastas Parquet sem o log, com o tempo e o
-    pico de RSS impressos; 2 na tabela fora do modelo ou sem Delta e no destino fora da raiz ou não
-    vazio."""
+    """[private] ``serialize-db export``: grava uma versão da tabela em pastas Parquet sem o log e
+    imprime o tempo e o pico de RSS. 2 na tabela fora do modelo ou sem Delta e no destino fora da
+    raiz ou não vazio."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "export")
     if found is None:
@@ -1427,8 +1474,9 @@ def _export(
 def _history(
     args: argparse.Namespace,
 ) -> int:
-    """[private] Uma linha por commit da tabela, do mais recente ao mais antigo: a versão, a
-    operação, o instante em UTC e os metadados da biblioteca que o commit tem."""
+    """[private] ``serialize-db history``: imprime uma linha por commit da tabela, do mais recente
+    ao mais antigo, com a versão, a operação, o instante em UTC e os metadados da biblioteca que o
+    commit tem. 2 na tabela fora do modelo ou sem Delta."""
     db = Database(args.root, args.environment, args.metadata)
     found = _existing_table(args, db, "history")
     if found is None:
@@ -1443,7 +1491,7 @@ def _history_line(
     entry: dict,
 ) -> str:
     """[private] A linha de um commit: a versão, a operação, o instante em UTC e os metadados da
-    biblioteca que ele tem, na ordem de ``delta.history``."""
+    biblioteca que ele tem, na ordem em que ``delta.history`` os devolve."""
     instant = entry["timestamp"].isoformat(timespec="seconds")
     line = f"{entry['version']} {entry['operation']} {instant}"
     for key, value in entry.items():
@@ -1455,10 +1503,11 @@ def _history_line(
 def main(
     argv: list[str] | None = None,
 ) -> int:
-    """[public] Executa a linha de comando.
+    """[public] Executa a linha de comando e devolve o código de saída.
 
-    Cada subcomando guarda a sua função em ``handler`` (``set_defaults`` do ``argparse``). Fora de
-    ``schema`` e ``sql``, o log vai ao stderr a partir do nível ``INFO``.
+    A função monta o parser, lê os argumentos e chama a função do subcomando escolhido. Cada
+    subcomando guarda essa função em ``handler`` (``set_defaults`` do ``argparse``). Fora de
+    ``schema`` e ``sql``, o log do pacote vai ao stderr a partir do nível ``INFO``.
 
     Exemplo:
 
@@ -1468,7 +1517,7 @@ def main(
         # 0 com os arquivos atualizados; 1 com o diff impresso
 
     :param argv: os argumentos, sem o nome do programa; ``None`` lê ``sys.argv``.
-    :return: o código de saída: 0 quando o comando termina, 1 e 2 nos casos que a documentação
+    :return: o código de saída, 0 quando o comando termina, 1 e 2 nos casos que a documentação
         do módulo lista.
     :raises SystemExit: o erro de uso que o ``argparse`` detecta, com o código 2, e ``--help``,
         com o código 0.

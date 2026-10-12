@@ -1,49 +1,54 @@
 """[public] A carga inicial: a base Parquet de origem vira tabelas Delta, uma partição por commit.
 
-A origem é a base atual em Parquet: uma pasta por tabela sob a raiz de origem (``source``),
-``<origem>/<tabela>/``, as tabelas particionadas em pastas Hive ``<coluna>=<valor>/`` com vários
-``chunk_<n>.parquet`` cada, as sem partição com os arquivos na pasta da tabela
-(``tests/source_db_projetado.py`` reproduz a estrutura lida nas duas bases reais). A carga só lê a
-origem, e a raiz Delta é a de ``Database``: cada tabela vai para ``<raiz>/<ambiente>/<tabela>``.
+A origem é a base atual em Parquet, com uma pasta por tabela sob a raiz de origem (``source``):
+``<origem>/<tabela>/``. Numa tabela particionada, cada partição é uma pasta Hive
+``<coluna>=<valor>/`` com vários ``chunk_<n>.parquet``. Numa tabela sem partição, os arquivos
+ficam na pasta da tabela. ``tests/source_db_projetado.py`` reproduz a estrutura lida nas duas
+bases reais. A carga só lê a origem. O destino é a raiz Delta de ``Database``: cada tabela vai
+para ``<raiz>/<ambiente>/<tabela>``.
 
-``import_table`` cria a tabela Delta do contrato, descobre as partições da pasta da tabela na
-origem, pula as que já estão no log da tabela Delta e grava cada uma das outras num motor DuckDB
-próprio da chamada, aberto com os limites lidos do ambiente e fechado no fim. Por partição, em
-ordem:
+``import_table`` cria a tabela Delta do contrato (o modelo SQLAlchemy do cliente), descobre as
+partições na pasta da tabela na origem e pula as que já estão no log da tabela Delta (a pasta
+``_delta_log``, onde cada commit registra os arquivos de uma versão). Cada uma das outras entra
+num commit próprio, gravado por um motor DuckDB (``DuckDBEngine``) da chamada, aberto com os
+limites lidos do ambiente e fechado no fim. Por partição, em ordem:
 
-- a conferência, no rodapé do primeiro arquivo da pasta, o que dá ao DuckDB o esquema da leitura,
-  de que ele tem as colunas do contrato;
-- a leitura da pasta inteira por ``read_parquet`` sem ``hive_partitioning`` (que converteria
-  ``data_str`` a ``DATE``), com cada coluna levada ao tipo do contrato por ``CAST`` (as chaves de
-  ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos) e o valor do
-  caminho na coluna de partição;
-- a conferência, numa consulta, de que a coluna de origem da partição (``data``, ``data_base``) é
-  igual ao valor do caminho em toda linha, que nenhuma coluna ``NOT NULL`` tem nulo e que nenhum
-  texto passa do limite da coluna em bytes, o de ``cast`` e da auditoria, e a contagem dos valores
-  não finitos de cada coluna ``Double``;
-- a gravação da partição na ordem da ``sort_key`` por ``COPY ... RETURN_STATS`` num arquivo novo da
-  pasta dela na tabela Delta, e o registro por ``serialize_db.delta.register_files``, com as
-  conferências do rodapé, a releitura e as colunas não finitas sem mínimo e máximo (issue #59 do
-  serialize-db).
+- A conferência do primeiro arquivo da pasta, o que dá ao DuckDB o esquema da leitura: o rodapé
+  dele (os metadados no fim do arquivo Parquet, com o esquema) tem de ter as colunas do contrato.
+- A leitura da pasta inteira por ``read_parquet`` sem ``hive_partitioning``, que converteria
+  ``data_str`` a ``DATE``. Cada coluna é levada ao tipo do contrato por ``CAST`` (as chaves de
+  ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos), e a coluna de
+  partição recebe o valor do caminho.
+- A conferência da partição, numa consulta: a coluna de origem da partição (``data``,
+  ``data_base``) é igual ao valor do caminho em toda linha, nenhuma coluna ``NOT NULL`` tem nulo
+  e nenhum texto passa do limite da coluna em bytes, o mesmo de ``cast`` e da auditoria. A mesma
+  consulta conta os valores não finitos de cada coluna ``Double``.
+- A gravação da partição, na ordem da ``sort_key``, por ``COPY ... RETURN_STATS`` num arquivo
+  novo da pasta dela na tabela Delta, e o registro do arquivo por
+  ``serialize_db.delta.register_files``, com as conferências do rodapé, a releitura e as colunas
+  não finitas sem mínimo e máximo (issue #59 do serialize-db).
 
-Uma partição fora do contrato é ``ContractError`` antes de qualquer gravação, com a tabela, a
-partição e a coluna, e o arquivo quando é o primeiro que não tem uma coluna do contrato; a
-chamada seguinte recomeça dela. Uma coluna do contrato ausente de um arquivo depois do primeiro,
-ou um valor que não converte para o tipo do contrato, falha na conferência ou no ``COPY`` com o
-erro do DuckDB, também sem commit; o da coluna ausente nomeia o arquivo. As entradas da pasta da
-tabela fora do padrão ficam fora da carga e entram no relatório (``ImportReport.skipped``); as da
-raiz de origem fora do modelo (``alembic_version``, ``meta_update_status``, ``schema.json``)
-ficam fora da carga, e ``entries_outside_the_model`` as lista para ``serialize-db import`` e o
-script de migração.
+Uma partição fora do contrato é ``ContractError`` antes de qualquer gravação. A mensagem traz a
+tabela, a partição e a coluna, e o arquivo quando ele é o primeiro da pasta e não tem uma coluna
+do contrato. A chamada seguinte recomeça dessa partição. Uma coluna do contrato ausente de um
+arquivo depois do primeiro, ou um valor que não converte para o tipo do contrato, falha na
+conferência ou no ``COPY`` com o erro do DuckDB, também sem commit. O erro da coluna ausente
+nomeia o arquivo.
 
-``import_report`` compara contagem e somas por partição entre a origem, lida pasta a pasta como a
-carga a lê, e o Delta: as colunas ``Numeric`` somadas como ``DECIMAL(38, 6)`` e as ``Double`` da
-mesma forma só nos valores finitos, com os não finitos contados à parte, porque a soma em ponto
-flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um infinito para ``DECIMAL`` falha. O
-relatório traz também as conversões de tipo de cada partição, lidas no rodapé do primeiro arquivo da
-pasta. A carga está completa quando ``matches`` é verdadeiro; ``serialize-db import`` roda as duas,
-com as mesmas partições quando ``--partitions`` as pede, e sai com 1 na diferença e na partição
-pedida que a origem não tem, recusada em toda tabela antes de qualquer gravação.
+As entradas da pasta da tabela fora do padrão ficam fora da carga e entram no relatório
+(``ImportReport.skipped``). As entradas da raiz de origem fora do modelo (``alembic_version``,
+``meta_update_status``, ``schema.json``) também ficam fora da carga, e
+``entries_outside_the_model`` as lista para ``serialize-db import`` e o script de migração.
+
+``import_report`` compara contagem e somas por partição entre a origem e o Delta. A origem é lida
+pasta a pasta, como a carga a lê. As colunas ``Numeric`` são somadas como ``DECIMAL(38, 6)``. As
+``Double`` são somadas da mesma forma, só nos valores finitos, e os não finitos são contados à
+parte, porque a soma em ponto flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um
+infinito para ``DECIMAL`` falha. O relatório traz também as conversões de tipo de cada partição,
+lidas no rodapé do primeiro arquivo da pasta. A carga está completa quando ``matches`` é
+verdadeiro. ``serialize-db import`` roda a carga e o relatório, com as mesmas partições quando
+``--partitions`` as pede, e sai com 1 na diferença e na partição pedida que a origem não tem,
+recusada em toda tabela antes de qualquer gravação.
 
 Exemplo:
 
@@ -110,8 +115,10 @@ _PARTITION_FOLDER = re.compile(rf"(?P<column>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>{
 
 @dataclasses.dataclass(frozen=True)
 class PartitionReport:
-    """[public] Contagem, somas e não finitos de uma partição, na origem e no Delta, e as conversões
-    de tipo da origem; ``None`` nas linhas do lado em que a partição falta.
+    """[public] A conferência de uma partição: contagem, somas e valores não finitos (``NaN`` e
+    infinitos) na origem e no Delta, e as conversões de tipo da origem.
+
+    O lado em que a partição falta fica com ``None`` nas linhas.
 
     Exemplo:
 
@@ -122,30 +129,30 @@ class PartitionReport:
     """
 
     value: str | None
-    """[public] O valor da partição; ``None`` na tabela sem partição."""
+    """[public] O valor da partição, ou ``None`` na tabela sem partição."""
     source_rows: int | None
     """[public] As linhas da partição na origem."""
     delta_rows: int | None
     """[public] As linhas da partição no Delta."""
     source_sums: Mapping[str, Decimal | None]
-    """[public] ``{coluna: soma}`` das colunas ``Numeric`` e ``Double`` na origem, como
-    ``DECIMAL(38, 6)`` e só dos valores finitos numa ``Double``; ``None`` na coluna sem valor a
-    somar, e vazio do lado em que a partição falta."""
+    """[public] ``{coluna: soma}`` das colunas ``Numeric`` e ``Double`` na origem. A soma é feita
+    como ``DECIMAL(38, 6)`` e, numa ``Double``, só sobre os valores finitos. A coluna sem valor a
+    somar tem ``None``. O lado em que a partição falta tem o mapa vazio."""
     delta_sums: Mapping[str, Decimal | None]
     """[public] As somas no Delta, na forma de ``source_sums``."""
     source_nonfinite: Mapping[str, int]
-    """[public] ``{coluna: contagem}`` dos ``NaN`` e infinitos de cada coluna ``Double`` na origem;
-    vazio do lado em que a partição falta."""
+    """[public] ``{coluna: contagem}`` dos ``NaN`` e infinitos de cada coluna ``Double`` na origem.
+    O lado em que a partição falta tem o mapa vazio."""
     delta_nonfinite: Mapping[str, int]
     """[public] Os não finitos no Delta, na forma de ``source_nonfinite``."""
     conversions: tuple[str, ...] = ()
     """[public] Uma frase por coluna cujo tipo no rodapé do primeiro arquivo da partição na origem
-    difere do contrato, como ``"carimbo: INT96 -> timestamp[us]"``; vazio quando a partição falta na
-    origem ou a pasta dela não tem arquivo ``.parquet`` direto."""
+    difere do contrato, como ``"carimbo: INT96 -> timestamp[us]"``. Fica vazio quando a partição
+    falta na origem ou quando a pasta dela não tem arquivo ``.parquet`` direto."""
 
     @property
     def matches(self) -> bool:
-        """[public] Se contagem, somas e não finitos coincidem nos dois lados."""
+        """[public] ``True`` quando contagem, somas e não finitos coincidem nos dois lados."""
         same_rows = self.source_rows == self.delta_rows
         same_sums = self.source_sums == self.delta_sums
         return same_rows and same_sums and self.source_nonfinite == self.delta_nonfinite
@@ -153,8 +160,8 @@ class PartitionReport:
 
 @dataclasses.dataclass(frozen=True)
 class ImportReport:
-    """[public] O relatório de uma tabela: as partições conferidas, as entradas da pasta fora do
-    padrão e as conversões de tipo da origem para o contrato.
+    """[public] O relatório de ``import_report`` para uma tabela: as partições conferidas, as
+    entradas da pasta fora do padrão e as conversões de tipo da origem para o contrato.
 
     Exemplo:
 
@@ -168,20 +175,20 @@ class ImportReport:
     table: str
     """[public] O nome da tabela."""
     partitions: tuple[PartitionReport, ...]
-    """[public] Uma conferência por partição que ``discover_partitions`` acha na origem ou que está
-    no Delta, só as pedidas quando ``import_report`` recebe ``partitions``, em ordem de texto do
-    valor."""
+    """[public] Uma conferência por partição, em ordem de texto do valor: as que
+    ``discover_partitions`` acha na origem e as que estão no Delta. Quando ``import_report`` recebe
+    ``partitions``, só as pedidas."""
     skipped: tuple[str, ...]
-    """[public] As entradas da pasta da tabela na origem que não são pasta de partição, fora das
-    contas; vazio numa tabela sem partição."""
+    """[public] As entradas da pasta da tabela na origem que não são pasta de partição. Elas ficam
+    fora das contas. Vazio numa tabela sem partição."""
     conversions: tuple[str, ...]
     """[public] As conversões de tipo da maior parte das partições da origem, na forma de
-    ``PartitionReport.conversions``, as da primeira em ordem de valor no empate; a partição com
-    outras conversões tem as dela no seu relatório."""
+    ``PartitionReport.conversions``. No empate, as da primeira partição em ordem de valor. A
+    partição com outras conversões tem as dela no seu ``PartitionReport``."""
 
     @property
     def matches(self) -> bool:
-        """[public] Se toda partição coincide nos dois lados."""
+        """[public] ``True`` quando toda partição coincide nos dois lados."""
         return all(partition.matches for partition in self.partitions)
 
 
@@ -192,8 +199,8 @@ def _entries(
     storage: Storage,
     prefix: str,
 ) -> list[pafs.FileInfo]:
-    """[private] As entradas diretas de uma pasta, em ordem de nome; a pasta ausente dá a lista
-    vazia."""
+    """[private] As entradas diretas de uma pasta da origem, em ordem de nome. A pasta ausente dá a
+    lista vazia."""
     path = f"{storage.path}/{prefix}" if prefix else storage.path
     selector = pafs.FileSelector(path, allow_not_found=True)
     found = storage.filesystem.get_file_info(selector)
@@ -211,7 +218,7 @@ def _table_folder(
     storage: Storage,
     table: sa.Table,
 ) -> str:
-    """[private] A pasta da tabela na origem, relativa à raiz dela; ausente é
+    """[private] A pasta da tabela na origem, relativa à raiz da origem. A pasta ausente é
     ``FileNotFoundError``."""
     if not storage.exists(table.name):
         raise FileNotFoundError(
@@ -234,15 +241,16 @@ def discover_partitions(
         found      # {"2026-02-28": "/dados/db_projetado/cad_operacoes/data_str=2026-02-28", ...}
         skipped    # ("notas.txt",)
 
-    :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
+    :param source: a raiz da base Parquet de origem, com uma pasta por tabela. Uma pasta local,
         ``file://`` ou ``s3://``.
     :param table: a tabela do modelo.
-    :return: numa tabela particionada, ``{valor: URI da pasta}`` das pastas ``<coluna>=<valor>``
-        com a coluna de partição do modelo e um valor da regra da partição, em ordem de nome, e o
-        resto da pasta na segunda tupla; numa tabela sem partição,
-        ``{None: URI da pasta da tabela}`` e a tupla vazia.
+    :return: numa tabela particionada, ``{valor: URI da pasta}`` das pastas ``<coluna>=<valor>``,
+        em ordem de nome, seguido da tupla com o resto das entradas da pasta. Entram no dicionário
+        só as pastas cuja coluna é a coluna de partição do modelo e cujo valor segue a regra da
+        partição. Numa tabela sem partição, ``{None: URI da pasta da tabela}`` e a tupla vazia.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
-    :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
+    :raises ValueError: ``source`` no S3 sem a região em ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``,
+        ou num esquema fora de pasta local, ``file://`` e ``s3://``.
     """
     storage = Storage.for_uri(source)
     folder = _table_folder(storage, table)
@@ -265,8 +273,8 @@ def entries_outside_the_model(
     source: str,
     metadata: sa.MetaData,
 ) -> tuple[str, ...]:
-    """[protected] As entradas da raiz da origem que não são pasta de uma tabela do modelo; para a
-    linha de comando e o script de migração."""
+    """[protected] As entradas da raiz da origem que não são pasta de uma tabela do modelo. Quem a
+    chama: ``serialize-db import`` e o script de migração."""
     storage = Storage.for_uri(source)
     names = metadata.tables
     outside = [entry.base_name for entry in _entries(storage, "") if entry.base_name not in names]
@@ -276,7 +284,7 @@ def entries_outside_the_model(
 def import_order(
     tables: Sequence[sa.Table],
 ) -> list[sa.Table]:
-    """[public] As tabelas na ordem da carga.
+    """[public] As tabelas do modelo na ordem em que a carga as grava.
 
     Exemplo:
 
@@ -285,7 +293,7 @@ def import_order(
         [table.name for table in import_order(db.tables())][-1]   # "cad_lancamentos"
 
     :param tables: as tabelas do modelo.
-    :return: as sem partição na ordem dada, depois as particionadas na ordem dada.
+    :return: as tabelas sem partição, na ordem dada, e depois as particionadas, na ordem dada.
     """
     unpartitioned = []
     partitioned = []
@@ -303,8 +311,8 @@ def import_order(
 def _read_folder(
     folder: str,
 ) -> str:
-    """[private] A leitura de uma pasta da origem, a mesma na carga e no relatório: os arquivos
-    ``.parquet`` diretos da pasta, sem ``hive_partitioning``."""
+    """[private] O ``read_parquet`` de uma pasta da origem, o mesmo na carga e no relatório: lê os
+    arquivos ``.parquet`` diretos da pasta, sem ``hive_partitioning``."""
     files = literal(f"{folder}/*.parquet")
     return f"read_parquet({files}, hive_partitioning = false)"
 
@@ -314,12 +322,12 @@ def _partition_query(
     table: sa.Table,
     value: str | None,
 ) -> str:
-    """[private] O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato; só
+    """[private] O ``SELECT`` do DuckDB que lê a partição da origem nos tipos do contrato. Só
     ``import_table`` a usa, por ``_import_partition``.
 
-    A pasta inteira por ``read_parquet`` sem ``hive_partitioning`` e cada coluna em ``CAST`` para
-    o tipo de ``sql_type`` no dialeto do DuckDB; todo identificador entre aspas, porque ``to`` é
-    palavra reservada.
+    A consulta lê a pasta inteira por ``read_parquet`` sem ``hive_partitioning`` e leva cada coluna,
+    por ``CAST``, ao tipo que ``sql_type`` dá no dialeto do DuckDB. Todo identificador vai entre
+    aspas, porque ``to`` é palavra reservada.
 
     Exemplo:
 
@@ -330,10 +338,10 @@ def _partition_query(
         # SELECT CAST("id_operacao" AS BIGINT) AS "id_operacao", ..., '2026-02-28' AS "data_str"
         # FROM read_parquet('/dados/.../data_str=2026-02-28/*.parquet', hive_partitioning = false)
 
-    :param folder: a URI da pasta da partição na origem, como ``discover_partitions`` a devolve;
-        numa tabela sem partição, a pasta da tabela.
+    :param folder: a URI da pasta da partição na origem, como ``discover_partitions`` a devolve.
+        Numa tabela sem partição, a pasta da tabela.
     :param table: a tabela do modelo.
-    :param value: o valor do caminho, que a coluna de partição recebe; ``None`` na tabela sem
+    :param value: o valor do caminho, que a coluna de partição recebe, ou ``None`` na tabela sem
         partição.
     :return: o texto da consulta.
     :raises serialize_db.errors.ContractError: a tabela com um tipo de coluna fora do contrato ou
@@ -354,8 +362,9 @@ def _ordered_select(
     query: str,
     table: sa.Table,
 ) -> str:
-    """[private] As colunas do arquivo sobre a consulta da partição, sem a coluna de partição, que o
-    caminho leva, na ordem da ``sort_key`` quando há uma."""
+    """[private] O ``SELECT`` sobre a consulta da partição com as colunas que o arquivo recebe: as
+    do contrato sem a coluna de partição, que fica no caminho da pasta. Com ``sort_key``, as
+    linhas saem nessa ordem."""
     options = table_options(table)
     names = [quoted(column.name) for column in table.columns if column.name != options.partition_by]
     text = f"SELECT {', '.join(names)} FROM ({query})"
@@ -369,7 +378,8 @@ def _ordered_select(
 
 @dataclasses.dataclass(frozen=True)
 class _PartitionCheck:
-    """[private] O que a consulta de conferência achou numa partição."""
+    """[private] O resultado da consulta de conferência de uma partição: as linhas, os problemas e
+    as colunas ``Double`` com valor não finito."""
 
     rows: int
     problems: tuple[str, ...]
@@ -379,11 +389,12 @@ class _PartitionCheck:
 def _text_limit(
     kind: sa.types.TypeEngine,
 ) -> tuple[int, str] | None:
-    """[private] O limite em bytes do texto de uma coluna, o de ``cast`` e da auditoria, e o rótulo
-    da contagem acima dele; ``None`` no tipo sem limite de texto.
+    """[private] O limite em bytes do texto de uma coluna, o mesmo de ``cast`` e da auditoria, e o
+    rótulo da contagem dos valores acima dele. ``None`` no tipo sem limite de texto.
 
-    JSON e ``Text`` levam o teto do ``VARCHAR`` do Redshift, e o ``n`` de ``Text(n)`` fica de fora
-    como no DDL; ``Text`` vem antes de ``String``, da qual deriva.
+    JSON e ``Text`` levam o teto do ``VARCHAR`` do Redshift (``TEXT_LIMIT``), e o ``n`` de
+    ``Text(n)`` fica de fora, como no DDL. Uma coluna ``Uuid`` leva ``UUID_LENGTH`` bytes. O teste
+    de ``Text`` vem antes do de ``String``, da qual ``Text`` deriva.
     """
     if isinstance(kind, sa.JSON):
         return TEXT_LIMIT, f"documentos JSON acima de {TEXT_LIMIT} bytes"
@@ -403,12 +414,13 @@ def _check_first_file(
     label: str,
 ) -> None:
     """[private] Recusa com ``ContractError`` a partição cujo primeiro arquivo não tem alguma coluna
-    do contrato, com o arquivo e as colunas na mensagem.
+    do contrato. A mensagem traz o arquivo e as colunas ausentes.
 
-    O primeiro arquivo em ordem de nome dá ao DuckDB o esquema da leitura, e sem a coluna o binder
-    acusa a coluna do ``SELECT`` sem nomear a partição nem o arquivo; um arquivo seguinte sem a
-    coluna o DuckDB recusa com o nome dele. Os nomes são comparados sem distinguir maiúsculas de
-    minúsculas, como o binder do DuckDB liga a coluna do ``SELECT`` à do arquivo.
+    O primeiro arquivo da pasta, em ordem de nome, dá ao DuckDB o esquema da leitura. Sem a coluna
+    nele, o binder do DuckDB, a etapa que liga cada coluna do ``SELECT`` a uma do arquivo, acusa a
+    coluna do ``SELECT`` sem nomear a partição nem o arquivo. Um arquivo seguinte sem a coluna o
+    DuckDB recusa com o nome dele. Os nomes são comparados sem distinguir maiúsculas de minúsculas,
+    como o binder os liga.
     """
     files = _direct_parquet_files(source_storage, source_storage.relative(folder))
     if not files:
@@ -435,14 +447,17 @@ def _check_partition(
     table: sa.Table,
     value: str | None,
 ) -> _PartitionCheck:
-    """[private] A conferência da partição, numa consulta só: as linhas, o que está fora do contrato
-    e as colunas ``Double`` com ``NaN`` ou infinito, que o contrato aceita e ficam sem mínimo e
-    máximo.
+    """[private] A conferência da partição, numa consulta só. Devolve as linhas, o que está fora do
+    contrato e as colunas ``Double`` com ``NaN`` ou infinito, que o contrato aceita e que ficam sem
+    mínimo e máximo.
 
-    Fora do contrato: linhas com a coluna de origem da partição diferente do valor do caminho,
-    quando o modelo declara ``partition_source``; nulos nas colunas ``NOT NULL``; textos acima do
-    limite da coluna em bytes, o de ``_text_limit``, medido como o ``VARCHAR(n)`` do Redshift
-    (``strlen`` conta bytes no DuckDB).
+    Fora do contrato:
+
+    - linhas com a coluna de origem da partição diferente do valor do caminho, quando o modelo
+      declara ``partition_source``;
+    - nulos nas colunas ``NOT NULL``;
+    - textos acima do limite da coluna em bytes, o de ``_text_limit``, medido como o ``VARCHAR(n)``
+      do Redshift (``strlen`` conta bytes no DuckDB).
     """
     options = table_options(table)
     measures = ["count(*)"]
@@ -492,8 +507,9 @@ def _copy_partition(
     query: str,
     execution_id: str,
 ) -> delta.RegisteredFile:
-    """[private] ``COPY ... RETURN_STATS`` da partição para um arquivo novo dentro da pasta dela,
-    com o ``execution_id`` no nome; devolve o arquivo como ``register_files`` o recebe."""
+    """[private] Grava a partição por ``COPY ... RETURN_STATS`` num arquivo novo dentro da pasta
+    dela, com o ``execution_id`` no nome. Devolve o arquivo na forma que ``register_files``
+    recebe."""
     partition_by = table_options(table).partition_by
     table_path = storage.relative(uri)
     relative = f"{execution_id}_{uuid.uuid4().hex}.parquet"
@@ -515,8 +531,8 @@ def _source_setup(
     delta_db: Database,
     source: str,
 ) -> None:
-    """[private] As extensões e o secret da origem no S3 quando a raiz Delta é uma pasta local; com
-    a raiz no S3, a conexão do motor já os tem."""
+    """[private] Carrega na conexão as extensões e o secret do S3 quando a origem está no S3 e a
+    raiz Delta é uma pasta local. Com a raiz no S3, a conexão do motor já os tem."""
     source_storage = Storage.for_uri(source)
     if source_storage.is_s3 and not delta_db.storage.is_s3:
         source_storage.duckdb_setup(connection)
@@ -526,8 +542,8 @@ def _wanted_values(
     found: Mapping[str | None, object],
     partitions: Sequence[str] | None,
 ) -> list[str | None]:
-    """[private] Os valores de partição de ``found`` que o chamador pediu; todos sem ``partitions``,
-    e nenhum numa tabela sem partição com ``partitions``."""
+    """[private] Os valores de partição de ``found`` que o chamador pediu em ``partitions``. Sem
+    ``partitions``, todos. Numa tabela sem partição com ``partitions``, nenhum."""
     if partitions is None:
         return list(found)
     return [value for value in found if value in partitions]
@@ -538,8 +554,8 @@ def _check_requested(
     found: Mapping[str | None, object],
     partitions: Sequence[str] | None,
 ) -> None:
-    """[private] Recusa, numa tabela particionada, um valor de ``partitions`` fora de ``found``; uma
-    tabela sem partição fica de fora do pedido, sem recusa."""
+    """[private] Recusa com ``ContractError``, numa tabela particionada, um valor de ``partitions``
+    que não está em ``found``. Uma tabela sem partição fica de fora do pedido, sem recusa."""
     if partitions is None or table_options(table).partition_by is None:
         return
     absent = [value for value in partitions if value not in found]
@@ -554,11 +570,10 @@ def check_requested_partitions(
     table: sa.Table,
     partitions: Sequence[str] | None,
 ) -> None:
-    """[public] Recusa um valor de ``partitions`` que a origem não tem, como ``import_table`` e
-    ``import_report`` o recusam, sem abrir um motor.
+    """[public] Recusa um valor de ``partitions`` que a origem não tem, sem abrir um motor.
 
-    ``serialize-db import`` e o script de migração conferem com ela toda tabela da carga antes de
-    gravar qualquer partição.
+    A recusa é a mesma de ``import_table`` e de ``import_report``. ``serialize-db import`` e o
+    script de migração conferem com ela toda tabela da carga antes de gravar qualquer partição.
 
     Exemplo:
 
@@ -568,15 +583,16 @@ def check_requested_partitions(
         check_requested_partitions("/dados/db_projetado", Operacao.__table__, ["9999-12-31"])
         # ContractError: cad_operacoes: partição(ões) pedida(s) que a origem não tem: 9999-12-31
 
-    :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
+    :param source: a raiz da base Parquet de origem, com uma pasta por tabela. Uma pasta local,
         ``file://`` ou ``s3://``.
     :param table: a tabela do modelo.
-    :param partitions: os valores pedidos, que toda tabela particionada precisa ter na origem;
-        uma tabela sem partição fica de fora do pedido, sem recusa; ``None`` não recusa nada.
+    :param partitions: os valores pedidos, que toda tabela particionada precisa ter na origem.
+        Uma tabela sem partição fica de fora do pedido, sem recusa. ``None`` não recusa nada.
     :raises serialize_db.errors.ContractError: um valor de ``partitions`` que a origem não tem, com
         a tabela e os valores ausentes na mensagem.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
-    :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
+    :raises ValueError: ``source`` no S3 sem a região em ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``,
+        ou num esquema fora de pasta local, ``file://`` e ``s3://``.
     """
     found, _ = discover_partitions(source, table)
     _check_requested(table, found, partitions)
@@ -587,9 +603,9 @@ def split_ignored_partitions(
     table: sa.Table,
     ignored: Sequence[str],
 ) -> tuple[list[str], list[str]]:
-    """[protected] As partições da tabela particionada na origem fora de ``ignored``, e as de
-    ``ignored`` que a origem tem, ambas em ordem de nome; para o ``--ignore-partitions`` da linha de
-    comando, do script de migração e das sondas da operação."""
+    """[protected] Divide as partições da tabela particionada na origem em duas listas, ambas em
+    ordem de nome: as fora de ``ignored`` e as de ``ignored`` que a origem tem. Serve ao
+    ``--ignore-partitions`` da linha de comando, do script de migração e das sondas da operação."""
     found, _ = discover_partitions(source, table)
     kept = []
     skipped = []
@@ -611,8 +627,9 @@ def _import_partition(
     folder: str,
     metadata: Mapping[str, str],
 ) -> None:
-    """[private] Grava uma partição no Delta: a conferência do primeiro arquivo e a da consulta, o
-    ``COPY`` para um arquivo novo e o registro dele, com o tempo no log. Uma partição fora do
+    """[private] Grava uma partição no Delta, em ordem: a conferência do primeiro arquivo, a
+    conferência da consulta, o ``COPY`` para um arquivo novo e o registro do arquivo. O log
+    ``serialize_db.parquet_import`` recebe as linhas e o tempo da partição. Uma partição fora do
     contrato é ``ContractError`` antes de qualquer gravação."""
     started = time.perf_counter()
     label = delta.partition_label(value)
@@ -652,11 +669,12 @@ def import_table(
     partitions: Sequence[str] | None = None,
     config: DuckDBConfig | None = None,
 ) -> list[str | None]:
-    """[public] Importa da base Parquet para a tabela Delta cada partição ainda fora do log da
-    tabela.
+    """[public] Importa da base Parquet para a tabela Delta cada partição que ainda não está no log
+    da tabela.
 
-    A tabela nasce por ``create_table`` quando não existe. A segunda chamada não grava nada. Com
-    ``partitions``, uma tabela sem partição fica inteira de fora: nada é criado nem aberto.
+    A tabela Delta nasce por ``create_table`` quando não existe. A chamada repetida não grava nada,
+    porque pula as partições já no log. Com ``partitions``, uma tabela sem partição fica inteira
+    de fora: nada é criado nem aberto.
 
     Exemplo:
 
@@ -665,21 +683,22 @@ def import_table(
         import_table(db, Operacao.__table__, "/dados/db_projetado")   # ["2026-02-28", "2026-03-31"]
         import_table(db, Operacao.__table__, "/dados/db_projetado")   # []
 
-    :param delta_db: o banco Delta em que os dados são importados, com a raiz e o ambiente;
-        a tabela Delta fica em ``<raiz>/<ambiente>/<tabela>``.
+    :param delta_db: o banco Delta de destino, com a raiz e o ambiente. A tabela Delta fica em
+        ``<raiz>/<ambiente>/<tabela>``.
     :param table: a tabela do modelo.
-    :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
+    :param source: a raiz da base Parquet de origem, com uma pasta por tabela. Uma pasta local,
         ``file://`` ou ``s3://``.
-    :param partitions: os valores a gravar, que toda tabela particionada precisa ter na origem, e
-        que deixam uma tabela sem partição inteira de fora, sem criar a tabela nem abrir o motor;
-        ``None`` grava todas.
-    :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
-        sistema e os limites lidos do ambiente.
-    :return: os valores gravados, na ordem da gravação; ``None`` é a tabela sem partição.
+    :param partitions: os valores a gravar, que toda tabela particionada precisa ter na origem.
+        Com a lista, uma tabela sem partição fica inteira de fora, sem criar a tabela nem abrir o
+        motor. ``None`` grava todas as partições.
+    :param config: a configuração do motor DuckDB da chamada. Sem ela, o motor usa a pasta
+        temporária do sistema e os limites lidos do ambiente.
+    :return: os valores gravados, na ordem da gravação. O valor ``None`` representa a tabela sem
+        partição.
     :raises serialize_db.errors.ContractError: um valor de ``partitions`` que a origem não tem,
-        antes de criar a tabela; ou uma partição fora do contrato, sem commit, pelo primeiro arquivo
-        sem uma coluna do contrato ou nas conferências da consulta, e a chamada seguinte recomeça
-        dela.
+        antes de criar a tabela. Ou uma partição fora do contrato, sem commit, pelo primeiro
+        arquivo sem uma coluna do contrato ou pelas conferências da consulta; a chamada seguinte
+        recomeça dessa partição.
     :raises duckdb.Error: uma coluna do contrato ausente de um arquivo depois do primeiro, ou um
         valor que não converte para o tipo do contrato, na conferência ou no ``COPY``, sem commit.
     :raises serialize_db.errors.RegistrationRefused: uma conferência de ``register_files`` reprovou
@@ -688,10 +707,12 @@ def import_table(
     :raises serialize_db.errors.ExecutionConflict: outro registro da mesma partição a partir da
         mesma versão.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
-    :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
+    :raises ValueError: ``source`` no S3 sem a região em ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``,
+        ou num esquema fora de pasta local, ``file://`` e ``s3://``.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-        2 MiB, ou negativa, na abertura do DuckDB sem ``memory_limit`` em ``config``, e, com ou
-        sem ele, no registro de cada partição, antes do commit (``environment_limits``).
+        2 MiB, ou negativa (``environment_limits``). A leitura acontece na abertura do DuckDB, só
+        sem ``memory_limit`` em ``config``, e no registro de cada partição, antes do commit, com ou
+        sem ele.
     """
     options = table_options(table)
     # A partição pedida que a origem não tem recusa a carga antes de criar a tabela.
@@ -741,9 +762,9 @@ def _total_measures(
     sums: list[str],
     doubles: list[str],
 ) -> list[str]:
-    """[private] As agregações de uma partição: a contagem, a soma de cada coluna de ``sums`` como
-    ``DECIMAL(38, 6)``, só dos valores finitos numa ``Double``, e a contagem dos não finitos de
-    cada coluna de ``doubles``."""
+    """[private] As agregações de uma partição, na ordem: a contagem de linhas, a soma de cada
+    coluna de ``sums`` como ``DECIMAL(38, 6)`` (só dos valores finitos numa ``Double``) e a
+    contagem dos não finitos de cada coluna de ``doubles``."""
     measures = ["count(*)"]
     for name in sums:
         decimal = f"CAST({quoted(name)} AS DECIMAL(38, 6))"
@@ -774,7 +795,8 @@ def _aggregate(
     sums: list[str],
     doubles: list[str],
 ) -> dict[str | None, _Totals]:
-    """[private] Contagem, somas e não finitos por partição de ``relation``: ``{valor: totais}``."""
+    """[private] Contagem, somas e não finitos por partição de ``relation``, a fonte do ``FROM``:
+    ``{valor: totais}``."""
     measures = ", ".join(_total_measures(sums, doubles))
     if partition_by is None:
         row = connection.execute(f"SELECT {measures} FROM {relation}").fetchone()
@@ -792,8 +814,8 @@ def _source_totals(
     doubles: list[str],
 ) -> dict[str | None, _Totals]:
     """[private] Contagem, somas e não finitos de cada pasta que ``discover_partitions`` achou na
-    origem, lida como a carga a lê; as outras entradas da pasta da tabela ficam fora, como na
-    carga."""
+    origem, cada uma lida como a carga a lê. As outras entradas da pasta da tabela ficam fora, como
+    na carga."""
     totals = {}
     for value, folder in found.items():
         totals[value] = _aggregate(connection, _read_folder(folder), None, sums, doubles)[None]
@@ -807,8 +829,8 @@ def _delta_totals(
     sums: list[str],
     doubles: list[str],
 ) -> dict[str | None, _Totals]:
-    """[private] Contagem, somas e não finitos por partição no Delta; vazio na tabela ainda fora
-    dele, que tem toda partição só na origem."""
+    """[private] Contagem, somas e não finitos por partição no Delta, por ``delta_scan``. Vazio na
+    tabela que ainda não existe no Delta, cujas partições estão todas só na origem."""
     uri = delta_db.uri(table)
     if not delta.table_exists(uri, delta_db.storage):
         return {}
@@ -821,8 +843,8 @@ def _partition_reports(
     in_delta: Mapping[str | None, _Totals],
     conversions: Mapping[str | None, tuple[str, ...]],
 ) -> tuple[PartitionReport, ...]:
-    """[private] Uma conferência por partição presente num dos lados, em ordem de texto do valor,
-    com as conversões de tipo dela; o lado em que a partição falta fica com ``None`` nas linhas."""
+    """[private] Uma conferência por partição presente em um dos lados, em ordem de texto do valor,
+    com as conversões de tipo dela. O lado em que a partição falta fica com ``None`` nas linhas."""
     absent = _Totals(rows=None, sums={}, nonfinite={})
     reports = []
     for value in sorted(set(in_source) | set(in_delta), key=str):
@@ -848,7 +870,7 @@ def _direct_parquet_files(
     prefix: str,
 ) -> list[str]:
     """[private] Os arquivos ``.parquet`` diretos de uma pasta da origem, os que ``_read_folder``
-    lê, em ordem de nome e relativos à raiz."""
+    lê, em ordem de nome e relativos à raiz da origem."""
     files = []
     for entry in _entries(storage, prefix):
         if entry.type == pafs.FileType.File and entry.base_name.endswith(".parquet"):
@@ -861,8 +883,9 @@ def _file_conversions(
     file: str,
     table: sa.Table,
 ) -> tuple[str, ...]:
-    """[private] As conversões de tipo de um arquivo da origem para o contrato, lidas no rodapé
-    dele: ``"id_contrato: int32 -> int64"``, ``"carimbo: INT96 -> timestamp[us]"``."""
+    """[private] As conversões de tipo de um arquivo da origem para o contrato, lidas no rodapé do
+    arquivo, uma frase por coluna: ``"id_contrato: int32 -> int64"``,
+    ``"carimbo: INT96 -> timestamp[us]"``."""
     footer = pq.ParquetFile(storage.open_input_file(file))
     # O tipo físico de cada coluna, que nomeia o timestamp INT96 na frase da conversão.
     physical = {}
@@ -884,8 +907,8 @@ def _partition_conversions(
     found: Mapping[str | None, str],
     table: sa.Table,
 ) -> dict[str | None, tuple[str, ...]]:
-    """[private] As conversões de tipo de cada pasta de ``found``, lidas no rodapé do primeiro
-    arquivo dela, o que dá ao DuckDB o esquema da leitura: ``{valor: conversões}``; a pasta sem
+    """[private] ``{valor: conversões}`` de cada pasta de ``found``, as conversões lidas no rodapé
+    do primeiro arquivo da pasta, o arquivo que dá ao DuckDB o esquema da leitura. A pasta sem
     arquivo fica de fora."""
     storage = Storage.for_uri(source)
     conversions = {}
@@ -899,8 +922,8 @@ def _partition_conversions(
 def _common_conversions(
     conversions: Mapping[str | None, tuple[str, ...]],
 ) -> tuple[str, ...]:
-    """[private] As conversões da maior parte das partições, as da primeira em ordem de valor no
-    empate; vazio sem partição."""
+    """[private] As conversões da maior parte das partições. No empate, as da primeira partição em
+    ordem de valor. Vazio sem partição."""
     if not conversions:
         return ()
     # O Counter devolve, entre contagens iguais, a primeira que contou.
@@ -915,14 +938,14 @@ def import_report(
     partitions: Sequence[str] | None = None,
     config: DuckDBConfig | None = None,
 ) -> ImportReport:
-    """[public] Contagem e somas por partição na base Parquet de origem e na tabela Delta, e o
-    veredito.
+    """[public] Compara contagem e somas por partição entre a base Parquet de origem e a tabela
+    Delta, e dá o veredito.
 
     A origem é lida como ``import_table`` a lê: só as pastas que ``discover_partitions`` acha, uma
-    a uma, pelos arquivos ``.parquet`` diretos de cada uma e sem ``hive_partitioning``. O Delta é
+    a uma, pelos arquivos ``.parquet`` diretos de cada uma, sem ``hive_partitioning``. O Delta é
     lido por ``delta_scan``, num motor DuckDB próprio da chamada. As colunas ``Numeric`` somam
-    como ``DECIMAL(38, 6)``; as ``Double`` da mesma forma só nos valores finitos, com os não
-    finitos contados à parte. As conversões de tipo de cada partição vêm do rodapé do primeiro
+    como ``DECIMAL(38, 6)``. As ``Double`` somam da mesma forma, só nos valores finitos, e os não
+    finitos são contados à parte. As conversões de tipo de cada partição vêm do rodapé do primeiro
     arquivo da pasta dela na origem.
 
     Exemplo:
@@ -935,25 +958,26 @@ def import_report(
         only = import_report(db, Operacao.__table__, "/dados/db_projetado", ["2026-02-28"])
         [partition.value for partition in only.partitions]   # ["2026-02-28"]
 
-    :param delta_db: o banco Delta em que os dados foram importados, com a raiz e o ambiente;
-        a tabela Delta fica em ``<raiz>/<ambiente>/<tabela>``.
+    :param delta_db: o banco Delta em que os dados foram importados, com a raiz e o ambiente. A
+        tabela Delta fica em ``<raiz>/<ambiente>/<tabela>``.
     :param table: a tabela do modelo.
-    :param source: a raiz da base Parquet de origem, com uma pasta por tabela; uma pasta local,
+    :param source: a raiz da base Parquet de origem, com uma pasta por tabela. Uma pasta local,
         ``file://`` ou ``s3://``.
-    :param partitions: os valores a conferir, que toda tabela particionada precisa ter na origem,
-        filtram as partições da origem e do Delta e deixam uma tabela sem partição inteira de
-        fora, com o relatório vazio e sem abrir o motor, como em ``import_table``; ``None``
-        confere todas.
-    :param config: a configuração do motor DuckDB da chamada; sem ela, a pasta temporária do
-        sistema e os limites lidos do ambiente.
-    :return: o relatório, com o veredito em ``matches``; uma partição presente num lado só tem
-        ``None`` nas linhas do outro, e a tabela ainda fora do Delta tem toda partição assim.
+    :param partitions: os valores a conferir, que toda tabela particionada precisa ter na origem.
+        A lista filtra as partições da origem e as do Delta. Com ela, uma tabela sem partição fica
+        inteira de fora, com o relatório vazio e sem abrir o motor, como em ``import_table``.
+        ``None`` confere todas.
+    :param config: a configuração do motor DuckDB da chamada. Sem ela, o motor usa a pasta
+        temporária do sistema e os limites lidos do ambiente.
+    :return: o relatório, com o veredito em ``matches``. Uma partição presente num lado só tem
+        ``None`` nas linhas do outro. A tabela ainda fora do Delta tem toda partição assim.
     :raises serialize_db.errors.ContractError: um valor de ``partitions`` que a origem não tem.
     :raises FileNotFoundError: a pasta da tabela ausente na origem.
-    :raises ValueError: ``source`` no S3 sem região, ou em outro esquema.
-    :raises serialize_db.errors.SandboxError: sem ``memory_limit`` em ``config``, a memória que o
-        processo ainda pode usar abaixo de 2 MiB, ou negativa, na abertura do DuckDB
-        (``environment_limits``).
+    :raises ValueError: ``source`` no S3 sem a região em ``AWS_REGION`` ou ``AWS_DEFAULT_REGION``,
+        ou num esquema fora de pasta local, ``file://`` e ``s3://``.
+    :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
+        2 MiB, ou negativa, lida na abertura do DuckDB quando ``config`` não informa
+        ``memory_limit`` (``environment_limits``).
     """
     # As colunas somadas são as Numeric, as Double inclusive, porque Double deriva de Numeric.
     sums = [column.name for column in table.columns if isinstance(column.type, sa.Numeric)]
