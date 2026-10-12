@@ -1368,7 +1368,9 @@ class Ordering:
 # 2026-10-10 às 18:52 as leu: a linha antes do COPY serializa as quatro transações no lock de
 # escrita da tabela de controle, que cada uma segura até o COMMIT (22,8 s a 23,4 s contra 9,1 s a
 # 10,2 s das outras duas ordens), e as tabelas criadas antes nunca esperaram
-# (.claude/memory/concurrency.md).
+# (.claude/memory/concurrency.md). Na de 2026-10-11 a ordem da publicação esperou cerca de 20 s
+# numa das três repetições (29,991 s), como a publicação da biblioteca, e as tabelas criadas antes
+# seguiram sem esperar.
 ORDERINGS = {
     "publicacao": Ordering("ordem da publicação", created_before=False, control_first=False),
     "linha-antes": Ordering(

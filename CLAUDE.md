@@ -609,9 +609,11 @@ A new lesson adds its story there and its rule here, in the same commit.
   negation, and a count is also read without rows**: in a Redshift scan neither the strict
   infinity comparison nor its negation was true for `NaN`, and a `count(*)` of
   `sys_load_error_detail` returned no row and stopped a probe section (2026-09-24).
-- **A repetition in the same process measures the caches the first run filled**: DuckDB's external
-  file cache served the threads probe's second and third reads from memory; turn caches off or
-  count requests at the source before a best of N stands for a remote read (2026-09-24).
+- **A repetition measures every cache the first run filled, the server's included**: DuckDB's
+  external file cache served the threads probe's second and third reads from memory, and
+  Redshift's result cache served 640 of the parallel probe's 720 small queries, in new sessions
+  too; turn caches off or count requests at the source before a best of N stands for a remote read
+  (2026-09-24, 2026-10-11).
 - **A long-running script writes its report as it goes**: the migration process that ended in
   `cad_lancamentos` 2026-03-31 took the four-variant measurement with it (2026-09-24).
 - **A credential renewal is designed per client that holds a copy**: delta-rs resolves the chain

@@ -4705,6 +4705,15 @@ nenhum `INSERT` esperou. As três ordens levaram de 9,427 s a 9,710 s (a da publ
 criadas antes). O usuário aceitou em 2026-10-10 a espera de cerca de 20 s da primeira publicação
 paralela de uma tabela nova (`docs/index.md`, seção "Multithreading").
 
+Em 2026-10-11 a ordem da publicação pela própria transação da sonda também esperou, numa das três
+repetições (29,991 s contra 10,042 s e 10,044 s): os dois `INSERT` da linha de controle que
+começaram enquanto outra transação segurava o lock levaram 20,237 s e 21,240 s, com 20,060 s e
+21,069 s de planejamento e 0 s de espera por lock. Nas seis publicações lentas lidas desde
+2026-10-10, o primeiro `INSERT` a terminar planejou de 20,060 s a 20,073 s, e cada um dos seguintes
+terminou de 0,24 s a 0,72 s depois do `COMMIT` do anterior, como se uma espera fixa de cerca de 20 s
+no servidor os soltasse para o lock um de cada vez; o que dispara essa espera não foi lido
+(`.claude/memory/concurrency.md`).
+
 ### Ingestão de dados
 
 Ordem de preferência da documentação:
