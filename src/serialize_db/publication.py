@@ -957,8 +957,8 @@ def publish_redshift(
         não os apaga.
     :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo; o padrão 1
         publica uma por vez. Com mais de um, a primeira publicação de uma tabela pode esperar
-        cerca de 20 s no ``INSERT`` da linha de controle, como em dez das 21 repetições das
-        sondas de 2026-10-05 a 2026-10-10, só nas publicações cuja transação criou a tabela; o
+        cerca de 20 s no ``INSERT`` da linha de controle, como em doze das 24 repetições das
+        sondas de 2026-10-05 a 2026-10-11, só nas publicações cuja transação criou a tabela; o
         usuário aceitou a espera em 2026-10-10 (``docs/index.md``, seção "Multithreading").
     :param versions: a versão do Delta por nome de tabela, as de um snapshot do arquivo de
         controle (``delta.snapshot_versions``); ``None`` publica a versão atual de cada tabela.

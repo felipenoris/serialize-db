@@ -898,7 +898,9 @@ depois do laço, e o trabalho do cliente só se sobrepõe à leitura e à grava�
 `stream` e os dois juntos ficaram de 79 MB a 129 MB acima da base, contra 243 MB a 457 MB da série.
 O `run.ingest`, o `materialize` e o `publish_delta` das quatro tabelas ganharam mais que na pasta
 local, porque o S3 e o Redshift fazem esperar a rede, e o pico do `run.ingest` e do `materialize`
-ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms.
+ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms, e a
+leitura de 2026-10-11, abaixo, mostra que o cache de resultados do Redshift responde às repetições
+dessas consultas.
 
 Em 2026-10-07 a mesma sonda rodou numa máquina de 2 vCPUs com 5,8 GiB disponíveis, sobre as mesmas
 quatro tabelas no S3 e o mesmo Redshift. No DuckDB, o trabalho em série levou de 1,5 a 2 vezes o
@@ -973,6 +975,24 @@ esperando depois do `COMMIT` dela: o que esperam não é esse lock, e a hipótes
 sem commit das outras transações caiu, porque o primeiro `INSERT` de cada repetição da linha antes
 do `COPY` planejou em 0,21 s a 0,34 s com os três `CREATE TABLE` das outras sem commit.
 
+Às 20:35 UTC de 2026-10-11 a sonda rodou de novo na máquina de 8 vCPUs, com os ganhos de 2026-10-05.
+No DuckDB: `run.ingest` das quatro 2,50 vezes (3,889 s contra 9,734 s), `materialize` das quatro
+2,32 vezes e `publish_delta` com `max_workers=4` 1,99 vez (8,007 s contra 15,911 s). No Redshift:
+`run.ingest` das quatro 2,62 vezes (11,640 s contra 30,487 s), as 80 consultas pequenas 1,93 vez na
+sessão a mais e `publish_delta` com `max_workers=4` 1,32 vez. `publish_redshift` com `max_workers=4`
+levou 11,266 s numa repetição e 31,747 s e 31,688 s nas outras duas, contra 25,169 s a 27,230 s uma
+tabela por vez, e sem a despublicação entre as medidas de 10,766 s a 11,898 s. O `sys_query_history`
+marcou 640 das 720 consultas pequenas das três formas como servidas pelo cache de resultados do
+Redshift: a primeira repetição da série levou 5,597 s e as outras oito de 1,942 s a 3,910 s, então
+só a primeira passada foi ao motor, e o menor tempo de cada forma mede respostas do cache, como
+provavelmente nas sondas desde 2026-10-05, que repetem os mesmos textos e valores; o ganho da sessão
+a mais nas consultas que o cache não serve não foi medido. Nas duas repetições lentas de
+`publish_redshift`, três das quatro transações esperaram no `INSERT` da linha de controle, e a
+publicação pela própria transação da sonda, na ordem da publicação, esperou numa das três repetições
+(29,991 s contra 10,042 s e 10,044 s): cada `INSERT` que começou enquanto outra transação segurava o
+lock da tabela de controle levou de 20,2 s a 21,8 s, e o primeiro a terminar planejou de 20,060 s a
+20,073 s nas seis publicações lentas lidas desde 2026-10-10.
+
 ### Como usar as threads
 
 - **Leia o resultado grande por `stream`, com o trabalho dentro do laço.** A consulta segue enquanto
@@ -1001,8 +1021,9 @@ do `COPY` planejou em 0,21 s a 0,34 s com os três `CREATE TABLE` das outras sem
   principal as threads esperam o lock, e o tempo é o da série. A sessão a mais ganha mais nas
   consultas pequenas; a consulta grande já usa todas as `threads` do DuckDB, as CPUs do processo,
   num pool que as sessões dividem. Ela não vê as tabelas temporárias da sessão principal. No
-  Redshift, cada sessão a mais é outra conexão, e as consultas pequenas, que esperam a rede, ganham
-  com ela mais que no DuckDB.
+  Redshift, cada sessão a mais é outra conexão, e as consultas pequenas, que esperam a rede,
+  ganharam com ela mais que no DuckDB; na medida de 2026-10-11 o cache de resultados respondeu às
+  repetições, e o ganho das consultas que vão ao motor não foi medido.
 - **Junte as consultas pequenas numa só**, com `GROUP BY` ou uma junção, antes de levá-las a
   threads: cada chamada com um statement Core o compila em Python, cerca de 2 ms sob o GIL, e esse
   tempo não se divide entre as threads.
@@ -1016,17 +1037,17 @@ do `COPY` planejou em 0,21 s a 0,34 s com os três `CREATE TABLE` das outras sem
   conferências, o commit e a releitura de cada tabela esperam a rede. Na pasta local ele não ganhou,
   porque o arquivo de cada partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada
   tabela em curso soma a memória da sua escrita.
-- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo**: das 21 repetições
-  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-10, onze
-  levaram de 10,520 s a 13,813 s e dez de 31,302 s a 36,110 s, nenhuma entre os dois grupos,
-  contra 24,341 s a 32,179 s das 21 repetições uma tabela por vez. Nas lentas, duas das quatro
-  transações, nas três publicações lentas que o `sys_query_history` leu, esperam no `INSERT` da
+- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo**: das 24 repetições
+  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-11, doze
+  levaram de 10,520 s a 13,813 s e doze de 31,302 s a 36,110 s, nenhuma entre os dois grupos, contra
+  24,341 s a 32,179 s das 24 repetições uma tabela por vez. Nas lentas, duas ou três das quatro
+  transações, nas cinco publicações lentas que o `sys_query_history` leu, esperam no `INSERT` da
   linha de controle, que cada uma grava no fim, e o servidor conta a espera, cerca de 20 s, como
-  planejamento do comando, sem fila nem lock (leituras de 2026-10-10); ela só veio em publicações
-  que criaram as tabelas, nenhuma das nove repetições sem o `CREATE TABLE` na transação esperou, o
-  que o `INSERT` espera não foi lido, e o runbook publica a base com `--max-workers 4`, cujas
-  publicações da base inteira não pagaram a espera em tabela alguma. O usuário aceitou a espera
-  em 2026-10-10, e a publicação segue criando a tabela na transação da carga, com a linha de
+  planejamento do comando, sem fila nem lock (leituras de 2026-10-10 e 2026-10-11); ela só veio em
+  publicações que criaram as tabelas, nenhuma das 15 repetições sem o `CREATE TABLE` na transação
+  esperou, o que o `INSERT` espera não foi lido, e o runbook publica a base com `--max-workers 4`,
+  cujas publicações da base inteira não pagaram a espera em tabela alguma. O usuário aceitou a
+  espera em 2026-10-10, e a publicação segue criando a tabela na transação da carga, com a linha de
   controle por último.
 
 ```python

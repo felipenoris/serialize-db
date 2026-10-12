@@ -2576,3 +2576,29 @@ keyword of `str.replace` in a test.
 
 `pyproject.toml`, `.github/workflows/tests.yml`, `src/serialize_db/resources.py`,
 `src/serialize_db/storage.py`, `docs/index.md`, `README.md`, `OPEN_QUESTIONS.md`.
+
+## The parallel probe's small queries without the result cache (2026-10-12)
+
+The battery of 2026-10-11 read the Redshift result cache (`enable_result_cache_for_session`, on by
+default) serving 640 of the 720 small queries of `probes/operacao/probe_parallel_gain.py`: only the
+serial form's first pass reached the engine, so the best of each form and the 1.93x of the extra
+sessions compared cached answers (`concurrency.md`). The assistant offered on a decision card in
+the battery's thread ("Escolher como a sonda de ganho mede as consultas pequenas no Redshift"):
+turn the cache off (recommended: "A sonda roda SET enable_result_cache_for_session TO off em cada
+sessão das consultas pequenas, e todas as repetições vão ao motor."); vary the values per form and
+repetition; or keep the probe, whose gain would keep measuring cached answers. The user chose
+"Desligar o cache" (2026-10-12, 01:51 UTC).
+
+- `turn_off_result_cache` runs the `SET` once on the main session, after the `stream` and
+  `appender` measures and before the small queries, outside the measured time, and
+  `count_in_new_session_without_cache` runs it on each extra session right after its opening,
+  inside the measured time like the opening. A refused `SET` prints as a reading and the small
+  queries run with the cache on; a reconnection of `execute` after a drop opens the session with
+  the cache on again. The `result_cache_hit` reading after the small queries stays, and with the
+  cache off it reads no query served by the cache.
+- The DuckDB section does not change. The card did not answer the extension of the `CLAUDE.md`
+  working rule on repetitions to the server's cache, which waits on the user
+  (`OPEN_QUESTIONS.md`).
+
+`probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
+`suite_alvo.sh`, `concurrency.md`, `OPEN_QUESTIONS.md`

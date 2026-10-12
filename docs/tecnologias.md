@@ -4030,8 +4030,21 @@ ordenação pula os blocos fora do intervalo. Numa tabela com cinco anos ordenad
 de um mês evita até 98 % dos blocos. Nas consultas, o otimizador redistribui linhas entre nós para
 joins e agregações, e essa redistribuição pode responder por parte substancial do custo do plano.
 
-A primeira execução de uma consulta inclui a compilação; as seguintes usam o cache de código, local e
-remoto. Medições comparam sempre a segunda execução.
+Os segmentos compilados ficam num cache local e num remoto, que sobrevive à reinicialização do
+cluster; pela documentação atual, a composição roda a consulta nova com lógica já existente enquanto
+o código dela compila ao fundo, o que tira a compilação do caminho da consulta.
+
+O cache de resultados, ligado por padrão, guarda no nó líder o resultado de certas consultas e o
+devolve sem rodar a consulta nova que case sintaticamente com a guardada, quando o usuário tem
+acesso aos objetos, as tabelas e visões não mudaram, a consulta não usa função avaliada a cada
+execução, como `GETDATE`, nem tabela externa do Spectrum, e os parâmetros de configuração que
+afetam o resultado são os mesmos; alguns resultados grandes ficam fora dele.
+`SET enable_result_cache_for_session TO off` o desliga na sessão, e a coluna `result_cache_hit` do
+`sys_query_history` diz se uma consulta o usou. No ambiente alvo, em 2026-10-11, ele serviu 640 das
+720 consultas pequenas de `probes/operacao/probe_parallel_gain.py`, as das sessões novas também, e
+só a primeira passada foi ao motor (`docs/index.md`, seção "Multithreading"). Uma medição que
+repete a mesma consulta mede esse cache, a menos que a sessão o desligue ou que o texto ou os
+valores mudem a cada execução.
 
 #### Diferenças para o PostgreSQL
 
@@ -4705,6 +4718,15 @@ nenhum `INSERT` esperou. As três ordens levaram de 9,427 s a 9,710 s (a da publ
 criadas antes). O usuário aceitou em 2026-10-10 a espera de cerca de 20 s da primeira publicação
 paralela de uma tabela nova (`docs/index.md`, seção "Multithreading").
 
+Em 2026-10-11 a ordem da publicação pela própria transação da sonda também esperou, numa das três
+repetições (29,991 s contra 10,042 s e 10,044 s): os dois `INSERT` da linha de controle que
+começaram enquanto outra transação segurava o lock levaram 20,237 s e 21,240 s, com 20,060 s e
+21,069 s de planejamento e 0 s de espera por lock. Nas seis publicações lentas lidas desde
+2026-10-10, o primeiro `INSERT` a terminar planejou de 20,060 s a 20,073 s, e cada um dos seguintes
+terminou de 0,24 s a 0,72 s depois do `COMMIT` do anterior, como se uma espera fixa de cerca de 20 s
+no servidor os soltasse para o lock um de cada vez; o que dispara essa espera não foi lido
+(`.claude/memory/concurrency.md`).
+
 ### Ingestão de dados
 
 Ordem de preferência da documentação:
@@ -5214,8 +5236,8 @@ de ordenação e de distribuição habilita o sort merge join sem fase de ordena
 
 No ambiente alvo, o join de `prd_cad_lancamentos` (283.835.836 linhas) com `prd_cad_contas` (101
 linhas) por `id_conta`, as duas publicadas em `DISTSTYLE AUTO`, leu `XN Hash Join DS_DIST_ALL_NONE`
-em 2026-10-09, e de novo às 21:45 do mesmo dia e em 2026-10-10, com 424.598.150 linhas: a tabela de
-contas está em `ALL`, e as tabelas publicadas seguem sem `DISTKEY`.
+em 2026-10-09, e de novo às 21:45 do mesmo dia, em 2026-10-10 e em 2026-10-11, com 424.598.150
+linhas: a tabela de contas está em `ALL`, e as tabelas publicadas seguem sem `DISTKEY`.
 
 **Escrita das consultas.** Sem `SELECT *`; predicados sobre a chave de ordenação; o mesmo filtro
 repetido nas duas tabelas de um join, mesmo que redundante, para que ambas sejam podadas; sem funções
@@ -5434,9 +5456,10 @@ linha do `redshift_connector`.
   `COMMENT`, restrições, chaves de ordenação e distribuição, `SELECT`, `INSERT`, `UPDATE`, `DELETE`,
   `MERGE`, `TRUNCATE`, tabelas de staging, carga de dados e boas práticas, `COPY`, `UNLOAD`,
   `VACUUM`, `ANALYZE`, codificações de compressão, otimização automática de tabelas, planejamento e
-  desempenho de consultas, `EXPLAIN`, isolamento e escritas concorrentes, os exemplos de escrita
-  concorrente, os erros de isolamento, `LOCK`, os comandos aceitos e recusados pela escrita por
-  datashare, `PG_LAST_COPY_COUNT`, `STL_LOAD_ERRORS` e `SYS_LOAD_ERROR_DETAIL`.
+  desempenho de consultas, o cache de resultados e `enable_result_cache_for_session`, `EXPLAIN`,
+  isolamento e escritas concorrentes, os exemplos de escrita concorrente, os erros de isolamento,
+  `LOCK`, os comandos aceitos e recusados pela escrita por datashare, `PG_LAST_COPY_COUNT`,
+  `STL_LOAD_ERRORS` e `SYS_LOAD_ERROR_DETAIL`.
 - Guia de gerenciamento do Amazon Redshift, conector Python e Data API:
   <https://docs.aws.amazon.com/redshift/latest/mgmt/>.
 - Repositório do `redshift_connector`: <https://github.com/aws/amazon-redshift-python-driver>.

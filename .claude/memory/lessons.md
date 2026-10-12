@@ -767,3 +767,13 @@ Read a story when the reason behind a rule in `CLAUDE.md` matters, or before add
   the entry were corrected before the first commit, d66195d, and the reply struck through. A
   choice is written down after rereading the message, with its time and where it was written, as
   the entries of `decisions.md` do, and an option someone else listed is not the answer.
+- **A repetition measures every cache the first run filled, the server's included** (2026-10-11).
+  `probe_parallel_gain.py`, written on 2026-10-04 after the rule of 2026-09-24, repeats its 80
+  Redshift small queries with the same text and values in three forms and three repetitions, the
+  extra sessions on new connections. Its first reading of `result_cache_hit` in
+  `sys_query_history`, in the battery of 2026-10-11, counted 640 of the 720 served by the leader
+  node's result cache (`enable_result_cache_for_session`, on by default) and 80 not: the first
+  serial pass took 5.597 s, the other eight repetitions 1.942 s to 3.910 s. A cache in the server
+  survives the new process and the new session that empty a client's: the best of three of every
+  form measured cached answers, and the runs since 2026-10-05, by the same design, most likely did
+  too [inferred] (`concurrency.md`).

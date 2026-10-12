@@ -923,8 +923,8 @@ def test_read_parquet_glob_takes_the_schema_from_the_first_file_by_name(
     divergente que a leitura abre, não o segundo em ordem de nome.
 
     ``parquet_import._check_first_file`` confere o primeiro arquivo em ordem de nome por isso. A
-    ordem da pasta é uma leitura: neste contêiner ela difere da ordem de nome, noutro sistema de
-    arquivos pode coincidir.
+    ordem da pasta é uma leitura: neste contêiner ela difere da ordem de nome, como na raiz local
+    do ambiente alvo na bateria de 2026-10-11, e noutro sistema de arquivos pode coincidir.
     """
     folder = Path(local_location.child("duckdb/glob"))
     folder.mkdir(parents=True)

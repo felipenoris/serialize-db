@@ -29,8 +29,8 @@ serialize-db import --root s3://bucket/projeto/delta --environment prd \
 ```
 
 Antes: a origem com uma pasta por tabela, `<origem>/<tabela>/`, que a carga só lê, e a memória da
-máquina, porque o pico do processo passa do `memory_limit` do DuckDB. Nas nove cargas da base de
-2026-09-25 a 2026-10-10, em máquinas de 2, 4 e 8 vCPUs, o pico do processo da carga ficou entre
+máquina, porque o pico do processo passa do `memory_limit` do DuckDB. Nas dez cargas da base de
+2026-09-25 a 2026-10-11, em máquinas de 2, 4 e 8 vCPUs, o pico do processo da carga ficou entre
 1,38 e 1,51 vez o `memory_limit` do DuckDB, entre 69% e 76% da memória disponível, sempre na maior
 partição de `cad_lancamentos`: 4.138 MB com 5.801 MB disponíveis e 2.900 MiB de limite em
 2026-10-07, 9.557 MB com 12.651 MB e 6.325 MiB em 2026-10-09. O pico acompanha o limite, metade da
@@ -184,6 +184,7 @@ linhas, que saiu sempre em 6 arquivos:
 | 2026-10-09, 21:55 | 8 | 12,4 GiB | 64, de 5,4 a 20,5 MB | de 55,1 a 66,9 MB, 370,1 MB | 5,6 s | 1.445 MB |
 | 2026-10-10 | 8 | 12,6 GiB | 64, de 5,4 a 16,6 MB | de 54,4 a 65,8 MB, 370,5 MB | 6,0 s | 1.649 MB |
 | 2026-10-10, 18:25 | 8 | 12,6 GiB | 61, de 5,6 a 21,2 MB | de 54,6 a 65,7 MB, 370,1 MB | 5,2 s | 1.502 MB |
+| 2026-10-11 | 8 | 12,4 GiB | 66, de 5,5 a 18,7 MB | de 47,6 a 68,5 MB, 369,9 MB | 5,6 s | 1.653 MB |
 
 Depois: `numFilesAdded` e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a
 medida da memória da compactação; um commit `OPTIMIZE` com `dataChange` falso, que
