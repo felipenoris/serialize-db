@@ -66,13 +66,15 @@ Para gerar o HTML estático, informe a pasta alvo em `-o`:
 
 ```
 uv sync --group docs
-uv run pdoc serialize_db --docformat restructuredtext -o /pasta/da/documentacao
+uv run pdoc serialize_db --docformat restructuredtext -t docs/theme -o /pasta/da/documentacao
 ```
 
 A pasta é criada se não existir e recebe `index.html`, que redireciona para `serialize_db.html`, a
 página principal, `serialize_db/` com uma página por módulo e `search.js`; abra `index.html` no
 navegador. `site/`, a pasta que a esteira usa, fica fora do git. Sem `-o`, o `pdoc` serve a
-documentação em `http://localhost:8080` e a regenera a cada mudança. A esteira
+documentação em `http://localhost:8080` e a regenera a cada mudança. O `-t docs/theme` traz as
+cores escuras do site, que o `pdoc` lê no lugar das suas: o site sai escuro com o sistema do leitor
+no modo claro ou no escuro. A esteira
 [`docs.yml`](.github/workflows/docs.yml) publica o mesmo resultado no GitHub Pages a cada push na
 `main`, em <https://felipenoris.github.io/serialize-db/>; a publicação exige o Pages do repositório
 com a origem "GitHub Actions".
