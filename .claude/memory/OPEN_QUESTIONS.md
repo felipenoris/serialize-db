@@ -180,24 +180,19 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   (`.claude/memory/concurrency.md`): no DuckDB os pools
   ganharam com 2 vCPUs a metade do que em 8, e com 4 vCPUs entre os dois, e no Redshift o ganho não
   dependeu da máquina; o ganho com mais CPUs segue sem medida e espera a sonda numa máquina maior.
-- **O cache de resultados do Redshift nas consultas pequenas da sonda de paralelismo.** As 80
-  consultas pequenas de `probes/operacao/probe_parallel_gain.py` no motor Redshift repetem o mesmo
-  texto com os mesmos valores sobre uma tabela que não muda, em três formas e três repetições, e o
-  cache de resultados do Redshift (`enable_result_cache_for_session`, ligado por padrão) pode ter
-  servido as repetições: às 17:02 de 2026-10-10, a série levou 5,327 s na primeira repetição e
-  3,720 s e 3,752 s nas seguintes, as threads na sessão principal 3,881 s, 3,952 s e 3,748 s, e as
-  sessões a mais 1,954 s, 1,798 s e 2,043 s; o menor tempo de cada forma entra no resumo, e um
-  cache servindo as repetições mediria o cache, não o motor (regra de 2026-09-24 em `CLAUDE.md`).
-  Desde o PR #155, de 2026-10-10, a sonda imprime, depois das consultas pequenas, quantas delas o
-  `sys_query_history` marca como servidas pelo cache (`result_cache_hit`), e desde o PR #157, de
-  2026-10-11, sem as leituras da própria vista. Na bateria de 2026-10-11 ele marcou 640 das 720
-  consultas como servidas pelo cache e 80 não; a primeira repetição da série, a primeira passada
-  pelos 80 textos e valores, levou 5,597 s, e as outras oito repetições das três formas de 1,942 s
-  a 3,910 s, então as 80 sem cache são essa primeira passada [inferido da ordem e dos tempos] e o
-  menor tempo de cada forma mede respostas do cache (`.claude/memory/concurrency.md`). Espera o
-  usuário: desligar o cache nas sessões das consultas pequenas
-  (`SET enable_result_cache_for_session TO off`), variar os valores a cada forma e repetição, ou
-  manter a medida, com a nota de que ela mede o cache.
+- **O ganho das consultas pequenas do Redshift sem o cache de resultados.** As 80 consultas
+  pequenas de `probes/operacao/probe_parallel_gain.py` no motor Redshift repetem o mesmo texto com
+  os mesmos valores sobre uma tabela que não muda, em três formas e três repetições, e na bateria
+  de 2026-10-11 o cache de resultados do Redshift (`enable_result_cache_for_session`, ligado por
+  padrão) serviu 640 das 720: só a primeira passada da série foi ao motor, e o menor tempo de cada
+  forma, com o ganho de 1,93 vez da sessão a mais, mede respostas do cache
+  (`.claude/memory/concurrency.md`). O usuário escolheu em 2026-10-12 desligar o cache nas sessões
+  das consultas pequenas (`.claude/memory/decisions.md`), e a sonda roda
+  `SET enable_result_cache_for_session TO off` na sessão principal e em cada sessão a mais
+  (`turn_off_result_cache`). Espera a próxima bateria: a leitura do `sys_query_history` sem
+  consulta servida pelo cache, e o ganho da sessão a mais nas consultas que vão ao motor, que
+  `docs/index.md` (seção "Multithreading") dá como não medido. A extensão da regra das repetições
+  do `CLAUDE.md` ao cache do servidor, no PR #161, espera a confirmação do usuário.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);

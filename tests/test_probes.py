@@ -38,6 +38,7 @@ import botocore.exceptions
 import duckdb
 import pyarrow as pa
 import pytest
+import redshift_connector
 import sqlalchemy as sa
 from deltalake import write_deltalake
 
@@ -2474,6 +2475,96 @@ def test_parallel_gain_result_cache_query_counts_the_small_queries_by_cache_hit(
     finally:
         connection.close()
     assert rows == [(False, 1), (True, 1)]
+
+
+class FakeRedshiftSession:
+    """Uma sessão do motor Redshift com o que as consultas pequenas de ``probe_parallel_gain.py``
+    chamam: o log guarda o ``SET``, cada consulta com a sua faixa e o fechamento, a consulta conta
+    as linhas da faixa, ``refuse`` faz o servidor recusar o ``SET``, e ``new_session`` guarda cada
+    sessão a mais que abre."""
+
+    def __init__(
+        self,
+        refuse: bool,
+    ) -> None:
+        self.refuse = refuse
+        self.log: list[object] = []
+        self.sessions: list[FakeRedshiftSession] = []
+
+    def execute(
+        self,
+        text: str,
+    ) -> None:
+        if self.refuse:
+            raise redshift_connector.ProgrammingError(
+                {"S": "ERROR", "C": "42501", "M": "permission denied"}
+            )
+        self.log.append(text)
+
+    def query(
+        self,
+        statement: sa.Select,
+        params: dict[str, int],
+    ) -> pa.Table:
+        self.log.append(("consulta", params["low"], params["high"]))
+        return pa.table({"n": [params["high"] - params["low"] + 1]})
+
+    def new_session(self) -> FakeRedshiftSession:
+        session = FakeRedshiftSession(self.refuse)
+        self.sessions.append(session)
+        return session
+
+    def __enter__(self) -> FakeRedshiftSession:
+        return self
+
+    def __exit__(
+        self,
+        *exc_info: object,
+    ) -> None:
+        self.log.append("fecha")
+
+
+def test_parallel_gain_turns_off_the_result_cache_before_the_small_queries(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``turn_off_result_cache`` roda na sessão o ``SET`` que desliga o cache de resultados e diz
+    se o servidor o aceitou, com a recusa impressa como leitura; ``count_in_new_sessions`` com
+    ``count_in_new_session_without_cache`` abre ``WORKERS`` sessões a mais, cada uma com o ``SET``
+    antes das suas consultas, e soma as linhas das faixas, e com ``count_in_new_session``, a forma
+    do DuckDB, consulta sem o ``SET``."""
+    cache_off = "SET enable_result_cache_for_session TO off"
+    engine = FakeRedshiftSession(refuse=False)
+    assert probe_parallel_gain.turn_off_result_cache(engine)
+    assert engine.log == [cache_off]
+
+    # Oito faixas de dez ids em quatro sessões a mais, duas por sessão.
+    ranges = probe_parallel_gain.query_ranges(80, 8)
+    count_without_cache = probe_parallel_gain.count_in_new_session_without_cache
+    total = probe_parallel_gain.count_in_new_sessions(engine, ranges, count_without_cache)
+    assert total == 80
+    assert len(engine.sessions) == probe_parallel_gain.WORKERS
+    queried = []
+    for session in engine.sessions:
+        assert session.log[0] == cache_off
+        assert session.log[-1] == "fecha"
+        assert len(session.log) == 4
+        queried.extend(session.log[1:-1])
+    assert sorted(queried) == [("consulta", low, high) for low, high in ranges]
+
+    # A sessão a mais do DuckDB consulta sem o SET.
+    duckdb_engine = FakeRedshiftSession(refuse=False)
+    count_with_cache = probe_parallel_gain.count_in_new_session
+    assert probe_parallel_gain.count_in_new_sessions(duckdb_engine, ranges, count_with_cache) == 80
+    for session in duckdb_engine.sessions:
+        assert cache_off not in session.log
+
+    # O servidor que recusa o SET: a recusa sai como leitura, e a sonda segue.
+    refusing = FakeRedshiftSession(refuse=True)
+    capsys.readouterr()
+    assert not probe_parallel_gain.turn_off_result_cache(refusing)
+    printed = capsys.readouterr().out
+    assert printed.startswith("cache de resultados: o servidor recusou o SET que o desliga (")
+    assert "permission denied" in printed
 
 
 def test_parallel_gain_commands_keep_the_start_the_thread_and_the_table() -> None:

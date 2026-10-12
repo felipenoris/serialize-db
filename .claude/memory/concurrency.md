@@ -468,11 +468,16 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   times; the probe prints no count per form]. The best of three of every form therefore measures
   the leader node's cached answers, about 47 ms per query in series against 70 ms in the first
   pass, and the 1.93x of the extra sessions compares cached answers. The earlier runs repeated
-  the same texts and values in the same order (the second battery of 2026-10-10 read 5.327 s in
-  the first serial repetition and 3.720 s and 3.752 s in the next two), so their bests read the
-  cache too [inferred]; the gain of the extra sessions on uncached queries is unmeasured, and
-  turning the cache off in the probe's sessions or varying the values waits on the user
-  (`OPEN_QUESTIONS.md`, "O cache de resultados do Redshift").
+  the same texts and values in the same order (the second battery of 2026-10-10, at 17:02, read
+  the serial form at 5.327 s in the first repetition and 3.720 s and 3.752 s in the next two, the
+  main session at 3.881 s, 3.952 s and 3.748 s and the extra sessions at 1.954 s, 1.798 s and
+  2.043 s), so their bests read the cache too [inferred]; the gain of the extra sessions on
+  uncached queries is unmeasured. The user chose on 2026-10-12 to turn the cache off in the small
+  queries' sessions (`decisions.md`, "The parallel probe's small queries without the result
+  cache"): the probe runs `SET enable_result_cache_for_session TO off` on the main session after
+  the `stream` and `appender` measures and on each extra session right after its opening, inside
+  the measured time like the opening, and the next battery's reading waits in `OPEN_QUESTIONS.md`
+  ("O ganho das consultas pequenas do Redshift sem o cache de resultados").
   The control row's wait came in two of the three four-worker repetitions with unpublish, three
   of the four transactions waiting in each. In the 31.747 s repetition `cad_paralelo_d`'s
   `INSERT` ran first (from 9.252 s, 0.463 s long, its `COMMIT` ending at 10.279 s), and the

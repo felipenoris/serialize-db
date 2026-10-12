@@ -23,10 +23,12 @@ anteriores. Cada seção de ``--only`` compara a forma em série, a primeira, co
 - ``redshift``: no motor Redshift, ``run.ingest`` das quatro contra uma chamada por tabela; o
   ``stream`` lido todo antes do trabalho contra o trabalho em cada lote do ``stream``, porque o
   ``query`` do Redshift passa pelo cursor; o ``appender`` e os dois juntos, como no DuckDB; 80
-  consultas pequenas, como no DuckDB, com a abertura de cada sessão a mais no tempo, e, depois
-  delas, quantas o ``sys_query_history`` marca como servidas pelo cache de resultados do
-  Redshift (``result_cache_hit``), porque as repetições repetem o texto e os valores sobre uma
-  tabela que não muda; e ``run.publish_delta`` com ``max_workers=4`` contra 1;
+  consultas pequenas, como no DuckDB, com o cache de resultados do Redshift desligado por
+  ``SET enable_result_cache_for_session TO off`` na sessão principal e em cada sessão a mais,
+  porque as repetições repetem o texto e os valores sobre uma tabela que não muda, e com a
+  abertura de cada sessão a mais e o ``SET`` dela no tempo; depois delas, quantas o
+  ``sys_query_history`` marca como servidas pelo cache (``result_cache_hit``); e
+  ``run.publish_delta`` com ``max_workers=4`` contra 1;
 - ``publicacao``: ``publication.publish_redshift`` das quatro com ``max_workers=4`` contra 1,
   primeiro com a despublicação depois de cada medida, fora do tempo, e depois sem ela, cada medida
   trocando a versão publicada pela outra de duas versões do Delta com as mesmas linhas: a da
@@ -535,9 +537,9 @@ def print_result_cache_reading(
 ) -> None:
     """Imprime quantas das ``expected`` consultas pequenas sobre ``table`` o ``sys_query_history``
     marca como servidas pelo cache de resultados do Redshift (``result_cache_hit``), esperando a
-    vista até 60 s, em passos de 5 s; a recusa da consulta sai como leitura. O cache ligado
-    (``enable_result_cache_for_session``, o padrão) serve a repetição de um texto com os mesmos
-    valores sobre uma tabela que não mudou, e a leitura diz se as repetições mediram o cache."""
+    vista até 60 s, em passos de 5 s; a recusa da consulta sai como leitura. Com o cache desligado
+    por ``turn_off_result_cache`` em cada sessão, nenhuma sai do cache, e a leitura confirma que as
+    repetições foram ao motor."""
     deadline = time.monotonic() + 60
     counts: dict[bool, int] = {}
     while True:
@@ -579,31 +581,59 @@ def count_in_new_session(
         return count_in_ranges(session, ranges)
 
 
-def count_in_new_sessions(
+def turn_off_result_cache(
+    engine: Engine,
+) -> bool:
+    """Desliga o cache de resultados do Redshift na sessão de ``engine`` e diz se o servidor aceitou
+    o ``SET``; a recusa sai como leitura. Ligado, o padrão, o cache respondeu a 640 das 720
+    consultas pequenas da bateria de 2026-10-11, e só a primeira passada em série foi ao motor. A
+    reconexão de ``execute`` depois de uma queda abre a sessão com o cache ligado de novo, e
+    ``print_result_cache_reading`` mostra as consultas que ele serviu."""
+    try:
+        engine.execute("SET enable_result_cache_for_session TO off")
+    except redshift_connector.Error as error:
+        print(f"cache de resultados: o servidor recusou o SET que o desliga ({error})")
+        return False
+    return True
+
+
+def count_in_new_session_without_cache(
     engine: Engine,
     ranges: list[tuple[int, int]],
 ) -> int:
-    """As faixas em ``WORKERS`` threads, cada uma com a sua sessão a mais."""
+    """As faixas numa sessão a mais do Redshift, aberta e fechada aqui, com o cache de resultados
+    desligado nela antes das consultas."""
+    with engine.new_session() as session:
+        turn_off_result_cache(session)
+        return count_in_ranges(session, ranges)
+
+
+def count_in_new_sessions(
+    engine: Engine,
+    ranges: list[tuple[int, int]],
+    count_in_session: Callable[[Engine, list[tuple[int, int]]], int],
+) -> int:
+    """As faixas em ``WORKERS`` threads, cada uma numa sessão a mais que ``count_in_session``
+    abre, consulta e fecha."""
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = []
         for chunk in chunks_of(ranges):
-            futures.append(pool.submit(count_in_new_session, engine, chunk))
+            futures.append(pool.submit(count_in_session, engine, chunk))
         return sum(future.result() for future in futures)
 
 
 # ---------------------------------------------------------------- as medidas de um motor
 
 
-def engine_measures(
+def stream_and_appender_measures(
     engine: Engine,
     engine_label: str,
     read_whole: Callable[[Engine], list[pa.RecordBatch]],
     rows: int,
     repetitions: int,
-    queries: int,
 ) -> None:
-    """``stream``, ``appender``, os dois juntos e as consultas pequenas num motor com ``SOURCE`` e
-    ``OUTPUT`` no sandbox."""
+    """``stream``, ``appender`` e os dois juntos num motor com ``SOURCE`` e ``OUTPUT`` no
+    sandbox."""
     batches = read_whole(engine)
     for work_name, work in WORKS.items():
         measure(
@@ -633,6 +663,19 @@ def engine_measures(
             repetitions,
             rows,
         )
+
+
+def small_query_measures(
+    engine: Engine,
+    engine_label: str,
+    rows: int,
+    repetitions: int,
+    queries: int,
+    count_in_session: Callable[[Engine, list[tuple[int, int]]], int],
+) -> None:
+    """As ``queries`` consultas pequenas sobre ``SOURCE`` em série, em ``WORKERS`` threads na
+    sessão principal e em ``WORKERS`` threads com uma sessão a mais cada, que ``count_in_session``
+    abre e consulta."""
     ranges = query_ranges(rows, queries)
     expected = len(ranges) * (ranges[0][1] - ranges[0][0] + 1)
     measure(
@@ -640,7 +683,9 @@ def engine_measures(
         {
             "serie": timed_variant(count_in_ranges, engine, ranges),
             "threads na principal": timed_variant(count_in_threads, engine, ranges),
-            "threads com sessão a mais": timed_variant(count_in_new_sessions, engine, ranges),
+            "threads com sessão a mais": timed_variant(
+                count_in_new_sessions, engine, ranges, count_in_session
+            ),
         },
         repetitions,
         expected,
@@ -771,7 +816,10 @@ def duckdb_section(
     with Execution(db, "duckdb", PARTITION) as run:
         run.ingest(SOURCE, materialize=True)
         run.sandbox.create_table(OUTPUT)
-        engine_measures(run.sandbox, "duckdb", whole_by_query, rows, repetitions, DUCKDB_QUERIES)
+        stream_and_appender_measures(run.sandbox, "duckdb", whole_by_query, rows, repetitions)
+        small_query_measures(
+            run.sandbox, "duckdb", rows, repetitions, DUCKDB_QUERIES, count_in_new_session
+        )
 
 
 def pools_section(
@@ -797,16 +845,26 @@ def redshift_section(
     repetitions: int,
 ) -> None:
     """O motor Redshift: a ingestão das quatro tabelas, as medidas do motor sobre
-    ``cad_paralelo_a``, a leitura do cache de resultados nas consultas pequenas e a publicação no
-    Delta."""
+    ``cad_paralelo_a``, as consultas pequenas com o cache de resultados desligado, a leitura do
+    cache nelas e a publicação no Delta."""
     count = len(TABLES)
     measure("redshift ingest", ingest_variants(db, "redshift", rows), repetitions, count)
     with Execution(db, "redshift", PARTITION) as run:
         run.ingest(SOURCE)
         run.sandbox.create_table(OUTPUT)
+        # A leitura do cache conta as contagens sobre a tabela de origem desde este instante,
+        # tomado antes das medidas do stream e do appender, que não fazem nenhuma, para tolerar a
+        # diferença entre o relógio da máquina e o do servidor.
         since = time.time()
-        engine_measures(
-            run.sandbox, "redshift", whole_by_stream, rows, repetitions, REDSHIFT_QUERIES
+        stream_and_appender_measures(run.sandbox, "redshift", whole_by_stream, rows, repetitions)
+        # As consultas pequenas vão ao motor com o cache de resultados desligado na sessão
+        # principal e em cada sessão a mais (decisão do usuário de 2026-10-12), e as medidas do
+        # stream e do appender ficam antes do SET; com o SET recusado, o cache fica ligado.
+        count_in_session = count_in_new_session
+        if turn_off_result_cache(run.sandbox):
+            count_in_session = count_in_new_session_without_cache
+        small_query_measures(
+            run.sandbox, "redshift", rows, repetitions, REDSHIFT_QUERIES, count_in_session
         )
         # As consultas pequenas em três formas, série, threads na sessão e sessões a mais.
         expected = REDSHIFT_QUERIES * 3 * repetitions
