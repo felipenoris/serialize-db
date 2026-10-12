@@ -2602,3 +2602,17 @@ repetition; or keep the probe, whose gain would keep measuring cached answers. T
 
 `probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
 `suite_alvo.sh`, `concurrency.md`, `OPEN_QUESTIONS.md`
+
+## The `pdoc` site always dark (2026-10-12)
+
+On 2026-10-12 at 03:18 UTC the user asked to apply dark mode to the `pdoc` site, "similar ao que
+foi feito no último commit do https://github.com/felipenoris/awsds-workflows". That commit,
+71c8227 of awsds-workflows (its PR #13), makes the site always dark: its
+`.claude/memory/decisions.md` records the user's choice there of "Sempre escuro" over "Seguir o
+sistema" (02:56 UTC), so every reader sees the site dark, whatever their system's setting. The
+site here does the same with the same two files in `docs/theme/`, the folder pdoc reads with `-t`:
+pdoc 16.0.0's `dark-mode` example for the page, with `color-scheme: dark`, and Pygments 2.21.0's
+`monokai` for the code. The package's code does not change.
+
+`docs/theme/theme.css`, `docs/theme/syntax-highlighting.css`, `.github/workflows/docs.yml`,
+`README.md`, `REFERENCES.md`.

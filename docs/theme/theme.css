@@ -1,0 +1,26 @@
+/*
+As cores do site, que o pdoc lê no lugar do seu theme.css: as do exemplo dark-mode do pdoc, para
+todo leitor. O color-scheme faz o navegador desenhar a caixa de busca e as barras de rolagem no
+modo escuro.
+*/
+:root {
+    color-scheme: dark;
+    --pdoc-background: #212529;
+}
+
+.pdoc {
+    --text: #f7f7f7;
+    --muted: #9d9d9d;
+    --link: #58a6ff;
+    --link-hover: #3989ff;
+    --code: #333;
+    --active: #555;
+
+    --accent: #343434;
+    --accent2: #555;
+
+    --nav-hover: rgba(0, 0, 0, 0.1);
+    --name: #77C1FF;
+    --def: #0cdd0c;
+    --annotation: #00c037;
+}

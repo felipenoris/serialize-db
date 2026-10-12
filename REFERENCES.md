@@ -1164,6 +1164,12 @@ As versões do Python e as rodas de cada uma, consultadas em 2026-10-11 para o `
 `python-version` do `setup-uv` vale por cima do `.python-version`:
 <https://docs.astral.sh/uv/guides/integration/github/>.
 
+O exemplo `dark-mode` do pdoc 16.0.0, lido em 2026-10-12, de onde vêm as cores escuras do
+`theme.css` de `docs/theme/` e o estilo `monokai` do destaque do código:
+<https://raw.githubusercontent.com/mitmproxy/pdoc/v16.0.0/examples/dark-mode/README.md>,
+<https://raw.githubusercontent.com/mitmproxy/pdoc/v16.0.0/examples/dark-mode/theme.css> e
+<https://raw.githubusercontent.com/mitmproxy/pdoc/v16.0.0/examples/dark-mode/syntax-highlighting.css>.
+
 ## Delta Lake
 
 Documentação do delta-rs e repositórios:
@@ -1509,3 +1515,4 @@ Python:
 ## Repositórios consultados
 
 - <https://github.com/felipenoris/AWS-DataScience> (2026-09-19): a pasta `aws/` (`INDEX.md`, `awslib/report.py`, `awslib/context.py`, `studio.py`, `probes/README.md`), o formato dos scripts de leitura que `probes/` deste repositório reproduz: só leitura, seções numeradas, chamada ecoada acima do resultado, identificadores `NOME=valor`, checagens `pass`/`fail`/`note` e a seção final de chamadas que falharam.
+- <https://github.com/felipenoris/awsds-workflows> (2026-10-12): o commit 71c8227, "O site da documentação sempre no modo escuro", de onde vêm os arquivos de `docs/theme/` e o `-t docs/theme` do `pdoc`.

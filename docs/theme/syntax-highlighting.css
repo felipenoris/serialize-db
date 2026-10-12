@@ -1,0 +1,94 @@
+/*
+O destaque de sintaxe dos blocos de código, que o pdoc lê no lugar do seu syntax-highlighting.css:
+o estilo monokai, gerado pelo Pygments 2.21.0 com `pygmentize -f html -a .pdoc-code -S monokai`.
+As regras de pre e de span.linenos são as do pdoc 16.0.0.
+*/
+pre { line-height: 125%; }
+
+span.linenos {
+    color: inherit;
+    background-color: transparent;
+    padding-left: 5px;
+    padding-right: 20px;
+}
+
+.pdoc-code .hll { background-color: #49483e }
+.pdoc-code { background: #272822; color: #F8F8F2 }
+.pdoc-code .c { color: #959077 } /* Comment */
+.pdoc-code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+.pdoc-code .esc { color: #F8F8F2 } /* Escape */
+.pdoc-code .g { color: #F8F8F2 } /* Generic */
+.pdoc-code .k { color: #66D9EF } /* Keyword */
+.pdoc-code .l { color: #AE81FF } /* Literal */
+.pdoc-code .n { color: #F8F8F2 } /* Name */
+.pdoc-code .o { color: #FF4689 } /* Operator */
+.pdoc-code .x { color: #F8F8F2 } /* Other */
+.pdoc-code .p { color: #F8F8F2 } /* Punctuation */
+.pdoc-code .ch { color: #959077 } /* Comment.Hashbang */
+.pdoc-code .cm { color: #959077 } /* Comment.Multiline */
+.pdoc-code .cp { color: #959077 } /* Comment.Preproc */
+.pdoc-code .cpf { color: #959077 } /* Comment.PreprocFile */
+.pdoc-code .c1 { color: #959077 } /* Comment.Single */
+.pdoc-code .cs { color: #959077 } /* Comment.Special */
+.pdoc-code .gd { color: #FF4689 } /* Generic.Deleted */
+.pdoc-code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+.pdoc-code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+.pdoc-code .gr { color: #FF4689 } /* Generic.Error */
+.pdoc-code .gh { color: #F8F8F2 } /* Generic.Heading */
+.pdoc-code .gi { color: #A6E22E } /* Generic.Inserted */
+.pdoc-code .go { color: #66D9EF } /* Generic.Output */
+.pdoc-code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+.pdoc-code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+.pdoc-code .gu { color: #959077 } /* Generic.Subheading */
+.pdoc-code .gt { color: #66D9EF } /* Generic.Traceback */
+.pdoc-code .kc { color: #66D9EF } /* Keyword.Constant */
+.pdoc-code .kd { color: #66D9EF } /* Keyword.Declaration */
+.pdoc-code .kn { color: #FF4689 } /* Keyword.Namespace */
+.pdoc-code .kp { color: #66D9EF } /* Keyword.Pseudo */
+.pdoc-code .kr { color: #66D9EF } /* Keyword.Reserved */
+.pdoc-code .kt { color: #66D9EF } /* Keyword.Type */
+.pdoc-code .ld { color: #E6DB74 } /* Literal.Date */
+.pdoc-code .m { color: #AE81FF } /* Literal.Number */
+.pdoc-code .s { color: #E6DB74 } /* Literal.String */
+.pdoc-code .na { color: #A6E22E } /* Name.Attribute */
+.pdoc-code .nb { color: #A6E22E } /* Name.Builtin */
+.pdoc-code .nc { color: #A6E22E } /* Name.Class */
+.pdoc-code .no { color: #66D9EF } /* Name.Constant */
+.pdoc-code .nd { color: #A6E22E } /* Name.Decorator */
+.pdoc-code .ni { color: #F8F8F2 } /* Name.Entity */
+.pdoc-code .ne { color: #A6E22E } /* Name.Exception */
+.pdoc-code .nf { color: #A6E22E } /* Name.Function */
+.pdoc-code .nl { color: #F8F8F2 } /* Name.Label */
+.pdoc-code .nn { color: #F8F8F2 } /* Name.Namespace */
+.pdoc-code .nx { color: #A6E22E } /* Name.Other */
+.pdoc-code .py { color: #F8F8F2 } /* Name.Property */
+.pdoc-code .nt { color: #FF4689 } /* Name.Tag */
+.pdoc-code .nv { color: #F8F8F2 } /* Name.Variable */
+.pdoc-code .ow { color: #FF4689 } /* Operator.Word */
+.pdoc-code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+.pdoc-code .w { color: #F8F8F2 } /* Text.Whitespace */
+.pdoc-code .mb { color: #AE81FF } /* Literal.Number.Bin */
+.pdoc-code .mf { color: #AE81FF } /* Literal.Number.Float */
+.pdoc-code .mh { color: #AE81FF } /* Literal.Number.Hex */
+.pdoc-code .mi { color: #AE81FF } /* Literal.Number.Integer */
+.pdoc-code .mo { color: #AE81FF } /* Literal.Number.Oct */
+.pdoc-code .sa { color: #E6DB74 } /* Literal.String.Affix */
+.pdoc-code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+.pdoc-code .sc { color: #E6DB74 } /* Literal.String.Char */
+.pdoc-code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+.pdoc-code .sd { color: #E6DB74 } /* Literal.String.Doc */
+.pdoc-code .s2 { color: #E6DB74 } /* Literal.String.Double */
+.pdoc-code .se { color: #AE81FF } /* Literal.String.Escape */
+.pdoc-code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+.pdoc-code .si { color: #E6DB74 } /* Literal.String.Interpol */
+.pdoc-code .sx { color: #E6DB74 } /* Literal.String.Other */
+.pdoc-code .sr { color: #E6DB74 } /* Literal.String.Regex */
+.pdoc-code .s1 { color: #E6DB74 } /* Literal.String.Single */
+.pdoc-code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+.pdoc-code .bp { color: #A6E22E } /* Name.Builtin.Pseudo */
+.pdoc-code .fm { color: #A6E22E } /* Name.Function.Magic */
+.pdoc-code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+.pdoc-code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+.pdoc-code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+.pdoc-code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+.pdoc-code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
