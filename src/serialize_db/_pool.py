@@ -1,8 +1,10 @@
-"""[private] O pool de tarefas por tabela que a execução, a publicação e o leitor usam.
+"""[private] O pool de threads que a execução, a publicação e o leitor usam para tratar várias
+tabelas ao mesmo tempo, uma tarefa por tabela.
 
-Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em curso
-terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada tarefa
-numa nota, porque os commits feitos ficam.
+Uma tarefa só começa quando há um worker livre e nenhuma tarefa falhou. Na primeira falha, as
+tarefas em curso terminam, as que não começaram ficam canceladas, e a exceção sobe com o
+resultado de cada tarefa numa nota. A nota existe porque os commits das tarefas que terminaram
+ficam: o Delta não tem transação entre tabelas.
 """
 
 from __future__ import annotations
@@ -20,7 +22,8 @@ Task = tuple[str, Callable[[], object]]
 def _outcome(
     future: Future,
 ) -> str:
-    """[private] O resultado de uma tarefa terminada ou cancelada, para a nota da exceção."""
+    """[private] O resultado de uma tarefa terminada ou cancelada, como texto para a nota da
+    exceção: ``cancelada``, ``concluída`` ou ``falhou`` com o tipo e a mensagem do erro."""
     if future.cancelled():
         return "cancelada"
     error = future.exception()
@@ -32,8 +35,8 @@ def _outcome(
 def _outcomes_note(
     outcomes: Mapping[str, str],
 ) -> str:
-    """[private] A nota da exceção com o resultado de cada tabela: os commits feitos ficam, porque o
-    Delta não tem transação entre tabelas."""
+    """[private] A nota da exceção com o resultado de cada tabela, em ordem de nome. A nota mostra o
+    que ficou feito, porque os commits feitos ficam: o Delta não tem transação entre tabelas."""
     lines = []
     for name, outcome in sorted(outcomes.items()):
         lines.append(f"{name}: {outcome}")
@@ -52,9 +55,9 @@ def _outcomes_of(
 
 @dataclasses.dataclass
 class _PoolState:
-    """[private] O estado do pool das tabelas: uma tarefa começa só com um worker livre e nenhuma
-    falha, então, na primeira falha, o que está em curso termina e o que não começou fica de
-    fora."""
+    """[private] O estado do pool das tabelas durante ``run_in_pool``: as tarefas em curso, as
+    terminadas e a primeira falha. Uma tarefa começa só com um worker livre e nenhuma falha;
+    então, na primeira falha, o que está em curso termina e o que não começou fica de fora."""
 
     pool: ThreadPoolExecutor
     workers: int
@@ -66,14 +69,16 @@ class _PoolState:
         self,
         waiting: list[Task],
     ) -> None:
-        """[private] Começa as tarefas que cabem nos workers livres, enquanto não houve falha."""
+        """[private] Tira de ``waiting`` e submete ao pool as tarefas que cabem nos workers livres,
+        enquanto não houve falha."""
         while waiting and self.failure is None and len(self.running) < self.workers:
             name, action = waiting.pop(0)
             future = self.pool.submit(action)
             self.running[future] = name
 
     def collect(self) -> None:
-        """[private] Espera a próxima tarefa terminar e guarda a primeira falha."""
+        """[private] Espera ao menos uma tarefa em curso terminar, move as terminadas para
+        ``finished`` e guarda a primeira falha em ``failure``."""
         done, _ = wait(self.running, return_when=FIRST_COMPLETED)
         for future in done:
             self.finished[future] = self.running.pop(future)
@@ -85,13 +90,14 @@ def run_in_pool(
     tasks: list[Task],
     max_workers: int,
 ) -> dict[str, object]:
-    """[protected] Roda as tarefas num pool de ``max_workers`` e devolve o resultado de cada uma
-    pelo nome; para ``serialize_db.execution``, ``serialize_db.publication`` e
+    """[protected] Roda as tarefas num pool de ``max_workers`` threads e devolve o resultado de
+    cada uma pelo nome da tabela; para ``serialize_db.execution``, ``serialize_db.publication`` e
     ``serialize_db.reader``.
 
-    Uma tarefa começa só com um worker livre e nenhuma falha: na primeira falha, as tarefas em
-    curso terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de cada
-    tarefa numa nota. Com um worker por tarefa, todas começam juntas e todas terminam.
+    Cada tarefa é um par com o nome da tabela e a função sem argumentos que a processa. Uma tarefa
+    só começa quando há um worker livre e nenhuma tarefa falhou. Na primeira falha, as tarefas em
+    curso terminam, as que não começaram ficam canceladas, e a exceção sobe com o resultado de
+    cada tarefa numa nota. Com um worker por tarefa, todas começam juntas e todas terminam.
     """
     waiting = list(tasks)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:

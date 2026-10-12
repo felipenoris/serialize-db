@@ -1,29 +1,38 @@
 """[public] As verificações que a auditoria roda antes de publicar no Delta, derivadas do contrato.
 
-Chave primária, unicidade e chave estrangeira ficam fora do DDL dos dois sandboxes; a auditoria é
-onde elas são aplicadas, com consultas montadas a partir do ``Table`` do modelo, sem declaração
-adicional. ``checks`` devolve a lista de ``Check``, cada um com o statement Core sobre a tabela do
-contrato, e não sabe qual motor o roda; ``audit_sql`` renderiza o texto de cada verificação por
-``sql.render``, para depuração. O motor roda as verificações e monta o ``AuditReport``.
+A auditoria confere uma tabela do sandbox, o banco de trabalho da execução no DuckDB ou no
+Redshift, contra o contrato, o modelo SQLAlchemy do cliente. Chave primária, unicidade e chave
+estrangeira ficam fora do DDL dos dois sandboxes. A auditoria é onde elas são aplicadas: cada
+verificação é uma consulta montada a partir do ``Table`` do modelo, sem declaração adicional.
 
-As verificações:
+O módulo divide o trabalho com o motor da execução:
 
-- **linhas**: uma consulta, agrupada pela coluna de partição numa tabela particionada, que conta
-  por coluna o nulo em ``NOT NULL``, o texto acima de ``String(n)`` em bytes, o texto de uma coluna
-  ``Uuid`` acima de 36 bytes, o texto de uma coluna ``Text`` e o documento JSON acima de 65.535
-  bytes, o teto do Redshift, o JSON inválido, a coluna de partição diferente da derivação de
-  ``partition_source`` e o valor de partição fora de ``schema.PARTITION_VALUE``; e que soma cada
-  coluna ``Numeric`` e ``Double`` como ``DECIMAL(38, 6)`` (a ``Double`` só nos valores finitos) e
-  conta à parte os não finitos, uma leitura que não reprova;
-- **chave_<colunas>**: a chave repetida nas partições da execução, uma consulta por chave;
-- **chave_<colunas>_tabela**: a chave repetida entre as partições da execução e as demais da
-  versão fixada, numa tabela particionada com as partições da execução e numa chave sem a coluna
-  de partição; a chave com a coluna de ``partition_source`` só com ``key_scope="table"``, e
-  nenhuma com ``key_scope="partition"``;
-- **orfao_<colunas>**: a chave estrangeira sem a linha referenciada, só com ``foreign_keys=True``.
+- ``checks`` devolve a lista de ``Check``. Cada ``Check`` traz o statement Core sobre a tabela do
+  contrato e não sabe qual motor o roda.
+- ``audit_sql`` renderiza o texto de cada verificação por ``sql.render``, para depuração.
+- O motor, ``DuckDBEngine`` ou ``RedshiftEngine``, roda as verificações e monta o ``AuditReport``.
 
-As funções que mudam de nome entre os motores são subclasses de ``FunctionElement`` com uma regra
-``@compiles`` por dialeto, e não registram nada em ``sa.func``.
+As verificações, pelo nome que cada uma tem no relatório:
+
+- ``linhas``: uma consulta só, agrupada pela coluna de partição numa tabela particionada. Ela conta
+  por coluna os defeitos: o nulo em ``NOT NULL``, o texto acima de ``String(n)`` em bytes, o texto
+  de uma coluna ``Uuid`` acima de 36 bytes, o texto de uma coluna ``Text`` e o documento JSON acima
+  de 65.535 bytes (o teto do Redshift), o JSON inválido, a coluna de partição diferente da
+  derivação de ``partition_source`` e o valor de partição fora de ``schema.PARTITION_VALUE``. A
+  mesma consulta soma cada coluna ``Numeric`` e ``Double`` como ``DECIMAL(38, 6)``, a ``Double`` só
+  nos valores finitos, e conta à parte os não finitos. As somas e as contagens de não finitos são
+  leituras: elas não reprovam.
+- ``chave_<colunas>``: a chave repetida nas partições da execução, uma consulta por chave.
+- ``chave_<colunas>_tabela``: a chave repetida entre as partições da execução e as demais
+  partições da versão fixada, a versão da tabela Delta que a execução leu na abertura. Ela roda
+  numa tabela particionada, com as partições da execução, e numa chave sem a coluna de partição.
+  A chave com a coluna de ``partition_source`` só entra com ``key_scope="table"``, e nenhuma
+  chave entra com ``key_scope="partition"``.
+- ``orfao_<colunas>``: a chave estrangeira sem a linha referenciada, só com
+  ``foreign_keys=True``.
+
+As funções SQL que mudam de nome entre os motores são subclasses de ``FunctionElement`` com uma
+regra ``@compiles`` por dialeto. Elas não registram nada em ``sa.func``.
 
 Exemplo:
 
@@ -64,10 +73,13 @@ from serialize_db.schema import (
 __all__ = ["AuditReport", "Check", "CheckResult", "KeyScope", "audit_sql", "checks"]
 
 KeyScope = Literal["partition", "table"]
-"""[public] O escopo da unicidade na verificação ``chave_<colunas>_tabela``: ``"partition"`` confere
-a chave só nas partições da execução; ``"table"`` a confere contra as demais partições da versão
-fixada também na chave com a coluna de ``partition_source``; ``None`` confere contra a versão fixada
-só a chave sem a coluna de partição e sem a de ``partition_source``."""
+"""[public] O escopo da unicidade na verificação ``chave_<colunas>_tabela``.
+
+- ``"partition"`` confere a chave só nas partições da execução.
+- ``"table"`` confere a chave contra as demais partições da versão fixada também na chave com a
+  coluna de ``partition_source``.
+- ``None`` confere contra a versão fixada só a chave sem a coluna de partição e sem a de
+  ``partition_source``."""
 
 # O teto de linhas de amostra de cada verificação reprovada, no relatório e no log.
 SAMPLE_ROWS = 20
@@ -81,16 +93,16 @@ def _by_name(
     compiler: object,
     **kw: object,
 ) -> str:
-    """[private] A regra padrão: o nome da função com os argumentos, para os dialetos sem regra
-    própria e para o ``str`` de um statement. Uma subclasse de ``FunctionElement`` sem regra padrão
-    não compila fora dos dialetos que a declaram, e o dialeto do DuckDB é um compilador do
-    PostgreSQL."""
+    """[private] A regra de compilação padrão das funções deste módulo: o nome da função com os
+    argumentos. Ela vale para os dialetos sem regra própria e para o ``str`` de um statement. Sem
+    uma regra padrão, uma subclasse de ``FunctionElement`` não compila fora dos dialetos que a
+    declaram, e o dialeto do DuckDB é um compilador do PostgreSQL."""
     return f"{element.name}({compiler.process(element.clauses, **kw)})"
 
 
 class _partition_text(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
     """[private] O texto ``AAAA-MM-DD`` de uma data: ``strftime`` no DuckDB e ``to_char`` no
-    Redshift; para os contadores de defeito da verificação de linhas."""
+    Redshift. Serve aos contadores de defeito da verificação de linhas."""
 
     name = "partition_text"
     type = sa.String()
@@ -119,10 +131,10 @@ def _redshift_partition_text(
 
 
 class _json_valid(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
-    """[private] Se o texto é um documento JSON: ``json_valid`` no DuckDB; no Redshift, ``true``,
-    porque a coluna JSON é ``SUPER``, cujo valor sempre se serializa como documento JSON, e o
-    ``is_valid_json`` recusa ``SUPER`` (42883, leitura de 2026-09-23). Para os contadores de defeito
-    da verificação de linhas."""
+    """[private] Se o texto é um documento JSON: ``json_valid`` no DuckDB e ``true`` no Redshift.
+    No Redshift a coluna JSON é ``SUPER``, cujo valor sempre se serializa como documento JSON, e o
+    ``is_valid_json`` recusa ``SUPER`` (42883, leitura de 2026-09-23). Serve aos contadores de
+    defeito da verificação de linhas."""
 
     name = "json_valid"
     type = sa.Boolean()
@@ -143,8 +155,8 @@ def _redshift_json_valid(
 
 class _text_bytes(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
     """[private] O comprimento do texto em bytes, a medida do ``VARCHAR(n)`` do Redshift:
-    ``strlen`` no DuckDB e ``octet_length`` no Redshift, porque o ``length`` dos dois conta
-    caracteres. Para os contadores de defeito da verificação de linhas."""
+    ``strlen`` no DuckDB e ``octet_length`` no Redshift. O ``length`` dos dois motores conta
+    caracteres, não bytes. Serve aos contadores de defeito da verificação de linhas."""
 
     name = "text_bytes"
     type = sa.Integer()
@@ -174,7 +186,7 @@ def _redshift_text_bytes(
 
 class _json_bytes(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
     """[private] O tamanho do documento JSON em bytes: ``strlen`` do texto no DuckDB, onde a
-    coluna é ``JSON`` ou ``VARCHAR``, e ``json_size`` no Redshift, onde ela é ``SUPER``. Para os
+    coluna é ``JSON`` ou ``VARCHAR``, e ``json_size`` no Redshift, onde ela é ``SUPER``. Serve aos
     contadores de defeito da verificação de linhas."""
 
     name = "json_bytes"
@@ -205,7 +217,7 @@ def _redshift_json_bytes(
 
 class _partition_value_valid(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
     """[private] Se o valor de partição segue ``schema.PARTITION_VALUE`` por inteiro:
-    ``regexp_full_match`` no DuckDB e o operador POSIX ``~`` com as âncoras no Redshift. Para os
+    ``regexp_full_match`` no DuckDB e o operador POSIX ``~`` com as âncoras no Redshift. Serve aos
     contadores de defeito da verificação de linhas."""
 
     name = "partition_value_valid"
@@ -235,14 +247,15 @@ def _redshift_partition_value_valid(
 
 
 class _is_finite(FunctionElement):  # noqa: N801 - o nome segue o da função SQL
-    """[private] Se o ``Double`` é finito: ``isfinite`` no DuckDB; no Redshift, estritamente entre
-    os infinitos. Para as somas de controle da verificação de linhas.
+    """[private] Se o ``Double`` é finito: ``isfinite`` no DuckDB e, no Redshift, o valor
+    estritamente entre os infinitos. Serve às somas de controle da verificação de linhas.
 
-    O Redshift comparou o ``NaN`` igual a si mesmo numa constante, como o PostgreSQL, e lá a
-    comparação estrita com os infinitos dá falso a ele. Na varredura de uma tabela, nem essa
-    comparação nem a negação dela deram verdadeiro ao ``NaN``, e ``NOT IN ('NaN'::float8, ...)`` o
-    deu por finito (leituras de 2026-09-23). A condição só entra afirmada: a soma de controle corre
-    onde ela é verdadeira, e os não finitos são os não nulos menos os finitos (``_totals``).
+    A condição só entra afirmada, nunca negada, pelas leituras de 2026-09-23 no Redshift. Numa
+    constante, o Redshift comparou o ``NaN`` igual a si mesmo, como o PostgreSQL, e a comparação
+    estrita com os infinitos deu falso a ele. Na varredura de uma tabela, nem essa comparação nem a
+    negação dela deram verdadeiro ao ``NaN``, e ``NOT IN ('NaN'::float8, ...)`` o deu por finito.
+    Por isso a soma de controle corre onde a condição é verdadeira, e os não finitos são os não
+    nulos menos os finitos (``_totals``).
     """
 
     name = "isfinite"
@@ -268,7 +281,8 @@ def _redshift_is_finite(
 
 @dataclasses.dataclass(frozen=True)
 class Check:
-    """[public] Uma verificação: o statement Core sobre a tabela do contrato e o que o reprova.
+    """[public] Uma verificação da auditoria: o statement Core sobre a tabela do contrato e o que
+    a reprova.
 
     Exemplo:
 
@@ -279,24 +293,25 @@ class Check:
     """
 
     name: str
-    """[public] ``linhas``, ``chave_<colunas>``, ``chave_<colunas>_tabela`` ou
-    ``orfao_<colunas>``."""
+    """[public] O nome da verificação: ``linhas``, ``chave_<colunas>``, ``chave_<colunas>_tabela``
+    ou ``orfao_<colunas>``."""
     statement: sa.Select
-    """[public] A consulta; na de linhas, uma linha por partição, e nas demais uma linha por
-    defeito."""
+    """[public] A consulta da verificação. Na verificação de linhas, ela devolve uma linha por
+    partição; nas demais, uma linha por defeito."""
     fails_when: str
-    """[public] ``"algum contador acima de zero"`` na de linhas, ``"alguma linha"`` nas demais."""
+    """[public] O que reprova a verificação: ``"algum contador acima de zero"`` na de linhas e
+    ``"alguma linha"`` nas demais."""
     skip_when: sa.Select | None = None
-    """[public] Uma consulta de uma linha booleana que, verdadeira, aprova a verificação sem
-    rodá-la."""
+    """[public] Uma consulta de uma linha booleana. Quando ela devolve verdadeiro, a verificação é
+    aprovada sem rodar."""
     counters: Mapping[str, sa.ColumnElement] = dataclasses.field(default_factory=dict)
-    """[public] Na de linhas, a condição de cada contador de defeito, pelo rótulo dele: a amostra da
-    reprovação é ``SELECT * ... WHERE <condição> LIMIT 20``."""
+    """[public] Na verificação de linhas, a condição de cada contador de defeito, pelo rótulo do
+    contador. A amostra da reprovação é ``SELECT * ... WHERE <condição> LIMIT 20``."""
 
 
 @dataclasses.dataclass(frozen=True)
 class CheckResult:
-    """[public] O resultado de uma verificação no relatório.
+    """[public] O resultado de uma verificação, uma entrada de ``AuditReport.results``.
 
     Exemplo:
 
@@ -307,23 +322,24 @@ class CheckResult:
     """
 
     name: str
-    """[public] O nome da verificação, o de ``Check.name``."""
+    """[public] O nome da verificação, o mesmo de ``Check.name``."""
     sql: str
-    """[public] O texto que o motor rodou."""
+    """[public] O texto SQL que o motor rodou."""
     defects: int
-    """[public] Na de linhas, a soma dos contadores de defeito; nas demais, as linhas devolvidas."""
+    """[public] O número de defeitos. Na verificação de linhas, a soma dos contadores de defeito;
+    nas demais, as linhas devolvidas."""
     sample: pa.Table
-    """[public] Até 20 linhas reprovadas; vazia na aprovação."""
+    """[public] Até 20 linhas reprovadas; vazia quando a verificação passou."""
     passed: bool
     """[public] Se a verificação passou: sem defeito, ou dispensada pelo ``skip_when``."""
     reason: str = ""
-    """[public] Por que a verificação foi aprovada sem rodar, quando o ``skip_when`` a dispensou."""
+    """[public] O motivo da aprovação sem rodar, quando o ``skip_when`` dispensou a verificação."""
 
 
 @dataclasses.dataclass(frozen=True)
 class AuditReport:
-    """[public] O relatório de uma auditoria: o resultado de cada verificação, o que não rodou e as
-    leituras.
+    """[public] O relatório de uma auditoria: o resultado de cada verificação, as verificações que
+    não rodaram e as leituras da verificação de linhas.
 
     Exemplo:
 
@@ -343,15 +359,15 @@ class AuditReport:
     results: tuple[CheckResult, ...]
     """[public] O resultado de cada verificação da lista de ``checks``, na ordem dela."""
     not_run: tuple[str, ...]
-    """[public] As verificações que não rodaram, com o motivo: ``orfao_*`` sem ``foreign_keys=True``
-    ou com a tabela referenciada fora do sandbox e sem versão fixada, e ``chave_<colunas>_tabela``
-    com ``key_scope="partition"`` ou sem versão fixada."""
+    """[public] As verificações que não rodaram, cada uma com o motivo. ``orfao_*`` não roda sem
+    ``foreign_keys=True``, nem com a tabela referenciada fora do sandbox e sem versão fixada.
+    ``chave_<colunas>_tabela`` não roda com ``key_scope="partition"`` nem sem versão fixada."""
     nonfinite_columns: Mapping[str | None, tuple[str, ...]]
-    """[public] Por valor de partição, as colunas ``Double`` com ``NaN`` ou infinito: a lista que
+    """[public] Por valor de partição, as colunas ``Double`` com ``NaN`` ou infinito. É a lista que
     ``publish_delta`` passa a ``export_partition`` como ``columns_without_min_max``."""
     totals: Mapping[str | None, Mapping[str, object]]
-    """[public] Por valor de partição, a linha da verificação de linhas: a contagem, os contadores,
-    as somas de controle e os não finitos."""
+    """[public] Por valor de partição, a linha da verificação de linhas: a contagem de linhas, os
+    contadores de defeito, as somas de controle e as contagens de não finitos."""
 
     @property
     def passed(self) -> bool:
@@ -359,7 +375,7 @@ class AuditReport:
         return all(result.passed for result in self.results)
 
     def sql(self) -> str:
-        """[public] O texto de todas as verificações.
+        """[public] O texto SQL de todas as verificações.
 
         Exemplo:
 
@@ -367,8 +383,8 @@ class AuditReport:
 
             print(report.sql())   # cada verificação com o nome num comentário e o texto dela
 
-        :return: uma verificação por bloco, com o nome em comentário, e uma linha em branco entre
-            os blocos.
+        :return: um bloco por verificação, com o nome num comentário SQL e o texto dela, e uma
+            linha em branco entre os blocos.
         """
         blocks = []
         for result in self.results:
@@ -379,7 +395,7 @@ class AuditReport:
         self,
         value: str | None,
     ) -> int:
-        """[public] As linhas da partição na auditoria.
+        """[public] As linhas que a auditoria contou numa partição.
 
         Exemplo:
 
@@ -388,7 +404,7 @@ class AuditReport:
             report.rows("2026-08-31")   # 1000
 
         :param value: o valor de partição; ``None`` numa tabela sem partição.
-        :return: a contagem da verificação de linhas, 0 quando a partição não tem linha.
+        :return: a contagem da verificação de linhas; 0 quando a partição não tem linha.
         """
         return int(self.totals.get(value, {}).get("linhas", 0))
 
@@ -400,8 +416,8 @@ def _scope(
     table: sa.Table,
     partitions: Sequence[str] | None,
 ) -> sa.ColumnElement:
-    """[private] A condição das partições da execução; verdadeira numa tabela sem partição ou sem
-    lista."""
+    """[private] A condição que restringe uma consulta às partições da execução. Numa tabela sem
+    partição, ou sem a lista de partições, a condição é sempre verdadeira."""
     partition_by = table_options(table).partition_by
     if partition_by is None or partitions is None:
         return sa.true()
@@ -411,7 +427,8 @@ def _scope(
 def _defect_counters(
     table: sa.Table,
 ) -> dict[str, sa.ColumnElement]:
-    """[private] A condição de cada contador de defeito da verificação de linhas, pelo rótulo."""
+    """[private] A condição de cada contador de defeito da verificação de linhas, pelo rótulo do
+    contador."""
     options = table_options(table)
     counters = {}
     # Os contadores de cada coluna: o nulo em NOT NULL, o JSON inválido e o texto acima do limite.
@@ -445,13 +462,13 @@ def _defect_counters(
 def _totals(
     table: sa.Table,
 ) -> list[sa.ColumnElement]:
-    """[private] As somas de controle como ``DECIMAL(38, 6)`` e a contagem dos não finitos de cada
-    ``Double``.
+    """[private] As somas de controle de cada coluna ``Numeric`` e ``Double`` como
+    ``DECIMAL(38, 6)``, e a contagem dos não finitos de cada ``Double``.
 
-    A soma de uma coluna ``Double`` corre só nos valores finitos: o ``CAST`` de um ``NaN`` ou de um
-    infinito para ``DECIMAL`` falha, e o ``FILTER`` do agregado não o evita. Os não finitos são os
-    não nulos menos os finitos, sem negar ``_is_finite``: na varredura de uma tabela, o Redshift não
-    deu verdadeiro à negação para o ``NaN``.
+    A soma de uma coluna ``Double`` corre só nos valores finitos, porque o ``CAST`` de um ``NaN``
+    ou de um infinito para ``DECIMAL`` falha, e o ``FILTER`` do agregado não o evita. Os não
+    finitos são os não nulos menos os finitos, sem negar ``_is_finite``: na varredura de uma
+    tabela, o Redshift não deu verdadeiro à negação para o ``NaN``.
     """
     sums = []
     nonfinite = []
@@ -471,9 +488,9 @@ def _totals(
 def _count_where(
     condition: sa.ColumnElement,
 ) -> sa.ColumnElement:
-    """[private] As linhas em que a condição vale, por ``count(CASE WHEN <condição> THEN 1 END)``: o
-    Redshift não tem a cláusula ``FILTER`` nos agregados, e o ``CASE`` sem ``ELSE`` dá nulo, que o
-    ``count`` não conta."""
+    """[private] A contagem das linhas em que a condição vale, por
+    ``count(CASE WHEN <condição> THEN 1 END)``. O Redshift não tem a cláusula ``FILTER`` nos
+    agregados; o ``CASE`` sem ``ELSE`` dá nulo nas outras linhas, e o ``count`` não conta o nulo."""
     return sa.func.count(sa.case((condition, 1)))
 
 
@@ -481,8 +498,8 @@ def _rows_check(
     table: sa.Table,
     partitions: Sequence[str] | None,
 ) -> Check:
-    """[private] A verificação de linhas: os contadores de defeito, as somas e os não finitos, por
-    partição."""
+    """[private] A verificação de linhas: os contadores de defeito, as somas de controle e os não
+    finitos, por partição."""
     partition_by = table_options(table).partition_by
     counters = _defect_counters(table)
     measures = [sa.func.count().label("linhas")]
@@ -506,7 +523,8 @@ def _rows_check(
 def _key_label(
     key: Sequence[str],
 ) -> str:
-    """[private] O nome de uma verificação de chave: as colunas juntadas por ``_``."""
+    """[private] A parte ``<colunas>`` do nome de uma verificação de chave ou de órfão: as colunas
+    juntadas por ``_``."""
     return "_".join(key)
 
 
@@ -515,7 +533,7 @@ def _key_within(
     key: Sequence[str],
     partitions: Sequence[str] | None,
 ) -> Check:
-    """[private] A chave repetida nas partições da execução."""
+    """[private] A verificação ``chave_<colunas>``: a chave repetida nas partições da execução."""
     columns = [table.c[name] for name in key]
     statement = (
         sa.select(*columns, sa.func.count().label("n"))
@@ -532,7 +550,7 @@ def _single_integer_key(
     key: Sequence[str],
 ) -> sa.Column | None:
     """[private] A coluna de ``key`` quando ``key`` é a chave sequencial da tabela, a chave primária
-    inteira de uma coluna que ``next_ids`` preenche; ``None`` nas outras chaves."""
+    inteira de uma só coluna, que ``next_ids`` preenche. ``None`` nas outras chaves."""
     column = sequential_key(table)
     if column is None or list(key) != [column.name]:
         return None
@@ -546,10 +564,12 @@ def _key_against_pinned(
     pinned: sa.FromClause,
     pinned_max_key: int | None,
 ) -> Check:
-    """[private] A chave das partições da execução repetida nas demais partições da versão fixada.
+    """[private] A verificação ``chave_<colunas>_tabela``: a chave das partições da execução
+    repetida nas demais partições da versão fixada.
 
-    Na chave primária inteira de uma coluna, com ``pinned_max_key``, o ``skip_when`` aprova a
-    verificação sem a junção quando o menor valor da execução passa do maior da versão fixada.
+    Na chave primária inteira de uma coluna, com ``pinned_max_key``, a verificação ganha um
+    ``skip_when``. Ele a aprova sem a junção quando o menor valor da chave na execução passa do
+    maior valor da versão fixada.
     """
     partition_by = table_options(table).partition_by
     columns = [table.c[name] for name in key]
@@ -575,7 +595,8 @@ def _orphans(
     referenced: sa.FromClause,
     partitions: Sequence[str] | None,
 ) -> Check:
-    """[private] As linhas da execução cuja chave estrangeira não acha a linha referenciada."""
+    """[private] A verificação ``orfao_<colunas>``: as linhas da execução cuja chave estrangeira
+    não acha a linha referenciada."""
     local = [table.c[column.name] for column in constraint.columns]
     remote = [referenced.c[element.column.name] for element in constraint.elements]
     pairs = zip(local, remote, strict=True)
@@ -594,9 +615,9 @@ def _needs_pinned_check(
     partitions: Sequence[str] | None,
     key_scope: KeyScope | None,
 ) -> bool:
-    """[private] Se a chave pede a verificação contra as demais partições da versão fixada: só numa
-    tabela particionada, com as partições da execução, e numa chave sem a coluna de partição; a
-    chave com a coluna de ``partition_source`` só com ``key_scope="table"``."""
+    """[private] Se a chave pede a verificação contra as demais partições da versão fixada. Ela
+    pede só numa tabela particionada, com as partições da execução, e numa chave sem a coluna de
+    partição. A chave com a coluna de ``partition_source`` só pede com ``key_scope="table"``."""
     if options.partition_by is None or partitions is None:
         return False
     if options.partition_by in key:
@@ -613,7 +634,8 @@ def _key_checks(
     pinned: sa.FromClause | None,
     pinned_max_key: int | None,
 ) -> tuple[list[Check], list[str]]:
-    """[private] As verificações de chave e as que não rodam, com o motivo."""
+    """[private] As verificações de chave de uma tabela, e as que não rodam, cada uma com o
+    motivo."""
     options = table_options(table)
     found = []
     not_run = []
@@ -637,7 +659,8 @@ def _foreign_key_checks(
     foreign_keys: bool,
     referenced: Mapping[str, sa.FromClause] | None,
 ) -> tuple[list[Check], list[str]]:
-    """[private] Os anti-joins das chaves estrangeiras e as que não rodam, com o motivo."""
+    """[private] As verificações de órfão, o anti-join de cada chave estrangeira, e as que não
+    rodam, cada uma com o motivo."""
     found = []
     not_run = []
     for constraint in foreign_keys_by_columns(table):
@@ -661,7 +684,13 @@ def checks(
     referenced: Mapping[str, sa.FromClause] | None = None,
     pinned_max_key: int | None = None,
 ) -> list[Check]:
-    """[public] As verificações do contrato para as partições da execução, sobre a tabela do modelo.
+    """[public] As verificações do contrato sobre uma tabela do modelo, para as partições da
+    execução.
+
+    Cada verificação é um ``Check`` com o statement Core sobre a tabela do contrato; o motor o
+    roda, e ``audit_sql`` o renderiza. A lista depende dos argumentos: a verificação de linhas
+    sempre entra, as de chave entram uma por chave da tabela, e as de órfão só com
+    ``foreign_keys=True``.
 
     Exemplo:
 
@@ -672,22 +701,23 @@ def checks(
         # ["linhas", "chave_id_operacao", "chave_id_operacao_tabela"]
 
     :param table: a tabela do modelo.
-    :param partitions: as partições da execução, pela regra da partição; ``partitions=None``
-        audita a tabela inteira do sandbox.
+    :param partitions: as partições da execução, cada uma pela regra da partição;
+        ``partitions=None`` audita a tabela inteira do sandbox.
     :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
         chave estrangeira, a chave sem a linha referenciada.
     :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
-        chave contra as demais partições da versão fixada: o padrão a faz na chave sem a coluna
-        de partição e sem a de ``partition_source``, ``key_scope="partition"`` a suprime, e
-        ``key_scope="table"`` a faz também na chave com a coluna de ``partition_source``.
+        chave contra as demais partições da versão fixada. O padrão faz a verificação na chave
+        sem a coluna de partição e sem a de ``partition_source``; ``key_scope="partition"`` a
+        suprime; ``key_scope="table"`` a faz também na chave com a coluna de
+        ``partition_source``.
     :param pinned: a versão fixada da tabela, a origem das demais partições na verificação
-        ``chave_<colunas>_tabela``, que sem ela não roda.
+        ``chave_<colunas>_tabela``; sem ela, essa verificação não roda.
     :param referenced: por nome de tabela, a origem da linha referenciada de cada chave
-        estrangeira, que só é conferida com ``foreign_keys=True``.
-    :param pinned_max_key: o ``max_key`` da versão fixada, que dá à chave primária inteira
-        de uma coluna o ``skip_when``.
-    :return: a verificação de linhas, as de chave e as de órfão, nessa ordem; as verificações que
-        não rodam ficam fora da lista, e o relatório do motor as registra.
+        estrangeira; só é conferida com ``foreign_keys=True``.
+    :param pinned_max_key: o ``max_key`` da versão fixada, que dá o ``skip_when`` à chave
+        primária inteira de uma coluna.
+    :return: a verificação de linhas, as de chave e as de órfão, nessa ordem. As verificações que
+        não rodam ficam fora da lista, e o relatório do motor as registra em ``not_run``.
     :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da partição.
     """
     found, _ = checks_and_not_run(
@@ -705,8 +735,8 @@ def checks_and_not_run(
     referenced: Mapping[str, sa.FromClause] | None,
     pinned_max_key: int | None,
 ) -> tuple[list[Check], list[str]]:
-    """[protected] As verificações de ``checks`` e as que ela deixa de fora, com o motivo; para o
-    relatório dos motores."""
+    """[protected] As verificações de ``checks`` e as que ela deixa de fora, cada uma com o motivo.
+    O ``audit_report`` de ``serialize_db.engine`` a chama para montar o relatório dos motores."""
     if partitions is not None:
         for value in partitions:
             check_partition_value(value)
@@ -720,12 +750,13 @@ def readings_by_partition(
     rows: Sequence[Mapping[str, object]],
     table: sa.Table,
 ) -> tuple[dict[str | None, dict[str, object]], dict[str | None, tuple[str, ...]]]:
-    """[protected] As leituras da verificação de linhas por valor de partição e as colunas
-    ``Double`` com valor não finito em cada partição; para o relatório dos motores.
+    """[protected] As leituras da verificação de linhas por valor de partição, e as colunas
+    ``Double`` com valor não finito em cada partição. O ``audit_report`` de ``serialize_db.engine``
+    a usa para montar o relatório dos motores.
 
-    Cada linha do resultado é uma partição: o valor da coluna de partição é a chave, ``None`` numa
-    tabela sem partição, e as demais colunas são as leituras (a contagem, os contadores, as somas e
-    os não finitos).
+    Cada linha do resultado da verificação é uma partição. O valor da coluna de partição é a chave
+    dos dois dicionários, ``None`` numa tabela sem partição. As demais colunas da linha são as
+    leituras: a contagem, os contadores, as somas e os não finitos.
     """
     partition_by = table_options(table).partition_by
     doubles = double_columns(table)
@@ -743,8 +774,9 @@ def failing_counters(
     counters: Mapping[str, sa.ColumnElement],
     totals: Mapping[str | None, Mapping[str, object]],
 ) -> tuple[int, list[str]]:
-    """[protected] A soma dos contadores de defeito em todas as partições e os rótulos dos
-    contadores acima de zero; para o relatório dos motores."""
+    """[protected] A soma dos contadores de defeito em todas as partições, e os rótulos dos
+    contadores acima de zero. O ``audit_report`` de ``serialize_db.engine`` a usa no resultado da
+    verificação de linhas."""
     defects = 0
     failing = []
     for label in counters:
@@ -760,8 +792,8 @@ def sample_statement(
     partitions: Sequence[str] | None,
     condition: sa.ColumnElement,
 ) -> sa.Select:
-    """[protected] Até 20 linhas inteiras em que a condição de um contador vale, nas partições da
-    execução; para a amostra que os motores buscam na reprovação da verificação de linhas."""
+    """[protected] A consulta de até 20 linhas inteiras em que a condição de um contador vale, nas
+    partições da execução. Os motores a rodam para a amostra da verificação de linhas reprovada."""
     return sa.select(table).where(_scope(table, partitions), condition).limit(SAMPLE_ROWS)
 
 
@@ -775,8 +807,10 @@ def audit_sql(
     referenced: Mapping[str, sa.FromClause] | None = None,
     prefix: str = sql.SENTINEL,
 ) -> dict[str, str]:
-    """[public] O texto de cada verificação no dialeto, por ``sql.render`` com o prefixo pedido, sem
-    conexão e sem motor: o SQL que a auditoria roda, para depuração.
+    """[public] O texto SQL de cada verificação no dialeto de um motor, para depuração.
+
+    A função renderiza por ``sql.render`` os statements de ``checks``, com o prefixo pedido, sem
+    abrir conexão e sem construir um motor. O texto é o SQL que a auditoria roda nesse motor.
 
     Exemplo:
 
@@ -787,20 +821,22 @@ def audit_sql(
 
     :param table: a tabela do modelo.
     :param dialect: o motor, ``"duckdb"`` ou ``"redshift"``.
-    :param partitions: as partições da execução, pela regra da partição; ``partitions=None``
-        audita a tabela inteira do sandbox.
+    :param partitions: as partições da execução, cada uma pela regra da partição;
+        ``partitions=None`` audita a tabela inteira do sandbox.
     :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
         chave estrangeira, a chave sem a linha referenciada.
     :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
-        chave contra as demais partições da versão fixada: o padrão a faz na chave sem a coluna
-        de partição e sem a de ``partition_source``, ``key_scope="partition"`` a suprime, e
-        ``key_scope="table"`` a faz também na chave com a coluna de ``partition_source``.
+        chave contra as demais partições da versão fixada. O padrão faz a verificação na chave
+        sem a coluna de partição e sem a de ``partition_source``; ``key_scope="partition"`` a
+        suprime; ``key_scope="table"`` a faz também na chave com a coluna de
+        ``partition_source``.
     :param pinned: a versão fixada da tabela, a origem das demais partições na verificação
-        ``chave_<colunas>_tabela``, que sem ela não roda.
+        ``chave_<colunas>_tabela``; sem ela, essa verificação não roda.
     :param referenced: por nome de tabela, a origem da linha referenciada de cada chave
-        estrangeira, que só é conferida com ``foreign_keys=True``.
-    :param prefix: o prefixo das tabelas no texto; o padrão deixa nele o sentinela ``{prefix}``,
-        e ``prefix=""`` dá o texto sobre as tabelas do contrato, o que o motor DuckDB roda.
+        estrangeira; só é conferida com ``foreign_keys=True``.
+    :param prefix: o prefixo das tabelas no texto. O padrão deixa no texto o sentinela
+        ``{prefix}``, o marcador que a execução troca pelo prefixo do sandbox; ``prefix=""`` dá o
+        texto sobre as tabelas do contrato, o que o motor DuckDB roda.
     :return: ``{nome: texto}``, na ordem de ``checks``.
     :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da partição.
     """

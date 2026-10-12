@@ -2,23 +2,34 @@
 (``Execution``).
 
 ``Database`` junta a raiz do banco, o ambiente (``prd``, ``dsv``) e o ``MetaData`` dos modelos do
-cliente, monta os caminhos (a pasta de cada tabela é ``<raiz>/<ambiente>/<tabela>``) e abre os
-leitores de ``serialize_db.reader`` por ``open_delta`` e ``open_redshift``. ``Execution`` é o
-gerenciador de contexto de uma execução: na entrada abre toda tabela do ambiente, fixa a versão
-de cada uma e cria o sandbox do motor; na saída descarta o sandbox, grava a entrada do snapshot
-marcado em ``<raiz>/<ambiente>/_serialize_db/snapshots.json`` e o resumo no log
-``serialize_db.execution``. Entre os dois, o pipeline chama as primitivas: ``ingest`` traz as
-tabelas do Delta ao sandbox, presas à versão fixada, ``sandbox`` é o motor onde ele roda
-``stream``, ``query``, ``create_table``, ``append`` e ``appender`` e toma a conexão por
-``session`` e ``new_session``, ``next_ids`` dá as faixas da chave sequencial, ``audit`` confere o
-contrato e ``publish_delta`` leva as partições auditadas do sandbox ao Delta; a publicação aos
-clientes no Redshift é ``serialize-db publish_redshift``, depois da execução.
+cliente, o contrato. Da raiz e do ambiente ele monta os caminhos: a pasta de cada tabela Delta é
+``<raiz>/<ambiente>/<tabela>``. Ele também abre os leitores de ``serialize_db.reader``, por
+``open_delta`` e ``open_redshift``.
 
-As primitivas podem ser chamadas de qualquer thread: cada comando do motor corre na sessão única,
-sob o lock dela, ou numa sessão a mais do ``ingest`` de várias tabelas, e o estado mutável da
-execução (as versões, as auditorias aprovadas, o alocador) fica sob um lock próprio. A partição,
-opcional, e o ``execution_id`` seguem ``schema.PARTITION_VALUE``, porque viram nome de pasta e
-literal SQL.
+``Execution`` é o gerenciador de contexto de uma execução, uma rodada do pipeline. Na entrada do
+``with`` ele abre toda tabela do ambiente, fixa a versão de cada uma e cria o sandbox do motor. A
+versão fixada é a versão da tabela Delta que a execução lê na abertura e usa até o fim. O sandbox
+é o banco de trabalho da execução, no DuckDB ou no Redshift, onde o pipeline roda. Na saída do
+``with`` a execução descarta o sandbox, grava a entrada do snapshot marcado, a versão de toda
+tabela do ambiente sob um nome, em ``<raiz>/<ambiente>/_serialize_db/snapshots.json``, e escreve
+o resumo no log ``serialize_db.execution``.
+
+Entre a entrada e a saída, o pipeline chama as primitivas da execução:
+
+- ``ingest`` traz as tabelas do Delta ao sandbox, presas à versão fixada.
+- ``sandbox`` é o motor onde o pipeline roda ``stream``, ``query``, ``create_table``, ``append`` e
+  ``appender``, e onde ele toma a conexão por ``session`` e ``new_session``.
+- ``next_ids`` dá as faixas da chave sequencial.
+- ``audit`` confere o contrato.
+- ``publish_delta`` leva as partições auditadas do sandbox ao Delta.
+
+A publicação aos clientes no Redshift vem depois da execução, por ``serialize-db publish_redshift``.
+
+As primitivas podem ser chamadas de qualquer thread. Cada comando do motor corre na sessão única,
+sob o lock dela, ou numa sessão a mais, como no ``ingest`` de várias tabelas. O estado mutável da
+execução (as versões, as auditorias aprovadas, o alocador de ids de ``next_ids``) fica sob um lock
+próprio. A partição, opcional, e o ``execution_id`` seguem ``schema.PARTITION_VALUE``, porque viram
+nome de pasta e literal SQL.
 
 Exemplo:
 
@@ -93,16 +104,24 @@ log = logging.getLogger("serialize_db.execution")
 class Database:
     """[public] O banco Delta: a raiz, o ambiente e os modelos do cliente.
 
-    Sob ``<raiz>/<ambiente>/`` ficam as tabelas Delta, uma pasta por tabela (``uri``), o arquivo de
-    controle dos snapshots (``control_path``), os arquivos intermediários do motor e do leitor
-    Redshift em ``staging/``, numa pasta por execução (``staging_prefix``) ou por leitor, os
-    manifestos da publicação no Redshift (``publication_prefix``) e as cópias dos snapshots
-    arquivados (``archive_prefix``). ``storage`` nasce no primeiro uso, e a pasta local relativa
-    vira absoluta: ``uri`` parte da raiz normalizada, a URI que o delta-rs e o DuckDB recebem. Os
-    prefixos são caminhos relativos à raiz, os que os métodos de ``Storage`` recebem. A construção
-    acerta as variáveis que o delta-rs lê (``serialize_db.storage.prepare_environment``:
-    ``NO_PROXY`` a partir de ``no_proxy``, e a região copiada entre ``AWS_REGION`` e
-    ``AWS_DEFAULT_REGION``), e as que mudaram vão ao log ``serialize_db.execution``.
+    Tudo o que o banco grava fica sob ``<raiz>/<ambiente>/``. Cada método devolve um desses
+    caminhos:
+
+    - ``uri``: a pasta de uma tabela Delta, uma pasta por tabela.
+    - ``control_path``: o arquivo de controle dos snapshots.
+    - ``staging_prefix``: os arquivos intermediários do motor Redshift, numa pasta por execução.
+      O leitor Redshift grava os dele numa pasta por leitor, sob o mesmo ``staging/``.
+    - ``publication_prefix``: os manifestos da publicação no Redshift.
+    - ``archive_prefix``: as cópias dos snapshots arquivados.
+
+    ``storage`` é criado no primeiro uso. Nesse momento uma pasta local relativa vira absoluta:
+    ``uri`` parte da raiz normalizada, que é a URI que o delta-rs e o DuckDB recebem. Os prefixos
+    são caminhos relativos à raiz, a forma que os métodos de ``Storage`` recebem.
+
+    A construção acerta as variáveis de ambiente que o delta-rs lê, por
+    ``serialize_db.storage.prepare_environment``: ``NO_PROXY`` a partir de ``no_proxy``, e a
+    região copiada entre ``AWS_REGION`` e ``AWS_DEFAULT_REGION``. As variáveis que mudaram vão ao
+    log ``serialize_db.execution``.
 
     Exemplo:
 
@@ -115,15 +134,16 @@ class Database:
 
     root: str
     """[public] A raiz do banco, como ``Storage.for_uri`` a recebe: ``s3://bucket/prefixo``, um
-    caminho ou ``file://``; o S3 sem região e outro esquema são ``ValueError`` no primeiro uso de
-    ``storage``."""
+    caminho local ou uma URI ``file://``. O S3 sem região e outro esquema de URI são
+    ``ValueError`` no primeiro uso de ``storage``."""
     environment: str
-    """[public] O ambiente, ``prd`` ou ``dsv``, a pasta sob a raiz e o prefixo das tabelas
-    publicadas no Redshift, ``<ambiente>_<tabela>``: as execuções de um não tocam as tabelas do
-    outro. Fora da regra da partição, a construção é ``ContractError``."""
+    """[public] O ambiente, ``prd`` ou ``dsv``. Ele é a pasta sob a raiz e o prefixo das tabelas
+    publicadas no Redshift, ``<ambiente>_<tabela>``: as execuções de um ambiente não tocam as
+    tabelas do outro. Um ambiente fora da regra da partição (``schema.PARTITION_VALUE``) é
+    ``ContractError`` na construção."""
     metadata: sa.MetaData
-    """[public] O ``MetaData`` dos modelos do cliente: as tabelas que a execução abre e
-    reconcilia."""
+    """[public] O ``MetaData`` dos modelos do cliente, o contrato: as tabelas que a execução abre
+    e reconcilia."""
 
     def __post_init__(self) -> None:
         check_partition_value(self.environment)
@@ -170,10 +190,15 @@ class Database:
         self,
         execution_id: str,
     ) -> str:
-        """[public] A pasta dos arquivos intermediários de uma execução no motor Redshift, que o fim
-        da execução apaga: os manifestos do ``COPY`` do ``ingest``, o Parquet do ``appender`` e os
-        arquivos do ``UNLOAD`` de ``stream`` e da partição com ``Double`` não finito em
-        ``export_partition``.
+        """[public] A pasta dos arquivos intermediários de uma execução no motor Redshift.
+
+        O fim da execução apaga a pasta. Nela ficam:
+
+        - os manifestos do ``COPY`` do ``ingest``;
+        - o Parquet do ``appender``;
+        - os arquivos do ``UNLOAD`` de ``stream``;
+        - os arquivos do ``UNLOAD`` da partição com ``Double`` não finito em
+          ``export_partition``.
 
         Exemplo:
 
@@ -190,7 +215,7 @@ class Database:
         self,
         execution_id: str,
     ) -> str:
-        """[public] Os manifestos da publicação no Redshift de uma execução.
+        """[public] A pasta dos manifestos da publicação no Redshift de uma execução.
 
         Exemplo:
 
@@ -207,7 +232,8 @@ class Database:
         self,
         name: str,
     ) -> str:
-        """[public] A pasta de arquivo de um snapshot do banco.
+        """[public] A pasta de arquivo de um snapshot do banco: as cópias das tabelas dele depois
+        do arquivamento.
 
         Exemplo:
 
@@ -240,8 +266,13 @@ class Database:
         channel: str | None = None,
         config: DuckDBConfig | None = None,
     ) -> DeltaReader:
-        """[public] O leitor da base Delta (``serialize_db.reader.DeltaReader``): um DuckDB no
+        """[public] Abre o leitor da base Delta (``serialize_db.reader.DeltaReader``): um DuckDB no
         processo com uma view por tabela do modelo, presa à versão do snapshot lido.
+
+        Um snapshot é uma entrada do arquivo de controle do ambiente com a versão de cada tabela
+        num instante, sob um nome que não muda. Um canal é um nome, como ``default``, que aponta
+        para um snapshot; o canal ``current`` é a versão atual de cada tabela. Sem argumento, o
+        leitor lê o snapshot do canal ``default``.
 
         Exemplo:
 
@@ -252,14 +283,14 @@ class Database:
             reader = db.open_delta(channel="current")        # a versão atual, num caderno
             reader.close()
 
-        :param snapshot: o nome de um snapshot do ambiente; o arquivado é lido pela cópia em
-            ``<raiz>/<ambiente>/arquivo/<nome>/``. ``None`` lê o canal.
-        :param channel: o canal do ambiente, ``"default"``, o mesmo que sem argumento, ou
-            ``"current"``, a versão atual de cada tabela do modelo que existe no ambiente.
-        :param config: a configuração do DuckDB; ``None`` é ``DuckDBConfig()``, os limites lidos
-            do ambiente e uma pasta temporária nova, apagada no ``close``.
-        :return: o leitor, gerenciador de contexto; sem ``close``, a coleta dele apaga a pasta
-            temporária do motor.
+        :param snapshot: o nome de um snapshot do ambiente. O snapshot arquivado é lido pela
+            cópia em ``<raiz>/<ambiente>/arquivo/<nome>/``. ``None`` lê o canal.
+        :param channel: o canal do ambiente. ``"default"`` é o mesmo que sem argumento, e
+            ``"current"`` é a versão atual de cada tabela do modelo que existe no ambiente.
+        :param config: a configuração do DuckDB. ``None`` é ``DuckDBConfig()``, com os limites
+            lidos do ambiente e uma pasta temporária nova, apagada no ``close``.
+        :return: o leitor, um gerenciador de contexto. Sem ``close``, a coleta do leitor apaga a
+            pasta temporária do motor.
         :raises serialize_db.errors.ContractError: ``snapshot`` e ``channel`` juntos; o ambiente sem
             o canal, com o ``serialize-db channel`` que o cria e o canal ``current`` na mensagem; ou
             o snapshot que não existe.
@@ -276,8 +307,12 @@ class Database:
         config: RedshiftConfig | None = None,
         unload_to: str | None = None,
     ) -> RedshiftReader:
-        """[public] O leitor da base publicada no Redshift (``serialize_db.reader.RedshiftReader``),
-        pelas tabelas ``<ambiente>_<tabela>`` do esquema.
+        """[public] Abre o leitor da base publicada no Redshift
+        (``serialize_db.reader.RedshiftReader``), que lê as tabelas ``<ambiente>_<tabela>`` do
+        esquema.
+
+        No leitor, ``query`` devolve o resultado pelo cursor do driver, e ``stream`` lê os lotes
+        dos arquivos de um ``UNLOAD``, gravados na pasta de ``unload_to``.
 
         Exemplo:
 
@@ -286,20 +321,20 @@ class Database:
             with db.open_redshift() as reader:   # SERIALIZE_DB_REDSHIFT_*, o UNLOAD em staging/
                 reader.query(sa.select(Conta))
 
-        :param config: a configuração do Redshift; ``None`` lê as variáveis
+        :param config: a configuração do Redshift. ``None`` lê as variáveis
             ``SERIALIZE_DB_REDSHIFT_*``.
-        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``; o leitor grava
+        :param unload_to: a URI da pasta dos arquivos do ``UNLOAD`` de ``stream``. O leitor grava
             em ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` é
-            ``<raiz>/<ambiente>/staging``. O ``UNLOAD`` grava só no S3, então só uma pasta
-            ``s3://bucket/prefixo`` serve, na conexão com o Redshift, pelo ``workgroup`` ou pelo
-            ``host``, e na do substituto local das suítes: os arquivos ficam nela até o ``close``
-            do stream e o do leitor. Com uma raiz local, o padrão é uma pasta local, e o primeiro
-            ``stream`` falha, sem arquivo gravado; a pasta local serve só à conexão de mentira
-            dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
-        :return: o leitor, gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
+            ``<raiz>/<ambiente>/staging``. O ``UNLOAD`` grava só no S3. Por isso, na conexão com
+            o Redshift, pelo ``workgroup`` ou pelo ``host``, e na conexão com o substituto local
+            das suítes, só uma pasta ``s3://bucket/prefixo`` serve, e os arquivos ficam nela até
+            o ``close`` do stream e o do leitor. Com uma raiz local, o padrão é uma pasta local, e
+            o primeiro ``stream`` falha, sem arquivo gravado. A pasta local serve só à conexão de
+            mentira dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
+        :return: o leitor, um gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
             pasta do leitor.
-        :raises serialize_db.errors.ContractError: a configuração sem conexão, sem ``workgroup`` e
-            sem ``host``, ``user`` e ``password``; ou, sem ``config``,
+        :raises serialize_db.errors.ContractError: a configuração sem conexão, isto é, sem
+            ``workgroup`` e sem ``host``, ``user`` e ``password``; ou, sem ``config``,
             ``SERIALIZE_DB_REDSHIFT_PORT`` que não é número.
         :raises ValueError: ``unload_to`` no S3 sem região, ou noutro esquema de URI.
         """
@@ -315,8 +350,9 @@ def _checked_partition(
     value: str,
     delta_db: Database,
 ) -> str:
-    """[private] A partição da execução: a regra da partição e o ``String(n)`` de cada coluna de
-    partição do modelo, medido em bytes."""
+    """[private] A partição da execução, conferida para ``Execution.__init__``: o valor segue a
+    regra da partição e cabe, em bytes, no ``String(n)`` de cada coluna de partição do modelo.
+    Fora disso, ``ContractError``."""
     check_partition_value(value)
     for table in delta_db.tables():
         column = table_options(table).partition_by
@@ -333,7 +369,8 @@ def _checked_partition(
 def _partition_text(
     partition: str | None,
 ) -> str:
-    """[private] A partição da execução no log: ``partição <valor>``, ou ``sem partição``."""
+    """[private] O texto da partição da execução para o log: ``partição <valor>``, ou
+    ``sem partição`` quando a execução não tem partição."""
     if partition is None:
         return "sem partição"
     return f"partição {partition}"
@@ -342,15 +379,17 @@ def _partition_text(
 def _where_text(
     partitions: list[str] | None,
 ) -> str:
-    """[private] As partições de ``audit`` e de ``publish_delta`` no log e nas mensagens:
-    ``em [<valores>]``, ou ``na tabela inteira`` sem a lista."""
+    """[private] O texto das partições de ``audit`` e de ``publish_delta`` para o log e as
+    mensagens: ``em [<valores>]`` com a lista, ou ``na tabela inteira`` quando ``partitions`` é
+    ``None``."""
     if partitions is None:
         return "na tabela inteira"
     return f"em {partitions}"
 
 
 def _new_execution_id() -> str:
-    """[private] ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC."""
+    """[private] Um identificador de execução novo, ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em
+    UTC."""
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     return f"exec-{today}-{uuid.uuid4().hex[:8]}"
 
@@ -358,7 +397,8 @@ def _new_execution_id() -> str:
 def _checked_partitions(
     partitions: Sequence[str] | None,
 ) -> list[str] | None:
-    """[private] Os valores de ``partitions`` pela regra da partição."""
+    """[private] Os valores de ``partitions`` conferidos pela regra da partição, numa lista;
+    ``None`` fica ``None``."""
     if partitions is None:
         return None
     checked = []
@@ -370,8 +410,8 @@ def _checked_partitions(
 def _sequential_key(
     table: sa.Table,
 ) -> sa.Column:
-    """[private] A chave sequencial, a chave primária inteira de uma coluna, a única que
-    ``next_ids`` preenche; outra chave é ``ContractError``."""
+    """[private] A chave sequencial da tabela: a chave primária inteira de uma coluna, a única que
+    ``next_ids`` preenche. Outra chave é ``ContractError``."""
     key = sequential_key(table)
     if key is None:
         names = [column.name for column in table.primary_key.columns]
@@ -388,6 +428,14 @@ def _sequential_key(
 class Execution:
     """[public] O ciclo de uma execução: as versões fixadas, o sandbox, a auditoria e a publicação
     no Delta.
+
+    Uma execução é uma rodada do pipeline sobre o banco. A entrada do ``with`` abre toda tabela
+    do ambiente, fixa a versão de cada uma e cria o sandbox. A versão fixada é a versão da tabela
+    Delta que a execução lê na abertura e usa até o fim; ``versions`` as guarda. O sandbox,
+    ``sandbox``, é o banco de trabalho da execução no motor, DuckDB ou Redshift, descartado na
+    saída do ``with``. Entre a entrada e a saída, o pipeline traz as tabelas por ``ingest``, roda
+    a lógica no sandbox, audita cada tabela de saída por ``audit`` e a publica no Delta por
+    ``publish_delta``.
 
     Exemplo:
 
@@ -406,21 +454,23 @@ class Execution:
         redshift: RedshiftConfig | None = None,
     ) -> None:
         """[public] Guarda os parâmetros da execução, com a partição e o ``execution_id``
-        conferidos; nada é aberto antes da entrada do ``with``.
+        conferidos. Nada é aberto antes da entrada do ``with``.
 
         :param delta_db: o banco Delta da execução.
         :param engine: o nome do motor, ``"duckdb"`` ou ``"redshift"``, ou um motor já
-            construído, para os testes; um nome desconhecido é ``ContractError`` na entrada do
+            construído, para os testes. Um nome desconhecido é ``ContractError`` na entrada do
             ``with``.
-        :param partition: a partição da execução, que segue ``schema.PARTITION_VALUE`` e cabe, em
-            bytes, no ``String(n)`` de cada coluna de partição do modelo; ``None``, o padrão, é a
-            execução sem partição, como a do pipeline que só atualiza tabelas sem partição.
-        :param execution_id: o identificador da execução, que segue ``schema.PARTITION_VALUE``;
-            ausente, vira ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC.
+        :param partition: a partição da execução, o valor de partição de referência desta rodada
+            do pipeline; ``previous_partitions`` lista as partições até ela. O valor segue
+            ``schema.PARTITION_VALUE`` e cabe, em bytes, no ``String(n)`` de cada coluna de
+            partição do modelo. ``None``, o padrão, é a execução sem partição, como a do pipeline
+            que só atualiza tabelas sem partição.
+        :param execution_id: o identificador da execução, que segue ``schema.PARTITION_VALUE``.
+            Ausente, vira ``exec-<AAAA-MM-DD>-<uuid8>``, com a data em UTC.
         :param redshift: a configuração do Redshift
-            (``serialize_db.engine.redshift.RedshiftConfig``) do motor ``"redshift"``, que sem
-            ela lê as variáveis ``SERIALIZE_DB_REDSHIFT_*``, e a porta que não é número é
-            ``ContractError`` na entrada do ``with``; o motor ``"duckdb"`` não a usa.
+            (``serialize_db.engine.redshift.RedshiftConfig``) do motor ``"redshift"``. Sem ela, o
+            motor lê as variáveis ``SERIALIZE_DB_REDSHIFT_*``, e a porta que não é número é
+            ``ContractError`` na entrada do ``with``. O motor ``"duckdb"`` não a usa.
         :raises serialize_db.errors.ContractError: a partição ou o ``execution_id`` fora da regra da
             partição, ou a partição acima do ``String(n)`` de uma coluna de partição.
         """
@@ -431,21 +481,21 @@ class Execution:
         self.partition = partition
         """[public] A partição da execução, ou ``None`` na execução sem partição."""
         self.execution_id = check_partition_value(execution_id or _new_execution_id())
-        """[public] O identificador da execução, que vai aos metadados de cada commit e aos nomes do
-        sandbox."""
+        """[public] O identificador da execução. Ele vai aos metadados de cada commit e aos nomes
+        do sandbox."""
         self._engine = engine
         self.redshift = redshift
-        """[public] A configuração do Redshift do motor ``"redshift"``: a recebida, ou a das
-        variáveis ``SERIALIZE_DB_REDSHIFT_*``, lida na entrada do ``with``; ``None`` no motor
-        ``"duckdb"`` sem ela."""
+        """[public] A configuração do Redshift do motor ``"redshift"``: a recebida, ou a lida das
+        variáveis ``SERIALIZE_DB_REDSHIFT_*`` na entrada do ``with``. No motor ``"duckdb"`` sem
+        ela, ``None``."""
         self.versions: dict[str, int | None] = {}
-        """[public] A versão fixada de cada tabela do ambiente, pelo nome, ``None`` na que não
-        existe: a entrada do ``with`` as lê, e ``publish_delta`` avança a de cada tabela que
-        grava."""
+        """[public] A versão fixada de cada tabela do ambiente, pelo nome da tabela, e ``None`` na
+        tabela que não existe. A entrada do ``with`` lê as versões, e ``publish_delta`` avança a
+        de cada tabela que grava."""
         self.sandbox: Engine | None = None
-        """[public] O motor da execução, onde o pipeline roda ``stream``, ``query``,
+        """[public] O motor da execução, o sandbox onde o pipeline roda ``stream``, ``query``,
         ``create_table``, ``append`` e ``appender`` e toma a conexão por ``session`` e
-        ``new_session``; ``None`` até a entrada do ``with``, e fechado na saída."""
+        ``new_session``. ``None`` até a entrada do ``with``, e fechado na saída."""
         self._read: dict[str, int] = {}
         self._written: dict[str, int] = {}
         self._tables: dict[str, DeltaTable] = {}
@@ -462,7 +512,8 @@ class Execution:
         self,
         name: str,
     ) -> Iterator[None]:
-        """[private] Soma o tempo do passo, para o resumo no log."""
+        """[private] Soma ao passo ``name`` o tempo do bloco, para o resumo no log da saída do
+        ``with``."""
         started = time.perf_counter()
         try:
             yield
@@ -471,8 +522,8 @@ class Execution:
                 self._timings[name] = self._timings.get(name, 0.0) + time.perf_counter() - started
 
     def _open_tables(self) -> None:
-        """[private] Abre toda tabela do ambiente que existe e fixa a versão; a ausente fica
-        ``None``."""
+        """[private] Abre toda tabela do ambiente que existe e fixa a versão de cada uma em
+        ``versions``; a tabela ausente fica ``None``. Chamada na entrada do ``with``."""
         storage = self.delta_db.storage
         for table in self.delta_db.tables():
             uri = self.delta_db.uri(table)
@@ -485,7 +536,8 @@ class Execution:
             self._read[table.name] = dt.version()
 
     def _build_engine(self) -> Engine:
-        """[private] O motor pelo nome, ou o motor recebido."""
+        """[private] O motor da execução: o construído pelo nome, ``"duckdb"`` ou ``"redshift"``,
+        ou o motor recebido já construído. Um nome desconhecido é ``ContractError``."""
         if not isinstance(self._engine, str):
             return self._engine
         if self._engine == "duckdb":
@@ -545,7 +597,8 @@ class Execution:
             )
 
     def _write_snapshot(self) -> None:
-        """[private] A entrada do snapshot marcado, com a versão de toda tabela do ambiente."""
+        """[private] Grava no arquivo de controle a entrada do snapshot marcado, com a versão de
+        toda tabela do ambiente que existe. Chamada na saída do ``with`` sem erro."""
         versions = {}
         for name, version in self.versions.items():
             if version is not None:
@@ -573,8 +626,9 @@ class Execution:
         table: sa.Table,
         version: int,
     ) -> DeltaTable:
-        """[private] A tabela aberta na versão fixada ``version``: a da abertura, ou reaberta quando
-        ``publish_delta`` avançou a versão fixada; quem chama segura o lock."""
+        """[private] A ``DeltaTable`` aberta na versão fixada ``version``: a aberta na entrada do
+        ``with``, ou reaberta quando ``publish_delta`` avançou a versão fixada. Quem chama segura
+        o lock."""
         opened = self._tables.get(table.name)
         if opened is None or opened.version() != version:
             opened = delta.open_table(self._uri(table), self.delta_db.storage, version)
@@ -596,9 +650,9 @@ class Execution:
             run.previous_partitions(Lancamento.__table__, 12)   # ["2025-09-30", ..., "2026-08-31"]
 
         :param table: a tabela particionada do modelo.
-        :param n: quantos valores, no máximo; zero ou negativo dá a lista vazia.
-        :return: os valores na ordem de texto, lidos das ações ``add`` da versão fixada, ou a lista
-            vazia numa tabela que não existe.
+        :param n: quantos valores, no máximo. Zero ou negativo dá a lista vazia.
+        :return: os valores na ordem de texto, lidos das ações ``add`` do log da tabela na versão
+            fixada, ou a lista vazia numa tabela que não existe.
         :raises serialize_db.errors.ContractError: a tabela sem partição, ou a execução sem
             partição.
         """
@@ -634,8 +688,8 @@ class Execution:
         partitions: list[str] | None,
         materialize: bool,
     ) -> None:
-        """[private] A ingestão de uma tabela na versão fixada; a tabela que não existe é
-        ``SandboxError``."""
+        """[private] Ingere uma tabela na versão fixada pelo motor ``engine``, a sessão principal
+        ou uma sessão a mais. A tabela que não existe no ambiente é ``SandboxError``."""
         version = self._version(table)
         if version is None:
             raise SandboxError(
@@ -649,7 +703,8 @@ class Execution:
         partitions: list[str] | None,
         materialize: bool,
     ) -> None:
-        """[private] A ingestão de uma tabela numa sessão a mais do motor, fechada no fim."""
+        """[private] Ingere uma tabela numa sessão a mais do motor, fechada no fim: uma tarefa do
+        pool de ``ingest`` com várias tabelas."""
         with self.sandbox.new_session() as session:
             self._ingest_one(session, table, partitions, materialize)
 
@@ -662,10 +717,10 @@ class Execution:
         """[public] Traz as tabelas do Delta ao sandbox, na versão fixada.
 
         Cada tabela entra no sandbox com o nome do modelo, que no Redshift leva o prefixo
-        ``exec_<id>_``. Uma tabela entra na sessão principal; mais de uma entram todas em
-        paralelo, cada uma numa sessão a mais do motor, e a chamada volta quando todas terminam.
-        Uma falha não cancela as que já rodam: todas terminam, e a exceção leva o resultado de
-        cada tabela numa nota.
+        ``exec_<id>_``. Uma tabela só entra na sessão principal do motor. Mais de uma entram
+        todas em paralelo, cada uma numa sessão a mais do motor, e a chamada volta quando todas
+        terminam. Uma falha não cancela as que já rodam: todas terminam, e a exceção leva o
+        resultado de cada tabela numa nota.
 
         Exemplo:
 
@@ -674,14 +729,14 @@ class Execution:
             run.ingest(Contrato.__table__, Operacao.__table__)   # views sobre a versão fixada
 
         :param tables: as tabelas do modelo.
-        :param partitions: os valores de partição a trazer, pela regra da partição; ``None`` traz
+        :param partitions: os valores de partição a trazer, pela regra da partição. ``None`` traz
             a tabela inteira.
-        :param materialize: no DuckDB, uma tabela em vez de uma view; no Redshift a tabela é
-            sempre carregada.
+        :param materialize: no DuckDB, ``True`` cria uma tabela com os dados em vez de uma view.
+            No Redshift a tabela é sempre carregada.
         :raises serialize_db.errors.ContractError: um valor fora da regra da partição, ou
             ``partitions`` numa tabela sem partição.
         :raises serialize_db.errors.SandboxError: a tabela sem versão fixada, que não existe no
-            ambiente, ou o nome dela já ocupado no sandbox; no motor Redshift, também a sessão numa
+            ambiente, ou o nome dela já ocupado no sandbox. No motor Redshift, também a sessão numa
             transação que o cliente abriu por ``BEGIN``, antes de qualquer comando, e, sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         """
@@ -700,8 +755,12 @@ class Execution:
         self,
         table: sa.Table,
     ) -> sa.FromClause:
-        """[public] A versão fixada da tabela como origem de consulta, sem ocupar nome no sandbox: é
-        por ela que o pipeline lê as partições já gravadas no Delta da tabela que ele mesmo grava.
+        """[public] A versão fixada da tabela como origem de consulta, sem ocupar o nome dela no
+        sandbox.
+
+        É por esta origem que o pipeline lê as partições já gravadas no Delta de uma tabela que
+        ele mesmo grava: o nome do modelo fica livre para a tabela de saída, criada por
+        ``sandbox.create_table``.
 
         Exemplo:
 
@@ -711,9 +770,9 @@ class Execution:
             run.sandbox.query(sa.select(sa.func.max(previous.c.id_projetado)))
 
         :param table: a tabela do modelo.
-        :return: o ``FromClause`` com as colunas do contrato.
-        :raises serialize_db.errors.SandboxError: a tabela sem versão fixada, que ainda não existe;
-            no motor Redshift, também a sessão numa transação que o cliente abriu e, sem
+        :return: o ``FromClause`` com as colunas do contrato, para os statements Core.
+        :raises serialize_db.errors.SandboxError: a tabela sem versão fixada, que ainda não existe.
+            No motor Redshift, também a sessão numa transação que o cliente abriu e, sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         """
         return self.sandbox.pinned_delta(table, self._uri(table), self._version(table))
@@ -723,8 +782,8 @@ class Execution:
         table: sa.Table,
         key: sa.Column,
     ) -> int:
-        """[private] O primeiro id de ``next_ids``: o maior da versão fixada mais um, ou 1 na tabela
-        nova; quem chama segura o lock."""
+        """[private] O primeiro id que ``next_ids`` entrega numa tabela: o maior valor da chave na
+        versão fixada mais um, ou 1 na tabela nova. Quem chama segura o lock."""
         version = self.versions.get(table.name)
         if version is None:
             return 1
@@ -735,12 +794,13 @@ class Execution:
         table: sa.Table,
         n: int,
     ) -> range:
-        """[public] Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior da
-        versão fixada.
+        """[public] Uma faixa de ``n`` inteiros contíguos da chave sequencial, acima do maior valor
+        da versão fixada.
 
-        O maior valor é lido uma vez por tabela, das estatísticas do log, ou da coluna quando um
-        arquivo não as tem. As faixas de threads paralelas não se sobrepõem, e as de uma
-        reexecução diferem.
+        A chave sequencial é a chave primária inteira de uma coluna. O maior valor dela é lido uma
+        vez por tabela na execução, das estatísticas do log da tabela, ou da coluna quando um
+        arquivo não as tem. As faixas de threads paralelas não se sobrepõem. As faixas de uma
+        reexecução diferem das da execução anterior.
 
         Exemplo:
 
@@ -769,7 +829,8 @@ class Execution:
         self,
         table: sa.Table,
     ) -> dict[str, tuple[str, int]]:
-        """[private] A URI e a versão fixada de cada tabela que uma chave estrangeira aponta."""
+        """[private] A URI e a versão fixada de cada tabela que uma chave estrangeira de ``table``
+        aponta e que existe no ambiente, para a verificação de órfãos de ``audit``."""
         referenced = {}
         for constraint in table.foreign_key_constraints:
             target = constraint.referred_table
@@ -785,12 +846,15 @@ class Execution:
         foreign_keys: bool = False,
         key_scope: KeyScope | None = None,
     ) -> AuditReport:
-        """[public] Roda a auditoria do motor e guarda o relatório aprovado.
+        """[public] Roda a auditoria do motor sobre uma tabela do sandbox e guarda o relatório
+        aprovado.
 
-        O relatório, com o SQL de cada verificação, vai ao log ``serialize_db.execution`` no nível
-        ``INFO``, e a amostra de cada verificação reprovada, no nível ``WARNING``. A contagem por
-        partição e as colunas ``Double`` com valor não finito do relatório aprovado são as que
-        ``publish_delta`` passa à exportação.
+        A auditoria é o conjunto de verificações que o contrato define para a tabela (nulos,
+        tamanhos, chaves, partição), antes de publicar. O relatório, com o SQL de cada
+        verificação, vai ao log ``serialize_db.execution`` no nível ``INFO``. A amostra de cada
+        verificação reprovada vai ao mesmo log no nível ``WARNING``. Do relatório aprovado,
+        ``publish_delta`` passa à exportação a contagem por partição e as colunas ``Double`` com
+        valor não finito.
 
         Exemplo:
 
@@ -799,18 +863,18 @@ class Execution:
             run.audit(Projetado.__table__, ["2026-08-31"], foreign_keys=True)
 
         :param table: a tabela do modelo, carregada no sandbox.
-        :param partitions: as partições da execução, pela regra da partição, as que a auditoria
-            verifica e a aprovação cobre; ``None`` audita a tabela inteira do sandbox. A tabela sem
-            partição é auditada com ``None``: ``publish_delta`` só aceita ``None`` nela e procura
-            a aprovação sob ``None``; uma lista nessa tabela não filtra nada e deixa a aprovação
-            onde ``publish_delta`` não a procura.
+        :param partitions: as partições da execução, pela regra da partição. A auditoria verifica
+            essas partições, e a aprovação as cobre. ``None`` audita a tabela inteira do sandbox.
+            A tabela sem partição é auditada com ``None``, porque ``publish_delta`` só aceita
+            ``None`` nela e procura a aprovação sob ``None``; uma lista nessa tabela não filtra
+            nada e deixa a aprovação onde ``publish_delta`` não a procura.
         :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
-            chave estrangeira, a chave sem a linha referenciada, procurada na tabela do sandbox ou
-            na versão fixada da referenciada.
+            chave estrangeira. O órfão é a chave sem a linha referenciada, procurada na tabela do
+            sandbox ou na versão fixada da tabela referenciada.
         :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
-            chave contra as demais partições da versão fixada: o padrão a faz na chave sem a
-            coluna de partição e sem a de ``partition_source``, ``key_scope="partition"`` a
-            suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
+            chave contra as demais partições da versão fixada. O padrão a faz na chave sem a
+            coluna de partição e sem a de ``partition_source``; ``key_scope="partition"`` a
+            suprime; ``key_scope="table"`` a faz também na chave com a coluna de
             ``partition_source``.
         :return: o relatório aprovado.
         :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
@@ -861,8 +925,9 @@ class Execution:
         table: sa.Table,
         partitions: list[str] | None,
     ) -> list[str | None]:
-        """[private] As partições a publicar: as pedidas, ou ``[None]`` numa tabela sem partição; a
-        lista vazia é ``ContractError``."""
+        """[private] As partições que ``publish_delta`` publica numa tabela: as pedidas, ou
+        ``[None]`` numa tabela sem partição. ``ContractError`` na lista vazia, em ``partitions``
+        numa tabela sem partição e em ``None`` numa tabela particionada."""
         partition_by = table_options(table).partition_by
         if partition_by is None:
             if partitions is not None:
@@ -885,7 +950,8 @@ class Execution:
         partitions: list[str] | None,
         audit: bool,
     ) -> AuditReport | None:
-        """[private] O relatório aprovado das partições, exigido quando ``audit`` é verdadeiro."""
+        """[private] O relatório aprovado das partições da tabela, exigido quando ``audit`` é
+        verdadeiro: sem ele, ``AuditFailed``. Com ``audit`` falso, ``None`` e um aviso no log."""
         if not audit:
             log.warning(
                 "publish_delta de %s %s sem auditoria (audit=False)",
@@ -909,8 +975,9 @@ class Execution:
         uri: str,
     ) -> None:
         """[private] Confere que nenhuma alteração de dados entrou na tabela desde a versão fixada;
-        um avanço só de metadados ou de manutenção atualiza a versão fixada. A tabela ausente nasce
-        aqui."""
+        outra execução que gravou dados é ``ExecutionConflict``. Um avanço só de metadados ou de
+        manutenção atualiza a versão fixada em ``versions``. A tabela ausente nasce aqui, por
+        ``delta.create_table``."""
         storage = self.delta_db.storage
         pinned = self._version(table)
         # O diff da tabela ausente na abertura parte da versão 0, a da criação.
@@ -934,8 +1001,9 @@ class Execution:
         values: list[str | None],
         report: AuditReport | None,
     ) -> int:
-        """[private] A reconciliação e a exportação de cada partição de uma tabela; devolve a versão
-        final."""
+        """[private] Publica uma tabela: a conferência de ``_check_no_data_change``, o
+        ``reconcile`` e o ``export_partition`` de cada partição, com a contagem e as colunas sem
+        mínimo e máximo do relatório. Devolve a versão final da tabela."""
         uri = self._uri(table)
         self._check_no_data_change(table, uri)
         delta.reconcile(uri, table, self.delta_db.storage)
@@ -977,15 +1045,20 @@ class Execution:
         ambiente, ``<raiz>/<ambiente>/<tabela>``.
 
         As partições e a auditoria de toda tabela são conferidas antes do primeiro commit. Depois,
-        por tabela: ``create_table`` se não existe, ``reconcile`` e ``export_partition`` por
-        partição. O motor grava a partição na pasta dela na tabela Delta, e o commit registra no
-        log da tabela o arquivo gravado, com a contagem da auditoria em ``expected_rows`` e as
-        colunas ``Double`` com valor não finito sem mínimo e máximo (todas as ``Double`` com
-        ``audit=False``); no motor Redshift, a partição com essas colunas volta por
-        ``publish_partition``, que grava o arquivo de novo.
+        cada tabela passa por:
 
-        As tabelas correm num pool de ``max_workers``: na primeira falha nada novo começa, o que
-        está em curso termina, e a exceção leva o resultado de cada tabela numa nota.
+        - ``create_table``, se a tabela não existe;
+        - ``reconcile``, que aplica ao log da tabela o que o modelo acrescentou;
+        - ``export_partition``, por partição.
+
+        Na exportação, o motor grava a partição na pasta dela na tabela Delta, e o commit registra
+        no log da tabela o arquivo gravado. O commit leva a contagem da auditoria em
+        ``expected_rows`` e deixa sem mínimo e máximo as colunas ``Double`` com valor não finito
+        (todas as ``Double`` com ``audit=False``). No motor Redshift, a partição com essas colunas
+        volta por ``publish_partition``, que grava o arquivo de novo.
+
+        As tabelas correm num pool de ``max_workers`` threads. Na primeira falha nada novo começa,
+        o que está em curso termina, e a exceção leva o resultado de cada tabela numa nota.
 
         Exemplo:
 
@@ -994,11 +1067,11 @@ class Execution:
             run.publish_delta(Projetado.__table__, partitions=["2026-08-31"])   # {"cad_...": 58}
 
         :param tables: as tabelas do modelo, com as partições no sandbox.
-        :param partitions: os valores de partição a publicar; ``None`` numa tabela sem partição,
+        :param partitions: os valores de partição a publicar. ``None`` numa tabela sem partição,
             que é substituída inteira.
         :param audit: ``audit=False`` dispensa a exigência da auditoria aprovada, com um aviso no
             log ``serialize_db.execution``.
-        :param max_workers: quantas tabelas correm ao mesmo tempo; o padrão 1 publica uma por vez,
+        :param max_workers: quantas tabelas correm ao mesmo tempo. O padrão 1 publica uma por vez,
             e o valor recomendado é 4.
         :return: ``{tabela: versão}``, com a versão do último commit de cada tabela.
         :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
@@ -1019,11 +1092,11 @@ class Execution:
             atual não existe.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
             2 MiB, ou negativa (``serialize_db.resources.environment_limits``), lida em cada
-            partição antes do commit: nada entra no log, e os arquivos que o motor gravou ficam
-            órfãos na pasta da partição até um
+            partição antes do commit. Nesse caso nada entra no log, e os arquivos que o motor
+            gravou ficam órfãos na pasta da partição até um
             ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção, ou, na
             troca do motor Redshift pelo ``Double`` não finito, no ``staging_prefix`` até o
-            ``cleanup``; no motor Redshift, também sem ``iam_role``, a sessão ``boto3`` sem
+            ``cleanup``. No motor Redshift, também sem ``iam_role``, a sessão ``boto3`` sem
             credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: no motor Redshift, a falta do manifesto depois de um ``UNLOAD``
             de alguma linha.
@@ -1042,11 +1115,15 @@ class Execution:
         self,
         name: str,
     ) -> None:
-        """[public] Marca a execução: ``serialize_db_snapshot`` nos commits seguintes e, no
-        encerramento sem erro, a entrada do snapshot com a versão de toda tabela do ambiente.
+        """[public] Marca a execução com um snapshot: ``serialize_db_snapshot`` nos metadados dos
+        commits seguintes e, no encerramento sem erro, a entrada do snapshot com a versão de toda
+        tabela do ambiente.
 
-        O snapshot não move o canal ``default``: ``serialize-db channel`` o aponta depois. Uma
-        execução marca um snapshot só: a segunda chamada é recusada.
+        Um snapshot é uma entrada do arquivo de controle do ambiente com a versão de cada tabela
+        num instante, sob um nome que não muda. O snapshot não move o canal ``default``, o
+        snapshot que o leitor Delta lê sem argumento e que ``serialize-db publish_redshift``
+        publica por ``--channel default``: ``serialize-db channel`` o aponta depois. Uma execução
+        marca um snapshot só: a segunda chamada é recusada.
 
         O nome é imutável: a entrada gravada não muda, e o nome não volta a ser usado, nem depois
         do arquivamento. Refazer os dados de um snapshot é uma execução nova marcada com outro
@@ -1063,7 +1140,7 @@ class Execution:
         :raises serialize_db.errors.ContractError: na chamada, antes de qualquer commit, o nome fora
             da regra da partição, ou já usado em ``snapshots`` ou em ``archived``, com o
             ``serialize-db channel`` na mensagem, e a segunda chamada na execução já marcada, com o
-            nome marcado na mensagem; na saída do ``with``, depois dos commits, o nome que outro
+            nome marcado na mensagem. Na saída do ``with``, depois dos commits, o nome que outro
             escritor gravou depois da chamada.
         :raises serialize_db.errors.ConflictError: na saída do ``with``, depois dos commits, outro
             escritor gravou o arquivo de controle entre a leitura e a escrita da entrada, que não

@@ -1,33 +1,41 @@
 """[public] A publicação para clientes no Redshift: as tabelas ``<ambiente>_<tabela>`` do esquema,
 derivadas do Delta, e a tabela de controle ``serialize_db_publications``.
 
-A tabela de controle é uma só para todos os ambientes, criada uma vez no esquema pelo usuário
-(``create_publications_table`` ou ``serialize-db publish_redshift --init``); o pipeline não a
-cria, e ``publish_redshift`` recusa publicar sem ela, antes de qualquer escrita. As versões vêm de
-um snapshot do arquivo de controle, por ``serialize-db publish_redshift`` com ``--snapshot`` ou
-``--channel``, ou são as atuais.
+A tabela de controle guarda a versão publicada de cada tabela. Ela é uma só para todos os
+ambientes, e o usuário a cria uma vez no esquema, por ``create_publications_table`` ou por
+``serialize-db publish_redshift --init``. O pipeline não a cria, e ``publish_redshift`` recusa
+publicar sem ela, antes de qualquer escrita. As versões a publicar vêm de um snapshot do arquivo
+de controle (a entrada com a versão de cada tabela do ambiente num instante), por
+``serialize-db publish_redshift`` com ``--snapshot`` ou ``--channel``, ou são as versões atuais.
 
-Cada tabela publica numa conexão própria, e as tabelas correm num pool. Antes da transação, a
-tabela publicada que já existe é reconciliada com o contrato, fora de transação: as colunas novas
-são acrescentadas; um diff destrutivo despublica a tabela, e a transação a recria com todas as
-partições. A transação é, em ordem: ``BEGIN``; a leitura da linha de controle, que identifica a
-versão publicada e fixa o snapshot da transação; sem linha, a primeira publicação, com a tabela
-publicada criada e todas as partições; com linha, ``version_diff`` entre a versão lida e a pedida,
-a menor e a maior delas, o que também volta a tabela a um snapshot anterior ao publicado; por
-partição, ``DELETE`` da partição e, quando a versão pedida a tem, um ``COPY ... MANIFEST`` por
-lista de colunas dos arquivos, com a lista, numa staging temporária e ``INSERT ... SELECT`` com o
-valor; por último, o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão
-lida. As 0 linhas desse ``UPDATE``, o ``1023`` e a tabela publicada que outra primeira publicação
-criou saem como ``ExecutionConflict``. Os manifestos do ``COPY`` ficam em
+Cada tabela publica numa conexão própria, e as tabelas correm num pool. Antes da transação, e
+fora de transação, a tabela publicada que já existe é reconciliada com o contrato: as colunas
+novas são acrescentadas, e um diff destrutivo, como uma coluna removida ou um tipo que mudou,
+despublica a tabela, que a transação recria com todas as partições. A transação roda, em ordem:
+
+- ``BEGIN``.
+- A leitura da linha de controle, a linha da tabela na tabela de controle, que identifica a
+  versão publicada e fixa o snapshot da transação. Sem linha, é a primeira publicação: a transação
+  cria a tabela publicada e carrega todas as partições. Com linha, ``version_diff`` entre a menor
+  e a maior das duas versões, a lida e a pedida, dá as partições a trocar, o que também volta a
+  tabela a um snapshot anterior ao publicado.
+- Por partição, o ``DELETE`` da partição e, quando a versão pedida a tem, a carga numa staging
+  temporária (uma tabela de passagem, apagada no fim da transação) por um ``COPY ... MANIFEST``
+  por lista de colunas dos arquivos, com a lista, seguida do ``INSERT ... SELECT`` com o valor da
+  partição. O manifesto é o arquivo JSON com a lista dos arquivos que o ``COPY`` carrega.
+- Por último, o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão lida.
+
+As 0 linhas desse ``UPDATE``, o ``1023`` e a tabela publicada que outra primeira publicação criou
+saem como ``ExecutionConflict``. Os manifestos do ``COPY`` ficam em
 ``<raiz>/<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``, e a publicação não os apaga.
-``unpublish_redshift`` apaga a tabela publicada e a linha de controle numa transação, e
+``unpublish_redshift`` apaga a tabela publicada e a linha de controle numa transação.
 ``publication_status`` compara a versão publicada com a atual.
 
-Cada ``COPY`` leva a cláusula de credenciais do motor Redshift montada logo antes do seu
-``execute``, com a chave que a cadeia de credenciais serve naquele momento; nenhum texto que a
-carregue vai a log. Todo comando cita a tabela publicada e a de controle por nome em duas partes,
-depois do ``USE`` que a conexão roda, e a staging temporária pelo nome só, sem ``COMPUPDATE`` e
-sem ``TRUNCATE``, o que um datashare aceita.
+Cada ``COPY`` leva a cláusula de credenciais do motor Redshift, montada logo antes do seu
+``execute`` com a chave que a cadeia de credenciais do ``boto3`` serve naquele momento. Nenhum
+texto que carregue a cláusula vai a log. Todo comando cita a tabela publicada e a de controle por
+nome em duas partes, ``"<esquema>"."<nome>"``, depois do ``USE`` que a conexão roda, e a staging
+temporária pelo nome só, sem ``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare aceita.
 
 Exemplo:
 
@@ -100,8 +108,8 @@ log = logging.getLogger("serialize_db.publication")
 command_log = logging.getLogger("serialize_db.publication.commands")
 
 CONTROL_TABLE = "serialize_db_publications"
-"""[public] A tabela de controle: ``table_name``, ``delta_version``, ``execution_id`` e
-``published_at``."""
+"""[public] O nome da tabela de controle. As colunas dela: ``table_name``, ``delta_version``,
+``execution_id`` e ``published_at``."""
 
 # A instrução de inicialização, na mensagem de PublicationError.
 _INIT = "crie-a uma vez com serialize-db publish_redshift --init (create_publications_table)"
@@ -137,7 +145,8 @@ _TYPE_FAMILIES = {
 
 @dataclasses.dataclass(frozen=True)
 class PublicationStatus:
-    """[public] A situação da publicação de uma tabela, para o operador.
+    """[public] A situação da publicação de uma tabela, para o operador: a versão publicada contra a
+    atual e as partições pendentes.
 
     Exemplo:
 
@@ -149,20 +158,21 @@ class PublicationStatus:
     """
 
     table: str
-    """[public] ``<ambiente>_<tabela>``."""
+    """[public] O nome da tabela publicada, ``<ambiente>_<tabela>``."""
     published_version: int | None
-    """[public] A versão do Delta na tabela de controle; ``None`` quando nunca publicada."""
+    """[public] A versão do Delta que a tabela de controle registra, ou ``None`` na tabela nunca
+    publicada."""
     current_version: int
     """[public] A versão atual do Delta."""
     pending_partitions: tuple[str | None, ...]
-    """[public] As partições que a próxima publicação troca; ``(None,)`` na tabela sem partição que
-    ela troca inteira."""
+    """[public] As partições que a próxima publicação troca. Na tabela sem partição, que ela troca
+    inteira, ``(None,)``."""
 
 
 @dataclasses.dataclass(frozen=True)
 class _PublishedColumn:
-    """[private] Uma coluna de uma tabela publicada, como ``svv_all_columns`` a lista; para
-    ``_reconcile_published``.
+    """[private] Uma coluna de uma tabela publicada, como o catálogo ``svv_all_columns`` a lista.
+    Serve a ``_reconcile_published``.
 
     Exemplo:
 
@@ -177,13 +187,14 @@ class _PublishedColumn:
     """[private] O tipo, o ``data_type`` do catálogo, como ``bigint``, ``numeric`` ou
     ``character varying``."""
     length: int | None
-    """[private] A largura do texto, o ``character_maximum_length``; ``None`` quando o catálogo
-    não a traz."""
+    """[private] A largura do texto, o ``character_maximum_length`` do catálogo, ou ``None`` quando
+    o catálogo não a traz."""
     precision: int | None
-    """[private] A precisão numérica, o ``numeric_precision``; ``None`` quando o catálogo não a
-    traz."""
+    """[private] A precisão numérica, o ``numeric_precision`` do catálogo, ou ``None`` quando o
+    catálogo não a traz."""
     scale: int | None
-    """[private] A escala numérica, o ``numeric_scale``; ``None`` quando o catálogo não a traz."""
+    """[private] A escala numérica, o ``numeric_scale`` do catálogo, ou ``None`` quando o catálogo
+    não a traz."""
 
 
 # ---------------------------------------------------------------- o texto dos comandos
@@ -193,7 +204,7 @@ def _published_name(
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[private] ``<ambiente>_<tabela>``, o nome da tabela publicada."""
+    """[private] O nome da tabela publicada, ``<ambiente>_<tabela>``."""
     return f"{environment}_{table.name}"
 
 
@@ -201,16 +212,17 @@ def _qualified(
     schema: str,
     name: str,
 ) -> str:
-    """[private] ``"<esquema>"."<nome>"``."""
+    """[private] O nome em duas partes, ``"<esquema>"."<nome>"``, cada parte entre as aspas de
+    ``quoted``."""
     return f"{quoted(schema)}.{quoted(name)}"
 
 
 def _control_ddl(
     schema: str,
 ) -> str:
-    """[private] O ``CREATE TABLE`` da tabela de controle, sem ``IF NOT EXISTS``: só o usuário o
-    roda, uma vez, e a segunda chamada falha com a mensagem do servidor; para
-    ``create_publications_table``.
+    """[private] O ``CREATE TABLE`` da tabela de controle, para ``create_publications_table``. O
+    comando vai sem ``IF NOT EXISTS``: só o usuário o roda, uma vez, e a segunda chamada falha com
+    a mensagem do servidor.
 
     Exemplo:
 
@@ -233,9 +245,9 @@ def _control_read(
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[private] O ``select`` da linha de controle da tabela; para ``publish_redshift`` e
-    ``unpublish_redshift``, que o rodam como o primeiro comando da transação, e para
-    ``publication_status``, que o roda fora de transação.
+    """[private] O ``select`` da linha de controle da tabela. ``publish_redshift`` e
+    ``unpublish_redshift`` o rodam como o primeiro comando da transação; ``publication_status`` o
+    roda fora de transação.
 
     Exemplo:
 
@@ -263,8 +275,9 @@ def _published_ddl(
     environment: str,
     table: sa.Table,
 ) -> str:
-    """[private] O ``CREATE TABLE`` da tabela publicada: o DDL do contrato com a chave primária
-    informativa e as cláusulas físicas do modelo; para ``_publication_statements``.
+    """[private] O ``CREATE TABLE`` da tabela publicada, para ``_publication_statements``: o DDL do
+    contrato, a chave primária, que o Redshift trata como informativa, e as cláusulas físicas do
+    modelo.
 
     Exemplo:
 
@@ -305,7 +318,8 @@ def _partition_delete(
     table: sa.Table,
     value: str | None,
 ) -> str:
-    """[private] O ``DELETE`` da partição na tabela publicada; a tabela inteira sem partição."""
+    """[private] O ``DELETE`` da partição na tabela publicada. Numa tabela sem partição, o
+    ``DELETE`` da tabela inteira."""
     partition_by = table_options(table).partition_by
     if partition_by is None:
         return f"DELETE FROM {published}"
@@ -324,12 +338,18 @@ def _publication_statements(
     credentials: str,
 ) -> list[str]:
     """[private] Os comandos da transação depois da leitura da linha de controle, um por
-    ``execute``, sem ``BEGIN`` e ``COMMIT``: na primeira publicação o ``CREATE TABLE`` da tabela
-    publicada; a staging temporária sem a coluna de partição; por partição, o ``DELETE`` dela e,
-    quando ela tem manifestos, o ``DELETE`` da staging, um ``COPY ... MANIFEST FILLRECORD`` por
-    manifesto, com a lista das colunas dos arquivos dele, e o ``INSERT ... SELECT`` com o valor e
-    ``JSON_PARSE``; o ``DROP`` da staging; e por último a linha de controle, pelo ``INSERT`` ou pelo
-    ``UPDATE`` condicionado à versão lida; para ``publish_redshift``.
+    ``execute``, sem ``BEGIN`` e ``COMMIT``; para ``publish_redshift``.
+
+    Na ordem:
+
+    - na primeira publicação, o ``CREATE TABLE`` da tabela publicada;
+    - a staging temporária, sem a coluna de partição;
+    - por partição, o ``DELETE`` dela e, quando ela tem manifestos, o ``DELETE`` da staging, um
+      ``COPY ... MANIFEST FILLRECORD`` por manifesto, com a lista das colunas dos arquivos dele, e
+      o ``INSERT ... SELECT`` com o valor e ``JSON_PARSE``;
+    - o ``DROP`` da staging;
+    - por último, a linha de controle, pelo ``INSERT`` ou pelo ``UPDATE`` condicionado à versão
+      lida.
 
     Exemplo:
 
@@ -344,13 +364,13 @@ def _publication_statements(
     :param environment: o ambiente, que prefixa o nome da tabela publicada,
         ``<ambiente>_<tabela>``.
     :param table: a tabela do modelo.
-    :param partitions: as partições que a publicação troca, na ordem dos comandos; ``None`` é a
+    :param partitions: as partições que a publicação troca, na ordem dos comandos. ``None`` é a
         tabela inteira, sem partição.
     :param manifests: os manifestos do ``COPY`` de cada partição com arquivo na versão, pelo
-        valor, como ``delta.copy_manifest`` os devolve; uma partição sem manifesto foi removida no
+        valor, como ``delta.copy_manifest`` os devolve. Uma partição sem manifesto foi removida no
         Delta e recebe só o ``DELETE``.
     :param delta_version: a versão do Delta publicada, que a linha de controle grava.
-    :param published_version: a versão lida na linha de controle; ``None`` na primeira
+    :param published_version: a versão lida na linha de controle, ou ``None`` na primeira
         publicação.
     :param execution_id: a execução que publica, que a linha de controle grava.
     :param credentials: a cláusula de credenciais, como ``IAM_ROLE default``, que os textos do
@@ -402,8 +422,8 @@ def _unpublication_statements(
     published_version: int,
 ) -> list[str]:
     """[private] Os comandos da despublicação depois da leitura da linha de controle: o
-    ``DROP TABLE`` da tabela publicada e o ``DELETE`` da linha, condicionado à versão lida; para
-    ``unpublish_redshift`` e para ``publish_redshift``, que despublica a tabela publicada num diff
+    ``DROP TABLE`` da tabela publicada e o ``DELETE`` da linha, condicionado à versão lida. Servem a
+    ``unpublish_redshift`` e a ``publish_redshift``, que despublica a tabela publicada num diff
     destrutivo antes de recriá-la.
 
     Exemplo:
@@ -433,7 +453,8 @@ def _unpublication_statements(
 def _expected_column(
     column: sa.Column,
 ) -> _PublishedColumn:
-    """[private] A coluna do contrato como ``svv_all_columns`` a listaria, na família do tipo."""
+    """[private] A coluna do contrato na forma em que ``svv_all_columns`` a listaria, com o tipo na
+    família de ``_TYPE_FAMILIES``."""
     # O texto do tipo é o nome, com um número entre parênteses (a largura) ou dois (a precisão e
     # a escala): "BIGINT", "VARCHAR(20)", "DECIMAL(18, 2)".
     text = sql_type(column, "redshift")
@@ -452,7 +473,7 @@ def _expected_column(
 def _optional_int(
     value: object,
 ) -> int | None:
-    """[private] O inteiro de um número lido como texto ou do catálogo; ``None`` quando não há
+    """[private] O inteiro de um número lido como texto ou do catálogo, ou ``None`` quando não há
     valor."""
     if value is None:
         return None
@@ -462,7 +483,8 @@ def _optional_int(
 def _in_family(
     column: _PublishedColumn,
 ) -> _PublishedColumn:
-    """[private] A coluna publicada com o tipo na família, para a comparação."""
+    """[private] A coluna publicada com o tipo levado à família de ``_TYPE_FAMILIES``, para a
+    comparação com a coluna do contrato."""
     family = _TYPE_FAMILIES.get(column.data_type.lower(), column.data_type.lower())
     if family in ("varchar", "char"):
         return dataclasses.replace(column, data_type=family, precision=None, scale=None)
@@ -479,9 +501,10 @@ def _reconcile_published(
 ) -> tuple[list[str], list[str]]:
     """[private] O diff entre o contrato e a tabela publicada; para ``publish_redshift``.
 
-    Aditivo: a coluna anulável nova. Destrutivo: a coluna removida, a coluna ``NOT NULL`` nova, o
-    tipo que mudou e a largura de ``VARCHAR(n)``, a precisão ou a escala que mudaram, porque o
-    ``ALTER COLUMN ... TYPE`` é recusado no esquema do datashare.
+    O diff aditivo é a coluna anulável nova. O diff destrutivo é a coluna removida, a coluna
+    ``NOT NULL`` nova, o tipo que mudou e a largura de ``VARCHAR(n)``, a precisão ou a escala que
+    mudaram. Essas mudanças são destrutivas porque o ``ALTER COLUMN ... TYPE`` é recusado no
+    esquema do datashare.
 
     Exemplo:
 
@@ -496,9 +519,9 @@ def _reconcile_published(
     :param table: a tabela do modelo.
     :param columns: as colunas da tabela publicada como ``svv_all_columns`` as lista, com nome,
         tipo, largura, precisão e escala, em ``_PublishedColumn``.
-    :return: os ``ALTER TABLE ... ADD COLUMN`` do diff aditivo, no fim da tabela, e uma frase por
-        diferença destrutiva, que despublica a tabela para a transação da mesma publicação
-        recriá-la.
+    :return: os ``ALTER TABLE ... ADD COLUMN`` do diff aditivo, que acrescentam cada coluna no fim
+        da tabela, e uma frase por diferença destrutiva. Qualquer diferença destrutiva despublica a
+        tabela, e a transação da mesma publicação a recria.
     :raises serialize_db.errors.ContractError: a tabela com um tipo de coluna fora do contrato.
     """
     published = _qualified(schema, _published_name(environment, table))
@@ -528,10 +551,10 @@ def _reconcile_published(
 
 
 class _Connection:
-    """[private] Uma conexão da publicação: um cursor por comando, o erro do servidor com o comando
-    mascarado numa nota, e o ``BEGIN``, o ``COMMIT`` e o ``ROLLBACK`` explícitos. O log
-    ``serialize_db.publication.commands`` dá em ``DEBUG`` o tempo da abertura da conexão e o de
-    cada comando, com o texto mascarado."""
+    """[private] Uma conexão da publicação, aberta por ``connect`` do motor Redshift: um cursor por
+    comando, o erro do servidor com o comando mascarado numa nota, e o ``BEGIN``, o ``COMMIT`` e o
+    ``ROLLBACK`` explícitos. O log ``serialize_db.publication.commands`` dá em ``DEBUG`` o tempo
+    da abertura da conexão e o de cada comando, com o texto mascarado por ``mask``."""
 
     def __init__(
         self,
@@ -546,7 +569,7 @@ class _Connection:
         self,
         text: str,
     ) -> object:
-        """[private] Roda um comando num cursor novo e o devolve."""
+        """[private] Roda um comando num cursor novo e devolve o cursor."""
         cursor = self.connection.cursor()
         started = time.perf_counter()
         try:
@@ -566,7 +589,8 @@ class _Connection:
         return list(self.execute(text).fetchall())
 
     def rollback(self) -> None:
-        """[private] O ``ROLLBACK``; o erro dele não esconde o que o causou."""
+        """[private] Roda o ``ROLLBACK``. Um erro do próprio ``ROLLBACK`` vai ao log como aviso e
+        não esconde o erro que o causou."""
         try:
             self.execute("ROLLBACK")
         except redshift_connector.Error as error:
@@ -580,8 +604,8 @@ def _check_control_table(
     connection: _Connection,
     schema: str,
 ) -> None:
-    """[private] A tabela de controle existe, por ``select 1 ... limit 0`` fora de transação; sem
-    ela, ``PublicationError`` com a instrução de inicialização."""
+    """[private] Confere que a tabela de controle existe, por ``select 1 ... limit 0`` fora de
+    transação. Sem ela, ``PublicationError`` com a instrução de inicialização."""
     try:
         connection.execute(f"SELECT 1 FROM {_qualified(schema, CONTROL_TABLE)} LIMIT 0")
     except redshift_connector.Error as error:
@@ -609,8 +633,10 @@ def _published_columns(
     environment: str,
     table: sa.Table,
 ) -> list[_PublishedColumn]:
-    """[private] As colunas da tabela publicada em ``svv_all_columns``, na ordem; vazia quando a
-    tabela não existe."""
+    """[private] As colunas da tabela publicada, lidas em ``svv_all_columns`` na ordem das posições.
+    A lista é vazia quando a tabela não existe. Quando a tabela existe e o catálogo não lista as
+    colunas, a lista também é vazia, e o log ``serialize_db.publication`` avisa que a
+    reconciliação não rodou."""
     name = _published_name(environment, table)
     try:
         connection.execute(f"SELECT 1 FROM {_qualified(config.schema, name)} LIMIT 0")
@@ -651,7 +677,8 @@ def _conflict(
     table: sa.Table,
 ) -> ExecutionConflict | None:
     """[private] O ``ExecutionConflict`` de um erro do servidor que é conflito entre publicações: o
-    ``1023`` e a tabela publicada que outra primeira publicação criou; ``None`` nos demais."""
+    ``1023``, a violação de isolamento serializável, e a tabela publicada que outra primeira
+    publicação criou. ``None`` nos demais erros."""
     if serialization_failure(error):
         return ExecutionConflict(
             f"{table.name}: outra publicação gravou a tabela ao mesmo tempo (1023): {error}"
@@ -669,8 +696,9 @@ def _unpublish_table(
     environment: str,
     table: sa.Table,
 ) -> int | None:
-    """[private] A transação da despublicação: a linha lida, o ``DROP TABLE`` e o ``DELETE`` da
-    linha; devolve a versão que estava publicada, ou ``None`` sem linha."""
+    """[private] A transação da despublicação de uma tabela: lê a linha de controle, roda o
+    ``DROP TABLE`` e o ``DELETE`` da linha. Devolve a versão que estava publicada, ou ``None`` sem
+    linha. O ``DELETE`` que não acha a linha é ``ExecutionConflict``."""
     connection.execute("BEGIN")
     try:
         published = _read_control(connection, config.schema, environment, table)
@@ -705,9 +733,9 @@ def _reconcile(
     environment: str,
     table: sa.Table,
 ) -> None:
-    """[private] A tabela publicada reconciliada com o contrato: as colunas novas acrescentadas,
-    fora de transação; um diff destrutivo despublica a tabela, e a transação da mesma publicação a
-    recria."""
+    """[private] Reconcilia a tabela publicada com o contrato, fora de transação: acrescenta as
+    colunas novas. Num diff destrutivo, despublica a tabela, com um aviso no log, e a transação da
+    mesma publicação a recria. Sem tabela publicada, não faz nada."""
     columns = _published_columns(connection, config, environment, table)
     if not columns:
         return
@@ -732,9 +760,9 @@ def _partitions_to_publish(
     version: int,
     storage: Storage,
 ) -> tuple[list[str | None], list[str | None]]:
-    """[private] As partições que a publicação troca e, entre elas, as que têm arquivo na versão:
-    todas na primeira publicação, as de ``version_diff`` entre a menor e a maior das duas versões
-    nas seguintes, o que serve à volta a uma versão anterior à publicada."""
+    """[private] As partições que a publicação troca e, entre elas, as que têm arquivo na versão
+    pedida. Na primeira publicação, todas. Nas seguintes, as de ``version_diff`` entre a menor e a
+    maior das duas versões, o que também serve à volta a uma versão anterior à publicada."""
     partition_by = table_options(table).partition_by
     available = delta.partition_values(delta.open_table(uri, storage, version), partition_by)
     if published is None:
@@ -753,8 +781,9 @@ def _write_manifests(
     execution_id: str,
     version: int,
 ) -> dict[str | None, list[delta.CopyManifest]]:
-    """[private] Os manifestos do ``COPY`` de cada partição com arquivo, um por lista de colunas dos
-    arquivos, em ``<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``."""
+    """[private] Grava os manifestos do ``COPY`` de cada partição com arquivo, um por lista de
+    colunas dos arquivos, em ``<ambiente>/publicacao/<execution_id>/<tabela>/<valor>/``, e os
+    devolve pelo valor da partição. Na tabela sem partição, a última pasta se chama ``tabela``."""
     storage = delta_db.storage
     uri = delta_db.uri(table)
     manifests = {}
@@ -775,9 +804,9 @@ def _run_publication(
     statements: Sequence[str],
     published: int | None,
 ) -> None:
-    """[private] Os comandos da transação, um por ``execute``, cada ``COPY`` com a cláusula de
-    credenciais montada logo antes; o último grava a linha de controle, e o ``UPDATE`` dela que não
-    afeta linha é ``ExecutionConflict``."""
+    """[private] Roda os comandos da transação, um por ``execute``. Cada ``COPY`` recebe a cláusula
+    de credenciais montada logo antes dele. O último comando grava a linha de controle; o
+    ``UPDATE`` dela que não afeta linha é ``ExecutionConflict``."""
     *changes, control_statement = statements
     for statement in changes:
         # Uma cláusula nova por COPY: a credencial temporária da cadeia vence em até uma hora, e
@@ -801,9 +830,9 @@ def _publication_transaction(
     execution_id: str,
     version: int,
 ) -> list[str | None] | None:
-    """[private] A transação da publicação de uma tabela: a linha de controle lida, as partições
-    trocadas e a linha gravada; devolve as partições trocadas, ou ``None`` quando a versão já está
-    publicada e nada muda."""
+    """[private] A transação da publicação de uma tabela: lê a linha de controle, troca as
+    partições e grava a linha. Devolve as partições trocadas, ou ``None`` quando a versão pedida
+    já está publicada e nada muda."""
     environment = delta_db.environment
     connection.execute("BEGIN")
     try:
@@ -847,8 +876,8 @@ def _publish_table(
     execution_id: str,
     version: int,
 ) -> int:
-    """[private] A publicação de uma tabela, numa conexão própria: a reconciliação e a transação,
-    com o tempo e o pico de RSS do processo na linha de log da tabela publicada."""
+    """[private] Publica uma tabela numa conexão própria: a reconciliação e depois a transação. A
+    linha de log da tabela publicada traz as partições, o tempo e o pico de RSS do processo."""
     started = time.perf_counter()
     connection = _Connection(config)
     try:
@@ -877,8 +906,8 @@ def _version_to_publish(
     table: sa.Table,
     versions: Mapping[str, int] | None,
 ) -> int:
-    """[private] A versão do Delta que a publicação grava: a de ``versions``, ou a atual sem
-    ``versions``; a tabela sem versão, fora de ``versions`` ou inexistente no ambiente, é
+    """[private] A versão do Delta que a publicação grava: a de ``versions`` ou, sem ``versions``, a
+    atual. A tabela sem versão, fora de ``versions`` ou inexistente no ambiente, é
     ``PublicationError``."""
     if versions is not None:
         version = versions.get(table.name)
@@ -899,7 +928,10 @@ def _version_to_publish(
 def create_publications_table(
     config: RedshiftConfig,
 ) -> None:
-    """[public] Cria a tabela de controle no esquema, uma vez, pelo usuário.
+    """[public] Cria a tabela de controle ``serialize_db_publications`` no esquema, uma vez, pelo
+    usuário.
+
+    ``serialize-db publish_redshift --init`` faz o mesmo na linha de comando.
 
     Exemplo:
 
@@ -910,8 +942,8 @@ def create_publications_table(
     :param config: a configuração do Redshift, com a conexão e o esquema.
     :raises redshift_connector.Error: a segunda chamada falha com a mensagem do servidor, porque a
         tabela já existe.
-    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
-        e ``password``.
+    :raises serialize_db.errors.ContractError: ``config`` sem conexão possível, isto é, sem
+        ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -931,13 +963,13 @@ def publish_redshift(
     """[public] Publica as tabelas Delta do ambiente nas tabelas ``<ambiente>_<tabela>`` do esquema
     do Redshift.
 
-    Confere a tabela de controle antes de tudo; depois, por tabela, numa conexão própria do pool: a
-    reconciliação da tabela publicada que já existe e a transação da publicação. Uma tabela cuja
-    versão publicada é a pedida não muda; uma versão anterior à publicada volta a tabela a ela,
-    trocando as partições alteradas entre as duas, e a partição que só a versão publicada tem sai
-    pelo ``DELETE``. Na primeira falha nada novo começa, o que está em curso termina, e a exceção
-    leva o resultado de cada tabela numa nota. Cada tabela publicada vai ao log
-    ``serialize_db.publication`` com as partições, o tempo e o pico de memória residente do
+    A função confere a tabela de controle antes de tudo. Depois, por tabela, numa conexão própria
+    do pool, roda a reconciliação da tabela publicada que já existe e a transação da publicação.
+    Uma tabela cuja versão publicada é a pedida não muda. Uma versão anterior à publicada volta a
+    tabela a ela: as partições alteradas entre as duas versões são trocadas, e a partição que só a
+    versão publicada tem sai pelo ``DELETE``. Na primeira falha nada novo começa, o que está em
+    curso termina, e a exceção leva o resultado de cada tabela numa nota. Cada tabela publicada vai
+    ao log ``serialize_db.publication`` com as partições, o tempo e o pico de memória residente do
     processo.
 
     Exemplo:
@@ -952,29 +984,29 @@ def publish_redshift(
     :param config: a configuração do Redshift de destino, com a conexão, o esquema das tabelas
         publicadas e o ``iam_role`` do ``COPY``.
     :param tables: as tabelas do modelo a publicar.
-    :param execution_id: a execução que publica, que a linha de controle grava; os manifestos do
+    :param execution_id: a execução que publica, que a linha de controle grava. Os manifestos do
         ``COPY`` ficam em ``<ambiente>/publicacao/<execution_id>/``, sob a raiz, e a publicação
         não os apaga.
-    :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo; o padrão 1
+    :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo. O padrão 1
         publica uma por vez. Com mais de um, a primeira publicação de uma tabela pode esperar
         cerca de 20 s no ``INSERT`` da linha de controle, como em doze das 24 repetições das
-        sondas de 2026-10-05 a 2026-10-11, só nas publicações cuja transação criou a tabela; o
+        sondas de 2026-10-05 a 2026-10-11, só nas publicações cuja transação criou a tabela. O
         usuário aceitou a espera em 2026-10-10 (``docs/index.md``, seção "Multithreading").
     :param versions: a versão do Delta por nome de tabela, as de um snapshot do arquivo de
-        controle (``delta.snapshot_versions``); ``None`` publica a versão atual de cada tabela.
+        controle (``delta.snapshot_versions``). ``None`` publica a versão atual de cada tabela.
     :return: ``{tabela: versão publicada}``.
     :raises serialize_db.errors.PublicationError: antes de qualquer escrita, sem a tabela de
-        controle, ou com uma tabela sem versão: fora de ``versions`` ou, sem ``versions``, fora do
-        Delta do ambiente.
-    :raises serialize_db.errors.ExecutionConflict: o ``UPDATE`` da linha de controle sem linha (ou o
-        ``DELETE`` dela, na despublicação de um diff destrutivo), o ``1023`` e a tabela publicada
-        que outra primeira publicação criou, sem repetição.
+        controle ou com uma tabela sem versão. A tabela sem versão é a que está fora de
+        ``versions`` ou, sem ``versions``, fora do Delta do ambiente.
+    :raises serialize_db.errors.ExecutionConflict: o ``UPDATE`` da linha de controle que não acha a
+        linha (ou o ``DELETE`` dela, na despublicação de um diff destrutivo), o ``1023`` e a tabela
+        publicada que outra primeira publicação criou. A função não tenta de novo.
     :raises serialize_db.errors.LogUnavailable: um arquivo do log entre a versão publicada e a
         pedida não existe.
     :raises serialize_db.errors.SandboxError: sem ``iam_role`` em ``config`` e sem credenciais da
         AWS na sessão ``boto3``, para o ``COPY``.
-    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
-        e ``password``.
+    :raises serialize_db.errors.ContractError: ``config`` sem conexão possível, isto é, sem
+        ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -994,8 +1026,10 @@ def unpublish_redshift(
     config: RedshiftConfig,
     tables: Sequence[sa.Table],
 ) -> dict[str, int | None]:
-    """[public] Despublica as tabelas: por tabela, uma transação com o ``DROP TABLE`` da tabela
-    publicada e o ``DELETE`` da linha de controle. O Delta fica intacto.
+    """[public] Despublica as tabelas do Redshift. Por tabela, uma transação roda o ``DROP TABLE``
+    da tabela publicada e o ``DELETE`` da linha de controle. O Delta fica intacto.
+
+    As tabelas são despublicadas uma por vez, numa só conexão.
 
     Exemplo:
 
@@ -1009,10 +1043,10 @@ def unpublish_redshift(
     :return: ``{tabela: versão que estava publicada}``, com ``None`` na tabela que não estava.
     :raises serialize_db.errors.PublicationError: antes de qualquer escrita, sem a tabela de
         controle.
-    :raises serialize_db.errors.ExecutionConflict: o ``DELETE`` da linha de controle sem linha e o
-        ``1023``, sem repetição.
-    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
-        e ``password``.
+    :raises serialize_db.errors.ExecutionConflict: o ``DELETE`` da linha de controle que não acha a
+        linha e o ``1023``. A função não tenta de novo.
+    :raises serialize_db.errors.ContractError: ``config`` sem conexão possível, isto é, sem
+        ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -1029,8 +1063,8 @@ def publication_status(
     delta_db: Database,
     config: RedshiftConfig,
 ) -> list[PublicationStatus]:
-    """[public] A versão publicada no Redshift contra a atual no Delta, de cada tabela do ambiente
-    que existe no Delta, com as partições pendentes.
+    """[public] A situação da publicação de cada tabela do ambiente que existe no Delta: a versão
+    publicada no Redshift contra a atual no Delta, com as partições pendentes.
 
     Exemplo:
 
@@ -1042,14 +1076,14 @@ def publication_status(
     :param delta_db: o banco Delta, com a raiz e o ambiente, que prefixa o nome das tabelas
         publicadas.
     :param config: a configuração do Redshift, com a conexão e o esquema.
-    :return: uma ``PublicationStatus`` por tabela, na ordem de ``delta_db.tables()``; as
-        partições pendentes são todas na tabela nunca publicada, as de ``version_diff`` nas
+    :return: uma ``PublicationStatus`` por tabela, na ordem de ``delta_db.tables()``. As
+        partições pendentes são todas na tabela nunca publicada e as de ``version_diff`` nas
         outras.
     :raises serialize_db.errors.PublicationError: sem a tabela de controle.
     :raises serialize_db.errors.LogUnavailable: um arquivo do log entre a versão publicada e a atual
         não existe.
-    :raises serialize_db.errors.ContractError: ``config`` sem ``workgroup`` e sem ``host``, ``user``
-        e ``password``.
+    :raises serialize_db.errors.ContractError: ``config`` sem conexão possível, isto é, sem
+        ``workgroup`` e sem ``host``, ``user`` e ``password``.
     """
     connection = _Connection(config)
     try:
@@ -1070,9 +1104,9 @@ def _table_status(
     config: RedshiftConfig,
     table: sa.Table,
 ) -> PublicationStatus:
-    """[private] A situação da publicação de uma tabela que existe no Delta: as partições pendentes
-    são todas na tabela nunca publicada, e as de ``version_diff`` na publicada numa versão
-    antiga."""
+    """[private] A situação da publicação de uma tabela que existe no Delta. As partições pendentes
+    são todas na tabela nunca publicada, e as de ``version_diff`` na tabela publicada numa versão
+    anterior à atual. Nas outras, nenhuma."""
     uri = delta_db.uri(table)
     current = delta.open_table(uri, delta_db.storage).version()
     published = _read_control(connection, config.schema, delta_db.environment, table)

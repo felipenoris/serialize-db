@@ -1,17 +1,24 @@
 """[public] Os motores da execução e a interface comum a eles.
 
-``Engine`` é o protocolo que ``serialize_db.execution`` usa, com a mesma forma nos dois motores:
-``serialize_db.engine.duckdb`` e ``serialize_db.engine.redshift``. Cada motor guarda uma sessão por
-execução sob um ``threading.RLock`` que as primitivas tomam e soltam; ``session()`` dá a conexão
-crua com o lock tomado pelo bloco, reentrante na mesma thread, e ``new_session()`` abre uma sessão
-a mais sobre o mesmo banco, para o que roda em paralelo.
+Um motor é o objeto que executa os comandos no sandbox, o banco de trabalho de uma execução.
+``Engine`` é o protocolo que ``serialize_db.execution`` usa, e os dois motores têm a mesma forma:
+``serialize_db.engine.duckdb`` e ``serialize_db.engine.redshift``.
 
-Os dados cruzam a fronteira em lotes Arrow: ``stream`` devolve um ``BatchStream`` de
-``pa.RecordBatch``, e ``appender`` recebe lotes por ``write`` e os acrescenta a uma tabela do
-sandbox; ``query`` devolve a ``pa.Table`` que ``stream`` montaria, e ``append`` entrega ao
-``appender`` os lotes de uma ``pa.Table``, de um ``RecordBatch``, de um ``RecordBatchReader`` ou de
-um iterável. A tabela que recebe os lotes vem do ``ingest`` com ``materialize=True`` ou de
-``create_table``, que cria a tabela vazia do modelo.
+Cada motor guarda uma sessão por execução sob um ``threading.RLock``. Cada primitiva, um método do
+motor que faz um passo do pipeline, toma o lock pelo tempo do seu comando e o solta. ``session()``
+dá a conexão crua com o lock tomado pelo bloco, reentrante na mesma thread. ``new_session()`` abre
+uma sessão a mais sobre o mesmo banco, para o que roda em paralelo.
+
+Os dados cruzam a fronteira entre o cliente e o motor em lotes Arrow:
+
+- ``stream`` devolve um ``BatchStream``, os lotes ``pa.RecordBatch`` da consulta, na ordem dela.
+- ``query`` devolve a ``pa.Table`` inteira que ``stream`` montaria.
+- ``appender`` recebe lotes por ``write`` e os acrescenta a uma tabela do sandbox.
+- ``append`` entrega ao ``appender`` os lotes de uma ``pa.Table``, de um ``RecordBatch``, de um
+  ``RecordBatchReader`` ou de um iterável.
+
+A tabela que recebe os lotes vem do ``ingest`` com ``materialize=True`` ou de ``create_table``,
+que cria a tabela vazia do modelo.
 
 Exemplo, com o motor DuckDB:
 
@@ -60,7 +67,7 @@ ARROW_ONLY = (
 class BatchStream(Protocol):
     """[public] Os lotes de uma consulta, lidos na ordem dela enquanto ela roda.
 
-    O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
+    O protocolo não é instanciado. A assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
 
     Exemplo:
@@ -106,7 +113,7 @@ class BatchStream(Protocol):
         """
 
     def close(self) -> None:
-        """[public] Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream; a
+        """[public] Para a consulta ou a leitura que ainda roda e apaga os arquivos do stream. A
         sessão continua usável.
 
         Exemplo:
@@ -130,7 +137,7 @@ class BatchStream(Protocol):
 class Appender(Protocol):
     """[public] O acréscimo em lotes a uma tabela do sandbox, inserido no ``close``.
 
-    O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
+    O protocolo não é instanciado. A assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
 
     Exemplo:
@@ -143,19 +150,20 @@ class Appender(Protocol):
     """
 
     rows: int
-    """[public] As linhas gravadas até agora; depois de um ``close`` sem erro, as acrescentadas à
-    tabela."""
+    """[public] As linhas gravadas até agora. Depois de um ``close`` sem erro, as linhas
+    acrescentadas à tabela."""
 
     def write(
         self,
         data: pa.RecordBatch | pa.Table,
     ) -> None:
         """[public] Converte os lotes pelo contrato, na thread de quem chama, e os põe na fila da
-        gravação, que bloqueia quando está cheia.
+        gravação.
 
-        Depois de um ``close`` com erro, ou com a thread de gravação encerrada por um erro, o
-        ``write`` levanta esse erro de novo: a exceção que saiu do ``with``, o lote recusado ou
-        o erro da gravação.
+        O contrato é o modelo do cliente, e a conversão é a de ``serialize_db.schema.cast``. A
+        fila bloqueia o ``write`` quando está cheia. Depois de um ``close`` com erro, ou com a
+        thread de gravação encerrada por um erro, o ``write`` levanta esse erro de novo: a
+        exceção que saiu do ``with``, o lote recusado ou o erro da gravação.
 
         Exemplo:
 
@@ -166,7 +174,8 @@ class Appender(Protocol):
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
         :raises serialize_db.errors.ContractError: ``data`` de outro tipo, recusado sem afetar o
             appender, que segue recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas
-            diferentes das do primeiro lote, e então o ``close`` não insere nada.
+            diferentes das do primeiro lote, e depois de um lote assim o ``close`` não insere
+            nada.
         :raises RuntimeError: o ``write`` depois de um ``close`` que terminou sem erro.
         """
 
@@ -192,9 +201,9 @@ class Appender(Protocol):
 
 @runtime_checkable
 class Engine(Protocol):
-    """[public] A interface dos dois motores; ``Execution`` só depende dela.
+    """[public] A interface dos dois motores. ``Execution`` só depende dela.
 
-    O protocolo não é instanciado: a assinatura ``(*args, **kwargs)`` da classe é a do
+    O protocolo não é instanciado. A assinatura ``(*args, **kwargs)`` da classe é a do
     ``__init__`` que ``typing.Protocol`` dá a todo protocolo.
 
     Exemplo:
@@ -215,8 +224,9 @@ class Engine(Protocol):
     (``serialize_db.schema.PARTITION_VALUE``)."""
 
     def session(self) -> contextlib.AbstractContextManager[object]:
-        """[public] A conexão crua com o lock tomado pelo bloco, reentrante na mesma thread: uma
-        primitiva chamada dentro do bloco não trava.
+        """[public] A conexão crua com o lock tomado pelo bloco.
+
+        O lock é reentrante na mesma thread: uma primitiva chamada dentro do bloco não trava.
 
         Exemplo:
 
@@ -229,8 +239,11 @@ class Engine(Protocol):
         """
 
     def new_session(self) -> Engine:
-        """[public] Uma sessão a mais sobre o mesmo banco, com o seu lock, para o que roda em
-        paralelo: vê o que a sessão principal confirmou e não as tabelas temporárias dela.
+        """[public] Uma sessão a mais sobre o mesmo banco, com o seu próprio lock, para o que roda
+        em paralelo.
+
+        A sessão a mais vê o que a sessão principal confirmou, e não vê as tabelas temporárias
+        dela.
 
         Exemplo:
 
@@ -260,8 +273,9 @@ class Engine(Protocol):
         """[public] Leva ao sandbox as partições pedidas da versão fixada da tabela Delta, com o
         nome do modelo.
 
+        A versão fixada é a versão da tabela Delta que a execução lê na abertura e usa até o fim.
         Uma coluna da versão que o modelo não tem, o caso de um modelo atrasado, é recusada na
-        carga por cada motor à sua maneira, e só a view do motor DuckDB a traz: o modelo tem de
+        carga por cada motor à sua maneira. Só a view do motor DuckDB a traz. O modelo tem de
         acompanhar a tabela.
 
         Exemplo:
@@ -275,9 +289,10 @@ class Engine(Protocol):
         :param version: a versão fixada da tabela; ``None`` diz que a tabela ainda não existe no
             Delta, e a ingestão a recusa.
         :param partitions: os valores de partição a ler, com um valor repetido contado uma vez;
-            ``None`` lê todas, e a lista vazia, nenhuma.
-        :param materialize: ``True`` copia os dados para uma tabela do sandbox; com ``False``, o
-            motor que lê o Delta no lugar cria uma view.
+            ``None`` lê todas, e a lista vazia não lê nenhuma.
+        :param materialize: ``True`` copia os dados para uma tabela do sandbox. Com ``False``, o
+            motor DuckDB, que lê o Delta no lugar, cria uma view; o motor Redshift carrega a
+            tabela de qualquer modo.
         :raises serialize_db.errors.SandboxError: o nome ocupado no sandbox, ou a tabela que não
             existe no Delta, sem versão (``version=None``).
         :raises serialize_db.errors.ContractError: ``partitions`` numa tabela sem partição, ou um
@@ -326,10 +341,10 @@ class Engine(Protocol):
                     work(batch)
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
-            compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
-            ``:nome``.
-        :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
-            statement ou dos marcadores do texto.
+            compila para o sandbox, ou um texto pronto no SQL do motor, com cada parâmetro
+            marcado como ``:nome``.
+        :param params: os valores dos parâmetros, por nome, para os ``bindparam`` sem valor do
+            statement ou para os marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote.
         :return: o ``BatchStream`` dos lotes, gerenciador de contexto; o ``close`` apaga os
             arquivos dele.
@@ -351,10 +366,10 @@ class Engine(Protocol):
             engine.query(sa.select(sa.func.count()).select_from(Lancamento.__table__))
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
-            compila para o sandbox, ou um texto pronto no SQL do motor, com os parâmetros como
-            ``:nome``.
-        :param params: os valores dos parâmetros, por nome, dos ``bindparam`` sem valor do
-            statement ou dos marcadores do texto.
+            compila para o sandbox, ou um texto pronto no SQL do motor, com cada parâmetro
+            marcado como ``:nome``.
+        :param params: os valores dos parâmetros, por nome, para os ``bindparam`` sem valor do
+            statement ou para os marcadores do texto.
         :return: a tabela do resultado.
         :raises serialize_db.errors.SqlError: os nomes de ``params`` não fecham com os parâmetros do
             statement ou do texto.
@@ -383,14 +398,14 @@ class Engine(Protocol):
         table: sa.Table,
         queue_depth: int = 2,
     ) -> Appender:
-        """[public] O gerenciador de contexto que grava lotes numa tabela do sandbox, criada pelo
-        ``ingest`` com ``materialize=True`` ou por ``create_table``, e os insere no ``close``.
+        """[public] O gerenciador de contexto que grava lotes numa tabela do sandbox e os insere no
+        ``close``.
 
-        Dois appenders na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas,
-        cada um numa sessão de ``new_session()`` ou os dois na sessão principal, onde um
-        ``close`` espera o outro sob o lock. Um appender e um ``UPDATE`` das linhas que a tabela
-        já tinha, ao mesmo tempo, também entram os dois, no Redshift sob o isolamento de
-        snapshot.
+        A tabela vem do ``ingest`` com ``materialize=True`` ou de ``create_table``. Dois appenders
+        na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas, cada um numa
+        sessão de ``new_session()`` ou os dois na sessão principal, onde um ``close`` espera o
+        outro sob o lock. Um appender e um ``UPDATE`` das linhas que a tabela já tinha, ao mesmo
+        tempo, também entram os dois; no Redshift, sob o isolamento de snapshot.
 
         Exemplo:
 
@@ -427,8 +442,8 @@ class Engine(Protocol):
         :param data: uma ``pa.Table``, um ``pa.RecordBatch``, um ``pa.RecordBatchReader`` ou um
             iterável de ``pa.RecordBatch``.
         :return: as linhas acrescentadas.
-        :raises serialize_db.errors.ContractError: um DataFrame, com a conversão sem cópia na
-            mensagem, ou outro tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é
+        :raises serialize_db.errors.ContractError: um DataFrame, recusado com a conversão sem cópia
+            na mensagem, ou outro tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é
             inserido.
         :raises serialize_db.errors.SandboxError: a tabela que não existe no sandbox, ou o nome que
             uma view do ``ingest`` ocupa.
@@ -446,6 +461,9 @@ class Engine(Protocol):
     ) -> AuditReport:
         """[public] Roda as verificações do contrato sobre a tabela do sandbox.
 
+        As verificações são as que ``serialize_db.audit`` deriva do modelo, e o resultado é o
+        ``AuditReport``.
+
         Exemplo:
 
         .. code-block:: python
@@ -456,10 +474,11 @@ class Engine(Protocol):
         :param table: a tabela do modelo, no sandbox.
         :param partitions: as partições da execução; ``None`` audita a tabela inteira do
             sandbox.
-        :param uri: a URI da tabela Delta da execução; com ``version``, a verificação
+        :param uri: a URI da tabela Delta da execução. Com ``version``, a verificação
             ``chave_<colunas>_tabela`` compara as chaves das partições da execução com as das
-            demais partições dessa versão, e é dispensada sem rodar quando o menor valor da chave
-            primária inteira de uma coluna na execução passa do maior registrado no log da versão.
+            demais partições dessa versão. Essa verificação é dispensada sem rodar quando o menor
+            valor da chave primária inteira de uma coluna na execução passa do maior registrado
+            no log da versão.
         :param version: a versão fixada da tabela; sem ela, ou sem ``uri``, a verificação
             ``chave_<colunas>_tabela`` não roda.
         :param foreign_keys: ``True`` confere as chaves estrangeiras, contra a tabela
@@ -469,7 +488,7 @@ class Engine(Protocol):
             de ``partition_source``.
         :param referenced: por tabela, a URI e a versão fixada da tabela referenciada que o
             sandbox não tem, para as chaves estrangeiras com ``foreign_keys=True``.
-        :return: o ``AuditReport``; a reprovação não levanta aqui: ``passed`` é falso, e
+        :return: o ``AuditReport``. A reprovação não levanta aqui: ``passed`` é falso, e
             ``serialize_db.execution.Execution.audit`` levanta ``serialize_db.errors.AuditFailed``.
         :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
             partição.
@@ -500,8 +519,8 @@ class Engine(Protocol):
         :param uri: a URI da pasta da tabela Delta de destino, sob a raiz do armazenamento.
         :param value: o valor da partição; ``None`` numa tabela sem partição, que sai inteira.
         :param metadata: os metadados do commit, de ``serialize_db.delta.commit_metadata``.
-        :param expected_rows: a contagem da auditoria, que confere as linhas dos arquivos
-            registrados; sem ela, a contagem do sandbox.
+        :param expected_rows: a contagem de linhas da auditoria, conferida contra as linhas dos
+            arquivos registrados; sem ela, vale a contagem do sandbox.
         :param columns_without_min_max: as colunas ``Double`` com valor não finito na partição,
             que saem sem mínimo e máximo (issue #59 do serialize-db).
         :return: a versão do commit.
@@ -516,13 +535,13 @@ class Engine(Protocol):
         :raises ValueError: ``uri`` fora da raiz do armazenamento.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
             2 MiB, ou negativa (``serialize_db.resources.environment_limits``), lida antes do
-            commit, que não acontece: os arquivos gravados ficam órfãos na pasta da partição até
-            um ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção, ou, na
-            troca do motor Redshift, no ``staging_prefix`` até o ``cleanup``.
+            commit. O commit não acontece, e os arquivos gravados ficam órfãos na pasta da
+            partição até um ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da
+            retenção; na troca do motor Redshift, ficam no ``staging_prefix`` até o ``cleanup``.
         """
 
     def cleanup(self) -> None:
-        """[public] Fecha a sessão e apaga o que a execução criou no sandbox; numa sessão a mais,
+        """[public] Fecha a sessão e apaga o que a execução criou no sandbox. Numa sessão a mais,
         fecha só ela. A segunda chamada não faz nada.
 
         Exemplo:
@@ -540,8 +559,9 @@ def batches_of(
     data: object,
 ) -> Iterator[pa.RecordBatch]:
     """[protected] Os lotes de uma ``pa.Table``, de um lote, de um leitor ou de um iterável de
-    lotes; para o ``append`` dos motores. Outro tipo, um DataFrame inclusive, é ``ContractError``
-    antes de qualquer gravação."""
+    lotes; para o ``append`` dos motores.
+
+    Outro tipo, um DataFrame inclusive, é ``ContractError`` antes de qualquer gravação."""
     if isinstance(data, pa.Table):
         return iter(data.to_batches())
     if isinstance(data, pa.RecordBatch):
@@ -564,7 +584,9 @@ def checked_batches(
     data: pa.RecordBatch | pa.Table,
 ) -> list[pa.RecordBatch]:
     """[protected] Os lotes de um ``RecordBatch`` ou de uma ``pa.Table``; para o ``write`` dos
-    appenders. Outro tipo é ``ContractError``."""
+    appenders.
+
+    Outro tipo é ``ContractError``."""
     if isinstance(data, pa.Table):
         return data.to_batches()
     if isinstance(data, pa.RecordBatch):
@@ -576,9 +598,11 @@ def take(
     source: queue.Queue,
     stop: threading.Event,
 ) -> object | None:
-    """[protected] O próximo item da fila, esperando em fatias de 50 ms, para quem lê perceber o
-    ``stop`` em vez de ficar preso num ``get`` sem fim; para as threads dos motores. ``None`` quando
-    ``stop`` chega com a fila vazia; nenhum item da fila é ``None``."""
+    """[protected] O próximo item da fila; para as threads dos motores.
+
+    A espera vai em fatias de 50 ms, para quem lê perceber o ``stop`` em vez de ficar preso num
+    ``get`` sem fim. Devolve ``None`` quando ``stop`` chega com a fila vazia; nenhum item da fila
+    é ``None``."""
     while True:
         try:
             return source.get(timeout=0.05)
@@ -607,7 +631,8 @@ class AuditSupport:
     """[protected] A consulta do motor: a ``pa.Table`` de um texto SQL."""
     run_check: Callable[[str], pa.Table]
     """[protected] A consulta de uma verificação de chave ou de órfão, com o que o texto cita
-    carregado antes: a staging ``_versao`` no Redshift; no DuckDB, a própria ``query``."""
+    carregado antes. No Redshift, carrega a staging ``_versao``; no DuckDB, é a própria
+    ``query``."""
     name_in_use: Callable[[str], bool]
     """[protected] Se o nome, já com o prefixo, está ocupado no sandbox."""
     pinned_source: Callable[[sa.Table, str, int], sa.FromClause]
@@ -625,11 +650,13 @@ def audit_report(
     referenced: Mapping[str, tuple[str, int]] | None,
 ) -> AuditReport:
     """[protected] Roda as verificações do contrato sobre a tabela do sandbox e monta o
-    ``AuditReport``; para o ``audit`` dos dois motores, que recebem os mesmos argumentos e dizem
-    nas suas docstrings o que cada um levanta. Com ``uri`` e ``version``, a versão fixada entra
-    pelo ``pinned_source`` de ``support``, e o seu ``max_key`` dispensa a verificação da chave da
-    tabela quando o menor valor da execução passa dele; um valor de ``partitions`` fora da regra da
-    partição é ``ContractError``."""
+    ``AuditReport``; para o ``audit`` dos dois motores.
+
+    Os dois motores recebem os mesmos argumentos e dizem nas suas docstrings o que cada um
+    levanta. Com ``uri`` e ``version``, a versão fixada entra pelo ``pinned_source`` de
+    ``support``, e o ``max_key`` dela dispensa a verificação da chave da tabela quando o menor
+    valor da execução passa dele. Um valor de ``partitions`` fora da regra da partição é
+    ``ContractError``."""
     pinned = None
     pinned_max_key = None
     if uri is not None and version is not None:
@@ -739,7 +766,7 @@ def _check_result(
     table: sa.Table,
     check: audit.Check,
 ) -> CheckResult:
-    """[private] Uma verificação de chave ou de órfão; o ``skip_when`` verdadeiro a aprova sem
+    """[private] Uma verificação de chave ou de órfão. O ``skip_when`` verdadeiro a aprova sem
     rodá-la, e ``run_check`` carrega o que ela cita só quando ela roda."""
     text = _check_text(support, check.statement, table)
     if check.skip_when is not None:
