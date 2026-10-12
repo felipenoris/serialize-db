@@ -59,6 +59,8 @@ Documentação:
 - <https://docs.aws.amazon.com/redshift/latest/dg/t_Defining_constraints.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_best-practices-defining-constraints.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c-optimizing-query-performance.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/c_challenges_achieving_high_performance_queries.html>
+- <https://docs.aws.amazon.com/redshift/latest/dg/r_enable_result_cache_for_session.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/c_loading-data-best-practices.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/copy-usage_notes-copy-from-columnar.html>
 - <https://docs.aws.amazon.com/redshift/latest/dg/t_updating-inserting-using-staging-tables-.html>

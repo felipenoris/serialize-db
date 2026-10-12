@@ -2355,8 +2355,9 @@ def test_session_terminated_by_the_server_is_read(
     seguintes reconectaram; a sessão ociosa reconectou com 1 s em sete das oito rodadas e, numa de
     2026-10-10, respondeu aos dois comandos no mesmo pid depois do ``pg_terminate_backend``
     verdadeiro, a leitura que fez cada comando se repetir até o limite (decisão do usuário de
-    2026-10-10); na bateria das 17:02 de 2026-10-10, a primeira com as asserções, os 12 casos das
-    quatro rodadas caíram na primeira repetição, 1 s depois do ``pg_terminate_backend``."""
+    2026-10-10); na bateria das 17:02 de 2026-10-10, a primeira com as asserções, e na de
+    2026-10-11, os 12 casos das quatro rodadas de cada uma caíram na primeira repetição, 1 s depois
+    do ``pg_terminate_backend``."""
     engine = target.engine
     reading = {}
 
@@ -2449,13 +2450,13 @@ def test_session_terminated_during_the_ingest_copy_is_read(
     segunda bateria de 2026-10-09, o ``COPY`` e o ``ROLLBACK`` levantaram o ``InterfaceError``; em
     três, o ``DROP`` falhou no envio com ``BrokenPipeError``, que o motor ainda não lia como a
     queda, e o ``ingest`` o levantou com a staging deixada e a sessão sem reconectar; na outra, o
-    ``DROP`` reabriu a conexão. Em 2026-10-10, com a conversão do ``OSError``, o ``DROP`` reabriu
-    a conexão nas oito rodadas das duas baterias, a staging saiu e o comando seguinte rodou num
-    pid novo.
+    ``DROP`` reabriu a conexão. Com a conversão do ``OSError``, o ``DROP`` reabriu a conexão nas
+    oito rodadas das duas baterias de 2026-10-10 e nas quatro de 2026-10-11, a staging saiu e o
+    comando seguinte rodou num pid novo.
     O ``PytestUnraisableExceptionWarning`` com ``ssl.SSLError: Underlying socket connection gone``
-    que a sessão imprime neste caso, em três das quatro sessões das 17:02 de 2026-10-10, vem do
-    ``__del__`` do par de buffers do socket morto, que o ``close()`` do driver deixa com a
-    mensagem de término por descarregar (``.claude/memory/redshift.md``).
+    que a sessão imprime neste caso, em três das quatro sessões das 17:02 de 2026-10-10 e nas
+    quatro de 2026-10-11, vem do ``__del__`` do par de buffers do socket morto, que o ``close()``
+    do driver deixa com a mensagem de término por descarregar (``.claude/memory/redshift.md``).
     ``SERIALIZE_DB_TEST_EMULATOR_BROKEN_PIPE`` provoca o ``BrokenPipeError`` no substituto."""
     engine = target.engine
     uri = target.uri(ENTRIES)

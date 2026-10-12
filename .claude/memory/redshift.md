@@ -843,3 +843,19 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   tables `já está publicada` both ways. `prd_cad_lancamentos` kept 424,598,150 rows and the
   `id_lancamento` sum 538,418,094,708,709,063 before the swap, after it and after the return, which
   the two swap checks assert since PR #155, and the channel ended on `carga-2026-09-25`.
+- The result cache, in the developer guide read on 2026-10-12
+  (`c_challenges_achieving_high_performance_queries.html`,
+  `r_enable_result_cache_for_session.html`): on by default and kept on the leader node, it answers a
+  new query without running it when the query matches the cached one syntactically, the user may
+  read the objects, the tables and views did not change, no function evaluated per run (`GETDATE`)
+  nor Spectrum table is used and the configuration parameters that affect the result are the same;
+  some large results stay out. `SET enable_result_cache_for_session TO off` turns it off for the
+  session, and `SVL_QLOG`'s `source_query`, or the `result_cache_hit` of `sys_query_history` that
+  the parallel probe reads, says whether a query used it. The battery of 2026-10-11 read it serving
+  640 of the 720 small queries (`concurrency.md`). The same page says composition takes compilation
+  off a new query's path; `docs/tecnologias.md` ("Armazenamento colunar e processamento paralelo")
+  states both in place of the old advice that a measurement compares the second run. No library
+  result depends on the cache: a modified table invalidates its cached results, and
+  `pg_last_unload_count()`, which the engine reads only when an `UNLOAD` wrote no manifest, is a
+  per-session function that the rule on functions evaluated per run keeps out of it [inferred; no
+  reading tells].

@@ -898,7 +898,9 @@ depois do laço, e o trabalho do cliente só se sobrepõe à leitura e à grava�
 `stream` e os dois juntos ficaram de 79 MB a 129 MB acima da base, contra 243 MB a 457 MB da série.
 O `run.ingest`, o `materialize` e o `publish_delta` das quatro tabelas ganharam mais que na pasta
 local, porque o S3 e o Redshift fazem esperar a rede, e o pico do `run.ingest` e do `materialize`
-ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms.
+ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms, e a
+leitura de 2026-10-11, abaixo, mostra que o cache de resultados do Redshift responde às repetições
+dessas consultas.
 
 Em 2026-10-07 a mesma sonda rodou numa máquina de 2 vCPUs com 5,8 GiB disponíveis, sobre as mesmas
 quatro tabelas no S3 e o mesmo Redshift. No DuckDB, o trabalho em série levou de 1,5 a 2 vezes o
@@ -1019,8 +1021,9 @@ lock da tabela de controle levou de 20,2 s a 21,8 s, e o primeiro a terminar pla
   principal as threads esperam o lock, e o tempo é o da série. A sessão a mais ganha mais nas
   consultas pequenas; a consulta grande já usa todas as `threads` do DuckDB, as CPUs do processo,
   num pool que as sessões dividem. Ela não vê as tabelas temporárias da sessão principal. No
-  Redshift, cada sessão a mais é outra conexão, e as consultas pequenas, que esperam a rede, ganham
-  com ela mais que no DuckDB.
+  Redshift, cada sessão a mais é outra conexão, e as consultas pequenas, que esperam a rede,
+  ganharam com ela mais que no DuckDB; na medida de 2026-10-11 o cache de resultados respondeu às
+  repetições, e o ganho das consultas que vão ao motor não foi medido.
 - **Junte as consultas pequenas numa só**, com `GROUP BY` ou uma junção, antes de levá-las a
   threads: cada chamada com um statement Core o compila em Python, cerca de 2 ms sob o GIL, e esse
   tempo não se divide entre as threads.
