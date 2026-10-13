@@ -405,8 +405,9 @@ O script cria na raiz do projeto tudo o que o pacote e os testes precisam em exe
 3.13 em `.python/`; o pacote com as dependências de execução e as de todos os grupos do
 `pyproject.toml` em `.venv/`; e as extensões do DuckDB (`httpfs` e `delta`) em `.duckdb/`. Ele
 recria a `.venv/` a cada execução, resolve as dependências na hora (o `uv.lock` não é versionado)
-e troca os links absolutos que o `uv` cria por links relativos, para a pasta funcionar em qualquer
-caminho. As três pastas estão no `.gitignore`. Rode o script de novo sempre que uma dependência
+e troca por caminhos relativos os links absolutos que o `uv` cria e o caminho do `src/` no
+`serialize_db.pth` da instalação editável, para a pasta funcionar em qualquer caminho. As três
+pastas estão no `.gitignore`. Rode o script de novo sempre que uma dependência
 mudar. Se a dependência nova estiver fora do `pyproject.toml` (uma extensão do DuckDB, a versão do
 Python), acrescente-a ao script antes.
 
