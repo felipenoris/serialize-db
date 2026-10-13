@@ -469,6 +469,15 @@ validates the prepared folder there (verified 2026-09-19: extracted at another p
 and an empty `HOME`, 10 passed; on macOS after the glob fix of PR #12). `uv sync` ignores
 `UV_VENV_RELOCATABLE` and the `.venv/bin/*` scripts keep absolute shebangs, hence
 `.venv/bin/python -m pytest` and the `.tar.gz`, never zip, that keeps links and permissions.
+The editable install of the package itself held the folder to the path of its preparation: `uv sync`
+writes `.venv/lib/python3.13/site-packages/serialize_db.pth` with the absolute `src/` path, and
+neither pytest's `pythonpath` nor the probes add `src/`, so a folder extracted at another path
+answered `ModuleNotFoundError: No module named 'serialize_db'` (found on 2026-10-12 by a local run
+of the processing job written for the target in the Claude project's library, whose
+`/mnt/project-files/alvo/etl/executar.sh` rewrites the line in the job). Since 2026-10-13
+`prepare_offline.sh` writes the line as `../../../../src`, which `site` joins to the `site-packages`
+folder: a folder prepared at one path and extracted at another imported `serialize_db` from the new
+`src/`, while the same folder with the absolute line failed (2026-10-13).
 
 ## The environments of the measurements
 

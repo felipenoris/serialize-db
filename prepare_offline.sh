@@ -37,8 +37,9 @@
 #
 # Levar a pasta ao destino
 #
-# Todos os links dentro das três pastas são relativos: a pasta inteira vai para qualquer caminho do
-# destino e roda com `.venv/bin/python`, sem uv e sem rede. O `tar` preserva os links simbólicos, as
+# Todos os links dentro das três pastas são relativos, e também o caminho do `src/` no
+# `serialize_db.pth`: a pasta inteira vai para qualquer caminho do destino e roda com
+# `.venv/bin/python`, sem uv e sem rede. O `tar` preserva os links simbólicos, as
 # permissões e os demais metadados do sistema de arquivos; copiar arquivo a arquivo por uma pasta
 # montada do S3 perde os links, e sem eles `.venv/bin/python` só funciona no caminho de origem.
 # Na pasta do projeto:
@@ -93,6 +94,16 @@ for link in .python/cpython-*; do
         ln -sfn "$version_dir" "$link"
     fi
 done
+
+# O uv instala o próprio serialize-db em modo editável, e o serialize_db.pth do site-packages guarda o
+# caminho absoluto do src/: a pasta só importaria o pacote no caminho em que foi preparada. O Python
+# junta uma linha relativa de um .pth à pasta do site-packages, e o src/ fica quatro níveis acima dela.
+pth_files=(.venv/lib/python3.*/site-packages/serialize_db.pth)
+if [ ! -f "${pth_files[0]}" ]; then
+    echo "prepare_offline.sh: o uv sync não criou o serialize_db.pth em .venv/lib/python3.*/site-packages" >&2
+    exit 1
+fi
+echo "../../../../src" > "${pth_files[0]}"
 
 # Extensões do DuckDB que o pacote, os testes e os probes carregam.
 # Acrescente aqui toda extensão nova que o código passar a usar.
