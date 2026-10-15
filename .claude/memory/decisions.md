@@ -2597,8 +2597,8 @@ repetition; or keep the probe, whose gain would keep measuring cached answers. T
   the cache on again. The `result_cache_hit` reading after the small queries stays, and with the
   cache off it reads no query served by the cache.
 - The DuckDB section does not change. The card did not answer the extension of the `CLAUDE.md`
-  working rule on repetitions to the server's cache, which waits on the user
-  (`OPEN_QUESTIONS.md`).
+  working rule on repetitions to the server's cache, which the user confirmed on 2026-10-15
+  ("The repetition rule covers the server's cache").
 
 `probes/operacao/probe_parallel_gain.py`, `tests/test_probes.py`, `probes/README.md`,
 `suite_alvo.sh`, `concurrency.md`, `OPEN_QUESTIONS.md`
@@ -2616,3 +2616,16 @@ pdoc 16.0.0's `dark-mode` example for the page, with `color-scheme: dark`, and P
 
 `docs/theme/theme.css`, `docs/theme/syntax-highlighting.css`, `.github/workflows/docs.yml`,
 `README.md`, `REFERENCES.md`.
+
+## The repetition rule covers the server's cache (2026-10-15)
+
+PR #161 replaced the working rule of 2026-09-24 in `CLAUDE.md`, "A repetition in the same process
+measures the caches the first run filled", with "A repetition measures every cache the first run
+filled, the server's included", after the battery of 2026-10-11 read Redshift's result cache
+serving 640 of the parallel probe's 720 small queries, in new sessions too (`lessons.md`). The
+instruction to turn caches off or count requests at the source before a best of N stands for a
+remote read was already in the old rule. Asked in the battery's thread whether to keep the
+extension, which the card of 2026-10-12 had not covered, the user answered "Sim" (2026-10-15,
+00:17 UTC).
+
+`CLAUDE.md` ("Working rules"), `lessons.md`

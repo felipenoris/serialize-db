@@ -191,8 +191,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `SET enable_result_cache_for_session TO off` na sessão principal e em cada sessão a mais
   (`turn_off_result_cache`). Espera a próxima bateria: a leitura do `sys_query_history` sem
   consulta servida pelo cache, e o ganho da sessão a mais nas consultas que vão ao motor, que
-  `docs/index.md` (seção "Multithreading") dá como não medido. A extensão da regra das repetições
-  do `CLAUDE.md` ao cache do servidor, no PR #161, espera a confirmação do usuário.
+  `docs/index.md` (seção "Multithreading") dá como não medido.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
