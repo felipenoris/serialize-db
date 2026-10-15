@@ -101,7 +101,7 @@ Read before `serialize_db.parquet_import`, `tests/source_db_projetado.py`, `test
   partitions keep the counts of the load of 2026-10-07 (`cad_lancamentos` 283,835,693 rows), every
   file is Snappy, and `meta_update_status` keeps 25 rows, ids up to 177.
 
-## The production base, read from 2026-10-09 to 2026-10-11
+## The production base, read from 2026-10-09 to 2026-10-14
 
 - `probes/parquet_source.py` over the production base at 02:05 UTC, in the battery of 2026-10-09
   (`environments.md`; the report stays out of git): 14 tables, 2,045 files, 8,146,020,859 bytes
@@ -141,6 +141,13 @@ Read before `serialize_db.parquet_import`, `tests/source_db_projetado.py`, `test
   (`environments.md`; the report stays out of git): 14 tables, 2,116 files, 10,895,492,847 bytes,
   every footer read, `cad_lancamentos` with 1,616 files, 9,026,006,951 bytes and 472,111,733 rows,
   as at 17:45 of 2026-10-10, and the load of 19:58 read every partition with the counts and sums of
+  19:29 of 2026-10-09 ("The early migration in the target"). The partition 2025-09-30 reads as on
+  2026-10-07, with `PQ-3` failing on the four tables (exit code 2), and `meta_update_status` has 29
+  rows.
+- `probes/parquet_source.py` again at 22:58 UTC on 2026-10-14, in the battery of that day
+  (`environments.md`; the report stays out of git): 14 tables, 2,116 files, 10,895,492,847 bytes,
+  every footer read, `cad_lancamentos` with 1,616 files, 9,026,006,951 bytes and 472,111,733 rows,
+  as at 19:54 of 2026-10-11, and the load of 23:03 read every partition with the counts and sums of
   19:29 of 2026-10-09 ("The early migration in the target"). The partition 2025-09-30 reads as on
   2026-10-07, with `PQ-3` failing on the four tables (exit code 2), and `meta_update_status` has 29
   rows.
@@ -325,11 +332,12 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `cad_lancamentos` in 20.0 s at 348 MB.
 - The resume of a stopped load ran in the target on 2026-10-05
   (`probes/operacao/probe_load_resume.py`, the first three partitions of `cad_lancamentos`): the
-  `SIGKILL` came 13.7 s after the second partition's file appeared, 52.2 s from the start, with
-  2026-01-31 in the log and 2026-02-28 out of it, and left the engine's temporary folder behind
-  (0.0 MB). The same command wrote only 2026-02-28 (22.9 s) and 2026-03-31 (62.9 s), checked the
-  three requested partitions equal and exited 0 in 128.6 s; the only file outside the log was the
-  killed execution's. `tests/test_parquet_import.py` covers the same path in the local folder.
+  second partition's file appeared 13.7 s after the first partition's line and the `SIGKILL`
+  followed, 52.2 s from the start, with 2026-01-31 in the log and 2026-02-28 out of it, and left the
+  engine's temporary folder behind (0.0 MB). The same command wrote only 2026-02-28 (22.9 s) and
+  2026-03-31 (62.9 s), checked the three requested partitions equal and exited 0 in 128.6 s; the
+  only file outside the log was the killed execution's. `tests/test_parquet_import.py` covers the
+  same path in the local folder.
 - The load of 2026-10-06 (`started_at` 15:33:32 UTC, from `main` at `e210089`, whose import path is
   the one of 2026-10-05, on 4 vCPUs, 12,914 MB available, 4 threads and 6,456 MiB): the eight
   unpartitioned tables matched with the counts of 2026-10-05, and the first partition of
@@ -379,13 +387,14 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
 - The resume of a stopped load ran again in the target on 2026-10-07 from 18:15 UTC
   (`probe_load_resume.py --ignore-partitions 2025-09-30`, from `main` at `b6acfa8`, 2 vCPUs,
   `environments.md`), over 2026-01-31, 2026-02-28 and 2026-03-31 after the line
-  `cad_lancamentos: partição 2025-09-30 ignorada, em --ignore-partitions`: the `SIGKILL` came
-  71.9 s after the second partition's file appeared, 222.3 s from the start (2026-01-31,
-  33,239,719 rows, in 147.7 s), with 2026-01-31 in the log and 2026-02-28 out of it, and left the
-  engine's temporary folder behind (22.9 MB, deleted by the probe). The same command found one
-  partition in the Delta, wrote 2026-02-28 (23,789,279 rows, 81.6 s) and 2026-03-31 (52,654,607
-  rows, 251.4 s), checked the three equal and exited 0 in 492.2 s (128.6 s with 8 vCPUs on
-  2026-10-05); the only file outside the log was the killed execution's. Every check passed.
+  `cad_lancamentos: partição 2025-09-30 ignorada, em --ignore-partitions`: the second partition's
+  file appeared 71.9 s after the first partition's line and the `SIGKILL` followed, 222.3 s from
+  the start (2026-01-31, 33,239,719 rows, in 147.7 s), with 2026-01-31 in the log and 2026-02-28
+  out of it, and left the engine's temporary folder behind (22.9 MB, deleted by the probe). The
+  same command found one partition in the Delta, wrote 2026-02-28 (23,789,279 rows, 81.6 s) and
+  2026-03-31 (52,654,607 rows, 251.4 s), checked the three equal and exited 0 in 492.2 s (128.6 s
+  with 8 vCPUs on 2026-10-05); the only file outside the log was the killed execution's. Every
+  check passed.
 - The load of 2026-10-09 (`started_at` 02:10:39 UTC, from `main` at `1a18fd5`, stated by the
   user, on 4 vCPUs, 12,875 MB available, 4 threads and 6,437 MiB, a fresh root,
   `--ignore-partitions 2025-09-30`) loaded 28 partitions, 379,046,221 rows, every table matching,
@@ -404,12 +413,13 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   and `archive` copied the 28 files, `cad_lancamentos` in 19.2 s at 353 MB.
 - The resume of a stopped load ran again in the target on 2026-10-09 from 05:18 UTC
   (`probe_load_resume.py --ignore-partitions 2025-09-30`, 4 vCPUs, 13.3 GiB available,
-  `environments.md`): the `SIGKILL` came 25.3 s after the second partition's file appeared, 78.9 s
-  from the start (2026-01-31 in 51.5 s), with 2026-01-31 in the log and 2026-02-28 out of it, and
-  left the engine's temporary folder behind (0.0 MB, deleted by the probe). The same command found
-  one partition in the Delta, wrote 2026-02-28 (32.1 s) and 2026-03-31 (89.4 s), checked the three
-  equal and exited 0 in 189.0 s (128.6 s with 8 vCPUs on 2026-10-05, 492.2 s with 2 on
-  2026-10-07); the only file outside the log was the killed execution's. Every check passed.
+  `environments.md`): the second partition's file appeared 25.3 s after the first partition's line
+  and the `SIGKILL` followed, 78.9 s from the start (2026-01-31 in 51.5 s), with 2026-01-31 in the
+  log and 2026-02-28 out of it, and left the engine's temporary folder behind (0.0 MB, deleted by
+  the probe). The same command found one partition in the Delta, wrote 2026-02-28 (32.1 s) and
+  2026-03-31 (89.4 s), checked the three equal and exited 0 in 189.0 s (128.6 s with 8 vCPUs on
+  2026-10-05, 492.2 s with 2 on 2026-10-07); the only file outside the log was the killed
+  execution's. Every check passed.
 - The load of the second battery of 2026-10-09 (`started_at` 19:29:32 UTC, from `main` at
   `c503462`, on 8 vCPUs, 12,651 MB available, 8 threads and 6,325 MiB, a fresh root,
   `--ignore-partitions 2025-09-30`) loaded 29 partitions, 519,808,535 rows, every table matching,
@@ -427,13 +437,13 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   `archive` copied the 29 files, `cad_lancamentos` in 29.0 s at 371 MB.
 - The resume of a stopped load ran again in the second battery of 2026-10-09, from 21:50 UTC
   (`probe_load_resume.py --ignore-partitions 2025-09-30`, 8 vCPUs, 12.9 GiB available, the source
-  with 7 partitions of `cad_lancamentos`, `environments.md`): the `SIGKILL` came 12.2 s after the
-  second partition's file appeared, 46.4 s from the start (2026-01-31 in 32.5 s), with 2026-01-31
-  in the log and 2026-02-28 out of it, and left the engine's temporary folder behind (0.0 MB,
-  deleted by the probe). The same command found one partition in the Delta, wrote 2026-02-28
-  (20.0 s) and 2026-03-31 (56.5 s), checked the three equal and exited 0 in 107.5 s (128.6 s with
-  8 vCPUs on 2026-10-05, 189.0 s with 4 at 05:18); the only file outside the log was the killed
-  execution's. Every check passed.
+  with 7 partitions of `cad_lancamentos`, `environments.md`): the second partition's file appeared
+  12.2 s after the first partition's line and the `SIGKILL` followed, 46.4 s from the start
+  (2026-01-31 in 32.5 s), with 2026-01-31 in the log and 2026-02-28 out of it, and left the engine's
+  temporary folder behind (0.0 MB, deleted by the probe). The same command found one partition in
+  the Delta, wrote 2026-02-28 (20.0 s) and 2026-03-31 (56.5 s), checked the three equal and exited 0
+  in 107.5 s (128.6 s with 8 vCPUs on 2026-10-05, 189.0 s with 4 at 05:18); the only file outside
+  the log was the killed execution's. Every check passed.
 - The load of the battery of 2026-10-10 (`started_at` 03:23:53 UTC, from `main` at `e38432f`, on
   8 vCPUs, 12,622 MB available, 8 threads and 6,310 MiB, a fresh root,
   `--ignore-partitions 2025-09-30`) loaded 29 partitions, 519,808,535 rows, every table matching,
@@ -451,15 +461,15 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   2026-10-09 at 19:29): the peak follows the limit, not the partition. `docs/operacao.md` states it
   as the sizing rule and the `_MEMORY_FRACTION` comment of `resources.py` cites it (the user's
   request of 2026-10-10).
-- The resume of a stopped load ran again on 2026-10-10 from 03:55 UTC
-  (`probe_load_resume.py --ignore-partitions 2025-09-30`, 8 vCPUs, 13.1 GiB available, the source
-  with 7 partitions of `cad_lancamentos`, `environments.md`): the `SIGKILL` came 11.7 s after the
-  second partition's file appeared, 43.4 s from the start (2026-01-31 in 30.0 s), with 2026-01-31
-  in the log and 2026-02-28 out of it, and left the engine's temporary folder behind (0.0 MB,
-  deleted by the probe). The same command found one partition in the Delta, wrote 2026-02-28
-  (18.7 s) and 2026-03-31 (52.8 s), checked the three equal and exited 0 in 98.1 s (107.5 s at
-  21:50 on 2026-10-09, with 8 vCPUs too); the only file outside the log was the killed execution's.
-  Every check passed.
+- The resume of a stopped load ran again on 2026-10-10 from 03:55 UTC (`probe_load_resume.py
+  --ignore-partitions 2025-09-30`, 8 vCPUs, 13.1 GiB available, the source with 7 partitions of
+  `cad_lancamentos`, `environments.md`): the second partition's file appeared 11.7 s after the first
+  partition's line and the `SIGKILL` followed, 43.4 s from the start (2026-01-31 in 30.0 s), with
+  2026-01-31 in the log and 2026-02-28 out of it, and left the engine's temporary folder behind (0.0
+  MB, deleted by the probe). The same command found one partition in the Delta, wrote 2026-02-28
+  (18.7 s) and 2026-03-31 (52.8 s), checked the three equal and exited 0 in 98.1 s (107.5 s at 21:50
+  on 2026-10-09, with 8 vCPUs too); the only file outside the log was the killed execution's. Every
+  check passed.
 - The load of the second battery of 2026-10-10 (`started_at` 17:49:48 UTC, from `main` at
   `f8eba34`, on 8 vCPUs, 12,631 MB available, 8 threads and 6,315 MiB, a fresh root,
   `--ignore-partitions 2025-09-30`) loaded 29 partitions, 519,808,535 rows, every table matching,
@@ -475,12 +485,13 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   and 76% of the available memory, at `cad_lancamentos` 2026-07-31 (`docs/operacao.md`).
 - The resume of a stopped load ran again in the second battery of 2026-10-10, from 18:20 UTC
   (`probe_load_resume.py --ignore-partitions 2025-09-30`, 8 vCPUs, 13.1 GiB available, the source
-  with 7 partitions of `cad_lancamentos`, `environments.md`): the `SIGKILL` came 11.3 s after the
-  second partition's file appeared, 41.3 s from the start (2026-01-31 in 28.4 s), with 2026-01-31
-  in the log and 2026-02-28 out of it, and left the engine's temporary folder behind (0.0 MB,
-  deleted by the probe). The same command found one partition in the Delta, wrote 2026-02-28
-  (18.5 s) and 2026-03-31 (49.9 s), checked the three equal and exited 0 in 94.4 s (98.1 s at
-  03:55); the only file outside the log was the killed execution's. Every check passed.
+  with 7 partitions of `cad_lancamentos`, `environments.md`): the second partition's file appeared
+  11.3 s after the first partition's line and the `SIGKILL` followed, 41.3 s from the start
+  (2026-01-31 in 28.4 s), with 2026-01-31 in the log and 2026-02-28 out of it, and left the engine's
+  temporary folder behind (0.0 MB, deleted by the probe). The same command found one partition in
+  the Delta, wrote 2026-02-28 (18.5 s) and 2026-03-31 (49.9 s), checked the three equal and exited 0
+  in 94.4 s (98.1 s at 03:55); the only file outside the log was the killed execution's. Every check
+  passed.
 - The load of the battery of 2026-10-11 (`started_at` 19:58:48 UTC, from `main` at `aa7d6dd`, on
   8 vCPUs, 12,860 MB available, 8 threads and 6,430 MiB, a fresh root,
   `--ignore-partitions 2025-09-30`) loaded 29 partitions, 519,808,535 rows, every table matching,
@@ -496,10 +507,35 @@ The fictitious Parquet source base `db_projetado`, reproducing the structure com
   6,430 MiB) and 73% of the available memory, at `cad_lancamentos` 2026-07-31 (`docs/operacao.md`).
 - The resume of a stopped load ran again in the battery of 2026-10-11, from 20:29 UTC
   (`probe_load_resume.py --ignore-partitions 2025-09-30`, 8 vCPUs, 12.9 GiB available, the source
-  with 7 partitions of `cad_lancamentos`, `environments.md`): the `SIGKILL` came 11.2 s after the
-  second partition's file appeared, 41.0 s from the start (2026-01-31 in 28.2 s), with 2026-01-31
-  in the log and 2026-02-28 out of it, and left the engine's temporary folder behind (0.0 MB,
-  deleted by the probe). The same command found one partition in the Delta, wrote 2026-02-28
-  (19.8 s) and 2026-03-31 (51.9 s), checked the three equal and exited 0 in 97.1 s (94.4 s at
-  18:20 of 2026-10-10); the only file outside the log was the killed execution's. Every check
-  passed.
+  with 7 partitions of `cad_lancamentos`, `environments.md`): the second partition's file appeared
+  11.2 s after the first partition's line and the `SIGKILL` followed, 41.0 s from the start
+  (2026-01-31 in 28.2 s), with 2026-01-31 in the log and 2026-02-28 out of it, and left the engine's
+  temporary folder behind (0.0 MB, deleted by the probe). The same command found one partition in
+  the Delta, wrote 2026-02-28 (19.8 s) and 2026-03-31 (51.9 s), checked the three equal and exited 0
+  in 97.1 s (94.4 s at 18:20 of 2026-10-10); the only file outside the log was the killed
+  execution's. Every check passed.
+- The load of the battery of 2026-10-14 (`started_at` 23:03:39 UTC, from `main` at `9417e45`, on
+  4 vCPUs, 7,680 MB of memory and 5,642 MB available, 4 threads and 2,821 MiB, a fresh root,
+  `--ignore-partitions 2025-09-30`) loaded 29 partitions, 519,808,535 rows, every table matching,
+  1,048.5 s summed (1,238 s for the step), the process peak at 2,201 MB after `cad_operacoes`,
+  3,203 MB after `rel_contrato_operacao` and 4,335 MB at `cad_lancamentos` 2026-07-31;
+  `cad_lancamentos` took 65.1 s, 42.2 s, 120.7 s, 68.8 s, 281.3 s and 272.6 s (2026-07-31 at 0.50
+  million rows per second, 0.54 with 4 vCPUs, 12,875 MB available and 6,437 MiB at 02:10 of
+  2026-10-09). The source had not changed since 19:23 of 2026-10-09: every partition kept the
+  counts and sums of the second battery of that day, and the same three entries stayed outside the
+  model. The audit of 2026-01-31 (version 6) read the same 989,852 orphans, `history` listed
+  versions 0 to 6 (23:07:48 to 23:20:55 UTC), and `archive` copied the 29 files, `cad_lancamentos`
+  in 26.6 s at 363 MB. The eleventh load since the half-memory rule set the highest ratios of the
+  eleven: the peak was 1.54 times the `memory_limit` (4,335 MB over 2,821 MiB) and 77% of the
+  available memory, at `cad_lancamentos` 2026-07-31, on the machine with the least memory per
+  thread of the eleven (`docs/operacao.md` and the `_MEMORY_FRACTION` comment of `resources.py`
+  cite the eleven loads).
+- The resume of a stopped load ran again in the battery of 2026-10-14, from 23:45 UTC
+  (`probe_load_resume.py --ignore-partitions 2025-09-30`, 4 vCPUs, 5.8 GiB available, the source
+  with 7 partitions of `cad_lancamentos`, `environments.md`): the second partition's file appeared
+  25.8 s after the first partition's line (2026-01-31 in 61.8 s) and the `SIGKILL` followed, 89.5 s
+  from the start, with 2026-01-31 in the log and 2026-02-28 out of it, and left the engine's
+  temporary folder behind (0.0 MB, deleted by the probe). The same command found one partition in
+  the Delta, wrote 2026-02-28 (33.9 s) and 2026-03-31 (113.1 s), checked the three equal and
+  exited 0 in 205.9 s (97.1 s with 8 vCPUs at 20:29 of 2026-10-11, 189.0 s with 4 at 05:18 of
+  2026-10-09); the only file outside the log was the killed execution's. Every check passed.

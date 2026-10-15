@@ -1565,8 +1565,8 @@ class RedshiftEngine:
         ``InterfaceError`` do driver, que vem da leitura do socket fechado, e no ``OSError`` do
         socket, que o driver deixa sair. Depois do ``COPY`` derrubado de um ``ingest``, o envio do
         ``DROP`` da staging recebeu ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09);
-        com a conversão do ``OSError``, o ``DROP`` reabriu a conexão nas 8 rodadas de 2026-10-10 e
-        nas 4 de 2026-10-11.
+        com a conversão do ``OSError``, o ``DROP`` reabriu a conexão nas 8 rodadas de 2026-10-10,
+        nas 4 de 2026-10-11 e nas 4 de 2026-10-14.
 
         A reconexão perde a tabela temporária que o pipeline tenha criado na sessão, e o log
         ``serialize_db.engine.redshift`` avisa da perda. O driver não diz se o servidor aplicou o

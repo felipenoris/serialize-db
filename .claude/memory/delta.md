@@ -403,6 +403,19 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   `serialize-db compact` wrote 6 files of 47.6 MB to 68.5 MB, 369.9 MB, and removed the 66 in
   5.6 s at a process peak of 1,653 MB, 12.4 GiB available; the same rows and sum, `OPTIMIZE` at
   version 3. `docs/operacao.md` ("Compactação")
+- In the battery of 2026-10-14 the same probes ran from 23:50 UTC (`main` at `9417e45`,
+  `--ignore-partitions 2025-09-30`, 4 vCPUs, 5.7 GiB to 5.8 GiB available, `environments.md`),
+  every check passing. `probe_archive_resume.py`: the load of the three partitions took 202.1 s,
+  `snapshot` 2.3 s (version 3), the `SIGKILL` came 4.2 s into `archive`, after 2026-03-31 (one
+  file, 2.6 s), and the same command skipped it, copied 2026-02-28 and 2026-01-31 in 1.8 s and
+  2.2 s, finished in 6.8 s (5.4 s for the table) at a process peak of 309 MB and moved the snapshot
+  to `archived`. `probe_vacuum_orphans.py`: `vacuum --full` listed 0 files with the default
+  retention (2.0 s), the two orphans with `--retention-hours 0` (2.0 s) and deleted them with
+  `--apply` (2.3 s, version 3 after), the log's file kept with the same rows and sum.
+  `probe_compact_memory.py`: with 4 threads the split gave 50 files of 6.2 MB to 18.6 MB, and
+  `serialize-db compact` wrote 6 files of 57.2 MB to 66.6 MB, 368.1 MB, and removed the 50 in
+  10.7 s at a process peak of 733 MB, 5.4 GiB available; the same rows and sum, `OPTIMIZE` at
+  version 3. `docs/operacao.md` ("Compactação")
 
 ## Alternatives assessed
 

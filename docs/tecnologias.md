@@ -4444,8 +4444,9 @@ Alguns resultados grandes ficam fora do cache. `SET enable_result_cache_for_sess
 desliga na sessão, e a coluna `result_cache_hit` do `sys_query_history` diz se uma consulta o
 usou. No ambiente alvo, em 2026-10-11, o cache serviu 640 das 720 consultas pequenas de
 `probes/operacao/probe_parallel_gain.py`, as das sessões novas também, e só a primeira passada foi
-ao motor (`docs/index.md`, seção "Multithreading"). Uma medição que repete a mesma consulta mede
-esse cache, a menos que a sessão o desligue ou que o texto ou os valores mudem a cada execução.
+ao motor; em 2026-10-14, com o `SET` em cada sessão, não serviu nenhuma (`docs/index.md`, seção
+"Multithreading"). Uma medição que repete a mesma consulta mede esse cache, a menos que a sessão o
+desligue ou que o texto ou os valores mudem a cada execução.
 
 #### Diferenças para o PostgreSQL
 
@@ -5171,11 +5172,13 @@ tabela nova (`docs/index.md`, seção "Multithreading").
 Em 2026-10-11 a ordem da publicação, pela própria transação da sonda, também esperou numa das
 três repetições (29,991 s contra 10,042 s e 10,044 s). Os dois `INSERT` da linha de controle que
 começaram enquanto outra transação segurava o lock levaram 20,237 s e 21,240 s, com 20,060 s e
-21,069 s de planejamento e 0 s de espera por lock. Nas seis publicações lentas lidas desde
-2026-10-10, o primeiro `INSERT` a terminar planejou de 20,060 s a 20,073 s, e cada um dos
-seguintes terminou de 0,24 s a 0,72 s depois do `COMMIT` do anterior, como se uma espera fixa de
-cerca de 20 s no servidor os soltasse para o lock um de cada vez. O que dispara essa espera não
-foi lido (`.claude/memory/concurrency.md`).
+21,069 s de planejamento e 0 s de espera por lock. Em 2026-10-14 a mesma ordem esperou de novo
+numa das três repetições (31,141 s), com duas transações esperando no `INSERT`, como nas duas
+repetições lentas da publicação da biblioteca. Nas nove publicações lentas lidas desde 2026-10-10,
+o primeiro `INSERT` a terminar planejou de 20,060 s a 20,073 s, e cada um dos seguintes terminou
+de 0,24 s a 0,72 s depois do `COMMIT` do anterior, como se uma espera fixa de cerca de 20 s no
+servidor os soltasse para o lock um de cada vez. O que dispara essa espera não foi lido
+(`.claude/memory/concurrency.md`).
 
 ### Ingestão de dados
 
@@ -5710,8 +5713,9 @@ publicação por período.
 
 No ambiente alvo, o join de `prd_cad_lancamentos` (283.835.836 linhas) com `prd_cad_contas` (101
 linhas) por `id_conta`, as duas publicadas em `DISTSTYLE AUTO`, leu `XN Hash Join DS_DIST_ALL_NONE`
-em 2026-10-09. A leitura se repetiu às 21:45 do mesmo dia, em 2026-10-10 e em 2026-10-11, com
-424.598.150 linhas. A tabela de contas está em `ALL`, e as tabelas publicadas seguem sem `DISTKEY`.
+em 2026-10-09. A leitura se repetiu às 21:45 do mesmo dia, em 2026-10-10, em 2026-10-11 e em
+2026-10-14, com 424.598.150 linhas. A tabela de contas está em `ALL`, e as tabelas publicadas
+seguem sem `DISTKEY`.
 
 **Escrita das consultas.** As regras da documentação:
 

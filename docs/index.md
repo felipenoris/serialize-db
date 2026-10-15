@@ -953,9 +953,9 @@ depois do laço, e o trabalho do cliente só se sobrepõe à leitura e à grava�
 `stream` e os dois juntos ficaram de 79 MB a 129 MB acima da base, contra 243 MB a 457 MB da série.
 O `run.ingest`, o `materialize` e o `publish_delta` das quatro tabelas ganharam mais que na pasta
 local, porque o S3 e o Redshift fazem esperar a rede, e o pico do `run.ingest` e do `materialize`
-ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms, e a
+ficou de 11% a 13% acima da série. Cada consulta pequena no Redshift levou cerca de 86 ms. A
 leitura de 2026-10-11, abaixo, mostra que o cache de resultados do Redshift responde às repetições
-dessas consultas.
+dessas consultas, e a de 2026-10-14 mede o ganho com o cache desligado.
 
 Em 2026-10-07 a mesma sonda rodou numa máquina de 2 vCPUs com 5,8 GiB disponíveis, sobre as mesmas
 quatro tabelas no S3 e o mesmo Redshift. No DuckDB, o trabalho em série levou de 1,5 a 2 vezes o
@@ -1040,13 +1040,29 @@ tabela por vez, e sem a despublicação entre as medidas de 10,766 s a 11,898 s.
 marcou 640 das 720 consultas pequenas das três formas como servidas pelo cache de resultados do
 Redshift: a primeira repetição da série levou 5,597 s e as outras oito de 1,942 s a 3,910 s, então
 só a primeira passada foi ao motor, e o menor tempo de cada forma mede respostas do cache, como
-provavelmente nas sondas desde 2026-10-05, que repetem os mesmos textos e valores; o ganho da sessão
-a mais nas consultas que o cache não serve não foi medido. Nas duas repetições lentas de
-`publish_redshift`, três das quatro transações esperaram no `INSERT` da linha de controle, e a
-publicação pela própria transação da sonda, na ordem da publicação, esperou numa das três repetições
-(29,991 s contra 10,042 s e 10,044 s): cada `INSERT` que começou enquanto outra transação segurava o
-lock da tabela de controle levou de 20,2 s a 21,8 s, e o primeiro a terminar planejou de 20,060 s a
-20,073 s nas seis publicações lentas lidas desde 2026-10-10.
+provavelmente nas sondas desde 2026-10-05, que repetem os mesmos textos e valores. Nas duas
+repetições lentas de `publish_redshift`, três das quatro transações esperaram no `INSERT` da linha
+de controle, e a publicação pela própria transação da sonda, na ordem da publicação, esperou numa
+das três repetições (29,991 s contra 10,042 s e 10,044 s): cada `INSERT` que começou enquanto outra
+transação segurava o lock da tabela de controle levou de 20,2 s a 21,8 s, e o primeiro a terminar
+planejou de 20,060 s a 20,073 s nas seis publicações lentas lidas desde 2026-10-10.
+
+Às 23:56 UTC de 2026-10-14 a sonda rodou numa máquina de 4 vCPUs com 5,8 GiB disponíveis, com o
+cache de resultados do Redshift desligado nas sessões das consultas pequenas. No DuckDB, com 4
+threads e 2.964 MiB de limite, os pools ganharam de novo entre o que ganharam com 2 e com 8 vCPUs:
+`run.ingest` das quatro 1,42 vez (6,363 s contra 9,024 s), `materialize` das quatro 1,37 vez e
+`publish_delta` com `max_workers=4` 1,86 vez (10,197 s contra 18,945 s); o `stream` ganhou 1,55 vez
+sem trabalho e 1,81 vez com o pandas, e as 200 consultas pequenas 1,43 vez na sessão a mais. No
+Redshift: `run.ingest` das quatro 2,25 vezes (14,910 s contra 33,607 s) e `publish_delta` com
+`max_workers=4` 1,38 vez. O `sys_query_history` não marcou nenhuma das 720 consultas pequenas como
+servida pelo cache, e as 80 levaram 4,778 s em série, cerca de 60 ms cada, 4,732 s nas threads da
+sessão principal e 2,664 s com uma sessão a mais por thread: 1,79 vez, o ganho da sessão a mais nas
+consultas que vão ao motor. `publish_redshift` com `max_workers=4` levou 13,197 s numa repetição e
+31,662 s e 32,549 s nas outras duas, contra 28,715 s a 30,325 s uma tabela por vez, e sem a
+despublicação entre as medidas de 12,730 s a 13,936 s. Nas duas repetições lentas, e na repetição
+lenta da publicação pela própria transação da sonda (31,141 s contra 9,881 s e 10,104 s), duas das
+quatro transações esperaram no `INSERT` da linha de controle, e a primeira a terminar planejou de
+20,062 s a 20,069 s, na faixa das seis publicações lentas de antes.
 
 ### Como usar as threads
 
@@ -1077,8 +1093,8 @@ lock da tabela de controle levou de 20,2 s a 21,8 s, e o primeiro a terminar pla
   consultas pequenas; a consulta grande já usa todas as `threads` do DuckDB, as CPUs do processo,
   num pool que as sessões dividem. Ela não vê as tabelas temporárias da sessão principal. No
   Redshift, cada sessão a mais é outra conexão, e as consultas pequenas, que esperam a rede,
-  ganharam com ela mais que no DuckDB; na medida de 2026-10-11 o cache de resultados respondeu às
-  repetições, e o ganho das consultas que vão ao motor não foi medido.
+  ganharam com ela mais que no DuckDB: com o cache de resultados desligado, em 2026-10-14, 1,79
+  vez, contra 1,43 vez das do DuckDB na mesma máquina.
 - **Junte as consultas pequenas numa só**, com `GROUP BY` ou uma junção, antes de levá-las a
   threads: cada chamada com um statement Core o compila em Python, cerca de 2 ms sob o GIL, e esse
   tempo não se divide entre as threads.
@@ -1092,18 +1108,20 @@ lock da tabela de controle levou de 20,2 s a 21,8 s, e o primeiro a terminar pla
   conferências, o commit e a releitura de cada tabela esperam a rede. Na pasta local ele não ganhou,
   porque o arquivo de cada partição sai da sessão principal uma tabela por vez. O padrão é 1, e cada
   tabela em curso soma a memória da sua escrita.
-- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo.** Das 24 repetições
-  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-11, doze
-  levaram de 10,520 s a 13,813 s e doze de 31,302 s a 36,110 s, nenhuma entre os dois grupos, contra
-  24,341 s a 32,179 s das 24 repetições uma tabela por vez. Nas lentas, duas ou três das quatro
-  transações, nas cinco publicações lentas que o `sys_query_history` leu, esperam no `INSERT` da
+- **`max_workers` de `publish_redshift` ora ganha, ora perde no ambiente alvo.** Das 27 repetições
+  da publicação de quatro tabelas iguais em quatro conexões, de 2026-10-05 a 2026-10-14, 13
+  levaram de 10,520 s a 13,813 s e 14 de 31,302 s a 36,110 s, nenhuma entre os dois grupos, contra
+  24,341 s a 32,179 s das 27 repetições uma tabela por vez. Nas lentas, duas ou três das quatro
+  transações, nas sete publicações lentas que o `sys_query_history` leu, esperam no `INSERT` da
   linha de controle, que cada uma grava no fim, e o servidor conta a espera, cerca de 20 s, como
-  planejamento do comando, sem fila nem lock (leituras de 2026-10-10 e 2026-10-11). A espera só
-  veio em publicações que criaram as tabelas: nenhuma das 15 repetições sem o `CREATE TABLE` na
+  planejamento do comando, sem fila nem lock (leituras de 2026-10-10 a 2026-10-14). A espera só
+  veio em publicações que criaram as tabelas: nenhuma das 21 repetições sem o `CREATE TABLE` na
   transação esperou. O que o `INSERT` espera não foi lido. O runbook publica a base com
-  `--max-workers 4`, e as publicações da base inteira não pagaram a espera em tabela alguma. O
-  usuário aceitou a espera em 2026-10-10, e a publicação segue criando a tabela na transação da
-  carga, com a linha de controle por último.
+  `--max-workers 4`. Nas cinco publicações da base inteira de 2026-10-09 a 2026-10-11 nenhuma
+  tabela pagou a espera; na de 2026-10-14, `cad_contratos` levou 64,9 s, 17,9 s a mais que em
+  2026-10-11, e a publicação não imprime o tempo de cada comando que diria se a pagou. O usuário
+  aceitou a espera em 2026-10-10, e a publicação segue criando a tabela na transação da carga, com
+  a linha de controle por último.
 
 ```python
 from concurrent.futures import ThreadPoolExecutor

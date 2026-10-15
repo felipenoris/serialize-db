@@ -41,15 +41,16 @@ serialize-db import --root s3://bucket/projeto/delta --environment prd \
 ```
 
 Antes: a origem tem uma pasta por tabela, `<origem>/<tabela>/`, e a carga só a lê. Confira a
-memória da máquina, porque o pico do processo passa do `memory_limit` do DuckDB. Nas dez cargas da
-base de 2026-09-25 a 2026-10-11, em máquinas de 2, 4 e 8 vCPUs, o pico do processo da carga ficou
-entre 1,38 e 1,51 vez o `memory_limit` do DuckDB, entre 69% e 76% da memória disponível, sempre na
+memória da máquina, porque o pico do processo passa do `memory_limit` do DuckDB. Nas onze cargas da
+base de 2026-09-25 a 2026-10-14, em máquinas de 2, 4 e 8 vCPUs, o pico do processo da carga ficou
+entre 1,38 e 1,54 vez o `memory_limit` do DuckDB, entre 69% e 77% da memória disponível, sempre na
 maior partição de `cad_lancamentos`: 4.138 MB com 5.801 MB disponíveis e 2.900 MiB de limite em
-2026-10-07, e 9.557 MB com 12.651 MB e 6.325 MiB em 2026-10-09. O pico acompanha o limite, que é
-metade da memória disponível que `environment_limits` lê na abertura de cada conexão, e não o
-tamanho da partição. A carga coube em todas as máquinas medidas, com ao menos um quarto da memória
-disponível de folga; a máquina maior só a encurta (0,35 milhão de linhas por segundo com 2 vCPUs,
-0,66 com 8).
+2026-10-07, 9.557 MB com 12.651 MB e 6.325 MiB em 2026-10-09, e 4.335 MB com 5.642 MB e 2.821 MiB
+em 2026-10-14. O pico acompanha o limite, que é metade da memória disponível que
+`environment_limits` lê na abertura de cada conexão, e não o tamanho da partição; a maior razão,
+1,54 vez, veio na máquina com menos memória por thread, a de 2026-10-14, com 4 vCPUs e 2.821 MiB.
+A carga coube em todas as máquinas medidas, com ao menos 23% da memória disponível de folga; a
+máquina maior só a encurta (0,35 milhão de linhas por segundo com 2 vCPUs, 0,66 com 8).
 
 Depois: cada partição da origem está num commit da tabela Delta, com `carga-<uuid8>` em
 `serialize_db_execution_id`. A segunda chamada não grava nada. A chamada depois de uma falha
@@ -201,6 +202,7 @@ de 33.239.719 linhas, que saiu sempre em 6 arquivos:
 | 2026-10-10 | 8 | 12,6 GiB | 64, de 5,4 a 16,6 MB | de 54,4 a 65,8 MB, 370,5 MB | 6,0 s | 1.649 MB |
 | 2026-10-10, 18:25 | 8 | 12,6 GiB | 61, de 5,6 a 21,2 MB | de 54,6 a 65,7 MB, 370,1 MB | 5,2 s | 1.502 MB |
 | 2026-10-11 | 8 | 12,4 GiB | 66, de 5,5 a 18,7 MB | de 47,6 a 68,5 MB, 369,9 MB | 5,6 s | 1.653 MB |
+| 2026-10-14 | 4 | 5,4 GiB | 50, de 6,2 a 18,6 MB | de 57,2 a 66,6 MB, 368,1 MB | 10,7 s | 733 MB |
 
 Depois: `numFilesAdded` e `numFilesRemoved` impressos com o tempo e o pico de RSS do processo, a
 medida da memória da compactação; e um commit `OPTIMIZE` com `dataChange` falso, que
@@ -274,7 +276,8 @@ Antes: o destino está vazio e sob a raiz. Em `rewrite`, confira a memória da m
 alvo, em 2026-10-10, com 8 vCPUs e 6.315 MiB de limite, `cad_lancamentos` inteira (424.598.150
 linhas em 6 partições) levou 80,8 s com o pico em 7.898 MB, contra 21,1 s com 258 MB em `copy`;
 em 2026-10-07, com 2 vCPUs e 2.900 MiB de limite, a tabela sem a partição 2026-08-31 levou
-278,0 s com 3.507 MB. Depois: em `copy`, os mesmos bytes dos arquivos que o log da versão lista;
+278,0 s com 3.507 MB; em 2026-10-14, numa máquina de 4 vCPUs e 7,5 GiB, a tabela inteira levou
+163,1 s com 3.642 MB. Depois: em `copy`, os mesmos bytes dos arquivos que o log da versão lista;
 em `rewrite`, um arquivo por partição pelo `COPY` do DuckDB, com o esquema da versão em todos. O
 tempo e o pico de RSS do processo são impressos. Sem `--version`, a versão exportada é a atual.
 

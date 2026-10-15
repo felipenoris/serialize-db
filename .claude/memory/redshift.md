@@ -852,10 +852,59 @@ Read before code on `engine.redshift`, `serialize_db.publication`, the Redshift 
   some large results stay out. `SET enable_result_cache_for_session TO off` turns it off for the
   session, and `SVL_QLOG`'s `source_query`, or the `result_cache_hit` of `sys_query_history` that
   the parallel probe reads, says whether a query used it. The battery of 2026-10-11 read it serving
-  640 of the 720 small queries (`concurrency.md`). The same page says composition takes compilation
+  640 of the 720 small queries, and the one of 2026-10-14, with the probe's `SET` on every
+  session, none (`concurrency.md`). The same page says composition takes compilation
   off a new query's path; `docs/tecnologias.md` ("Armazenamento colunar e processamento paralelo")
   states both in place of the old advice that a measurement compares the second run. No library
   result depends on the cache: a modified table invalidates its cached results, and
   `pg_last_unload_count()`, which the engine reads only when an `UNLOAD` wrote no manifest, is a
   per-session function that the rule on functions evaluated per run keeps out of it [inferred; no
   reading tells].
+- The battery of 2026-10-14 (22:00 UTC to 00:30 UTC of 2026-10-15, on 4 vCPUs, `environments.md`)
+  read the version `1.0.477953` again; `RS-8` read 0 of 3 tables, `RS-12`'s count returned no row,
+  and the Data API's `select 1` answered in 23 ms. The four sessions that run the engine cases read:
+  - `test_primitives_refuse_a_transaction_the_client_opened_on_the_target`,
+    `test_nonfinite_double_reaches_the_server_by_every_text_path` and
+    `test_audit_refuses_a_transaction_the_client_opened_when_a_check_loads_the_staging` passed in
+    all four.
+  - `test_session_terminated_by_the_server_is_read`: the 12 cases of the four sessions resolved at
+    the first repetition, 1 s after the `pg_terminate_backend` (`waited` 1.0 in every reading); the
+    idle session reconnected on a new pid, and inside `transaction()` and inside the client's
+    `BEGIN` the command raised the driver's `InterfaceError`, with the `KeyError` of the
+    prepared-statement cache in its context, and the next command reconnected. The late
+    termination of 02:32 of 2026-10-10 did not recur in the twelve sessions since, so whether the
+    10 s of `TERMINATION_LIMIT` cover it stays unread (`OPEN_QUESTIONS.md`).
+  - `test_session_terminated_during_the_ingest_copy_is_read`: `pg_terminate_backend` ran 1.709 s
+    to 1.903 s after the start, 4 ms to 10 ms after the `COPY` was sent, which raised the
+    `InterfaceError` 0.29 s to 0.93 s after the termination, and the `ROLLBACK` of `transaction()`
+    raised it again. The staging's `DROP` failed in the send within 1 ms in all four, with the
+    driver's `InterfaceError` in three and the engine's `InterfaceError: o socket da conexão
+    falhou: BrokenPipeError` in `redshift_suite_2.json`; in all four the engine reconnected, the
+    second `DROP` started 0.74 s to 1.04 s after the first and took 0.33 s to 1.05 s,
+    `staging_left` was false, the sandbox table kept 0 rows and the next command ran on a new pid.
+    The session of `redshift_suite_2.json` closed this case with the driver's
+    `PytestUnraisableExceptionWarning` (`ssl.SSLError: Underlying socket connection gone`) and
+    printed it once more under `test_two_writers_on_the_same_table_both_enter`; the one of
+    `engine_redshift_2.json` printed it only under that next case, and the other two not at all.
+
+  The whole base was published by channel on 4 vCPUs after `--init` created the control table
+  again, `cad_contas` first by `--tables cad_contas` (4.8 s at 246 MB): the other unpartitioned
+  tables 3.4 s to 5.4 s, `cad_contratos` 64.9 s, `cad_operacoes` 69.0 s, `rel_contrato_operacao`
+  98.3 s and `cad_lancamentos` (6 partitions, 424,598,150 rows) 509.0 s at 279 MB, 0.83 million
+  rows per second, the command 528 s; the three mid-size tables took 17.9 s, 5.1 s and 12.7 s more
+  than on 2026-10-11 with 8 vCPUs, and the publication prints no per-command time that would say
+  whether `cad_contratos` paid the control row's ~20 s wait (`concurrency.md`). `--status`,
+  `--channel current` and `--snapshot carga-2026-09-25 --tables cad_contas` read as on 2026-10-07.
+- `probes/operacao/probe_published_base.py` in the battery of 2026-10-14 (23:38 UTC, 182 s, every
+  check passing, 4 vCPUs and 5.7 GiB available), over the base just published at
+  `carga-2026-09-25`: the `EXPLAIN` of the join of `prd_cad_lancamentos` (424,598,150 rows) with
+  `prd_cad_contas` (101) on `id_conta` read `XN Hash Join DS_DIST_ALL_NONE` again. The redo of
+  2026-01-31 (33,239,719 rows) took 51.3 s at a process peak of 4,166 MB with 4 threads and
+  2.8 GiB (`ingest` 0.115 s, `audit` 11.024 s, `publish_delta` 37.052 s; 29.7 s at 8,292 MB with
+  8 vCPUs on 2026-10-11), `cad_lancamentos` at version 7; with the channel on it, the publication
+  by channel swapped only that partition, version 7, in 47.1 s at 256 MB (52.8 s for the
+  command), and with the channel back on `carga-2026-09-25` it swapped it back, version 6, in
+  46.7 s at 256 MB (52.6 s), the other 11 tables `já está publicada` both ways.
+  `prd_cad_lancamentos` kept 424,598,150 rows and the `id_lancamento` sum
+  538,418,094,708,709,063 before the swap, after it and after the return, and the channel ended on
+  `carga-2026-09-25`.
