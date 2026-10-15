@@ -333,6 +333,6 @@ Read before code on `engine.duckdb`, `storage.duckdb_setup`, a probe that opens 
   name gives the schema whatever the directory order, as the docstring of
   `parquet_import._check_first_file` says; the case is
   `test_duckdb.py::test_read_parquet_glob_takes_the_schema_from_the_first_file_by_name`. In the
-  target's battery of 2026-10-11 the local root (`SERIALIZE_DB_TEST_LOCAL_ROOT`, in the space's
-  home) also listed the 40 files out of name order (`duckdb.glob_folder_lists_in_name_order`
-  false in `suite_s3.json`), and the case passed there.
+  target's batteries of 2026-10-11 and 2026-10-14 the local root (`SERIALIZE_DB_TEST_LOCAL_ROOT`,
+  in the space's home) also listed the 40 files out of name order
+  (`duckdb.glob_folder_lists_in_name_order` false in `suite_s3.json`), and the case passed there.

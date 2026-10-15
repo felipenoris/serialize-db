@@ -194,17 +194,20 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   local whole-suite sessions on 2026-09-25 (0.011 s beside the loop against 0.018 s with the
   shorter interval), on 2026-10-03 and on 2026-10-07 (0.005 s against 0.006 s; alone, three runs
   at 0.278 s to 0.444 s against 0.006 s to 0.024 s), and passed alone and in the other sessions.
-  In the target the `-m "not redshift"` session of `suite_alvo.sh` runs it, and it passed in the 14
-  sessions with a report from 2026-09-24 to 2026-10-09, at 0.381 s to 0.893 s beside the loop
-  against 0.012 s to 0.086 s with the shorter interval (`concurrency.gil.os_stat_200` of
-  `suite_s3.json`), 0.381 s against 0.012 s on 2 vCPUs on 2026-10-07 and 0.773 s against 0.086 s
-  on 4 vCPUs on 2026-10-09; the item is in `.claude/memory/OPEN_QUESTIONS.md`.
+  In the target the `-m "not redshift"` session of `suite_alvo.sh` runs it, and it passed in the 19
+  sessions with a report from 2026-09-24 to 2026-10-14, at 0.381 s to 0.899 s beside the loop
+  against 0.012 s to 0.087 s with the shorter interval (`concurrency.gil.os_stat_200` of
+  `suite_s3.json`), 0.381 s against 0.012 s on 2 vCPUs on 2026-10-07, 0.773 s against 0.086 s
+  on 4 vCPUs on 2026-10-09 and 0.869 s against 0.087 s on 4 vCPUs on 2026-10-14; the item is in
+  `.claude/memory/OPEN_QUESTIONS.md`.
 - `Storage.write_text(if_match=...)` on a local folder is not atomic between threads either:
   `_replace_local` reads the fingerprint and `os.replace`s without a lock, and eight threads
   adding 50 each with a retry on `ConflictError` kept 107 of 400 (204 conflicts seen,
   2026-09-25), and in the target machine's local folder 79 of 400 (175 conflicts) on 2026-09-26,
   88 (204) on 2026-09-27, 65 (84) on 2026-09-29, 67 (108) on 2026-10-05, 87 (165) on
-  2026-10-07 and 81 (151) on 2026-10-09; S3's `IfMatch` is server-side. `.claude/memory/OPEN_QUESTIONS.md`
+  2026-10-07, 81 (151) on 2026-10-09, 69 (89) on 2026-10-11 and 66 (78) on 2026-10-14
+  (`probes/consistencia/probe_delta_ops.py`); S3's `IfMatch` is server-side.
+  `.claude/memory/OPEN_QUESTIONS.md`
 - `Execution.publish_delta` checks `version_diff` from the pinned version before `reconcile` and
   `export_partition`, and `register_files` (`publish_partition` too) opens the table anew right
   before the commit, so a data commit by another execution on the same partition between the check
@@ -476,8 +479,8 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   queries' sessions (`decisions.md`, "The parallel probe's small queries without the result
   cache"): the probe runs `SET enable_result_cache_for_session TO off` on the main session after
   the `stream` and `appender` measures and on each extra session right after its opening, inside
-  the measured time like the opening, and the next battery's reading waits in `OPEN_QUESTIONS.md`
-  ("O ganho das consultas pequenas do Redshift sem o cache de resultados").
+  the measured time like the opening, and the battery of 2026-10-14 read the uncached gain
+  (below).
   The control row's wait came in two of the three four-worker repetitions with unpublish, three
   of the four transactions waiting in each. In the 31.747 s repetition `cad_paralelo_d`'s
   `INSERT` ran first (from 9.252 s, 0.463 s long, its `COMMIT` ending at 10.279 s), and the
@@ -513,4 +516,63 @@ Read before `stream`, `appender`, `max_workers`, any helper thread, or a change 
   of 2026-10-10 and 2026-10-11, and none of the 15 repetitions without a `CREATE TABLE` in the
   transaction (9 without the unpublish, 6 with the tables created before) waited. No table of the
   five publications of the whole base since 2026-10-09 paid the wait (`redshift.md`).
+  `docs/index.md` ("Multithreading"), `docs/tecnologias.md` (Redshift, "Transações concorrentes")
+- The same probe in the battery of 2026-10-14, from 23:56 UTC to 00:30 UTC of 2026-10-15 (4 vCPUs,
+  5.8 GiB available, DuckDB limits 4 threads and 2,964 MiB, the tables prepared in 26.8 s, `main`
+  at `9417e45`), with the result cache off in the small queries' sessions. DuckDB: `stream` 1.55x
+  with no work (0.329 s, +1 MB, against 0.509 s, +313 MB) and 1.81x with pandas (0.423 s against
+  0.767 s), `appender` 0.97x and 1.05x, both 1.03x and 1.18x, 200 small queries 0.579 s serial,
+  0.606 s on the main session and 0.406 s with one `new_session()` each (1.43x), `run.ingest`
+  1.42x (6.363 s, +903 MB, against 9.024 s, +709 MB), `materialize` 1.37x (6.374 s against
+  8.720 s) and `publish_delta(max_workers=4)` 1.86x (10.197 s against 18.945 s). Redshift:
+  `run.ingest` 2.25x (14.910 s against 33.607 s), `stream`, `appender` and both 1.01x, 0.99x and
+  1.09x with no work and 1.02x, 1.09x and 1.07x with pandas, 80 small queries 4.778 s serial,
+  4.732 s on the main session and 2.664 s with one extra session each (1.79x),
+  `publish_delta(max_workers=4)` 1.38x (19.122 s against 26.338 s) and `publish_redshift` with
+  four workers 2.18x (13.197 s against 28.715 s), its other two repetitions at 31.662 s and
+  32.549 s against 30.325 s and 29.520 s serial; without the unpublish the three four-worker
+  repetitions took 13.033 s, 13.936 s and 12.730 s against 38.031 s, 34.949 s and 39.517 s serial
+  (2.75x, best against best), and the publication that prepared those measures planned its four
+  `INSERT`s in 0.044 s to 1.201 s.
+  `sys_query_history` booked none of the 720 small queries with `result_cache_hit` true. The
+  serial form took 5.016 s, 4.778 s and 4.817 s, the main session 4.732 s, 4.811 s and 4.787 s
+  and the extra sessions 3.123 s, 2.748 s and 2.664 s, about 60 ms per query in series against
+  the 47 ms of the cached answers on 2026-10-11, so the 1.79x of the extra sessions is the gain
+  on uncached queries (`docs/index.md`, "Multithreading").
+  The control row's wait came in two of the three four-worker repetitions with unpublish, two of
+  the four transactions waiting in each. In the 31.662 s repetition `cad_paralelo_d`'s `INSERT`
+  ran first (from 9.026 s, 0.353 s long, its `COMMIT` ending at 9.768 s) and `cad_paralelo_b`'s
+  next (from 10.055 s, 0.242 s long, its `COMMIT` ending at 10.640 s), and the `INSERT`s of
+  `cad_paralelo_c` and `cad_paralelo_a`, started at 10.060 s and 10.103 s while
+  `cad_paralelo_b`'s ran, took 21.269 s and 20.260 s (`planning_time` 21.081 s and 20.069 s,
+  `lock_wait_time` 0.000 s, `execution_time` 0.012 s); in the 32.549 s one `cad_paralelo_d`'s ran
+  first (from 10.046 s, 0.383 s long, its `COMMIT` ending at 10.803 s) and `cad_paralelo_b`'s next
+  (from 10.920 s, 0.187 s long, its `COMMIT` ending at 11.625 s), and those of `cad_paralelo_a`
+  and `cad_paralelo_c`, started at 10.933 s and 10.962 s while `cad_paralelo_b`'s ran, took
+  21.236 s and 20.281 s (`planning_time` 21.061 s and 20.062 s). The probe's own transactions in
+  the publication's order waited too, in their second repetition (31.141 s against 10.104 s and
+  9.881 s): `cad_paralelo_d` and `cad_paralelo_b` wrote their rows at 7.764 s and 8.408 s,
+  0.264 s and 0.556 s long, and the `INSERT`s of `cad_paralelo_c` and `cad_paralelo_a`, started at
+  8.960 s and 8.965 s as `cad_paralelo_b`'s ended, took 20.253 s and 21.250 s (`planning_time`
+  20.067 s and 21.081 s, `lock_wait_time` 0.000 s). In the nine slow publications read since
+  2026-10-10 the first waiter to finish planned 20.060 s to 20.073 s (this run's 20.069 s,
+  20.062 s and 20.067 s) and the second 20.959 s to 21.088 s (21.081 s, 21.061 s and 21.081 s);
+  in this run's three each second waiter ended its `INSERT` 0.58 s to 0.66 s after the `COMMIT`
+  of the first, and the other control writes, the control-row-first order aside, planned in
+  1.579 s at most. The fifth session saw no pending lock in the three slow measures (30, 31 and
+  30 readings), and `sys_query_history` answered for 88 of 88 control writes. The control row
+  right after the `CREATE TABLE` serialized the four transactions again in every repetition
+  (24.141 s, 24.574 s and 25.706 s; the three waits booked as `planning_time` 4.858 s to 5.183 s,
+  10.212 s to 11.361 s and 15.542 s to 17.105 s, with `lock_wait_time` 0.055 s to 0.196 s), the
+  fifth session seeing no pending lock in any; the tables created before took 10.492 s, 11.648 s
+  and 10.308 s, the 12 `INSERT`s 0.222 s to 2.122 s long, the fifth session seeing the
+  `PgXenWriteLock` on relation `787296` held by one pid after the other in the first two. Across
+  the nine runs of 2026-10-05 to 2026-10-14, 14 of the 27 four-connection repetitions of the
+  library's publication with unpublish took 31.302 s to 36.110 s and 13 took 10.520 s to
+  13.813 s, against 24.341 s to 32.179 s for the 27 serial ones; the probe's publication order
+  waited in 2 of its 9 repetitions of 2026-10-10 to 2026-10-14, and none of the 21 repetitions
+  without a `CREATE TABLE` in the transaction (12 without the unpublish, 9 with the tables
+  created before) waited. In the whole base's publication of 2026-10-14, with four workers,
+  `cad_contratos` took 17.9 s more than on 2026-10-11, and the publication prints no per-command
+  time that would say whether it paid the wait (`redshift.md`).
   `docs/index.md` ("Multithreading"), `docs/tecnologias.md` (Redshift, "Transações concorrentes")

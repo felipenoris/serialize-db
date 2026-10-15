@@ -586,9 +586,10 @@ def turn_off_result_cache(
 ) -> bool:
     """Desliga o cache de resultados do Redshift na sessão de ``engine`` e diz se o servidor aceitou
     o ``SET``; a recusa sai como leitura. Ligado, o padrão, o cache respondeu a 640 das 720
-    consultas pequenas da bateria de 2026-10-11, e só a primeira passada em série foi ao motor. A
-    reconexão de ``execute`` depois de uma queda abre a sessão com o cache ligado de novo, e
-    ``print_result_cache_reading`` mostra as consultas que ele serviu."""
+    consultas pequenas da bateria de 2026-10-11, e só a primeira passada em série foi ao motor;
+    desligado, na de 2026-10-14, não respondeu a nenhuma. A reconexão de ``execute`` depois de
+    uma queda abre a sessão com o cache ligado de novo, e ``print_result_cache_reading`` mostra
+    as consultas que ele serviu."""
     try:
         engine.execute("SET enable_result_cache_for_session TO off")
     except redshift_connector.Error as error:
@@ -1426,9 +1427,9 @@ class Ordering:
 # 2026-10-10 às 18:52 as leu: a linha antes do COPY serializa as quatro transações no lock de
 # escrita da tabela de controle, que cada uma segura até o COMMIT (22,8 s a 23,4 s contra 9,1 s a
 # 10,2 s das outras duas ordens), e as tabelas criadas antes nunca esperaram
-# (.claude/memory/concurrency.md). Na de 2026-10-11 a ordem da publicação esperou cerca de 20 s
-# numa das três repetições (29,991 s), como a publicação da biblioteca, e as tabelas criadas antes
-# seguiram sem esperar.
+# (.claude/memory/concurrency.md). Nas de 2026-10-11 e 2026-10-14 a ordem da publicação esperou
+# cerca de 20 s numa das três repetições (29,991 s e 31,141 s), como a publicação da biblioteca, e
+# as tabelas criadas antes seguiram sem esperar.
 ORDERINGS = {
     "publicacao": Ordering("ordem da publicação", created_before=False, control_first=False),
     "linha-antes": Ordering(

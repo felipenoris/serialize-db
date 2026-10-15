@@ -17,38 +17,36 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   com 859 marcadores às 12:39 do mesmo dia; e 1.943 versões, 50.394.018 bytes, com 1.823 marcadores
   às 23:26; e 2.980 versões, 86.695.363 bytes, com 2.788 marcadores em 2026-09-25 às 17:26; e 5.269
   versões, 159.538.248 bytes, com 4.883 marcadores em 2026-09-26 às 15:14; e 7.619 versões,
-  233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822 versões,
-  270.369.639 bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões,
-  307.133.320 bytes, com 9.504 marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes,
-  com 9.565 marcadores em 2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de
-  20.000 entradas, `POC.md`; e, com a listagem no mesmo limite, ao menos 10.419 versões,
-  26.705.558.141 bytes, com 9.580 marcadores em 2026-10-07 às 03:04, ao menos 10.248 versões,
-  62.094.316.073 bytes, com 9.751 marcadores em 2026-10-09 às 01:07, ao menos 10.110 versões,
-  88.588.140.425 bytes, com 9.889 marcadores às 18:35, e ao menos 9.990 versões,
-  115.006.714.004 bytes, com 10.009 marcadores em 2026-10-10 às 02:32, e ao menos 9.859 versões,
-  141.821.283.172 bytes, com 10.140 marcadores às 17:03, e ao menos 9.711 versões,
-  160.631.151.436 bytes, com 10.288 marcadores em 2026-10-11 às 19:10,
-  `.claude/memory/environments.md`), e a regra
-  `NoncurrentVersionExpiration` sob a raiz, junto com `AbortIncompleteMultipartUpload`, é pergunta
-  para quem administra o bucket. Sem ela, o `vacuum` da retenção de 400 dias não libera espaço;
-  `docs/index.md`, seção "Retenção dos arquivos removidos", traz a regra de exemplo e como mudar a
-  retenção. A mesma pergunta vale para a regra de ciclo de vida que `docs/operacao.md`, seção
-  "Arquivamento de um snapshot", espera na pasta `arquivo/`: a passagem dos arquivos dela à classe
-  de armazenamento mais barata. As sondas da operação também apagam a pasta delas sob a raiz da
-  suíte no fim de cada
-  rodada: 19.293 MB em 2026-10-05, 19.284 MB na segunda rodada de 2026-10-07, 19.293 MB em
-  2026-10-09 às 05:18, 19.289 MB às 21:50, 19.612 MB em 2026-10-10 às 03:58, 12.021 MB às
-  18:20 e 12.019 MB em 2026-10-11 às 20:29, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos
-  relatórios. Cada rodada deixa ao
-  menos isso em versões não correntes,
-  cerca de três quartos do salto de `BK-14` de 249.621.376 bytes em 2026-10-05 para
-  26.705.708.023 em 2026-10-06, e os 23.015 MB das duas rodadas de 2026-10-07 cerca de dois terços
-  do salto de 26.705.558.141 bytes para 62.094.316.073 em 2026-10-09, os 19.293 MB da rodada das
-  05:18 cerca de três quartos do salto para 88.588.140.425 bytes às 18:35, e os 19.289 MB da
-  rodada das 21:50 cerca de três quartos do salto para 115.006.714.004 bytes em 2026-10-10, e os
-  19.612 MB da rodada das 03:58 cerca de três quartos do salto para 141.821.283.172 bytes às 17:03,
-  e os 12.021 MB da rodada das 18:20 cerca de dois terços do salto para 160.631.151.436 bytes em
-  2026-10-11 [inferido].
+  233.165.927 bytes, com 7.030 marcadores em 2026-09-27 às 15:59; e 8.822 versões, 270.369.639
+  bytes, com 8.127 marcadores em 2026-09-28 às 20:14; e 10.301 versões, 307.133.320 bytes, com 9.504
+  marcadores às 23:10; e ao menos 10.434 versões, 283.570.979 bytes, com 9.565 marcadores em
+  2026-09-29 às 13:32, quando a listagem de `BK-14` parou no limite de 20.000 entradas, `POC.md`; e,
+  com a listagem no mesmo limite, ao menos 10.419 versões, 26.705.558.141 bytes, com 9.580
+  marcadores em 2026-10-07 às 03:04, ao menos 10.248 versões, 62.094.316.073 bytes, com 9.751
+  marcadores em 2026-10-09 às 01:07, ao menos 10.110 versões, 88.588.140.425 bytes, com 9.889
+  marcadores às 18:35, e ao menos 9.990 versões, 115.006.714.004 bytes, com 10.009 marcadores em
+  2026-10-10 às 02:32, e ao menos 9.859 versões, 141.821.283.172 bytes, com 10.140 marcadores às
+  17:03, e ao menos 9.711 versões, 160.631.151.436 bytes, com 10.288 marcadores em 2026-10-11 às
+  19:10, e ao menos 9.519 versões, 179.464.360.076 bytes, com 10.480 marcadores em 2026-10-14 às
+  22:01, `.claude/memory/environments.md`), e a regra `NoncurrentVersionExpiration` sob a raiz,
+  junto com `AbortIncompleteMultipartUpload`, é pergunta para quem administra o bucket. Sem ela, o
+  `vacuum` da retenção de 400 dias não libera espaço; `docs/index.md`, seção "Retenção dos arquivos
+  removidos", traz a regra de exemplo e como mudar a retenção. A mesma pergunta vale para a regra de
+  ciclo de vida que `docs/operacao.md`, seção "Arquivamento de um snapshot", espera na pasta
+  `arquivo/`: a passagem dos arquivos dela à classe de armazenamento mais barata. As sondas da
+  operação também apagam a pasta delas sob a raiz da suíte no fim de cada rodada: 19.293 MB em
+  2026-10-05, 19.284 MB na segunda rodada de 2026-10-07, 19.293 MB em 2026-10-09 às 05:18, 19.289 MB
+  às 21:50, 19.612 MB em 2026-10-10 às 03:58, 12.021 MB às 18:20, 12.019 MB em 2026-10-11 às 20:29 e
+  12.015 MB em 2026-10-14 às 23:45, em MB de 2^20 bytes, pelas linhas `raiz apagada` dos relatórios.
+  Cada rodada deixa ao menos isso em versões não correntes, cerca de três quartos do salto de
+  `BK-14` de 249.621.376 bytes em 2026-10-05 para 26.705.708.023 em 2026-10-06, e os 23.015 MB das
+  duas rodadas de 2026-10-07 cerca de dois terços do salto de 26.705.558.141 bytes para
+  62.094.316.073 em 2026-10-09, os 19.293 MB da rodada das 05:18 cerca de três quartos do salto para
+  88.588.140.425 bytes às 18:35, e os 19.289 MB da rodada das 21:50 cerca de três quartos do salto
+  para 115.006.714.004 bytes em 2026-10-10, e os 19.612 MB da rodada das 03:58 cerca de três quartos
+  do salto para 141.821.283.172 bytes às 17:03, e os 12.021 MB da rodada das 18:20 cerca de dois
+  terços do salto para 160.631.151.436 bytes em 2026-10-11, e os 12.019 MB da rodada de 2026-10-11
+  cerca de dois terços do salto para 179.464.360.076 bytes em 2026-10-14 [inferido].
 - **Credenciais de uma hora.** `probes/credentials.py` leu no alvo, em 2026-09-25, em 2026-09-26, em
   2026-09-27, em 2026-09-29 (`POC.md`) e duas vezes em 2026-10-09 (`.claude/memory/aws-s3.md`), o
   delta-rs, o `S3FileSystem` e o `boto3` renovando a credencial do contêiner, que troca de chave a
@@ -90,9 +88,9 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   de 2026-10-10 (`decisions.md`) o caso assere a queda e a reconexão e repete cada comando a cada
   1 s por até 10 s enquanto a sessão responde no mesmo pid, com os segundos esperados no relatório
   (`waited`, `esperou` antes de 2026-10-11). Na bateria das 17:02 de 2026-10-10, a primeira com as
-  asserções, e na de 2026-10-11, os 12 casos das quatro rodadas de cada uma caíram na primeira
-  repetição, 1 s depois do `pg_terminate_backend`, a ociosa num pid novo; a terminação atrasada não
-  voltou nessas oito rodadas, e só uma rodada em que ela volte diz se os 10 s a cobrem.
+  asserções, na de 2026-10-11 e na de 2026-10-14, os 12 casos das quatro rodadas de cada uma caíram
+  na primeira repetição, 1 s depois do `pg_terminate_backend`, a ociosa num pid novo; a terminação
+  atrasada não voltou nessas doze rodadas, e só uma rodada em que ela volte diz se os 10 s a cobrem.
 - **O filtro do dataset do delta-rs nas colunas sem mínimo e máximo.** O
   `DeltaTable.to_pyarrow_dataset()` do delta-rs, e com ele o `to_pyarrow_table` e o `to_pandas`
   com `filters`, perde as linhas de um filtro sobre uma coluna que o log deixa sem mínimo e máximo:
@@ -150,48 +148,38 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   de `valor`, se vier, antes da carga da produção.
 - **O acesso de leitura no ambiente alvo.** O `reader` e os canais rodaram no alvo nas baterias de
   2026-09-25, de 2026-09-26, de 2026-09-27, de 2026-09-28 às 23:09, de 2026-10-05, de 2026-10-07,
-  nas duas de 2026-10-09, nas duas de 2026-10-10 e na de 2026-10-11 (`POC.md`,
+  nas duas de 2026-10-09, nas duas de 2026-10-10, na de 2026-10-11 e na de 2026-10-14 (`POC.md`,
   `.claude/memory/environments.md`): o leitor Delta abriu as 12 views da raiz carregada em 0,645 s,
-  em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s, com 2 vCPUs em 1,440 s, com 4 vCPUs em 0,844 s e
-  com 8 vCPUs em 0,647 s, em 0,617 s, em 0,558 s e em 0,615 s; as suítes passaram a publicação por
-  canal e por snapshot, com a volta a um snapshot anterior, e a comparação dos dois leitores, com o
-  `stream` do leitor Redshift pelo `UNLOAD`, e na bateria de 2026-09-30 o runbook de refazer um
-  snapshot, com a volta pelo canal; e em 2026-09-26 a base inteira foi publicada por `--channel
-  default`, `cad_lancamentos` em 295,1 s com o pico do processo em 266 MB, e de novo em 2026-09-27,
-  em 328,5 s com 270 MB, em 2026-09-29, em 335,2 s com 286 MB, em 2026-10-05, em 324,9 s com 285 MB,
-  em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB, e em 2026-10-09, com 4 vCPUs, em 320,9 s com
-  280 MB e, às 20:31, com 8 vCPUs e a partição 2026-08-31 a mais (424.598.150 linhas), em 487,8 s
-  com 286 MB, e em 2026-10-10, com 8 vCPUs, em 504,0 s com 287 MB e, às 17:02, em 501,8 s com 287
-  MB, e em 2026-10-11, em 475,6 s com 286 MB. Nas duas baterias de 2026-10-09, nas duas de
-  2026-10-10 e na de 2026-10-11, `probes/operacao/probe_published_base.py` voltou a base publicada a
+  em 0,582 s, em 0,571 s, em 0,556 s, em 0,607 s, com 2 vCPUs em 1,440 s, com 4 vCPUs em 0,844 s,
+  com 8 vCPUs em 0,647 s, em 0,617 s, em 0,558 s e em 0,615 s e de novo com 4 vCPUs em 0,727 s; as
+  suítes passaram a publicação por canal e por snapshot, com a volta a um snapshot anterior, e a
+  comparação dos dois leitores, com o `stream` do leitor Redshift pelo `UNLOAD`, e na bateria de
+  2026-09-30 o runbook de refazer um snapshot, com a volta pelo canal; e em 2026-09-26 a base
+  inteira foi publicada por `--channel default`, `cad_lancamentos` em 295,1 s com o pico do processo
+  em 266 MB, e de novo em 2026-09-27, em 328,5 s com 270 MB, em 2026-09-29, em 335,2 s com 286 MB,
+  em 2026-10-05, em 324,9 s com 285 MB, em 2026-10-07, com 2 vCPUs, em 300,2 s com 274 MB, e em
+  2026-10-09, com 4 vCPUs, em 320,9 s com 280 MB e, às 20:31, com 8 vCPUs e a partição 2026-08-31 a
+  mais (424.598.150 linhas), em 487,8 s com 286 MB, e em 2026-10-10, com 8 vCPUs, em 504,0 s com 287
+  MB e, às 17:02, em 501,8 s com 287 MB, e em 2026-10-11, em 475,6 s com 286 MB, e em 2026-10-14,
+  com 4 vCPUs, em 509,0 s com 279 MB. Nas duas baterias de 2026-10-09, nas duas de 2026-10-10, na de
+  2026-10-11 e na de 2026-10-14, `probes/operacao/probe_published_base.py` voltou a base publicada a
   um snapshot anterior: a partição 2026-01-31 de `cad_lancamentos`, refeita num snapshot novo, foi
-  publicada pelo canal em 42,8 s, em 44,3 s, em 45,0 s, em 43,8 s e em 42,5 s, com o pico do
-  processo em 261 MB, em 262 MB, em 262 MB, em 261 MB e em 260 MB, e a volta ao snapshot de antes a
-  trocou de novo em 44,3 s com 258 MB, em 46,7 s com 262 MB, em 48,2 s com 262 MB, em 46,9 s com 260
-  MB e em 44,3 s com 259 MB (`.claude/memory/redshift.md`). Espera o `UNLOAD` de um cliente com
-  usuário só de leitura para um bucket próprio, com o caminho de credencial que serve a ele, que
-  precisa de um papel de cliente no alvo.
+  publicada pelo canal em 42,8 s, em 44,3 s, em 45,0 s, em 43,8 s, em 42,5 s e em 47,1 s, com o pico
+  do processo em 261 MB, em 262 MB, em 262 MB, em 261 MB, em 260 MB e em 256 MB, e a volta ao
+  snapshot de antes a trocou de novo em 44,3 s com 258 MB, em 46,7 s com 262 MB, em 48,2 s com 262
+  MB, em 46,9 s com 260 MB, em 44,3 s com 259 MB e em 46,7 s com 256 MB
+  (`.claude/memory/redshift.md`). Espera o `UNLOAD` de um cliente com usuário só de leitura para um
+  bucket próprio, com o caminho de credencial que serve a ele, que precisa de um papel de cliente no
+  alvo.
 
 - **O ganho das APIs com threads numa máquina maior.** `probes/operacao/probe_parallel_gain.py`
   mediu o ganho de cada API com threads sobre a série no ambiente alvo em 2026-10-05, numa máquina
   de 8 vCPUs, com as tabelas no S3 e o Redshift (`docs/index.md`, seção "Multithreading"), e em
   2026-10-07, duas vezes, numa de 2 vCPUs, e em 2026-10-09 numa de 4 vCPUs e, às 22:09, duas
-  vezes em 2026-10-10 e em 2026-10-11, de novo numa de 8 vCPUs, com os ganhos de 2026-10-05
-  (`.claude/memory/concurrency.md`): no DuckDB os pools
+  vezes em 2026-10-10 e em 2026-10-11, de novo numa de 8 vCPUs, com os ganhos de 2026-10-05, e em
+  2026-10-14 numa de 4 vCPUs (`.claude/memory/concurrency.md`): no DuckDB os pools
   ganharam com 2 vCPUs a metade do que em 8, e com 4 vCPUs entre os dois, e no Redshift o ganho não
   dependeu da máquina; o ganho com mais CPUs segue sem medida e espera a sonda numa máquina maior.
-- **O ganho das consultas pequenas do Redshift sem o cache de resultados.** As 80 consultas
-  pequenas de `probes/operacao/probe_parallel_gain.py` no motor Redshift repetem o mesmo texto com
-  os mesmos valores sobre uma tabela que não muda, em três formas e três repetições, e na bateria
-  de 2026-10-11 o cache de resultados do Redshift (`enable_result_cache_for_session`, ligado por
-  padrão) serviu 640 das 720: só a primeira passada da série foi ao motor, e o menor tempo de cada
-  forma, com o ganho de 1,93 vez da sessão a mais, mede respostas do cache
-  (`.claude/memory/concurrency.md`). O usuário escolheu em 2026-10-12 desligar o cache nas sessões
-  das consultas pequenas (`.claude/memory/decisions.md`), e a sonda roda
-  `SET enable_result_cache_for_session TO off` na sessão principal e em cada sessão a mais
-  (`turn_off_result_cache`). Espera a próxima bateria: a leitura do `sys_query_history` sem
-  consulta servida pelo cache, e o ganho da sessão a mais nas consultas que vão ao motor, que
-  `docs/index.md` (seção "Multithreading") dá como não medido.
 
 - **A SQLAlchemy 2.1.** A 2.1.0, publicada em 2026-09-24, quebrou o pacote na sessão de testes
   de 2026-09-25, e a 2.1.3, de 2026-10-02, ainda o quebra na de 2026-10-03 (`POC.md`);
@@ -249,13 +237,14 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   intervalo de troca dez vezes menor, e nas sessões reprovadas levaram 0,011 s contra 0,018 s, 0,005
   s contra 0,006 s e, em 2026-10-10, com 4 vCPUs, 0,026 s contra 0,020 s (isolado em 2026-10-07,
   0,278 s a 0,444 s contra 0,006 s a 0,024 s). No alvo, a sessão `-m "not redshift"` do
-  `suite_alvo.sh` roda o caso, e ele passou nas 17 sessões com relatório, de 2026-09-24 a
-  2026-10-10, com 0,381 s a 0,899 s ao lado do laço contra 0,012 s a 0,086 s com o intervalo menor
+  `suite_alvo.sh` roda o caso, e ele passou nas 19 sessões com relatório, de 2026-09-24 a
+  2026-10-14, com 0,381 s a 0,899 s ao lado do laço contra 0,012 s a 0,087 s com o intervalo menor
   (`concurrency.gil.os_stat_200`); a de 2026-10-07, com 2 vCPUs, leu 0,381 s contra 0,012 s, as duas
-  de 2026-10-09, com 4 e 8 vCPUs, 0,773 s contra 0,086 s e 0,899 s contra 0,052 s, e as duas de
-  2026-10-10, com 8 vCPUs, 0,868 s contra 0,061 s e 0,634 s contra 0,045 s. A esteira não roda
-  `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o usuário:
-  tornar a medida robusta ou aceitar a reprovação ocasional.
+  de 2026-10-09, com 4 e 8 vCPUs, 0,773 s contra 0,086 s e 0,899 s contra 0,052 s, as duas de
+  2026-10-10, com 8 vCPUs, 0,868 s contra 0,061 s e 0,634 s contra 0,045 s, a de 2026-10-11, com 8
+  vCPUs, 0,817 s contra 0,060 s, e a de 2026-10-14, com 4 vCPUs, 0,869 s contra 0,087 s. A esteira
+  não roda `tests/proof_of_concept/`, e o caso só atrapalha a sessão local antes do commit. Espera o
+  usuário: tornar a medida robusta ou aceitar a reprovação ocasional.
 - **A pasta da execução no pacote.** `tests/test_pipeline.py` guarda, em código cliente, a cópia
   da entrega e os resultados de cada execução em `<ambiente>/execucoes/<execution_id>/`
   (`POC.md`), sem API do pacote; `Storage.copy` só copia dentro da raiz do banco, e uma
@@ -279,7 +268,7 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta é o recurso
   `catalogManaged`, que leva o commit para um catálogo. `probes/catalog.py` mede o gatilho, uma
   tabela Iceberg no Glue ou um table bucket no S3 Tables: nas leituras das baterias de 2026-10-05 a
-  2026-10-10, a última às 02:33 de 2026-10-10, o Glue seguia com um banco e uma tabela Parquet, e o
+  2026-10-14, a última às 22:01 de 2026-10-14, o Glue seguia com um banco e uma tabela Parquet, e o
   Lake Formation e o S3 Tables não responderam ao papel do projeto
   (`.claude/memory/environments.md`). Espera um catálogo no ambiente alvo.
 - **O prefixo `_` das constantes, do alias e dos loggers que só o próprio módulo usa.** A regra
@@ -296,7 +285,7 @@ As sondas de 2026-09-25 (`POC.md`, seção "O que as sondas de consistência de 
 mostraram") atravessaram cada fronteira de leitura e escrita com valores de borda e trabalho
 paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas no ambiente alvo, em
 2026-09-26, em 2026-09-27, em 2026-09-29, em 2026-10-05, em 2026-10-07, em 2026-10-09, em
-2026-10-10 e em 2026-10-11, repetiram os achados sem reprovar checagem (`POC.md`,
+2026-10-10, em 2026-10-11 e em 2026-10-14, repetiram os achados sem reprovar checagem (`POC.md`,
 `.claude/memory/environments.md`). Cada item espera o usuário: corrigir, ou aceitar como está.
 
 - **A soma de controle da auditoria acima de 1e32.** `audit` soma cada `Double` e `Numeric` como
@@ -310,7 +299,7 @@ paralelo, e acharam o que segue, reproduzido sem mudar `src/`; as rodadas delas 
 - **A escrita condicional do arquivo de controle entre threads.** Na pasta local,
   `Storage.write_text(if_match=...)` confere a impressão digital e faz o `os.replace` fora de um
   lock: oito threads somando 50 cada perderam 293 de 400 atualizações, e de 312 a 335 nas rodadas do
-  alvo, de 2026-09-26 a 2026-10-11. A docstring diz que a escrita não é atômica entre processos;
+  alvo, de 2026-09-26 a 2026-10-14. A docstring diz que a escrita não é atômica entre processos;
   entre threads do mesmo processo ela também não é, e `snapshot`, `archive_snapshot` e `set_channel`
   chamados em paralelo numa raiz local (duas `Execution` com `snapshot` encerrando ao mesmo tempo,
   por exemplo) podem perder uma entrada. No S3 o `IfMatch` é do servidor. Opções: um
