@@ -2642,3 +2642,27 @@ without the CDN the reader sees each diagram's text (probed 2026-10-16 with the 
 light default theme, with Mermaid 11.17.2 (2026-08-25, the last 11.x) and `theme: "dark"`.
 
 `docs/theme/mermaid.html.jinja2`, `.github/workflows/docs.yml`, `README.md`, `REFERENCES.md`.
+
+## The full names stay links in the prose (2026-10-16)
+
+On the card "Como citar as funções no meio do texto das páginas?" of the same review, the user chose
+"Como está" (01:03:01 UTC) over "Fim da seção", the short name in the text with a line of links at
+the end of each section, and "Nome curto com link", about 110 links written by hand. Each full name
+between backticks, which pdoc turns into a link (`serialize_db.delta.reconcile`), stays in the
+middle of its sentence, in `docs/` and in the docstrings; the rewrite splits the sentence around it.
+
+`docs/index.md`, `docs/operacao.md`, `docs/tecnologias.md`, `src/serialize_db/`.
+
+## The dated measurements in tables (2026-10-16)
+
+On the card "Reorganizar as medições datadas das threads em tabelas ou em outra página?" of the same
+review, the user chose "Tabelas na página" (01:14:36 UTC) over "Outra página", the probes' history
+in the technology review, and "Como estão", the paragraphs with their long sentences split. Each
+probe of "As sondas seguintes no ambiente alvo" in `docs/index.md` is a row, named by its date and,
+when the page records it, its hour in UTC, and the next probe adds a row; the control row's wait and
+the result cache are short lists, and no number left the page. Each engine's probes take two tables,
+the DuckDB pools and the `stream` with the small queries, the Redshift pools with the small queries
+and the `publish_redshift`, because one table per engine did not fit the page's 784 px at a 1280 px
+window. The runbook's measurements of the load's peak and of the export follow the same form.
+
+`docs/index.md` ("Multithreading"), `docs/operacao.md` ("Carga inicial", "Exportação").
