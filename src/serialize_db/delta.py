@@ -25,8 +25,8 @@ O ciclo de uma tabela começa no modelo:
 
 Uma partição entra por um de dois caminhos:
 
-- ``register_files`` é o caminho dos motores. Outro escritor grava os arquivos na pasta da tabela;
-  ``register_files`` confere o rodapé de cada arquivo e os registra no log, e ``read_back`` relê a
+- ``register_files`` é o caminho dos motores. Outro escritor grava os arquivos na pasta da tabela,
+  e ``register_files`` confere o rodapé de cada arquivo e os registra no log. ``read_back`` relê a
   versão depois do commit pelos dois leitores do pacote, o dataset do delta-rs e o ``delta_scan``
   do DuckDB.
 - ``publish_partition`` grava os dados pelo escritor do delta-rs, que confere tudo e paga a
@@ -1099,8 +1099,9 @@ def register_files(
 
     - o arquivo existe com o tamanho declarado;
     - o esquema do rodapé tem cada coluna do contrato, na ordem dele, num tipo físico que os
-      leitores leem como o lógico, e não tem a coluna de partição nem coluna fora do contrato, a
-      aninhada inclusive, cuja folha pode repetir o nome de uma coluna do contrato;
+      leitores leem como o lógico;
+    - o esquema do rodapé não tem a coluna de partição nem coluna fora do contrato, a aninhada
+      inclusive, cuja folha pode repetir o nome de uma coluna do contrato;
     - as colunas ``NOT NULL`` não têm nulo na contagem do rodapé;
     - o caminho está na pasta da partição;
     - as linhas do rodapé são as declaradas.
@@ -1725,7 +1726,7 @@ def rewrite(
     :param table: a tabela do modelo.
     :param storage: o armazenamento da raiz do banco.
     :param expressions: por coluna do contrato, a expressão SQL do DuckDB sobre a versão atual que
-        a preenche, como o nome antigo numa renomeação ou o valor de uma coluna ``NOT NULL`` nova;
+        a preenche, como o nome antigo numa renomeação ou o valor de uma coluna ``NOT NULL`` nova.
         ``None`` preenche cada coluna pelo próprio nome.
     :return: a versão do commit.
     :raises serialize_db.errors.ContractError: uma chave de ``expressions`` fora das colunas do
@@ -1738,7 +1739,7 @@ def rewrite(
     :raises serialize_db.errors.ExecutionConflict: o commit falhou no delta-rs com
         ``CommitFailedError``.
     :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
-        2 MiB, ou negativa, na abertura da conexão da reescrita, antes de qualquer escrita; a
+        2 MiB, ou negativa, na abertura da conexão da reescrita, antes de qualquer escrita. A
         releitura usa os mesmos limites (``environment_limits``).
     """
     expressions = dict(expressions or {})
@@ -2046,8 +2047,8 @@ def snapshot(
         preserva as versões marcadas aqui.
     :return: o controle novo.
     :raises serialize_db.errors.ContractError: o nome fora da regra da partição, antes de ler o
-        arquivo de controle; ou um nome já presente em ``snapshots`` ou em ``archived``, porque o
-        nome dá a pasta ``<ambiente>/arquivo/<nome>/`` e não volta a ser usado. A mensagem manda
+        arquivo de controle. Também um nome já presente em ``snapshots`` ou em ``archived``, porque
+        o nome dá a pasta ``<ambiente>/arquivo/<nome>/`` e não volta a ser usado. A mensagem manda
         gravar o snapshot novo com outro nome e apontar o canal com ``serialize-db channel``.
     :raises serialize_db.errors.ConflictError: outro escritor gravou o arquivo de controle entre
         a leitura e a escrita; nada foi gravado.
@@ -2579,7 +2580,7 @@ def deep_copy(
 
     A repetição continua uma cópia interrompida. Com tabela em ``destination``, a partição cujos
     arquivos ela já registra é pulada, sem commit, e as outras são copiadas. Numa tabela criada de
-    outra versão, o commit da primeira partição copiada troca o esquema dela pelo da versão; o
+    outra versão, o commit da primeira partição copiada troca o esquema dela pelo da versão. O
     nome, a descrição e as propriedades ficam os da criação.
 
     Exemplo:
@@ -2595,9 +2596,9 @@ def deep_copy(
     :return: a versão da cópia, que ganha uma versão por partição copiada; a repetição sobre a
         cópia completa devolve a mesma versão.
     :raises serialize_db.errors.RegistrationRefused: um destino que registra um arquivo que a versão
-        não lista, porque guarda outra tabela; ou, no fim, o esquema da cópia diferente do da
-        versão sem partição copiada que o trocasse, ou a contagem da cópia pelos dois leitores
-        diferente da soma das ações.
+        não lista, porque guarda outra tabela. No fim, o esquema da cópia diferente do da versão
+        sem partição copiada que o trocasse, ou a contagem da cópia pelos dois leitores diferente
+        da soma das ações.
     :raises ValueError: ``uri`` ou ``destination`` fora da raiz de ``storage``, antes de qualquer
         escrita.
     :raises serialize_db.errors.ExecutionConflict: o commit de uma partição falhou no delta-rs com

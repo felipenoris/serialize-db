@@ -173,9 +173,9 @@ class Appender(Protocol):
 
         :param data: um ``pa.RecordBatch`` ou uma ``pa.Table``.
         :raises serialize_db.errors.ContractError: ``data`` de outro tipo, recusado sem afetar o
-            appender, que segue recebendo lotes; ou um lote que o ``cast`` recusa, ou com colunas
-            diferentes das do primeiro lote, e depois de um lote assim o ``close`` não insere
-            nada.
+            appender, que segue recebendo lotes. Também um lote que o ``cast`` recusa, ou com
+            colunas diferentes das do primeiro lote; depois de um lote assim, o ``close`` não
+            insere nada.
         :raises RuntimeError: o ``write`` depois de um ``close`` que terminou sem erro.
         """
 

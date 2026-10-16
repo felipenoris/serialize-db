@@ -7,26 +7,30 @@ ficam na pasta da tabela. ``tests/source_db_projetado.py`` reproduz a estrutura 
 bases reais. A carga só lê a origem. O destino é a raiz Delta de ``Database``: cada tabela vai
 para ``<raiz>/<ambiente>/<tabela>``.
 
-``import_table`` cria a tabela Delta do contrato (o modelo SQLAlchemy do cliente), descobre as
-partições na pasta da tabela na origem e pula as que já estão no log da tabela Delta (a pasta
-``_delta_log``, onde cada commit registra os arquivos de uma versão). Cada uma das outras entra
-num commit próprio, gravado por um motor DuckDB (``DuckDBEngine``) da chamada, aberto com os
-limites lidos do ambiente e fechado no fim. Por partição, em ordem:
+``import_table`` cria a tabela Delta do contrato (o modelo SQLAlchemy do cliente) e descobre as
+partições na pasta da tabela na origem. As partições que já estão no log da tabela Delta (a pasta
+``_delta_log``, onde cada commit registra os arquivos de uma versão) são puladas. Cada uma das
+outras entra num commit próprio, gravado por um motor DuckDB (``DuckDBEngine``) da chamada, aberto
+com os limites lidos do ambiente e fechado no fim. Por partição, em ordem:
 
-- A conferência do primeiro arquivo da pasta, o que dá ao DuckDB o esquema da leitura: o rodapé
-  dele (os metadados no fim do arquivo Parquet, com o esquema) tem de ter as colunas do contrato.
-- A leitura da pasta inteira por ``read_parquet`` sem ``hive_partitioning``, que converteria
-  ``data_str`` a ``DATE``. Cada coluna é levada ao tipo do contrato por ``CAST`` (as chaves de
-  ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos), e a coluna de
-  partição recebe o valor do caminho.
-- A conferência da partição, numa consulta: a coluna de origem da partição (``data``,
-  ``data_base``) é igual ao valor do caminho em toda linha, nenhuma coluna ``NOT NULL`` tem nulo
-  e nenhum texto passa do limite da coluna em bytes, o mesmo de ``cast`` e da auditoria. A mesma
-  consulta conta os valores não finitos de cada coluna ``Double``.
-- A gravação da partição, na ordem da ``sort_key``, por ``COPY ... RETURN_STATS`` num arquivo
-  novo da pasta dela na tabela Delta, e o registro do arquivo por
-  ``serialize_db.delta.register_files``, com as conferências do rodapé, a releitura e as colunas
-  não finitas sem mínimo e máximo (issue #59 do serialize-db).
+1. A conferência do primeiro arquivo da pasta, o que dá ao DuckDB o esquema da leitura: o rodapé
+   dele (os metadados no fim do arquivo Parquet, com o esquema) tem de ter as colunas do contrato.
+2. A leitura da pasta inteira por ``read_parquet`` sem ``hive_partitioning``, que converteria
+   ``data_str`` a ``DATE``. Cada coluna é levada ao tipo do contrato por ``CAST`` (as chaves de
+   ``int32`` a ``BIGINT``, o ``timestamp`` de ``INT96`` truncado a microssegundos), e a coluna de
+   partição recebe o valor do caminho.
+3. A conferência da partição, numa consulta:
+
+   - a coluna de origem da partição (``data``, ``data_base``) é igual ao valor do caminho em toda
+     linha;
+   - nenhuma coluna ``NOT NULL`` tem nulo;
+   - nenhum texto passa do limite da coluna em bytes, o mesmo de ``cast`` e da auditoria.
+
+   A mesma consulta conta os valores não finitos de cada coluna ``Double``.
+4. A gravação da partição, na ordem da ``sort_key``, por ``COPY ... RETURN_STATS`` num arquivo
+   novo da pasta dela na tabela Delta.
+5. O registro do arquivo por ``serialize_db.delta.register_files``, com as conferências do
+   rodapé, a releitura e as colunas não finitas sem mínimo e máximo (issue #59 do serialize-db).
 
 Uma partição fora do contrato é ``ContractError`` antes de qualquer gravação. A mensagem traz a
 tabela, a partição e a coluna, e o arquivo quando ele é o primeiro da pasta e não tem uma coluna
@@ -42,13 +46,15 @@ As entradas da pasta da tabela fora do padrão ficam fora da carga e entram no r
 
 ``import_report`` compara contagem e somas por partição entre a origem e o Delta. A origem é lida
 pasta a pasta, como a carga a lê. As colunas ``Numeric`` são somadas como ``DECIMAL(38, 6)``. As
-``Double`` são somadas da mesma forma, só nos valores finitos, e os não finitos são contados à
-parte, porque a soma em ponto flutuante depende da ordem e o ``CAST`` de um ``NaN`` ou de um
-infinito para ``DECIMAL`` falha. O relatório traz também as conversões de tipo de cada partição,
-lidas no rodapé do primeiro arquivo da pasta. A carga está completa quando ``matches`` é
-verdadeiro. ``serialize-db import`` roda a carga e o relatório, com as mesmas partições quando
-``--partitions`` as pede, e sai com 1 na diferença e na partição pedida que a origem não tem,
-recusada em toda tabela antes de qualquer gravação.
+``Double`` são somadas da mesma forma, porque a soma em ponto flutuante depende da ordem. Só os
+valores finitos entram na soma, e os não finitos são contados à parte, porque o ``CAST`` de um
+``NaN`` ou de um infinito para ``DECIMAL`` falha. O relatório traz também as conversões de tipo de
+cada partição, lidas no rodapé do primeiro arquivo da pasta.
+
+A carga está completa quando ``matches`` é verdadeiro. ``serialize-db import`` roda a carga e o
+relatório, com as mesmas partições quando ``--partitions`` as pede. O comando sai com 1 na
+diferença e na partição pedida que a origem não tem, recusada em toda tabela antes de qualquer
+gravação.
 
 Exemplo:
 

@@ -15,13 +15,19 @@ O módulo divide o trabalho com o motor da execução:
 As verificações, pelo nome que cada uma tem no relatório:
 
 - ``linhas``: uma consulta só, agrupada pela coluna de partição numa tabela particionada. Ela conta
-  por coluna os defeitos: o nulo em ``NOT NULL``, o texto acima de ``String(n)`` em bytes, o texto
-  de uma coluna ``Uuid`` acima de 36 bytes, o texto de uma coluna ``Text`` e o documento JSON acima
-  de 65.535 bytes (o teto do Redshift), o JSON inválido, a coluna de partição diferente da
-  derivação de ``partition_source`` e o valor de partição fora de ``schema.PARTITION_VALUE``. A
-  mesma consulta soma cada coluna ``Numeric`` e ``Double`` como ``DECIMAL(38, 6)``, a ``Double`` só
-  nos valores finitos, e conta à parte os não finitos. As somas e as contagens de não finitos são
-  leituras: elas não reprovam.
+  por coluna os defeitos:
+
+  - o nulo em ``NOT NULL``;
+  - o texto acima de ``String(n)`` em bytes;
+  - o texto de uma coluna ``Uuid`` acima de 36 bytes;
+  - o texto de uma coluna ``Text`` e o documento JSON acima de 65.535 bytes (o teto do Redshift);
+  - o JSON inválido;
+  - a coluna de partição diferente da derivação de ``partition_source``;
+  - o valor de partição fora de ``schema.PARTITION_VALUE``.
+
+  A mesma consulta soma cada coluna ``Numeric`` e ``Double`` como ``DECIMAL(38, 6)``, a ``Double``
+  só nos valores finitos, e conta à parte os não finitos. As somas e as contagens de não finitos
+  são leituras: elas não reprovam.
 - ``chave_<colunas>``: a chave repetida nas partições da execução, uma consulta por chave.
 - ``chave_<colunas>_tabela``: a chave repetida entre as partições da execução e as demais
   partições da versão fixada, a versão da tabela Delta que a execução leu na abertura. Ela roda
@@ -707,8 +713,8 @@ def checks(
         chave estrangeira, a chave sem a linha referenciada.
     :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
         chave contra as demais partições da versão fixada. O padrão faz a verificação na chave
-        sem a coluna de partição e sem a de ``partition_source``; ``key_scope="partition"`` a
-        suprime; ``key_scope="table"`` a faz também na chave com a coluna de
+        sem a coluna de partição e sem a de ``partition_source``. ``key_scope="partition"`` a
+        suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
         ``partition_source``.
     :param pinned: a versão fixada da tabela, a origem das demais partições na verificação
         ``chave_<colunas>_tabela``; sem ela, essa verificação não roda.
@@ -827,15 +833,15 @@ def audit_sql(
         chave estrangeira, a chave sem a linha referenciada.
     :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
         chave contra as demais partições da versão fixada. O padrão faz a verificação na chave
-        sem a coluna de partição e sem a de ``partition_source``; ``key_scope="partition"`` a
-        suprime; ``key_scope="table"`` a faz também na chave com a coluna de
+        sem a coluna de partição e sem a de ``partition_source``. ``key_scope="partition"`` a
+        suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
         ``partition_source``.
     :param pinned: a versão fixada da tabela, a origem das demais partições na verificação
         ``chave_<colunas>_tabela``; sem ela, essa verificação não roda.
     :param referenced: por nome de tabela, a origem da linha referenciada de cada chave
         estrangeira; só é conferida com ``foreign_keys=True``.
     :param prefix: o prefixo das tabelas no texto. O padrão deixa no texto o sentinela
-        ``{prefix}``, o marcador que a execução troca pelo prefixo do sandbox; ``prefix=""`` dá o
+        ``{prefix}``, o marcador que a execução troca pelo prefixo do sandbox. ``prefix=""`` dá o
         texto sobre as tabelas do contrato, o que o motor DuckDB roda.
     :return: ``{nome: texto}``, na ordem de ``checks``.
     :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da partição.
