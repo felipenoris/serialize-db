@@ -1,8 +1,9 @@
 # A documentação do pacote em HTML estático, gerada pelo pdoc a partir das docstrings e de
 # docs/index.md, docs/operacao.md e docs/tecnologias.md, publicada no GitHub Pages a cada push na
-# main. O -t aponta a pasta docs/theme/, com as cores escuras do site. O repositório precisa ter o
-# Pages configurado com a origem "GitHub Actions" (Settings, Pages, Build and deployment); sem
-# isso, actions/configure-pages falha com "Get Pages site failed".
+# main. O -t aponta a pasta docs/theme/, com as cores escuras do site e o template do Mermaid, e o
+# --mermaid faz o navegador desenhar os diagramas das páginas. O repositório precisa ter o Pages
+# configurado com a origem "GitHub Actions" (Settings, Pages, Build and deployment); sem isso,
+# actions/configure-pages falha com "Get Pages site failed".
 name: Documentação do pacote
 
 on:
@@ -33,7 +34,7 @@ jobs:
         run: uv sync --group docs
 
       - name: Gerar a documentação
-        run: uv run pdoc serialize_db --docformat restructuredtext -t docs/theme -o site
+        run: uv run pdoc serialize_db --docformat restructuredtext -t docs/theme --mermaid -o site
 
       - uses: actions/configure-pages@v6
 

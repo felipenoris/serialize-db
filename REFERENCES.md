@@ -1170,6 +1170,13 @@ O exemplo `dark-mode` do pdoc 16.0.0, lido em 2026-10-12, de onde vêm as cores 
 <https://raw.githubusercontent.com/mitmproxy/pdoc/v16.0.0/examples/dark-mode/theme.css> e
 <https://raw.githubusercontent.com/mitmproxy/pdoc/v16.0.0/examples/dark-mode/syntax-highlighting.css>.
 
+O Mermaid que o `pdoc --mermaid` carrega, lido em 2026-10-16 para fixar a versão e o tema de
+`docs/theme/mermaid.html.jinja2`: as versões e as datas em <https://registry.npmjs.org/mermaid> e
+<https://data.jsdelivr.com/v1/package/npm/mermaid> (a 11.17.2, de 2026-08-25, a última da série 11
+que o template do pdoc 16.0.0 carrega; a 12.2.0, de 2026-10-13, a mais nova), o módulo em
+<https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs> e os temas em
+<https://mermaid.js.org/config/theming.html> (o `dark`, para o modo escuro).
+
 ## Delta Lake
 
 Documentação do delta-rs e repositórios:

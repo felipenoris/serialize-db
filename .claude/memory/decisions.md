@@ -2629,3 +2629,16 @@ extension, which the card of 2026-10-12 had not covered, the user answered "Sim"
 00:17 UTC).
 
 `CLAUDE.md` ("Working rules"), `lessons.md`
+
+## The diagrams in Mermaid (2026-10-16)
+
+On 2026-10-16 at 00:39 UTC the user asked to review the `pdoc` documentation in light of a critique
+of the site: dense blocks, long sentences, links in the middle of the prose and no diagram. On the
+decision card "Desenhar os diagramas da documentação com Mermaid ou em texto?" the user chose
+"Mermaid" (00:55:40 UTC) over "Texto" and "Sem diagramas". The diagrams of `docs/` are `mermaid`
+code blocks. `pdoc --mermaid` makes the browser load Mermaid from the jsdelivr CDN and draw them;
+without the CDN the reader sees each diagram's text (probed 2026-10-16 with the CDN blocked).
+`docs/theme/mermaid.html.jinja2` replaces pdoc 16.0.0's template, which loads `mermaid@11` with the
+light default theme, with Mermaid 11.17.2 (2026-08-25, the last 11.x) and `theme: "dark"`.
+
+`docs/theme/mermaid.html.jinja2`, `.github/workflows/docs.yml`, `README.md`, `REFERENCES.md`.
