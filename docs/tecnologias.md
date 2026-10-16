@@ -1003,8 +1003,10 @@ Chave aqui é a chave primária do modelo ou um identificador usado em busca pon
 Ordenar pela chave na gravação. Estatísticas min/max só podam quando as faixas dos row groups são
 estreitas e disjuntas, e isso depende da ordem física das linhas. A documentação do DuckDB compara
 um inteiro sequencial, que permite pular todos os row groups menos um, com um UUID aleatório, que
-obriga a ler todos. No arquivo de exemplo, ordenado por `data_ref, id_operacao`, o filtro por
-agosto leu 1 dos 3 row groups; a consulta sobre `parquet_metadata` em
+obriga a ler todos.
+
+No arquivo de exemplo, ordenado por `data_ref, id_operacao`, o filtro por agosto leu 1 dos 3 row
+groups. A consulta sobre `parquet_metadata` em
 [Inspeção dos metadados com DuckDB](#inspecao-dos-metadados-com-duckdb) mostra os dois pulados. A
 coluna `id_cliente`, aleatória, tem `1` a `5000` em todos. Com chave composta, a segunda coluna só
 poda dentro das faixas da primeira; a `sort_key` do contrato (`data_ref`, `id_operacao`) é esse
@@ -1022,12 +1024,15 @@ pq.write_table(t, path, row_group_size=100_000,
 ```
 
 Filtros Bloom para chaves não ordenadas. Um identificador consultado por igualdade que não é a
-chave de ordenação (`id_cliente` numa tabela ordenada por data) só é podado por filtro Bloom. O
-DuckDB grava o filtro quando a coluna do row group cabe no dicionário (`DICTIONARY_SIZE_LIMIT`,
+chave de ordenação (`id_cliente` numa tabela ordenada por data) só é podado por filtro Bloom.
+
+O DuckDB grava o filtro quando a coluna do row group cabe no dicionário (`DICTIONARY_SIZE_LIMIT`,
 padrão `ROW_GROUP_SIZE / 5` valores distintos). Com mais valores distintos do que isso, a coluna
-sai em `PLAIN` e sem filtro; um `ROW_GROUP_SIZE` maior ou um `DICTIONARY_SIZE_LIMIT` explícito
-resolvem. No PyArrow, o filtro é pedido por coluna, e `ndv` deve ser a cardinalidade esperada por
-row group, não do arquivo, com `fpp` 0,01, o que custa cerca de 10,5 bits por valor distinto. No
+sai em `PLAIN` e sem filtro. Um `ROW_GROUP_SIZE` maior ou um `DICTIONARY_SIZE_LIMIT` explícito
+resolvem.
+
+No PyArrow, o filtro é pedido por coluna, e `ndv` deve ser a cardinalidade esperada por row group,
+não a do arquivo. Com `fpp` 0,01, o filtro custa cerca de 10,5 bits por valor distinto. No
 exemplo, `WHERE id_cliente = 99999` virou `EMPTY_RESULT` no plano do DuckDB sem ler dados, e
 `parquet_bloom_probe` confirmou a exclusão dos 3 row groups.
 
@@ -1845,10 +1850,11 @@ Sem Spark o pipeline não perde recurso nem velocidade. No desenho da biblioteca
 grava o log e registra arquivos. O cálculo é do DuckDB ou do Redshift, e a seção de performance mede
 a leitura por `delta_scan` a milissegundos da leitura direta do Parquet. O Spark ganharia só ao
 distribuir o cálculo num cluster. O caso dos dados maiores que a máquina é atendido de outro modo:
-ingerindo só as partições necessárias, ou executando no Redshift. O risco fica no caminho de
-escrita. Um escritor Spark ou Databricks que habilite vetores de exclusão nas mesmas tabelas
-invalida o `COPY` do Redshift e expõe o delta-rs aos bugs abertos de leitura desse recurso, os
-issues 4613 e 4657. Por isso a biblioteca é o único escritor.
+ingerindo só as partições necessárias, ou executando no Redshift.
+
+O risco fica no caminho de escrita. Um escritor Spark ou Databricks que habilite vetores de exclusão
+nas mesmas tabelas invalida o `COPY` do Redshift. Ele também expõe o delta-rs aos bugs abertos de
+leitura desse recurso, os issues 4613 e 4657. Por isso a biblioteca é o único escritor.
 
 ### Requisitos do S3
 
@@ -1905,9 +1911,9 @@ Intelligent-Tiering é seguro porque não apaga.
 Criptografia: SSE-S3 é transparente. SSE-KMS exige as permissões de KMS nos dois papéis. Quando a
 política do bucket exige uma chave específica, o delta-rs recebe em `storage_options` as opções
 `aws_server_side_encryption` (`AES256`, `aws:kms`, `aws:kms:dsse`), `aws_sse_kms_key_id` e
-`aws_sse_bucket_key_enabled`; no DuckDB a chave vai na opção `KMS_KEY_ID` do secret S3 (não
-verificado). Quando a chave é apenas o padrão do bucket, nenhuma opção é necessária: no bucket do
-projeto (SSE-KMS com bucket key) o delta-rs, o DuckDB e o `boto3` gravaram e leram sem
+`aws_sse_bucket_key_enabled`. No DuckDB, a chave vai na opção `KMS_KEY_ID` do secret S3 (não
+verificado). Quando a chave é apenas o padrão do bucket, nenhuma opção é necessária. No bucket do
+projeto (SSE-KMS com bucket key), o delta-rs, o DuckDB e o `boto3` gravaram e leram sem
 configuração, e cada objeto saiu com a chave do projeto.
 
 Região e endpoint: `AWS_REGION` é obrigatória para o delta-rs; `AWS_ENDPOINT_URL` serve só para
@@ -1949,19 +1955,26 @@ nem `AWS_DEFAULT_REGION`, a listagem foi a `us-east-1` com `region = us-west-2` 
 O cliente HTTP do delta-rs lê `HTTP_PROXY` e `HTTPS_PROXY` nas duas grafias, mas lê `NO_PROXY` e,
 só quando ela está ausente, `no_proxy`. Com `NO_PROXY` vazia, a chamada ao endpoint de credenciais
 vai pelo proxy e falha com `Non-success status from HTTP credential provider` (`StatusCode(403)`).
-Foi essa a falha do início da verificação de 2026-09-19, isolada em 2026-09-20: num shell aberto
-pela extensão do Claude Code no Code Editor, `NO_PROXY` existe vazia, e num terminal do Code Editor
-ela tem a lista de `no_proxy`. A chamada passa com `NO_PROXY` ausente, exportada de `no_proxy` ou
-reduzida a `169.254.170.2`, ou sem as variáveis de proxy (em 2026-09-19 também passou com
-`AWS_CONTAINER_CREDENTIALS_FULL_URI`), com deltalake 1.5.0 e 1.6.4 e com os dois interpretadores.
+
+Foi essa a falha do início da verificação de 2026-09-19, isolada em 2026-09-20. Num shell aberto
+pela extensão do Claude Code no Code Editor, `NO_PROXY` existe vazia; num terminal do Code Editor,
+ela tem a lista de `no_proxy`. Com deltalake 1.5.0 e 1.6.4 e com os dois interpretadores, a chamada
+passa nestes casos:
+
+- `NO_PROXY` ausente;
+- `NO_PROXY` exportada de `no_proxy`;
+- `NO_PROXY` reduzida a `169.254.170.2`;
+- sem as variáveis de proxy (em 2026-09-19 também passou com
+  `AWS_CONTAINER_CREDENTIALS_FULL_URI`).
+
 O teste `test_delta_rs_credential_chain` em `tests/proof_of_concept/test_s3.py` registra as cinco
 variantes no ambiente onde roda. A biblioteca exporta `NO_PROXY` a partir de `no_proxy` ao
 iniciar, quando a maiúscula está ausente ou vazia.
 
 As credenciais temporárias que o `boto3` resolve também abrem a tabela quando passadas em
 `storage_options` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`;
-`test_delta_rs_storage_options_fallback`). A biblioteca não as põe lá, por duas razões: a cadeia
-padrão do delta-rs as renova na `DeltaTable` que a execução segura, e um trio congelado expiraria
+`test_delta_rs_storage_options_fallback`). A biblioteca não as põe lá, por duas razões. A cadeia
+padrão do delta-rs as renova na `DeltaTable` que a execução segura. Um trio congelado expiraria
 em cerca de uma hora e circularia num dicionário que um log imprime. O DuckDB com
 `PROVIDER credential_chain` e o `boto3` nunca falharam.
 
@@ -2156,10 +2169,11 @@ renomeada para `valor_bruto` e `descricao` removida. A medição comparou dois c
 (FORMAT parquet, PARTITION_BY (mes), APPEND, FILENAME_PATTERN 'part-{uuid}', RETURN_STATS)` do
 DuckDB, registrado por `create_write_transaction(actions, mode="overwrite", schema=novo,
 partition_by=["mes"])`, produziu o mesmo commit, `remove` de 12, `add` de 12 e `metaData`, com
-memória constante. É o caminho para uma tabela que não cabe na máquina. O delta-rs e o DuckDB
-leram os doze meses com `valor_bruto` preenchida, e a versão anterior continuou lendo `valor` e
-`descricao`. Os arquivos antigos ficam no disco até o `vacuum` (25 arquivos para 12 no snapshot), e
-um snapshot do banco preso por `keep_versions` os mantém.
+memória constante. É o caminho para uma tabela que não cabe na máquina.
+
+O delta-rs e o DuckDB leram os doze meses com `valor_bruto` preenchida, e a versão anterior
+continuou lendo `valor` e `descricao`. Os arquivos antigos ficam no disco até o `vacuum` (25
+arquivos para 12 no snapshot), e um snapshot do banco preso por `keep_versions` os mantém.
 
 | Caminho | 12 arquivos, 135 MB, 12.000.000 linhas | 12 arquivos, 269 MB, 24.000.000 linhas |
 | --- | --- | --- |
@@ -2167,7 +2181,7 @@ um snapshot do banco preso por `keep_versions` os mantém.
 | `COPY ... (RETURN_STATS)` mais `create_write_transaction` | 0,4 s, RSS máximo 581 MB | 0,6 s, RSS máximo 605 MB |
 
 Reescrever um mês por vez não serve. `write_deltalake(mode="overwrite", schema_mode="overwrite",
-predicate="mes = '2026-02'")` foi aceito com um `add`, um `remove` e um `metaData`, e os outros onze
+predicate="mes = '2026-02'")` foi aceito com um `add`, um `remove` e um `metaData`. Os outros onze
 meses passaram a ler `valor_bruto` como nulo no delta-rs e no DuckDB, com os valores ainda dentro
 dos arquivos sob o nome antigo. O `restore` da versão anterior desfez a mudança. A biblioteca
 recusa `predicate` junto com `schema_mode="overwrite"`.
@@ -2180,16 +2194,19 @@ sem predicado. Cada `set_table_description` ou `set_column_metadata` sai num com
 `commitInfo` e `metaData`, sem tocar nos dados (2026-09-22). Assim a documentação da tabela
 sobrevive à publicação de partição, e a reconciliação a sincroniza com o modelo.
 
-A reconciliação é o comando da biblioteca que substitui a migração. Ela compara
-`arrow_schema(Table)` com `dt.schema()`, aplica o diff aditivo e recusa o destrutivo com a
-instrução de reescrita. Depois repete o mesmo diff nas tabelas publicadas no Redshift
-(`ALTER TABLE ADD COLUMN`, que acrescenta no fim, ou recriação e recarga). O `COPY` de Parquet liga
-as colunas por posição. Por isso a biblioteca passa a cada `COPY` a lista das colunas do rodapé (os
-metadados no fim de cada arquivo Parquet), com um manifesto por lista: cada coluna do arquivo entra
-na coluna de mesmo nome, e a coluna que um arquivo anterior a uma coluna nova não tem fica nula. O
-`FILLRECORD` segue em todo `COPY` da biblioteca. Em 2026-09-21 ele carregou no ambiente alvo um
-arquivo anterior a uma coluna nova com ela nula, como a lista ([Regras do COPY para
-Parquet](#regras-do-copy-para-parquet)).
+A reconciliação é o comando da biblioteca que substitui a migração. Ela segue estes passos:
+
+1. compara `arrow_schema(Table)` com `dt.schema()`;
+2. aplica o diff aditivo e recusa o destrutivo com a instrução de reescrita;
+3. repete o mesmo diff nas tabelas publicadas no Redshift (`ALTER TABLE ADD COLUMN`, que
+   acrescenta no fim, ou recriação e recarga).
+
+O `COPY` de Parquet liga as colunas por posição. Por isso a biblioteca passa a cada `COPY` a lista
+das colunas do rodapé (os metadados no fim de cada arquivo Parquet), com um manifesto por lista.
+Cada coluna do arquivo entra na coluna de mesmo nome. A coluna que um arquivo anterior a uma coluna
+nova não tem fica nula. O `FILLRECORD` segue em todo `COPY` da biblioteca. Em 2026-09-21 ele
+carregou no ambiente alvo um arquivo anterior a uma coluna nova com ela nula, como a lista
+([Regras do COPY para Parquet](#regras-do-copy-para-parquet)).
 
 ### O que substitui o Alembic
 
@@ -2352,11 +2369,13 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
    colunas de partição). O DuckDB fornece essas estatísticas por `COPY ... (RETURN_STATS)`, e um
    arquivo alheio as fornece pelo rodapé Parquet (`pq.read_metadata`). Com as estatísticas, a poda
    funcionou no delta-rs e no DuckDB: `file_uris` com `id_operacao >= 990000` devolveu lista vazia,
-   e o DuckDB mostrou `Scanning Files: 0/12`. O mínimo e o máximo entram só dos tipos que o JSON
-   transcreve exato (inteiro, data, `Double` e texto), porque o log os guarda como valor JSON. Um
-   `decimal(18, 2)` de 18 dígitos significativos vira um dobro e perde precisão, e um máximo abaixo
-   do valor real poda o arquivo que tem a linha (adiante, "As estatísticas por tipo"). Uma
-   estatística ausente só deixa de podar.
+   e o DuckDB mostrou `Scanning Files: 0/12`.
+
+   O mínimo e o máximo entram só dos tipos que o JSON transcreve exato (inteiro, data, `Double` e
+   texto), porque o log os guarda como valor JSON. Um `decimal(18, 2)` de 18 dígitos
+   significativos vira um dobro e perde precisão, e um máximo abaixo do valor real poda o arquivo
+   que tem a linha (adiante, "As estatísticas por tipo"). Uma estatística ausente só deixa de
+   podar.
 3. `convert_to_deltalake(uri, partition_by=..., partition_strategy="hive")` cria o log sobre uma
    pasta Parquet existente, sem reescrever. Serve para a carga inicial só se os arquivos já têm os
    tipos, a ordem de colunas e o layout Hive do contrato. Esse caminho não foi testado.
@@ -2364,11 +2383,16 @@ def register_file(dt: DeltaTable, relative_path: str, size: int, month: str, sta
 
 A carga inicial dos Parquet atuais é `serialize_db.parquet_import.import_table`, que segue o
 caminho 2. Ela percorre as tabelas na ordem de `import_order` e, em cada tabela, uma partição por
-vez. Para cada partição, o DuckDB lê a pasta da partição com `CAST` de cada coluna para o tipo do
-contrato e o valor do caminho na coluna de partição (`_partition_query`), grava um arquivo novo na
-pasta `<coluna>=<valor>/` da tabela Delta por `COPY ... (RETURN_STATS)` e o registra por
-`register_files`. Cada partição é um commit. As colunas numéricas do modelo cliente são `Double`;
-nenhuma passa por `Numeric(18, 2)`.
+vez. Cada partição passa por estes passos:
+
+1. o DuckDB lê a pasta da partição com `CAST` de cada coluna para o tipo do contrato e o valor do
+   caminho na coluna de partição (`_partition_query`);
+2. o DuckDB grava um arquivo novo na pasta `<coluna>=<valor>/` da tabela Delta por
+   `COPY ... (RETURN_STATS)`;
+3. o arquivo é registrado por `register_files`.
+
+Cada partição é um commit. As colunas numéricas do modelo cliente são `Double`; nenhuma passa por
+`Numeric(18, 2)`.
 
 #### As estatísticas por tipo
 
@@ -2398,12 +2422,18 @@ O `NaN` segue convenções diferentes no rodapé Parquet e no log. A especifica�
 (`parquet.thrift`) manda o escritor deixar o `NaN` fora do mínimo e do máximo e, desde o
 PARQUET-2249 (2026-05-26), contá-lo em `nan_count`. O leitor sem `nan_count` supõe que pode haver
 `NaN`, e ignora o mínimo e o máximo numa busca que o `NaN` satisfaz. O protocolo Delta define
-`maxValues` como o maior valor válido do arquivo, sem contagem de `NaN`. As implementações
-divergem: o delta-kernel-rs grava o `NaN` como máximo, e o Delta Spark descarta o mínimo e o máximo
-de ponto flutuante que colhe do rodapé de escritores que deixam o `NaN` de fora (PR #7101,
-2026-06-27). O delta-rs copia o máximo do rodapé para o log. A biblioteca grava sem mínimo e máximo,
-no rodapé e no log, as colunas `Double` com valor não finito em cada partição
-([issue #59](https://github.com/felipenoris/serialize-db/issues/59), 2026-09-23).
+`maxValues` como o maior valor válido do arquivo, sem contagem de `NaN`.
+
+As implementações divergem:
+
+- o delta-kernel-rs grava o `NaN` como máximo;
+- o Delta Spark descarta o mínimo e o máximo de ponto flutuante que colhe do rodapé de escritores
+  que deixam o `NaN` de fora (PR #7101, 2026-06-27);
+- o delta-rs copia o máximo do rodapé para o log.
+
+A biblioteca grava sem mínimo e máximo, no rodapé e no log, as colunas `Double` com valor não
+finito em cada partição ([issue #59](https://github.com/felipenoris/serialize-db/issues/59),
+2026-09-23).
 
 ### Exportação para Parquet
 
@@ -2412,14 +2442,19 @@ Os arquivos de dados já são Parquet. Exportar é listar os arquivos do snapsho
 `get_add_actions(flatten=True)` acrescenta `size_bytes` e `num_records`. Essa lista alimenta o
 manifesto do `COPY` do Redshift e qualquer leitor Parquet.
 
-Os arquivos do delta-rs têm as colunas não anuláveis como `required`, estatísticas em todas as
-colunas, compressão Snappy e um row group (o bloco de linhas do Parquet) por arquivo até o tamanho
-alvo do escritor (120.000 linhas ficaram num row group). O `optimize.compact` regrava em ZSTD, e um
-`WriterProperties` sem `compression` grava sem compressão (delta-rs 1.6.6, 2026-10-05). A
-biblioteca passa `compression="SNAPPY"` nas propriedades que tiram o mínimo e o máximo das colunas
-`Double` com valor não finito. O `COPY` do Redshift carregou uma partição compactada em ZSTD no
-ambiente alvo em 2026-10-06 (`test_publication_loads_a_compacted_partition` de
-`tests/test_publication.py`).
+Os arquivos do delta-rs têm:
+
+- as colunas não anuláveis como `required`;
+- estatísticas em todas as colunas;
+- compressão Snappy;
+- um row group (o bloco de linhas do Parquet) por arquivo até o tamanho alvo do escritor (120.000
+  linhas ficaram num row group).
+
+O `optimize.compact` regrava em ZSTD, e um `WriterProperties` sem `compression` grava sem compressão
+(delta-rs 1.6.6, 2026-10-05). A biblioteca passa `compression="SNAPPY"` nas propriedades que tiram o
+mínimo e o máximo das colunas `Double` com valor não finito. O `COPY` do Redshift carregou uma
+partição compactada em ZSTD no ambiente alvo em 2026-10-06
+(`test_publication_loads_a_compacted_partition` de `tests/test_publication.py`).
 
 Uma exportação para outro layout (um arquivo por mês com `FIELD_IDS` e `KV_METADATA`, por exemplo)
 é um `COPY (SELECT ... FROM delta_scan(uri) WHERE ...) TO ...` do DuckDB, com as opções de
@@ -2445,15 +2480,21 @@ Na verificação abaixo, uma tabela com 20 commits tinha 20 arquivos de dados no
 snapshot, e a leitura da pasta inteira devolveu 330.000 linhas a mais.
 
 Há duas formas de exportar, copiar os arquivos vivos ou reescrevê-los, e o esquema dos arquivos
-vivos decide entre elas. Cada arquivo tem o esquema da época em que foi gravado: depois de um
+vivos decide entre elas. Cada arquivo tem o esquema da época em que foi gravado. Depois de um
 `ADD COLUMN`, os arquivos anteriores não têm a coluna, e só os meses reescritos depois passam a
-tê-la (4 de 14 na verificação). O Delta preenche nulo na leitura; fora dele, isso fica a cargo do
-leitor. Leitores por nome preenchem nulo: o Hive por padrão (`parquet.column.index.access=false`),
-o Spark e o DuckDB com `union_by_name`. Leitores posicionais, como o `COPY` do Redshift, não
-preenchem. Sem `union_by_name`, o DuckDB toma o esquema do primeiro arquivo do glob, e as colunas
-que só existem em arquivos posteriores somem em silêncio. Uma mudança de tipo não deixa arquivo
-heterogêneo, porque só acontece por reescrita da tabela inteira. O column mapping deixaria os nomes
-físicos `col-<uuid>` nos arquivos; o projeto não o habilita.
+tê-la (4 de 14 na verificação).
+
+O Delta preenche nulo na leitura. Fora dele, isso fica a cargo do leitor:
+
+- leitores por nome preenchem nulo: o Hive por padrão (`parquet.column.index.access=false`), o
+  Spark e o DuckDB com `union_by_name`;
+- leitores posicionais, como o `COPY` do Redshift, não preenchem;
+- sem `union_by_name`, o DuckDB toma o esquema do primeiro arquivo do glob, e as colunas que só
+  existem em arquivos posteriores somem em silêncio.
+
+Uma mudança de tipo não deixa arquivo heterogêneo, porque só acontece por reescrita da tabela
+inteira. O column mapping deixaria os nomes físicos `col-<uuid>` nos arquivos; o projeto não o
+habilita.
 
 Copiar pelo log é a opção que não lê dados. A lista `get_add_actions()` do snapshot dá o caminho
 relativo de cada arquivo vivo, já no layout Hive `mes=2026-02/part-....parquet`, e o valor da
@@ -2603,13 +2644,14 @@ Comportamentos verificados:
   arquivos. O intervalo somado ao `IN` poda pelo intervalo, e o `EXPLAIN ANALYZE` dessa forma falha
   com `InternalException: ... total_files inconsistent!`, com a consulta rodando (2026-09-23, log
   `FileSystem` do DuckDB). O `delta_scan` lê vetores de exclusão, tipos primitivos, structs e
-  `VARIANT`; expõe a coluna de partição como coluna comum; mostra todas as colunas como anuláveis.
+  `VARIANT`. Ele expõe a coluna de partição como coluna comum e mostra todas as colunas como
+  anuláveis.
 - `delta_scan(uri, version := n)` e `ATTACH ... (VERSION n)` leem versões antigas;
   `delta_scan(...) AT (VERSION => n)` não é aceito. `ATTACH ... (PIN_SNAPSHOT true)` fixa a versão:
   depois de um commit externo, a tabela anexada continuou em 220.076 linhas, e um `delta_scan` novo
   viu 220.081.
 - `INSERT INTO` numa tabela anexada é a única escrita. Ele cria um commit cujo `commitInfo` o
-  delta-rs mostra como `UNKNOWN` e grava `duckdb_<uuid>_0.parquet` na subpasta da partição, com
+  delta-rs mostra como `UNKNOWN`. Ele grava `duckdb_<uuid>_0.parquet` na subpasta da partição, com
   estatísticas na ação `add` e com a coluna de partição dentro do arquivo, ao contrário do delta-rs.
   Um `COPY` do Redshift sobre arquivos dos dois escritores falharia por número de colunas. Por isso
   a biblioteca escreve por um único caminho: o delta-rs, ou `COPY ... TO` mais
@@ -2619,13 +2661,14 @@ Comportamentos verificados:
   dataset Arrow do delta-rs com poda por partição.
 - `COPY (consulta) TO 'uri/mes=2026-09/exec_abc.parquet' (FORMAT parquet, RETURN_STATS)` grava com
   o escritor paralelo do DuckDB e devolve `count`, `file_size_bytes` e `column_statistics` (mapa
-  com `min`, `max`, `null_count` por coluna, nomes entre aspas e valores em texto), que viram a
-  `AddAction` do registro. O arquivo do DuckDB marca todas as colunas como `optional`; a nulidade
-  continua garantida pelo esquema Delta e pela auditoria. Num `DOUBLE` com `NaN`, o `RETURN_STATS`
-  traz o maior número como máximo e `has_nan: true` só quando o `NaN` está no último grupo de
-  linhas do arquivo; o rodapé grava sem mínimo e máximo todo grupo com `NaN`. O infinito sai `inf`.
-  O texto longo sai truncado em 256 caracteres, com o máximo de 255 e o último incrementado, acima
-  do valor real, e o texto multibyte longo sai sem mínimo e máximo (2026-09-23).
+  com `min`, `max`, `null_count` por coluna, nomes entre aspas e valores em texto). Esses valores
+  viram a `AddAction` do registro. O arquivo do DuckDB marca todas as colunas como `optional`; a
+  nulidade continua garantida pelo esquema Delta e pela auditoria.
+- Num `DOUBLE` com `NaN`, o `RETURN_STATS` traz o maior número como máximo e `has_nan: true` só
+  quando o `NaN` está no último grupo de linhas do arquivo. O rodapé grava sem mínimo e máximo todo
+  grupo com `NaN`. O infinito sai `inf`. O texto longo sai truncado em 256 caracteres, com o máximo
+  de 255 e o último incrementado, acima do valor real. O texto multibyte longo sai sem mínimo e
+  máximo (2026-09-23).
 - O secret guarda a chave resolvida no `CREATE SECRET`, e o `delta_scan` lê o log com ela, sem
   renová-la. Numa conexão mais longa que a credencial do contêiner, o primeiro `delta_scan` depois
   da expiração falhou com `DeltaKernel ObjectStoreError (8)`, e o `REFRESH auto` do
@@ -2671,9 +2714,11 @@ A tabela de staging existe porque a coluna de partição não está nos arquivos
 conteúdo deles. A lista de colunas no `COPY` de Parquet funciona (2026-09-21), e a biblioteca a
 passa com as colunas do rodapé de cada grupo de arquivos, um manifesto por lista. A lista não
 fornece o valor da coluna ausente, então a staging fica. O `INSERT` lista as colunas na ordem do
-contrato, com o valor da partição no lugar da coluna. A publicação incremental compara as ações da
-versão publicada com as da pedida e recarrega só os meses que mudaram, numa transação por tabela,
-sem atomicidade entre as tabelas. A versão publicada de cada tabela fica numa tabela de controle
+contrato, com o valor da partição no lugar da coluna.
+
+A publicação incremental compara as ações da versão publicada com as da pedida e recarrega só os
+meses que mudaram. Ela roda numa transação por tabela, sem atomicidade entre as tabelas. A versão
+publicada de cada tabela fica numa tabela de controle
 (`serialize_db_publications(table_name, delta_version, execution_id, published_at)`).
 
 A escrita de volta, quando o sandbox é o Redshift, é um `UNLOAD` dentro da pasta da tabela:
@@ -2725,14 +2770,16 @@ O que as medições sustentam:
 
 - Ler no lugar custa o mesmo que ler Parquet solto: o log e as estatísticas pagam a si mesmos pela
   poda. A ingestão no DuckDB deixa de ser uma cópia obrigatória e vira uma view ou um `ATTACH`.
-- Materializar continua valendo em três casos: tabelas consultadas repetidas vezes na execução (as
-  consultas pontuais foram dez vezes mais rápidas na tabela, e no S3 cada `delta_scan` refaz
-  requisições); joins repetidos com a mesma tabela grande; e um pipeline que precisa de índice ou
-  de ordenação física. A regra prática: `CREATE TABLE AS` com o filtro de meses para as tabelas de
-  fato do pipeline, view para as dimensões e para leituras únicas. A medição no S3, abaixo,
-  confirma a regra: uma consulta pontual por `delta_scan` custa cerca de 0,3 s no S3 e menos de
-  1 ms na tabela materializada, e materializar os 300.000 registros custou o mesmo que uma
-  agregação.
+- Materializar continua valendo em três casos:
+  - tabelas consultadas repetidas vezes na execução (as consultas pontuais foram dez vezes mais
+    rápidas na tabela, e no S3 cada `delta_scan` refaz requisições);
+  - joins repetidos com a mesma tabela grande;
+  - um pipeline que precisa de índice ou de ordenação física.
+
+  A regra prática: `CREATE TABLE AS` com o filtro de meses para as tabelas de fato do pipeline,
+  view para as dimensões e para leituras únicas. A medição no S3, abaixo, confirma a regra. Uma
+  consulta pontual por `delta_scan` custa cerca de 0,3 s no S3 e menos de 1 ms na tabela
+  materializada, e materializar os 300.000 registros custou o mesmo que uma agregação.
 - Um arquivo por mês por tabela basta enquanto o mês couber em um ou dois arquivos de 100 MB a
   1 GB, a faixa que o DuckDB e o Redshift preferem. `optimize.compact(partition_filters=...)` junta
   os arquivos pequenos de um mês que cabem juntos no tamanho alvo (`target_size`, ou a propriedade
@@ -2749,7 +2796,7 @@ O que as medições sustentam:
   ficar curto.
 
 As medições no S3 foram feitas em 2026-09-19, do espaço do SageMaker Unified Studio (4 threads)
-para o bucket do projeto na mesma região, com 300.010 linhas em dois meses, 7,6 MB em três
+para o bucket do projeto na mesma região. Elas usaram 300.010 linhas em dois meses, 7,6 MB em três
 arquivos, deltalake 1.6.4 e DuckDB 1.5.5. Os tempos medem a latência do S3 e o custo de reler o
 log, não CPU:
 
@@ -2773,6 +2820,7 @@ log, não CPU:
 
 Cada `delta_scan` no S3 relê o log antes de ler os dados. É isso que separa os 0,3 s por consulta
 pontual dos 0,065 s do `read_parquet`. `PIN_SNAPSHOT` corta a releitura pela metade, não a elimina.
+
 A ingestão no motor DuckDB fica então em dois modos. A tabela materializada, pela DDL do modelo e
 `INSERT ... BY NAME` com filtro de meses numa transação, serve toda tabela que o pipeline consulta
 mais de uma vez. A view por `delta_scan` serve a leitura única. A medição acima materializou por
@@ -3847,7 +3895,7 @@ As recomendações da documentação para a carga:
   join em `VARCHAR`.
 - Sem chaves nem índices na carga. Eles entram depois, se a integridade exigir.
 - Um comando por lote, a partir de Arrow ou de Parquet. Um laço roda dentro de uma transação.
-- Bancos persistentes usam compressão e podem ser mais rápidos que bancos em memória: a consulta 1
+- Bancos persistentes usam compressão e podem ser mais rápidos que bancos em memória. A consulta 1
   do TPC-H (fator 30) levou 4,22 s num banco em memória sem compressão, 0,55 s com `COMPRESS` e
   0,56 s em arquivo.
 - Uma conexão reutilizada. Abrir e fechar a conexão a cada consulta descarta os caches de dados e
@@ -3862,20 +3910,25 @@ O guia de falta de memória da versão 1.4 separa dois casos: a `OutOfMemoryExce
 (`failed to pin block of size ...`) e o processo morto pelo sistema, com `Killed` no terminal. É
 para o processo morto pelo sistema que o guia pede de 50% a 60%: parte das operações foge do
 gerenciador de buffers e reserva memória além do limite. Os índices ART ficam fora do limite, e
-`list()` e `string_agg()` não transbordam para o disco. A ordenação refeita na versão 1.4 usa o
-layout de páginas que transborda do hash join e da agregação: ela grava os runs ordenados no disco
-página a página e os junta por k-way merge. No DuckDB 1.5.5, o RSS (a memória residente) do
-processo no `COPY` ordenado de 52.654.607 linhas passou do limite em 13% a 21% (2026-09-24).
+`list()` e `string_agg()` não transbordam para o disco.
+
+A ordenação refeita na versão 1.4 usa o layout de páginas que transborda do hash join e da
+agregação. Ela grava os runs ordenados no disco página a página e os junta por k-way merge. No
+DuckDB 1.5.5, o RSS (a memória residente) do processo no `COPY` ordenado de 52.654.607 linhas
+passou do limite em 13% a 21% (2026-09-24).
 
 Os limites entram na abertura da conexão ou por `SET`. A máquina muda de tamanho, então o pacote lê
 os limites do ambiente na abertura, nunca de um valor fixo (instrução do usuário de 2026-09-24).
 `environment_limits()`, de `serialize_db.resources`, dá `threads` igual às CPUs que o processo pode
 usar e `memory_limit` igual a metade da memória que ele ainda pode usar. O motor e as conexões
-DuckDB de `serialize_db.delta` aplicam esses valores. Uma memória lida abaixo de 2 MiB, ou
-negativa, é recusada com `SandboxError`: o DuckDB 1.5.5 não abre com `0MiB` e lê um valor negativo
-como o padrão dele, 80% da memória da máquina (sonda de 2026-10-01). O cgroup é o mecanismo do
-Linux que limita a memória e a CPU de um contêiner. O exemplo rodou num contêiner Linux de 4 vCPUs
-com limite de cgroup de 13,4 GiB (2026-09-24):
+DuckDB de `serialize_db.delta` aplicam esses valores.
+
+Uma memória lida abaixo de 2 MiB, ou negativa, é recusada com `SandboxError`. O DuckDB 1.5.5 não
+abre com `0MiB` e lê um valor negativo como o padrão dele, 80% da memória da máquina (sonda de
+2026-10-01).
+
+O cgroup é o mecanismo do Linux que limita a memória e a CPU de um contêiner. O exemplo rodou num
+contêiner Linux de 4 vCPUs com limite de cgroup de 13,4 GiB (2026-09-24):
 
 ```python
 # Memória, threads e pasta de transbordo definidos na abertura da conexão e conferidos no catálogo.
@@ -3898,16 +3951,19 @@ con.sql("SELECT current_setting('threads'), current_setting('memory_limit')").fe
 
 O `memory_limit` só aceita um valor com unidade: `'60%'` e `'60'` são recusados com
 `Parser Error: Unknown unit for memory` (DuckDB 1.5.5, 2026-09-22). Quem quer uma fração da máquina
-calcula o valor antes. O padrão é 80% da memória que o DuckDB detecta: 14,3 GiB numa máquina que o
-`os.sysconf` do Python lê como 18,0 GiB, e 6,1 GiB dos 7,6 GiB do ambiente alvo. Desde a versão
-1.3 (a PR duckdb/duckdb#16608, de 2025-03-14), a detecção lê o limite de memória do cgroup, em
+calcula o valor antes.
+
+O padrão é 80% da memória que o DuckDB detecta: 14,3 GiB numa máquina que o `os.sysconf` do Python
+lê como 18,0 GiB, e 6,1 GiB dos 7,6 GiB do ambiente alvo. Desde a versão 1.3 (a PR
+duckdb/duckdb#16608, de 2025-03-14), a detecção lê o limite de memória do cgroup, em
 `memory.limit_in_bytes` no v1 e em `memory.max` no v2. O padrão de `threads` lê a cota de CPU,
 `cpu.cfs_quota_us` sobre `cpu.cfs_period_us` ou `cpu.max`, arredondada para cima. A versão 1.1.3
-lia a memória da máquina hospedeira dentro do contêiner (duckdb/duckdb#15080). No contêiner de 4
-vCPUs com limite de cgroup v1 de 14.345.912.320 bytes, o DuckDB 1.5.5 escolheu 10,6 GiB, 80% do
-limite, e 4 threads (2026-09-24). Os 80% supõem o DuckDB sozinho no processo e na máquina: o
-PyArrow, o delta-rs e o código do cliente ficam fora do limite, e um processo com o limite anterior
-ainda aberto segura a memória dele.
+lia a memória da máquina hospedeira dentro do contêiner (duckdb/duckdb#15080).
+
+No contêiner de 4 vCPUs com limite de cgroup v1 de 14.345.912.320 bytes, o DuckDB 1.5.5 escolheu
+10,6 GiB, 80% do limite, e 4 threads (2026-09-24). Os 80% supõem o DuckDB sozinho no processo e na
+máquina. O PyArrow, o delta-rs e o código do cliente ficam fora do limite, e um processo com o
+limite anterior ainda aberto segura a memória dele.
 
 O DuckDB só devolve ao sistema a memória de uma conexão quando ela fecha. Depois de um
 `CREATE TABLE ... AS SELECT ... ORDER BY` de 20.000.000 de linhas de um Parquet local, o RSS do
@@ -3920,13 +3976,17 @@ em memória transborda para `.tmp` no diretório corrente. `max_temp_directory_s
 transbordo; o padrão é 90 % do espaço livre do disco. `8GB` aparece como `7.4 GiB` porque o limite
 é lido em bytes decimais e exibido em unidades binárias.
 
-O `threads` é da instância do banco, não da conexão: `duckdb_settings()` o dá com escopo `GLOBAL`,
-`SET SESSION threads` é recusado (`option "threads" cannot be set locally`), e o valor que uma
-conexão grava é o que as outras leem. O pool de threads vale para todas as conexões e cursores da
-instância. A thread que chama cada conexão também executa a consulta dela, ao lado do pool
-(`external_threads`, 1 por padrão). A tabela mede uma varredura de 100.000.000 de linhas em
-memória, com 11 núcleos (DuckDB 1.5.5, 2026-09-23, melhor de três). Cada linha dá o tempo de uma
-consulta sozinha, e o de duas e de quatro conexões em threads Python distintas, rodando juntas:
+O `threads` é da instância do banco, não da conexão:
+
+- `duckdb_settings()` o dá com escopo `GLOBAL`;
+- `SET SESSION threads` é recusado (`option "threads" cannot be set locally`);
+- o valor que uma conexão grava é o que as outras leem.
+
+O pool de threads vale para todas as conexões e cursores da instância. A thread que chama cada
+conexão também executa a consulta dela, ao lado do pool (`external_threads`, 1 por padrão). A tabela
+mede uma varredura de 100.000.000 de linhas em memória, com 11 núcleos (DuckDB 1.5.5, 2026-09-23,
+melhor de três). Cada linha dá o tempo de uma consulta sozinha, e o de duas e de quatro conexões em
+threads Python distintas, rodando juntas:
 
 | `threads` | Uma | Duas juntas | Quatro juntas |
 | --- | --- | --- | --- |
@@ -4101,13 +4161,15 @@ class AlembicDuckDBImpl(DefaultImpl):
 
 ### Referências
 
-- Documentação do DuckDB, versão 1.5: <https://duckdb.org/docs/current/>. Páginas usadas: formato de
-  armazenamento, vetores, tipos de dados (visão geral, numéricos, texto, JSON), instruções
-  `CREATE TABLE`, `ALTER TABLE`, `DROP`, `COMMENT ON`, `CREATE INDEX`, `CREATE SEQUENCE`, `INSERT`,
-  `UPDATE`, `DELETE`, `MERGE INTO`, transações, concorrência, restrições, índices, compatibilidade
-  com PostgreSQL, guias de performance (esquema, indexação, joins, ajuste de cargas, ambiente,
-  memória, falta de memória), guias do cliente Python (ingestão, conversão, pandas, Arrow, polars,
-  DB-API, tipos) e `COPY`.
+- Documentação do DuckDB, versão 1.5: <https://duckdb.org/docs/current/>. Páginas usadas:
+  - formato de armazenamento, vetores e tipos de dados (visão geral, numéricos, texto, JSON);
+  - instruções `CREATE TABLE`, `ALTER TABLE`, `DROP`, `COMMENT ON`, `CREATE INDEX`,
+    `CREATE SEQUENCE`, `INSERT`, `UPDATE`, `DELETE` e `MERGE INTO`;
+  - transações, concorrência, restrições, índices e compatibilidade com PostgreSQL;
+  - guias de performance (esquema, indexação, joins, ajuste de cargas, ambiente, memória, falta de
+    memória);
+  - guias do cliente Python (ingestão, conversão, pandas, Arrow, polars, DB-API, tipos);
+  - `COPY`.
 - Blog do DuckDB: a gestão de memória (<https://duckdb.org/2024/07/09/memory-management>), a versão
   1.3 com o cache de arquivos externos (<https://duckdb.org/2025/05/21/announcing-duckdb-130>) e a
   ordenação refeita da versão 1.4 (<https://duckdb.org/2025/09/24/sorting-again>).
@@ -4371,13 +4433,15 @@ Os comandos que o Redshift aceita na escrita por datashare, e os que a documenta
 O `COPY` e o `UNLOAD` aceitam `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` e `SESSION_TOKEN` no texto do
 comando, em vez de `IAM_ROLE`. É o que destrava o ambiente alvo: o namespace não tem papel IAM
 associado, então nem um ARN explícito funcionaria. Com as credenciais no comando, quem alcança o
-S3 é a identidade da sessão, a mesma que o `boto3` usa. As credenciais do espaço expiram em cerca
-de uma hora. Por isso a cláusula é montada a cada comando e nunca guardada, e nenhum texto que a
-carregue vai para log, para o relatório da suíte ou para arquivo: `tests/conftest.py` mascara toda
-cláusula de credencial antes de gravar o relatório. O `COPY` desse caminho leu um prefixo de pasta
-Parquet direto, sem manifesto, e converteu `int32` da origem para a coluna `BIGINT` do contrato.
-Em 2026-09-21 leu também um manifesto, e o `UNLOAD` gravou com `PARTITION BY ... MANIFEST VERBOSE`
-pelas mesmas credenciais.
+S3 é a identidade da sessão, a mesma que o `boto3` usa.
+
+As credenciais do espaço expiram em cerca de uma hora. Por isso a cláusula é montada a cada
+comando e nunca guardada. Nenhum texto que a carregue vai para log, para o relatório da suíte ou
+para arquivo: `tests/conftest.py` mascara toda cláusula de credencial antes de gravar o relatório.
+
+O `COPY` desse caminho leu um prefixo de pasta Parquet direto, sem manifesto, e converteu `int32`
+da origem para a coluna `BIGINT` do contrato. Em 2026-09-21 leu também um manifesto, e o `UNLOAD`
+gravou com `PARTITION BY ... MANIFEST VERBOSE` pelas mesmas credenciais.
 
 O que o ambiente alvo respondeu aos três requisitos da escrita por datashare, lido em 2026-09-20
 por `probes/redshift.py`:
@@ -4418,14 +4482,15 @@ da coluna. Os padrões:
 Com `ENCODE AUTO`, o padrão, o banco ajusta a codificação ao longo do tempo.
 
 O processamento é paralelo. O cluster tem um nó líder, que compila cada consulta em código
-executável, e nós de computação divididos em slices, as fatias de memória e de disco entre as
-quais cada nó reparte o trabalho. As linhas de uma tabela são distribuídas entre as slices pelo
-estilo de distribuição (`AUTO`, `EVEN`, `KEY`, `ALL`). Dentro de cada slice, as linhas ficam
-ordenadas pela chave de ordenação. Cada bloco guarda os valores mínimo e máximo da coluna, e um
-predicado por intervalo sobre a chave de ordenação pula os blocos fora do intervalo. Numa tabela
-com cinco anos ordenados por data, um filtro de um mês evita até 98 % dos blocos. Nas consultas, o
-otimizador redistribui linhas entre nós para joins e agregações. Essa redistribuição pode responder
-por parte substancial do custo do plano.
+executável, e nós de computação. Cada nó de computação é dividido em slices, as fatias de memória
+e de disco entre as quais ele reparte o trabalho. As linhas de uma tabela são distribuídas entre
+as slices pelo estilo de distribuição (`AUTO`, `EVEN`, `KEY`, `ALL`).
+
+Dentro de cada slice, as linhas ficam ordenadas pela chave de ordenação. Cada bloco guarda os
+valores mínimo e máximo da coluna, e um predicado por intervalo sobre a chave de ordenação pula os
+blocos fora do intervalo. Numa tabela com cinco anos ordenados por data, um filtro de um mês evita
+até 98 % dos blocos. Nas consultas, o otimizador redistribui linhas entre nós para joins e
+agregações. Essa redistribuição pode responder por parte substancial do custo do plano.
 
 Os segmentos compilados ficam num cache local e num remoto, que sobrevive à reinicialização do
 cluster. Pela documentação atual, a composição roda a consulta nova com lógica já existente
@@ -4441,10 +4506,10 @@ consulta nova que case sintaticamente com uma guardada recebe o resultado sem ro
 - os parâmetros de configuração que afetam o resultado são os mesmos.
 
 Alguns resultados grandes ficam fora do cache. `SET enable_result_cache_for_session TO off` o
-desliga na sessão, e a coluna `result_cache_hit` do `sys_query_history` diz se uma consulta o
-usou. No ambiente alvo, em 2026-10-11, o cache serviu 640 das 720 consultas pequenas de
+desliga na sessão, e a coluna `result_cache_hit` do `sys_query_history` diz se uma consulta o usou.
+No ambiente alvo, em 2026-10-11, o cache serviu 640 das 720 consultas pequenas de
 `probes/operacao/probe_parallel_gain.py`, as das sessões novas também, e só a primeira passada foi
-ao motor; em 2026-10-14, com o `SET` em cada sessão, não serviu nenhuma (`docs/index.md`, seção
+ao motor. Em 2026-10-14, com o `SET` em cada sessão, ele não serviu nenhuma (`docs/index.md`, seção
 "Multithreading"). Uma medição que repete a mesma consulta mede esse cache, a menos que a sessão o
 desligue ou que o texto ou os valores mudem a cada execução.
 
@@ -4565,10 +4630,13 @@ ausentes: o dialeto não os rejeita na compilação. O `VARCHAR(36)` do contrato
 #### DECIMAL com escala fixa
 
 `DECIMAL(precisao, escala)` é o tipo decimal exato, com a escala, o número de casas decimais, fixa
-por coluna. Ele guarda até 38 dígitos. A precisão padrão é 18 e a escala padrão é 0; a escala vai
-de 0 à precisão, até 37. A representação depende da precisão: até 19 dígitos, inteiro de 8 bytes;
-de 20 a 38, inteiro de 16 bytes, que ocupa o dobro em disco e torna as consultas mais lentas. A
-documentação pede que a precisão máxima não seja atribuída sem necessidade. `DECIMAL(18, 2)`, o
+por coluna. Ele guarda até 38 dígitos. A precisão padrão é 18 e a escala padrão é 0. A escala vai
+de 0 à precisão, até 37. A representação depende da precisão:
+
+- até 19 dígitos, inteiro de 8 bytes;
+- de 20 a 38, inteiro de 16 bytes, que ocupa o dobro em disco e torna as consultas mais lentas.
+
+A documentação pede que a precisão máxima não seja atribuída sem necessidade. `DECIMAL(18, 2)`, o
 tipo dos exemplos desta página para valores contábeis (o modelo cliente usa `Double`), fica em
 8 bytes no DuckDB e no Redshift. O `decimal128(18, 2)` do Arrow, que o representa nos arquivos e
 na memória, ocupa 16 bytes por valor.
@@ -4656,16 +4724,20 @@ No contrato ([tabela de mapeamento de tipos][tipos]), a coluna é
 - a carga passa pela staging `VARCHAR(65535)`, e o `INSERT ... SELECT` aplica `JSON_PARSE`;
 - a exportação devolve texto com `JSON_SERIALIZE`.
 
-As leituras no ambiente alvo delimitam o que entra em `SUPER`. O `COPY` de Parquet com a
-coluna em texto numa coluna `SUPER` é recusado sem `SERIALIZETOJSON` (`SUPER column in COPY query
-requires SERIALIZETOJSON option`, ambiente alvo, 2026-09-21), e um documento de 80.901 bytes entrou
-por `INSERT ... JSON_PARSE(%s)` com parâmetro, acima do teto do `VARCHAR`. Com
-`SERIALIZETOJSON`, o mesmo `COPY` recusa a string acima do teto (`1224 String value exceeds the max
-size of 65535 bytes`): um Parquet com o documento em texto não leva um documento acima de 65.535
-bytes a `SUPER`. `COPY ... FORMAT JSON 'auto'` de um arquivo JSON de uma linha, com o documento
-como objeto, carregou os 80.901 bytes (`json_typeof` `object`), lido às 13:35 e às 13:39. O
-contrato fixa o teto de 65.535 bytes por documento, recusado pelo `cast` e contado pela auditoria.
-Os caminhos por JSON ficam para uma tabela que precise de documentos maiores.
+As leituras no ambiente alvo delimitam o que entra em `SUPER`:
+
+- o `COPY` de Parquet com a coluna em texto numa coluna `SUPER` é recusado sem `SERIALIZETOJSON`
+  (`SUPER column in COPY query requires SERIALIZETOJSON option`, ambiente alvo, 2026-09-21);
+- um documento de 80.901 bytes entrou por `INSERT ... JSON_PARSE(%s)` com parâmetro, acima do teto
+  do `VARCHAR`;
+- com `SERIALIZETOJSON`, o mesmo `COPY` recusa a string acima do teto
+  (`1224 String value exceeds the max size of 65535 bytes`): um Parquet com o documento em texto
+  não leva um documento acima de 65.535 bytes a `SUPER`;
+- `COPY ... FORMAT JSON 'auto'` de um arquivo JSON de uma linha, com o documento como objeto,
+  carregou os 80.901 bytes (`json_typeof` `object`), lido às 13:35 e às 13:39.
+
+O contrato fixa o teto de 65.535 bytes por documento, recusado pelo `cast` e contado pela
+auditoria. Os caminhos por JSON ficam para uma tabela que precise de documentos maiores.
 
 ```python
 import sqlalchemy as sa
@@ -4815,9 +4887,9 @@ Regras da referência:
 - Combinações num só comando reduzem o tempo: `ALTER SORTKEY (...), ALTER DISTKEY coluna`.
 
 O SQLAlchemy não tem construto para `ADD COLUMN`. Sem Alembic, a biblioteca monta esse comando como
-texto, com a especificação da coluna por `serialize_db.schema.column_ddl`, a mesma do `CREATE
-TABLE`; o compilador do dialeto também a rende, com `DEFAULT` e
-`ENCODE`, e o Core tem os construtos para restrições e `sa.DDL` para as demais cláusulas:
+texto, com a especificação da coluna por `serialize_db.schema.column_ddl`, a mesma do
+`CREATE TABLE`. O compilador do dialeto também a rende, com `DEFAULT` e `ENCODE`. O Core tem os
+construtos para restrições e `sa.DDL` para as demais cláusulas:
 
 ```python
 import sqlalchemy as sa
@@ -5140,24 +5212,23 @@ execuções de 2026-09-23:
 - o `CREATE TABLE` de um nome que outra transação criou espera o `COMMIT` dela;
 - o `DELETE` das linhas que outra transação confirmada trocou recebe
   `1023 Serializable isolation violation`;
-- o `LOCK` é recusado (`0A000 Operation is not supported
-  through datashares`); e o `UPDATE` condicionado à versão lida espera o `COMMIT` da outra e afeta 0
-  linhas.
+- o `LOCK` é recusado (`0A000 Operation is not supported through datashares`);
+- o `UPDATE` condicionado à versão lida espera o `COMMIT` da outra e afeta 0 linhas.
 
 A publicação lê a linha de controle no início da transação e a grava no fim.
 
 Em 2026-10-10, `probes/operacao/probe_parallel_gain.py` mediu a concorrência na linha de controle.
 Ele leu no `sys_query_history` as 52 gravações da linha de controle de 13 publicações de quatro
-tabelas, em quatro conexões ou uma por vez, e no `svv_transactions`, por uma quinta sessão a cada
-segundo, os locks delas. A espera por lock foi de até 0,132 s, sem fila, e o `PgXenWriteLock` na
-tabela de controle apareceu uma vez como pendente, por um segundo. Os quatro `INSERT` que passaram
-de 3 s levaram de 20,067 s a 21,070 s no planejamento, todos em publicações que criaram as tabelas
-(`.claude/memory/concurrency.md`).
+tabelas, em quatro conexões ou uma por vez. No `svv_transactions`, por uma quinta sessão a cada
+segundo, ele leu os locks delas. A espera por lock foi de até 0,132 s, sem fila, e o
+`PgXenWriteLock` na tabela de controle apareceu uma vez como pendente, por um segundo. Os quatro
+`INSERT` que passaram de 3 s levaram de 20,067 s a 21,070 s no planejamento, todos em publicações
+que criaram as tabelas (`.claude/memory/concurrency.md`).
 
 Às 18:52 do mesmo dia a sonda publicou as quatro tabelas pela própria transação, com a linha de
 controle logo depois do `CREATE TABLE` e antes do `COPY`. A gravação da linha toma um lock de
 escrita na tabela de controle, que a transação segura até o `COMMIT`. As quatro transações se
-serializaram nesse lock, cada `INSERT` esperando o `COMMIT` da anterior, e o `sys_query_history`
+serializaram nesse lock, cada `INSERT` esperando o `COMMIT` da anterior. O `sys_query_history`
 contou a espera como planejamento, de 4,995 s a 16,481 s, com até 0,132 s de espera por lock. Por
 isso a publicação grava a linha por último. Com as tabelas criadas e confirmadas antes da
 transação, nenhum `INSERT` esperou. As três ordens levaram:
@@ -5174,10 +5245,12 @@ três repetições (29,991 s contra 10,042 s e 10,044 s). Os dois `INSERT` da li
 começaram enquanto outra transação segurava o lock levaram 20,237 s e 21,240 s, com 20,060 s e
 21,069 s de planejamento e 0 s de espera por lock. Em 2026-10-14 a mesma ordem esperou de novo
 numa das três repetições (31,141 s), com duas transações esperando no `INSERT`, como nas duas
-repetições lentas da publicação da biblioteca. Nas nove publicações lentas lidas desde 2026-10-10,
-o primeiro `INSERT` a terminar planejou de 20,060 s a 20,073 s, e cada um dos seguintes terminou
-de 0,24 s a 0,72 s depois do `COMMIT` do anterior, como se uma espera fixa de cerca de 20 s no
-servidor os soltasse para o lock um de cada vez. O que dispara essa espera não foi lido
+repetições lentas da publicação da biblioteca.
+
+Nas nove publicações lentas lidas desde 2026-10-10, o primeiro `INSERT` a terminar planejou de
+20,060 s a 20,073 s. Cada um dos seguintes terminou de 0,24 s a 0,72 s depois do `COMMIT` do
+anterior. Os tempos parecem os de uma espera fixa de cerca de 20 s no servidor, que soltaria os
+`INSERT` para o lock um de cada vez. O que dispara essa espera não foi lido
 (`.claude/memory/concurrency.md`).
 
 ### Ingestão de dados
@@ -5264,16 +5337,22 @@ Os métodos do `redshift_connector` para DataFrames não substituem esse fluxo:
 | `cursor.insert_data_bulk(filename, table_name, parameter_indices, column_names, delimiter, batch_size)` | Lê um CSV local e emite `INSERT ... VALUES` com `batch_size` linhas por comando. | Uma ida por lote; o padrão de `batch_size` é 1. |
 | `cursor.executemany(sql, parametros)` | Laço de `execute`. | Uma ida por linha. |
 
-O `awswrangler.redshift.copy` implementa o fluxo Parquet mais `COPY`, com `max_rows_by_file` de
-10.000.000, `mode` `append`, `overwrite` ou `upsert` com tabela temporária, `use_column_names` para
-gerar a lista de colunas, e a criação da tabela a partir do esquema Arrow com `diststyle`,
-`distkey`, `sortstyle`, `sortkey` e `primary_keys`. O `awswrangler.redshift.to_sql` gera `INSERT`
-de várias linhas com `chunksize` de 200, e a própria documentação o indica só abaixo de 1.000
-linhas. O `awswrangler` monta `COPY tabela (colunas) FROM ... FORMAT AS PARQUET` quando
-`use_column_names` é verdadeiro. A documentação do `COPY` descreve a lista de colunas apenas para
-arquivos planos, e o ambiente alvo a aceitou com Parquet em 2026-09-21 (tabela "Regras do COPY
-para Parquet"). O driver ADBC para Redshift (versão 1.7.0, 2026-09-09) faz ingestão em bloco e
-leitura em Arrow, e merece um benchmark contra o fluxo acima.
+O `awswrangler.redshift.copy` implementa o fluxo Parquet mais `COPY`, com:
+
+- `max_rows_by_file` de 10.000.000;
+- `mode` `append`, `overwrite` ou `upsert` com tabela temporária;
+- `use_column_names` para gerar a lista de colunas;
+- a criação da tabela a partir do esquema Arrow com `diststyle`, `distkey`, `sortstyle`, `sortkey`
+  e `primary_keys`.
+
+O `awswrangler.redshift.to_sql` gera `INSERT` de várias linhas com `chunksize` de 200, e a própria
+documentação o indica só abaixo de 1.000 linhas. O `awswrangler` monta
+`COPY tabela (colunas) FROM ... FORMAT AS PARQUET` quando `use_column_names` é verdadeiro. A
+documentação do `COPY` descreve a lista de colunas apenas para arquivos planos, e o ambiente alvo
+a aceitou com Parquet em 2026-09-21 (tabela "Regras do COPY para Parquet").
+
+O driver ADBC para Redshift (versão 1.7.0, 2026-09-09) faz ingestão em bloco e leitura em Arrow, e
+merece um benchmark contra o fluxo acima.
 
 #### Regras do COPY para Parquet
 
@@ -5407,8 +5486,8 @@ O `UNLOAD` do projeto grava uma partição por comando:
 O `SELECT` lista as colunas na ordem do modelo, com o JSON serializado em texto por
 `JSON_SERIALIZE`, e `ORDER BY` pela chave de ordenação. A biblioteca confere o manifesto do
 `UNLOAD` e o rodapé de cada arquivo, o bloco de metadados no fim de um Parquet, antes de
-registrá-los no log do Delta, e relê a versão depois (seção "O manifesto entre o log do Delta e o
-Redshift"). `CLEANPATH` não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo
+registrá-los no log do Delta. Depois ela relê a versão (seção "O manifesto entre o log do Delta e
+o Redshift"). `CLEANPATH` não é usado: arquivos de execuções abortadas ficam fora do log e saem pelo
 `vacuum`.
 
 A documentação do `UNLOAD` não informa os tipos físicos Parquet, a obrigatoriedade das colunas nem
@@ -5429,7 +5508,7 @@ Toda coluna sai `optional`, inclusive as declaradas `NOT NULL` na tabela de orig
 Delta vem do esquema da tabela, não dos arquivos. As estatísticas de mínimo e máximo estão
 presentes, e por isso vale preencher `minValues` e `maxValues` na `AddAction`. Num grupo de linhas
 com `NaN`, o mínimo e o máximo do `DOUBLE PRECISION` deixam o `NaN` de fora, como no rodapé do
-pyarrow, e o leitor Parquet do DuckDB poda o grupo pelo máximo e perde a linha. Com os infinitos,
+pyarrow. O leitor Parquet do DuckDB poda o grupo pelo máximo e perde a linha. Com os infinitos,
 o rodapé os traz (2026-09-23, [issue #59](https://github.com/felipenoris/serialize-db/issues/59)).
 
 Os dois tipos físicos que divergem do resto do projeto:
@@ -5454,12 +5533,19 @@ em série num arquivo só e respeita o `ORDER BY`, ou uma compactação posterio
 O `UNLOAD` em paralelo do `SELECT` da exportação, sem `PARTITION BY` e com `ORDER BY` pela chave
 de ordenação, gravou um arquivo só de 1.000.000 a 33.239.719 linhas de `cad_lancamentos` (17,3 MB
 a 559,5 MB), no tempo do `PARALLEL OFF`. A razão entre o tempo em paralelo e o do `PARALLEL OFF`
-foi de 0,98 a 0,99 em 2026-10-05, às 05:29 de 2026-10-09 e em 2026-10-10, de 0,98 a 1,01 em
-2026-10-07 e de 0,97 a 1,00 às 21:56 de 2026-10-09. A medição foi sobre a tabela do sandbox, em
-`DISTSTYLE AUTO`, e sobre cópias dela por `CREATE TABLE AS ... LIMIT`. A leitura não separa o
-efeito do `ORDER BY`, do `PARTITION BY` e da distribuição. O `UNLOAD` da exportação da biblioteca
-grava em série, num arquivo só (`PARALLEL OFF`), a partição de até 5.000.000 linhas, contadas
-antes no sandbox, e em paralelo acima disso (`_PARALLEL_OFF_ROWS`, `serialize_db.engine.redshift`).
+foi:
+
+- de 0,98 a 0,99 em 2026-10-05, às 05:29 de 2026-10-09 e em 2026-10-10;
+- de 0,98 a 1,01 em 2026-10-07;
+- de 0,97 a 1,00 às 21:56 de 2026-10-09.
+
+A medição foi sobre a tabela do sandbox, em `DISTSTYLE AUTO`, e sobre cópias dela por
+`CREATE TABLE AS ... LIMIT`. A leitura não separa o efeito do `ORDER BY`, do `PARTITION BY` e da
+distribuição.
+
+O `UNLOAD` da exportação da biblioteca grava em série, num arquivo só (`PARALLEL OFF`), a partição
+de até 5.000.000 linhas, contadas antes no sandbox, e em paralelo acima disso
+(`_PARALLEL_OFF_ROWS`, `serialize_db.engine.redshift`).
 
 O `UNLOAD` lê tabelas do sandbox no banco local, fora das regras de escrita por datashare. Sem
 acesso do Redshift ao S3, a exportação lê o mês em Arrow pelo driver ADBC e grava o Parquet com o
@@ -5469,13 +5555,16 @@ de volta num DataFrame; `unload_to_files` só descarrega.
 Com o Delta como fonte da verdade ([Delta Lake](#delta-lake)), o `UNLOAD` da biblioteca grava uma
 partição por comando, sem `PARTITION BY`, num prefixo novo por chamada dentro da pasta
 `<coluna>=<valor>/` da tabela. Ele registra os arquivos no log do Delta depois de conferir o
-manifesto verboso (`RedshiftEngine.export_partition`). Sob `PARTITION BY`, o `schema.elements`
-listou também a coluna de partição, que a cláusula tira dos arquivos (`mes` como
-`character varying` de `max_length` 7 na suíte de 2026-09-21). Sem a cláusula, como a biblioteca
-grava, ele lista só as colunas do `select`, e essa é a lista esperada da conferência de
-`register_files`. Uma amostra do manifesto, reduzida aos campos que a biblioteca lê, no leiaute
-que a documentação descreve (URL, `content_length` e `record_count` por entrada, `schema.elements`
-com nome e tipo, total em `meta`):
+manifesto verboso (`RedshiftEngine.export_partition`).
+
+Sob `PARTITION BY`, o `schema.elements` listou também a coluna de partição, que a cláusula tira
+dos arquivos (`mes` como `character varying` de `max_length` 7 na suíte de 2026-09-21). Sem a
+cláusula, como a biblioteca grava, ele lista só as colunas do `select`, e essa é a lista esperada
+da conferência de `register_files`.
+
+A amostra abaixo é um manifesto reduzido aos campos que a biblioteca lê, no leiaute que a
+documentação descreve (URL, `content_length` e `record_count` por entrada, `schema.elements` com
+nome e tipo, total em `meta`):
 
 ```json
 {
@@ -5664,21 +5753,24 @@ na partição com `Double` não finito, cujo rodapé do `UNLOAD` deixa o `NaN` f
   não vale para Parquet). `RAW` nas colunas de chave de ordenação, para que a poda por blocos não
   fique mais lenta que a leitura das demais colunas.
 - Evitar `DECIMAL` acima de 19 dígitos e `VARCHAR` maiores que o necessário. Os `DECIMAL` de 128
-  bits ocupam o dobro em disco e tornam as consultas mais lentas, e a referência do `CREATE TABLE`
+  bits ocupam o dobro em disco e tornam as consultas mais lentas. A referência do `CREATE TABLE`
   alerta para o limite de largura de linha nos resultados intermediários das cargas e das
   consultas.
 - Manutenção fora do horário de carga: `VACUUM` e `ALTER TABLE` de chaves não rodam juntos.
 
 #### Organização das tabelas para filtros por chave e joins
 
-**Estilos de distribuição.** O estilo de distribuição decide em que slice cada linha fica. `AUTO`
-(padrão) começa com `ALL` para tabelas pequenas, passa a `KEY` pela chave primária quando a tabela
-cresce e a `EVEN` quando nenhuma coluna serve. A documentação recomenda `AUTO`. `EVEN` distribui
-em rodízio e serve a tabelas que não participam de joins. `KEY` coloca as linhas com o mesmo valor
-da coluna `DISTKEY` na mesma slice, o que colocaliza joins entre tabelas distribuídas pela mesma
-coluna. `ALL` copia a tabela inteira para todos os nós, multiplica o armazenamento e encarece as
-cargas. Ele serve a tabelas de dimensão pouco alteradas que não podem ser colocalizadas. Para
-tabelas pequenas o ganho é insignificante, porque redistribuí-las numa consulta custa pouco.
+**Estilos de distribuição.** O estilo de distribuição decide em que slice cada linha fica. Os
+estilos são estes:
+
+- `AUTO` (padrão) começa com `ALL` para tabelas pequenas, passa a `KEY` pela chave primária quando
+  a tabela cresce e a `EVEN` quando nenhuma coluna serve. A documentação recomenda `AUTO`.
+- `EVEN` distribui em rodízio e serve a tabelas que não participam de joins.
+- `KEY` coloca as linhas com o mesmo valor da coluna `DISTKEY` na mesma slice, o que colocaliza
+  joins entre tabelas distribuídas pela mesma coluna.
+- `ALL` copia a tabela inteira para todos os nós, multiplica o armazenamento e encarece as cargas.
+  Ele serve a tabelas de dimensão pouco alteradas que não podem ser colocalizadas. Para tabelas
+  pequenas o ganho é insignificante, porque redistribuí-las numa consulta custa pouco.
 
 **Escolha da chave de distribuição.** Distribuir a tabela fato e a maior dimensão pela coluna do
 join entre elas (`DISTKEY` na chave primária da dimensão e na chave estrangeira do fato). Só um
@@ -5688,11 +5780,15 @@ slices. Para a tabela `operacoes`, `id_cliente` colocaliza o join com a tabela d
 agrupamentos por cliente; `data_ref` seria uma chave ruim.
 
 **Chaves de ordenação.** A chave de ordenação decide a ordem física das linhas dentro de cada
-slice. A chave compound ordena pelas colunas na ordem declarada e serve a filtros por prefixo, a
-`GROUP BY` e a merge joins. O benefício cai quando as consultas usam só as colunas secundárias. A
-chave interleaved dá peso igual a cada coluna (até 8) e serve a filtros por qualquer subconjunto.
-Ela custa mais na carga e no `VACUUM REINDEX`, e não deve incluir colunas monotônicas. A
-documentação recomenda criar as tabelas com `SORTKEY AUTO` e, ao escolher a chave, compound para
+slice. Os tipos de chave são estes:
+
+- A chave compound ordena pelas colunas na ordem declarada e serve a filtros por prefixo, a
+  `GROUP BY` e a merge joins. O benefício cai quando as consultas usam só as colunas secundárias.
+- A chave interleaved dá peso igual a cada coluna (até 8) e serve a filtros por qualquer
+  subconjunto. Ela custa mais na carga e no `VACUUM REINDEX`, e não deve incluir colunas
+  monotônicas.
+
+A documentação recomenda criar as tabelas com `SORTKEY AUTO` e, ao escolher a chave, compound para
 tabelas atualizadas regularmente com `INSERT`, `UPDATE` ou `DELETE`. Com dados recentes
 consultados com frequência, a coluna de tempo lidera a chave. Com joins frequentes, a coluna do
 join como chave de ordenação e de distribuição habilita o sort merge join sem fase de ordenação.
@@ -5737,11 +5833,13 @@ seguem sem `DISTKEY`.
 O ajuste de um banco relacional de linha passa por índices, transações curtas e atualizações
 pontuais. No Redshift, ele passa pela distribuição e pela ordenação física, pela codificação e
 pelo tamanho dos lotes. As chaves declaradas não protegem os dados, mas mudam os planos. A
-integridade é responsabilidade da carga. As escritas concorrentes seguem snapshot isolation por
-padrão ou o nível serializável, que aborta a segunda transação conflitante. Os dois favorecem um
-escritor por tabela. Os comandos têm limite de 16 MB, o que exclui `INSERT` gigantes. O custo de
-`UPDATE` e `DELETE` inclui a reordenação e a recuperação de espaço posteriores. Esse custo é o
-motivo para substituir partições por período em vez de alterá-las.
+integridade é responsabilidade da carga.
+
+As escritas concorrentes seguem snapshot isolation por padrão ou o nível serializável, que aborta a
+segunda transação conflitante. Os dois favorecem um escritor por tabela. Os comandos têm limite de
+16 MB, o que exclui `INSERT` gigantes. O custo de `UPDATE` e `DELETE` inclui a reordenação e a
+recuperação de espaço posteriores. Esse custo é o motivo para substituir partições por período em
+vez de alterá-las.
 
 ### Suporte a SQLAlchemy
 
@@ -5938,16 +6036,21 @@ linha do `redshift_connector`.
 ### Referências
 
 - Guia do desenvolvedor do Amazon Redshift: <https://docs.aws.amazon.com/redshift/latest/dg/>.
-  Páginas usadas: armazenamento colunar, Redshift e PostgreSQL (recursos implementados de outra
-  forma, recursos e tipos não suportados), tipos de dados (numéricos, caracteres, `SUPER`, dados
-  semiestruturados e limites), `CREATE TABLE`, `CREATE TABLE AS`, `ALTER TABLE`, `DROP TABLE`,
-  `COMMENT`, restrições, chaves de ordenação e distribuição, `SELECT`, `INSERT`, `UPDATE`, `DELETE`,
-  `MERGE`, `TRUNCATE`, tabelas de staging, carga de dados e boas práticas, `COPY`, `UNLOAD`,
-  `VACUUM`, `ANALYZE`, codificações de compressão, otimização automática de tabelas, planejamento e
-  desempenho de consultas, o cache de resultados e `enable_result_cache_for_session`, `EXPLAIN`,
-  isolamento e escritas concorrentes, os exemplos de escrita concorrente, os erros de isolamento,
-  `LOCK`, os comandos aceitos e recusados pela escrita por datashare, `PG_LAST_COPY_COUNT`,
-  `STL_LOAD_ERRORS` e `SYS_LOAD_ERROR_DETAIL`.
+  Páginas usadas:
+  - armazenamento colunar;
+  - Redshift e PostgreSQL (recursos implementados de outra forma, recursos e tipos não suportados);
+  - tipos de dados (numéricos, caracteres, `SUPER`, dados semiestruturados e limites);
+  - `CREATE TABLE`, `CREATE TABLE AS`, `ALTER TABLE`, `DROP TABLE`, `COMMENT`, restrições, chaves
+    de ordenação e distribuição;
+  - `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `TRUNCATE` e tabelas de staging;
+  - carga de dados e boas práticas, `COPY`, `UNLOAD`, `VACUUM`, `ANALYZE`, codificações de
+    compressão e otimização automática de tabelas;
+  - planejamento e desempenho de consultas, o cache de resultados e
+    `enable_result_cache_for_session`, `EXPLAIN`;
+  - isolamento e escritas concorrentes, os exemplos de escrita concorrente, os erros de
+    isolamento, `LOCK`;
+  - os comandos aceitos e recusados pela escrita por datashare;
+  - `PG_LAST_COPY_COUNT`, `STL_LOAD_ERRORS` e `SYS_LOAD_ERROR_DETAIL`.
 - Guia de gerenciamento do Amazon Redshift, conector Python e Data API:
   <https://docs.aws.amazon.com/redshift/latest/mgmt/>.
 - Repositório do `redshift_connector`: <https://github.com/aws/amazon-redshift-python-driver>.
@@ -5967,13 +6070,17 @@ bancos. Ele tem duas partes:
 - O ORM: as classes mapeadas sobre as tabelas e a `Session`.
 
 Os modelos ORM são o contrato de esquema do projeto: as tabelas que o cliente declara e que
-`serialize_db.schema.check_models` confere. Deles a biblioteca deriva o DDL do DuckDB e do
-Redshift (os comandos que criam as tabelas), o esquema Arrow dos arquivos Parquet e as
-auditorias. Esta seção resume os conceitos que a biblioteca usa, as opções de customização e o
-comportamento com Redshift, DuckDB e Parquet. A seção
+`serialize_db.schema.check_models` confere. Deles a biblioteca deriva:
+
+- o DDL do DuckDB e do Redshift (os comandos que criam as tabelas);
+- o esquema Arrow dos arquivos Parquet;
+- as auditorias.
+
+Esta seção resume os conceitos que a biblioteca usa, as opções de customização e o comportamento
+com Redshift, DuckDB e Parquet. A seção
 [Papel do SQLAlchemy na biblioteca](#papel-do-sqlalchemy-na-biblioteca) registra o que cada parte
 entrega ao projeto e os dois caminhos de execução. O caminho padrão é a compilação pelo dialeto em
-tempo de execução; o dialeto é o componente do SQLAlchemy que traduz cada comando para a sintaxe
+tempo de execução. O dialeto é o componente do SQLAlchemy que traduz cada comando para a sintaxe
 de um banco. O texto SQL gerado é a opção de migração para fora do SQLAlchemy.
 
 As afirmações vêm da documentação oficial da versão 2.0, consultada em 2026-09-18. Os exemplos
@@ -6097,8 +6204,8 @@ estrangeira.
 
 A política de restrições da biblioteca dispensa a cláusula. No sandbox as chaves estrangeiras
 ficam de fora. A auditoria, as verificações do contrato sobre uma tabela do sandbox antes da
-publicação, confere a integridade referencial sob pedido (`foreign_keys=True`), com a tabela
-referenciada ingerida na versão fixada, a versão da tabela Delta que a execução leu na abertura.
+publicação, confere a integridade referencial sob pedido (`foreign_keys=True`). A tabela
+referenciada é ingerida na versão fixada, a versão da tabela Delta que a execução leu na abertura.
 Essa é a verificação adiada, feita pelo próprio pipeline. No Redshift só a tabela publicada
 declara chave, a `PRIMARY KEY` informativa de `_published_ddl`, sem `deferrable`; o sandbox não
 declara nenhuma.
@@ -7410,13 +7517,14 @@ exemplo foi compilado, não executado num cluster.
 
 ### Referências
 
-- Documentação do SQLAlchemy 2.0: <https://docs.sqlalchemy.org/en/20/>. Páginas usadas: tutorial
-  unificado (engine, transações, metadata, insert, select, update, manipulação de dados no ORM),
-  `MetaData` e `Table`, reflexão, DDL, restrições e índices, defaults e `Identity`, tipos e tipos
-  customizados, extensão de compilação, conexões e `insertmanyvalues`, eventos, tabelas
-  declarativas, configuração e estilos de mapeamento, dataclasses, guia de consultas do ORM
-  (`INSERT`, `UPDATE`, `DELETE`), técnicas de persistência, `Session`, FAQ de performance e a lista
-  de dialetos.
+- Documentação do SQLAlchemy 2.0: <https://docs.sqlalchemy.org/en/20/>. Páginas usadas:
+  - tutorial unificado (engine, transações, metadata, insert, select, update, manipulação de dados
+    no ORM);
+  - `MetaData` e `Table`, reflexão, DDL, restrições e índices, defaults e `Identity`;
+  - tipos e tipos customizados, extensão de compilação, conexões e `insertmanyvalues`, eventos;
+  - tabelas declarativas, configuração e estilos de mapeamento, dataclasses;
+  - guia de consultas do ORM (`INSERT`, `UPDATE`, `DELETE`), técnicas de persistência, `Session`;
+  - FAQ de performance e a lista de dialetos.
 - Dialeto do Redshift: <https://github.com/sqlalchemy-redshift/sqlalchemy-redshift> e
   <https://sqlalchemy-redshift.readthedocs.io/en/latest/>.
 - Dialeto do DuckDB: <https://github.com/Mause/duckdb_engine>.
