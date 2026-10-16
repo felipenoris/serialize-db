@@ -1177,6 +1177,10 @@ que o template do pdoc 16.0.0 carrega; a 12.2.0, de 2026-10-13, a mais nova), o 
 <https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs> e os temas em
 <https://mermaid.js.org/config/theming.html> (o `dark`, para o modo escuro).
 
+As cores do aviso do Bootstrap 5.3.3 no modo escuro, lidas em 2026-10-16 para a caixa
+`> [!WARNING]` de `docs/theme/custom.css` (texto `#ffda6a`, fundo `#332701`, borda `#997404`):
+<https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.css>.
+
 ## Delta Lake
 
 Documentação do delta-rs e repositórios:
