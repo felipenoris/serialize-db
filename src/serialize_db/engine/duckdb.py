@@ -1194,9 +1194,9 @@ class DuckDBEngine:
             valor fora da regra da partição.
         :raises duckdb.Error: com ``materialize=True``, um valor do Delta que o tipo ou o
             ``NOT NULL`` do contrato recusa, o JSON malformado incluído, ou uma coluna da versão
-            que o modelo não tem, que o ``INSERT ... BY NAME`` recusa (``BinderException``); a
+            que o modelo não tem, que o ``INSERT ... BY NAME`` recusa (``BinderException``). A
             transação é desfeita, e o nome fica livre. Também o ``BEGIN`` recusado dentro de uma
-            transação que o cliente abriu em ``session()``; nesse caso o ``ROLLBACK`` desfaz a
+            transação que o cliente abriu em ``session()``. Nesse caso, o ``ROLLBACK`` desfaz a
             transação do cliente.
         """
         if version is None:
@@ -1282,7 +1282,7 @@ class DuckDBEngine:
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com cada parâmetro
-            marcado como ``:nome``; o texto cita as tabelas pelo nome do modelo.
+            marcado como ``:nome``. O texto cita as tabelas pelo nome do modelo.
         :param params: os valores dos parâmetros, por nome, para os ``bindparam`` sem valor do
             statement ou para os marcadores do texto.
         :return: a tabela do resultado; um comando sem resultado devolve a tabela ``Count`` ou
@@ -1313,7 +1313,7 @@ class DuckDBEngine:
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com cada parâmetro
-            marcado como ``:nome``; o texto cita as tabelas pelo nome do modelo.
+            marcado como ``:nome``. O texto cita as tabelas pelo nome do modelo.
         :param params: os valores dos parâmetros, por nome, para os ``bindparam`` sem valor do
             statement ou para os marcadores do texto.
         :param batch_size: o máximo de linhas de cada lote, passado ao leitor Arrow do DuckDB
@@ -1372,9 +1372,9 @@ class DuckDBEngine:
         ``close``.
 
         A tabela vem do ``ingest`` com ``materialize=True`` ou de ``create_table``. Dois appenders
-        na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas: em sessões de
+        na mesma tabela, ao mesmo tempo, entram os dois com todas as suas linhas. Em sessões de
         ``new_session()``, os dois ``INSERT ... BY NAME`` rodam juntos, porque um acréscimo do
-        DuckDB não conflita com outro; na sessão principal, um ``close`` espera o outro sob o
+        DuckDB não conflita com outro. Na sessão principal, um ``close`` espera o outro sob o
         lock. Um appender e um ``UPDATE`` das linhas que a tabela já tinha, ao mesmo tempo,
         também entram os dois.
 

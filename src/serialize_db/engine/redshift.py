@@ -22,8 +22,8 @@ As primitivas:
 
 - ``ingest`` carrega as partições pedidas da versão fixada em ``exec_<id>_<tabela>``, cada
   partição numa transação. Os arquivos entram por um ``COPY ... MANIFEST`` por lista de colunas dos
-  arquivos, com a lista, numa staging, a tabela intermediária da carga, sem a coluna de partição;
-  um ``INSERT`` leva a staging à tabela com o valor da partição.
+  arquivos, com a lista, numa staging, a tabela intermediária da carga, sem a coluna de partição.
+  Um ``INSERT`` leva a staging à tabela com o valor da partição.
 - ``pinned_delta`` carrega a versão fixada em ``exec_<id>_<tabela>_versao_<versão>`` e a devolve
   como origem de consulta.
 - ``stream`` roda ``UNLOAD ... PARALLEL OFF`` para ``stream/<uuid>/`` sob o ``staging_prefix``
@@ -1090,7 +1090,7 @@ class RedshiftAppender:
 
     ``close`` grava ao lado do arquivo um manifesto com ele como a única entrada, obrigatória. Em
     seguida roda, sob o lock e numa transação, o ``COPY ... MANIFEST`` na tabela, com a lista das
-    colunas do arquivo; quando a tabela tem coluna JSON, o ``COPY`` passa por uma staging
+    colunas do arquivo. Quando a tabela tem coluna JSON, o ``COPY`` passa por uma staging
     temporária e um ``JSON_PARSE``. A coluna anulável que o lote não trouxe fica nula. A coluna
     ``NOT NULL`` ausente faz a carga falhar (no ambiente alvo em 2026-10-06, o ``COPY`` direto com
     ``42601`` e o ``INSERT`` da staging com ``XX000``). O arquivo ausente faz o ``COPY`` falhar. A
@@ -1427,10 +1427,10 @@ class RedshiftEngine:
 
         O ``append``, o ``appender``, o ``ingest`` e o ``pinned_delta`` abrem a sua própria
         transação. Por isso eles recusam a sessão numa transação que o cliente abriu no bloco,
-        lida no ``in_transaction`` do driver, antes de qualquer comando: o servidor aceitaria o
-        ``BEGIN`` deles sem erro nem aviso, e o ``COMMIT`` deles confirmaria também o que o cliente
-        fez antes (leitura de 2026-10-09). A transação do cliente segue aberta, para o ``COMMIT``
-        ou o ``ROLLBACK`` dele.
+        lida no ``in_transaction`` do driver, antes de qualquer comando. Sem a recusa, o servidor
+        aceitaria o ``BEGIN`` deles sem erro nem aviso, e o ``COMMIT`` deles confirmaria também o
+        que o cliente fez antes (leitura de 2026-10-09). A transação do cliente segue aberta, para
+        o ``COMMIT`` ou o ``ROLLBACK`` dele.
 
         Exemplo:
 
@@ -1564,8 +1564,8 @@ class RedshiftEngine:
         informado), e o comando é repetido. O motor lê a queda em dois erros: no
         ``InterfaceError`` do driver, que vem da leitura do socket fechado, e no ``OSError`` do
         socket, que o driver deixa sair. Depois do ``COPY`` derrubado de um ``ingest``, o envio do
-        ``DROP`` da staging recebeu ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09);
-        com a conversão do ``OSError``, o ``DROP`` reabriu a conexão nas 8 rodadas de 2026-10-10,
+        ``DROP`` da staging recebeu ``BrokenPipeError`` em 3 de 4 rodadas (leitura de 2026-10-09).
+        Com a conversão do ``OSError``, o ``DROP`` reabriu a conexão nas 8 rodadas de 2026-10-10,
         nas 4 de 2026-10-11 e nas 4 de 2026-10-14.
 
         A reconexão perde a tabela temporária que o pipeline tenha criado na sessão, e o log
@@ -1822,14 +1822,15 @@ class RedshiftEngine:
         nome do modelo: a carga na tabela ``exec_<id>_<tabela>`` do esquema.
 
         A versão fixada é a versão da tabela Delta que a execução lê na abertura e usa até o fim.
-        Cada partição entra numa transação. Os arquivos dela, agrupados pela lista de colunas do
-        rodapé, o metadado no fim de cada arquivo Parquet, entram por um
-        ``COPY ... MANIFEST FILLRECORD`` por grupo, com essa lista, numa staging sem a coluna de
-        partição; um ``INSERT`` leva a staging à tabela com o valor da partição. O ``COPY`` lê os
-        arquivos da versão na pasta da tabela Delta, listados nos manifestos que o motor grava sob
-        o ``staging_prefix``. Um commit na tabela depois da abertura não muda o que foi carregado.
-        A transação de cada partição deixa a queda da conexão subir sem a repetição de
-        ``execute``, que carregaria a partição duas vezes.
+        Cada partição entra numa transação. Os arquivos dela são agrupados pela lista de colunas
+        do rodapé, o metadado no fim de cada arquivo Parquet. Cada grupo entra por um
+        ``COPY ... MANIFEST FILLRECORD``, com essa lista, numa staging sem a coluna de partição.
+        Um ``INSERT`` leva a staging à tabela com o valor da partição.
+
+        O ``COPY`` lê os arquivos da versão na pasta da tabela Delta, listados nos manifestos que
+        o motor grava sob o ``staging_prefix``. Um commit na tabela depois da abertura não muda o
+        que foi carregado. A transação de cada partição deixa a queda da conexão subir sem a
+        repetição de ``execute``, que carregaria a partição duas vezes.
 
         Exemplo:
 
@@ -1848,15 +1849,15 @@ class RedshiftEngine:
             tabela é sempre carregada.
         :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
             de qualquer comando; o nome ocupado no sandbox, ou a tabela que não existe no Delta, sem
-            versão (``version=None``); e, sem ``iam_role``, a sessão ``boto3`` sem credenciais para
-            o ``COPY``.
+            versão (``version=None``). Sem ``iam_role``, a sessão ``boto3`` sem credenciais para o
+            ``COPY``.
         :raises serialize_db.errors.ContractError: ``partitions`` numa tabela sem partição, ou um
             valor fora da regra da partição.
         :raises redshift_connector.Error: o ``COPY`` recusado por uma coluna da versão que o
             modelo não tem, porque a lista de colunas do rodapé a nomeia e a staging, criada do
-            modelo, não a tem; o modelo tem de acompanhar a tabela.
+            modelo, não a tem. O modelo tem de acompanhar a tabela.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação de uma
-            partição, que o servidor desfaz; a tabela fica criada, sem essa partição e sem as
+            partição, que o servidor desfaz. A tabela fica criada, sem essa partição e sem as
             seguintes, e a staging sai pelo ``DROP`` do fim, que reabre a conexão.
         """
         self._refuse_inside_transaction(table.name)
@@ -1923,10 +1924,10 @@ class RedshiftEngine:
         :return: o ``FromClause`` com as colunas do contrato, para os statements Core, sobre a
             staging.
         :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
-            de qualquer comando; numa tabela que ainda não existe, sem versão (``version=None``); e,
-            sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
+            de qualquer comando; numa tabela que ainda não existe, sem versão (``version=None``).
+            Sem ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação de uma
-            partição da carga, que o servidor desfaz; a staging fica criada, sem essa partição e
+            partição da carga, que o servidor desfaz. A staging fica criada, sem essa partição e
             sem as seguintes, até o ``cleanup``.
         """
         self._refuse_inside_transaction(table.name)
@@ -1965,7 +1966,7 @@ class RedshiftEngine:
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com cada parâmetro
-            marcado como ``:nome``; o sentinela ``{prefix}`` do texto vira o prefixo do motor
+            marcado como ``:nome``. O sentinela ``{prefix}`` do texto vira o prefixo do motor
             (``prefix``).
         :param params: os valores dos parâmetros, por nome, para os ``bindparam`` sem valor do
             statement ou para os marcadores do texto.
@@ -2049,7 +2050,7 @@ class RedshiftEngine:
 
         :param statement_or_sql: um statement Core sobre as tabelas do modelo, que o motor
             compila para o sandbox, ou um texto pronto no SQL do motor, com cada parâmetro
-            marcado como ``:nome``; o sentinela ``{prefix}`` do texto vira o prefixo do motor
+            marcado como ``:nome``. O sentinela ``{prefix}`` do texto vira o prefixo do motor
             (``prefix``).
         :param params: os valores dos parâmetros, por nome, para os ``bindparam`` sem valor do
             statement ou para os marcadores do texto. Os valores do cliente entram como literais,
@@ -2110,8 +2111,8 @@ class RedshiftEngine:
 
         A tabela vem do ``ingest`` ou de ``create_table``. No Redshift, o ``close`` os carrega por
         ``COPY``. Dois appenders na mesma tabela, ao mesmo tempo, entram os dois com todas as suas
-        linhas: em sessões de ``new_session()``, cada ``COPY`` roda na sua conexão, e o Redshift
-        grava um depois do outro na tabela; na sessão principal, um ``close`` espera o outro sob o
+        linhas. Em sessões de ``new_session()``, cada ``COPY`` roda na sua conexão, e o Redshift
+        grava um depois do outro na tabela. Na sessão principal, um ``close`` espera o outro sob o
         lock. Sob o isolamento de snapshot, o que a escrita por datashare exige, um appender e um
         ``UPDATE`` das linhas que a tabela já tinha, ao mesmo tempo, também entram os dois.
 
@@ -2128,11 +2129,11 @@ class RedshiftEngine:
         :return: o ``serialize_db.engine.Appender`` da tabela, que guarda os lotes num Parquet do
             ``staging/`` até o ``close`` e os carrega por ``COPY ... MANIFEST``.
         :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
-            de qualquer comando; a tabela que não existe no sandbox; ou, no ``close``, sem
+            de qualquer comando; a tabela que não existe no sandbox. No ``close``, sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY``.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação do
             ``close``, o ``COPY`` e o ``INSERT`` da staging, que o servidor desfaz, ou no
-            ``COMMIT`` dela, cujo resultado fica desconhecido; o Parquet e o manifesto do
+            ``COMMIT`` dela, cujo resultado fica desconhecido. O Parquet e o manifesto do
             ``staging/`` saem no ``finally``.
         """
         self._refuse_inside_transaction(table.name)
@@ -2162,11 +2163,11 @@ class RedshiftEngine:
             na mensagem, ou outro tipo em ``data``; ou um lote que o ``cast`` recusa, e nada é
             inserido.
         :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu, antes
-            de qualquer comando; a tabela que não existe no sandbox; ou, sem ``iam_role``, a sessão
+            de qualquer comando; a tabela que não existe no sandbox. Sem ``iam_role``, a sessão
             ``boto3`` sem credenciais para o ``COPY``.
         :raises redshift_connector.InterfaceError: a conexão derrubada na transação do
             ``close`` do ``appender``, o ``COPY`` e o ``INSERT`` da staging, que o servidor
-            desfaz, ou no ``COMMIT`` dela, cujo resultado fica desconhecido; o Parquet e o
+            desfaz, ou no ``COMMIT`` dela, cujo resultado fica desconhecido. O Parquet e o
             manifesto do ``staging/`` saem no ``finally``.
         """
         batches = batches_of(data)
@@ -2245,7 +2246,7 @@ class RedshiftEngine:
         :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
             partição.
         :raises serialize_db.errors.SandboxError: a sessão numa transação que o cliente abriu,
-            quando uma verificação carrega a staging ``_versao``, antes do DDL dela; ou, sem
+            quando uma verificação carrega a staging ``_versao``, antes do DDL dela. Sem
             ``iam_role``, a sessão ``boto3`` sem credenciais para o ``COPY`` da staging ``_versao``.
         """
         # A versão fixada entra como staging pendente, que _run_check carrega só quando uma

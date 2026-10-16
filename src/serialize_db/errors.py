@@ -207,7 +207,7 @@ class SandboxError(ValueError):
       ``ROLLBACK`` dela antes.
     - A memória lida do ambiente que não dá 1 MiB de ``memory_limit`` ao DuckDB. A memória é a que
       o processo ainda pode usar, de ``serialize_db.resources``, lida quando a configuração do
-      DuckDB não informa o ``memory_limit``; abaixo de 2 MiB, ou negativa, ela é recusada, e a
+      DuckDB não informa o ``memory_limit``. Abaixo de 2 MiB, ou negativa, ela é recusada, e a
       mensagem traz a leitura.
 
     Exemplo:

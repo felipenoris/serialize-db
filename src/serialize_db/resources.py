@@ -3,10 +3,15 @@
 O pacote roda em máquinas de tamanhos diferentes, e os limites do DuckDB saem destas leituras, não
 de um valor fixo no código. O motor DuckDB lê ``available_cpus`` e ``memory_limit_setting`` na
 abertura. ``environment_limits`` monta os dois, ``threads`` e ``memory_limit``, para as outras
-conexões do DuckDB: as de ``serialize_db.delta``, a do DuckDB local com que o motor Redshift troca
-os arquivos da partição com ``Double`` não finito e a do script de migração. A memória que o
-processo ainda pode usar abaixo de 2 MiB, ou negativa, não dá 1 MiB de ``memory_limit`` ao DuckDB
-e é recusada com ``SandboxError``.
+conexões do DuckDB:
+
+- as de ``serialize_db.delta``;
+- a do DuckDB local com que o motor Redshift troca os arquivos da partição com ``Double`` não
+  finito;
+- a do script de migração.
+
+A memória que o processo ainda pode usar abaixo de 2 MiB, ou negativa, não dá 1 MiB de
+``memory_limit`` ao DuckDB e é recusada com ``SandboxError``.
 
 No Linux, as leituras respeitam o cgroup do processo, v1 e v2, o mecanismo com que um contêiner
 limita as CPUs e a memória abaixo das da máquina. O menor limite no caminho do cgroup até a raiz é
@@ -68,7 +73,7 @@ _MEMORY_FRACTION = 0.5
 def available_cpus() -> int:
     """[public] As CPUs que o processo pode usar, o ``threads`` do DuckDB.
 
-    A afinidade do processo é o conjunto de CPUs em que o sistema o deixa rodar; a cota do cgroup
+    A afinidade do processo é o conjunto de CPUs em que o sistema o deixa rodar. A cota do cgroup
     é o limite de CPU que um contêiner impõe por cima dela.
 
     Exemplo:
@@ -80,8 +85,8 @@ def available_cpus() -> int:
     :return: as CPUs da afinidade do processo, limitadas pela menor cota de CPU do cgroup,
         arredondada para cima como o DuckDB arredonda; ao menos 1. A afinidade é a de
         ``os.process_cpu_count`` desde o Python 3.13, que a variável ``PYTHON_CPU_COUNT``
-        sobrepõe; no 3.12, a de ``os.sched_getaffinity`` no Linux e a de ``os.cpu_count`` nos
-        outros sistemas.
+        sobrepõe. No 3.12, ela é a de ``os.sched_getaffinity`` no Linux e a de ``os.cpu_count``
+        nos outros sistemas.
     """
     cpus = _process_cpus() or 1
     quota = _cgroup_cpu_quota()
@@ -114,12 +119,12 @@ def available_memory() -> int:
         available_memory() / 2**30   # 14.7 numa máquina de 16 GiB com pouco em uso
 
     :return: em bytes, a menor de três leituras. A primeira é a memória física. A segunda é a
-        disponível no sistema: no Windows, ``ullAvailPhys`` de ``GlobalMemoryStatusEx``, que conta
-        como livre a lista de espera (as páginas em cache que o sistema reaproveita); no Linux,
-        ``MemAvailable`` de ``/proc/meminfo``, que conta como livre o cache de arquivos que o
-        kernel devolve. A terceira é a folga do cgroup, o limite menos o uso, com o cache de
-        arquivos de volta e menos a memória compartilhada (``shmem``), que o kernel conta no cache
-        e não devolve sem swap.
+        disponível no sistema. No Windows, ela é ``ullAvailPhys`` de ``GlobalMemoryStatusEx``, que
+        conta como livre a lista de espera (as páginas em cache que o sistema reaproveita). No
+        Linux, ela é ``MemAvailable`` de ``/proc/meminfo``, que conta como livre o cache de
+        arquivos que o kernel devolve. A terceira é a folga do cgroup, o limite menos o uso, com o
+        cache de arquivos de volta e menos a memória compartilhada (``shmem``). O kernel conta a
+        ``shmem`` no cache e não a devolve sem swap.
     """
     readings = [_physical_memory()]
     if sys.platform == "win32":
@@ -203,10 +208,10 @@ def peak_rss_mb() -> float:
 
         peak_rss_mb()   # 297.2 no script de migração, depois das importações
 
-    :return: o pico em MB. No Linux, lido do ``VmHWM`` de ``/proc/self/status``, em KB; no
-        Windows, do pico do conjunto de trabalho (``PeakWorkingSetSize``) de
-        ``K32GetProcessMemoryInfo``, em bytes; nos outros sistemas, do ``ru_maxrss`` do processo,
-        em bytes no macOS e em KB nos outros Unix.
+    :return: o pico em MB. No Linux, ele é lido do ``VmHWM`` de ``/proc/self/status``, em KB. No
+        Windows, ele vem do pico do conjunto de trabalho (``PeakWorkingSetSize``) de
+        ``K32GetProcessMemoryInfo``, em bytes. Nos outros sistemas, ele vem do ``ru_maxrss`` do
+        processo, em bytes no macOS e em KB nos outros Unix.
     """
     status = _PROC / "self" / "status"
     if status.exists():

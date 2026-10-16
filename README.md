@@ -81,7 +81,7 @@ Para gerar o HTML estático, informe a pasta de destino em `-o`:
 
 ```
 uv sync --group docs
-uv run pdoc serialize_db --docformat restructuredtext -t docs/theme -o /pasta/da/documentacao
+uv run pdoc serialize_db --docformat restructuredtext -t docs/theme --mermaid -o /pasta/da/documentacao
 ```
 
 A pasta é criada se não existir. Ela recebe `index.html`, que redireciona para `serialize_db.html`,
@@ -90,6 +90,11 @@ no navegador. `site/`, a pasta que a esteira usa, fica fora do git. Sem `-o`, o 
 documentação em `http://localhost:8080` e a regenera a cada mudança. O `-t docs/theme` traz as
 cores escuras do site, que o `pdoc` lê no lugar das suas. O site sai escuro com o sistema do leitor
 no modo claro ou no escuro.
+
+Os diagramas das páginas são blocos de código de linguagem `mermaid` nos arquivos de `docs/`. Com
+`--mermaid`, o navegador baixa o Mermaid do CDN jsdelivr ao abrir a página e desenha os diagramas;
+sem acesso ao CDN, o leitor vê o texto de cada um. A versão do Mermaid e o tema escuro ficam em
+`docs/theme/mermaid.html.jinja2`.
 
 A esteira [`docs.yml`](.github/workflows/docs.yml) publica o mesmo resultado no GitHub Pages a cada
 push na `main`, em <https://felipenoris.github.io/serialize-db/>. A publicação exige que o Pages do

@@ -9,16 +9,22 @@ publicadas ``<ambiente>_<tabela>`` do esquema do Redshift. O time que tem o ``Da
 os lotes.
 
 Um snapshot é uma entrada do arquivo de controle do ambiente com a versão de cada tabela num
-instante, sob um nome que não muda; um canal é um nome que aponta para um snapshot. O leitor
-Delta lê, sem argumento, o snapshot do canal ``default`` do ambiente, que ``serialize-db channel``
-move. ``snapshot=`` lê um snapshot pelo nome; o snapshot arquivado é lido pela cópia em
-``<raiz>/<ambiente>/arquivo/<nome>/``. ``channel="current"`` lê a versão atual de cada tabela.
+instante, sob um nome que não muda. Um canal é um nome que aponta para um snapshot. O leitor Delta
+lê:
+
+- sem argumento, o snapshot do canal ``default`` do ambiente, que ``serialize-db channel`` move;
+- com ``snapshot=``, um snapshot pelo nome, e o snapshot arquivado pela cópia em
+  ``<raiz>/<ambiente>/arquivo/<nome>/``;
+- com ``channel="current"``, a versão atual de cada tabela.
+
 Cada view fica presa à versão lida na abertura, e a leitura entre tabelas é consistente num
-snapshot. ``materialize`` copia uma tabela, ou parte das partições dela, para o banco local do
-leitor. O filtro das partições é ``BETWEEN`` o menor e o maior valor ``AND`` o ``IN`` da lista,
-como no ``ingest`` do motor DuckDB, porque o ``delta_scan`` do DuckDB poda as partições por ``=`` e
-por intervalo, isto é, abre só os arquivos das partições que o filtro pede, e abre todos os
-arquivos com um ``IN`` de mais de um valor sozinho.
+snapshot.
+
+``materialize`` copia uma tabela, ou parte das partições dela, para o banco local do leitor. O
+filtro das partições é ``BETWEEN`` o menor e o maior valor ``AND`` o ``IN`` da lista, como no
+``ingest`` do motor DuckDB, por causa da poda do ``delta_scan`` do DuckDB. O ``delta_scan`` poda
+as partições por ``=`` e por intervalo, isto é, abre só os arquivos das partições que o filtro
+pede. Com um ``IN`` de mais de um valor sozinho, ele abre todos os arquivos.
 
 O leitor Redshift lê as tabelas que ``serialize_db.publication`` publica, cada uma na sua
 transação: uma consulta que junta duas tabelas durante uma publicação pode ler versões
@@ -674,8 +680,8 @@ class RedshiftReader:
             ``stream`` indisponível, e o leitor não toca arquivo algum. O ``UNLOAD`` grava só no
             S3. Por isso, na conexão com o Redshift, pelo ``workgroup`` ou pelo ``host``, e na
             conexão com o substituto local das suítes, só uma pasta ``s3://bucket/prefixo``
-            serve, os arquivos ficam nela até o ``close`` do stream e o do leitor, e uma pasta
-            local faz o primeiro ``stream`` falhar, sem arquivo gravado. A pasta local serve só à
+            serve. Os arquivos ficam nela até o ``close`` do stream e o do leitor. Uma pasta local
+            faz o primeiro ``stream`` falhar, sem arquivo gravado. A pasta local serve só à
             conexão de mentira dos testes do pacote, que grava o arquivo pelo armazenamento do
             leitor.
         :raises serialize_db.errors.ContractError: o ambiente fora da regra da partição, ou a
@@ -848,8 +854,8 @@ def open_redshift(
         ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` deixa
         ``stream`` indisponível, e o leitor não toca arquivo algum. O ``UNLOAD`` grava só no S3.
         Por isso, na conexão com o Redshift, pelo ``workgroup`` ou pelo ``host``, e na conexão com
-        o substituto local das suítes, só uma pasta ``s3://bucket/prefixo`` serve, os arquivos
-        ficam nela até o ``close`` do stream e o do leitor, e uma pasta local faz o primeiro
+        o substituto local das suítes, só uma pasta ``s3://bucket/prefixo`` serve. Os arquivos
+        ficam nela até o ``close`` do stream e o do leitor. Uma pasta local faz o primeiro
         ``stream`` falhar, sem arquivo gravado. A pasta local serve só à conexão de mentira dos
         testes do pacote, que grava o arquivo pelo armazenamento do leitor.
     :return: o leitor, um gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia

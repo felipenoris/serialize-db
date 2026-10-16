@@ -201,9 +201,10 @@ def arrow_type(
     :param column: a coluna do modelo.
     :return: o tipo Arrow.
     :raises serialize_db.errors.ContractError: um tipo fora da tabela (``Float``, ``LargeBinary``,
-        ``ARRAY``, ``Interval``); o ``Enum``, que deriva de ``String`` mas fica fora porque nada
-        confere a lista de valores; ou o ``Numeric`` de precisão fora de 1 a 38, ou de escala fora
-        de 0 à precisão ou acima de 37, o teto do Redshift. A mensagem traz a tabela e a coluna.
+        ``ARRAY``, ``Interval``), ou o ``Enum``, que deriva de ``String`` mas fica fora porque nada
+        confere a lista de valores. Também o ``Numeric`` de precisão fora de 1 a 38, ou de escala
+        fora de 0 à precisão ou acima de 37, o teto do Redshift. A mensagem traz a tabela e a
+        coluna.
     """
     kind = column.type
     # Enum deriva de String, mas nem o DDL, nem cast, nem a auditoria conferem a lista de valores.
@@ -1004,13 +1005,17 @@ def cast(
 
     Só as colunas do contrato presentes nos dados entram, na ordem do contrato. As colunas
     ausentes ficam para quem grava. Cada coluna é convertida com ``safe=True``, o cast seguro do
-    PyArrow: ``large_string`` e ``string_view`` viram ``string``, os timestamps vão a
-    microssegundos, e o inteiro e o ``float16`` entram em ``Numeric``. As perdas que o cast seguro
-    não acusa são recusadas. Um dicionário, como a ``category`` do pandas, é conferido e
-    convertido pelos seus valores. Um ``timestamp`` com outro fuso numa coluna com fuso entra no
-    mesmo instante, em UTC. Um ``uuid.UUID``, que o PyArrow e o pandas inferem como
-    ``arrow.uuid``, entra numa coluna de texto como ``str(valor)``, o texto canônico de 36
-    caracteres.
+    PyArrow:
+
+    - ``large_string`` e ``string_view`` viram ``string``;
+    - os timestamps vão a microssegundos;
+    - o inteiro e o ``float16`` entram em ``Numeric``.
+
+    As perdas que o cast seguro não acusa são recusadas. Um dicionário, como a ``category`` do
+    pandas, é conferido e convertido pelos seus valores. Um ``timestamp`` com outro fuso numa
+    coluna com fuso entra no mesmo instante, em UTC. Um ``uuid.UUID``, que o PyArrow e o pandas
+    inferem como ``arrow.uuid``, entra numa coluna de texto como ``str(valor)``, o texto canônico
+    de 36 caracteres.
 
     Exemplo:
 
@@ -1028,15 +1033,19 @@ def cast(
         converte lote a lote.
     :raises serialize_db.errors.ContractError: uma perda na conversão, um lote sem coluna alguma
         do contrato ou uma coluna do modelo de tipo fora do contrato. A mensagem traz a tabela e a
-        coluna. As perdas que o cast seguro acusa são o nulo em coluna ``NOT NULL``, a escala
-        perdida, o nanossegundo não nulo, o estouro de inteiro e um tipo sem conversão para o do
-        contrato. As perdas que o cast seguro não acusa vêm com a instrução ao cliente na mensagem:
-        ``double`` fora da escala de um ``Numeric``, ``timestamp`` com hora numa coluna ``Date``,
-        ``timestamp`` com fuso numa coluna ``DateTime`` sem fuso e o inverso, documento JSON como
-        ``struct``, texto acima de ``String(n)`` em bytes, texto numa coluna ``Uuid`` acima de 36
-        bytes, e texto numa coluna ``Text`` ou documento JSON acima de 65.535 bytes, o teto do
-        Redshift. Num leitor, a recusa de um valor sai na leitura do lote, e as demais saem na
-        chamada.
+        coluna.
+
+        As perdas que o cast seguro acusa são o nulo em coluna ``NOT NULL``, a escala perdida, o
+        nanossegundo não nulo, o estouro de inteiro e um tipo sem conversão para o do contrato.
+
+        As perdas que o cast seguro não acusa vêm com a instrução ao cliente na mensagem. Nas
+        conversões, elas são o ``double`` fora da escala de um ``Numeric``, o ``timestamp`` com
+        hora numa coluna ``Date``, o ``timestamp`` com fuso numa coluna ``DateTime`` sem fuso e o
+        inverso, e o documento JSON como ``struct``. Nos limites em bytes, elas são o texto acima
+        de ``String(n)``, o texto numa coluna ``Uuid`` acima de 36 bytes, e o texto numa coluna
+        ``Text`` ou o documento JSON acima de 65.535 bytes, o teto do Redshift.
+
+        Num leitor, a recusa de um valor sai na leitura do lote, e as demais saem na chamada.
     """
     if isinstance(data, pa.RecordBatchReader):
         return _cast_reader(data, table)

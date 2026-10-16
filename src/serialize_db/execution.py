@@ -327,9 +327,9 @@ class Database:
             em ``<unload_to>/<id do leitor>/``, e o ``close`` esvazia essa pasta. ``None`` é
             ``<raiz>/<ambiente>/staging``. O ``UNLOAD`` grava só no S3. Por isso, na conexão com
             o Redshift, pelo ``workgroup`` ou pelo ``host``, e na conexão com o substituto local
-            das suítes, só uma pasta ``s3://bucket/prefixo`` serve, e os arquivos ficam nela até
-            o ``close`` do stream e o do leitor. Com uma raiz local, o padrão é uma pasta local, e
-            o primeiro ``stream`` falha, sem arquivo gravado. A pasta local serve só à conexão de
+            das suítes, só uma pasta ``s3://bucket/prefixo`` serve. Os arquivos ficam nela até o
+            ``close`` do stream e o do leitor. Com uma raiz local, o padrão é uma pasta local, e o
+            primeiro ``stream`` falha, sem arquivo gravado. A pasta local serve só à conexão de
             mentira dos testes do pacote, que grava o arquivo pelo armazenamento do leitor.
         :return: o leitor, um gerenciador de contexto, cujo ``close`` fecha a sessão e esvazia a
             pasta do leitor.
@@ -866,15 +866,15 @@ class Execution:
         :param partitions: as partições da execução, pela regra da partição. A auditoria verifica
             essas partições, e a aprovação as cobre. ``None`` audita a tabela inteira do sandbox.
             A tabela sem partição é auditada com ``None``, porque ``publish_delta`` só aceita
-            ``None`` nela e procura a aprovação sob ``None``; uma lista nessa tabela não filtra
+            ``None`` nela e procura a aprovação sob ``None``. Uma lista nessa tabela não filtra
             nada e deixa a aprovação onde ``publish_delta`` não a procura.
         :param foreign_keys: ``foreign_keys=True`` roda a verificação ``orfao_<colunas>`` de cada
             chave estrangeira. O órfão é a chave sem a linha referenciada, procurada na tabela do
             sandbox ou na versão fixada da tabela referenciada.
         :param key_scope: o escopo da unicidade na verificação ``chave_<colunas>_tabela``, a da
             chave contra as demais partições da versão fixada. O padrão a faz na chave sem a
-            coluna de partição e sem a de ``partition_source``; ``key_scope="partition"`` a
-            suprime; ``key_scope="table"`` a faz também na chave com a coluna de
+            coluna de partição e sem a de ``partition_source``. ``key_scope="partition"`` a
+            suprime, e ``key_scope="table"`` a faz também na chave com a coluna de
             ``partition_source``.
         :return: o relatório aprovado.
         :raises serialize_db.errors.ContractError: um valor de ``partitions`` fora da regra da
@@ -1080,9 +1080,9 @@ class Execution:
         :raises serialize_db.errors.AuditFailed: uma tabela sem a auditoria aprovada nessas
             partições, na mesma ordem, na própria execução.
         :raises serialize_db.errors.ExecutionConflict: uma alteração de dados na tabela desde a
-            versão fixada, conferida antes de qualquer commit nela (a compactação e os commits só de
-            metadados não contam), ou o commit de outro escritor na mesma partição durante a
-            exportação.
+            versão fixada, ou o commit de outro escritor na mesma partição durante a exportação. A
+            alteração é conferida antes de qualquer commit na tabela, e a compactação e os commits
+            só de metadados não contam.
         :raises serialize_db.errors.SchemaDiffRefused: o diff entre o modelo e a tabela é
             destrutivo, e ``reconcile`` não altera a tabela.
         :raises serialize_db.errors.RegistrationRefused: uma conferência do arquivo exportado
@@ -1092,10 +1092,10 @@ class Execution:
             atual não existe.
         :raises serialize_db.errors.SandboxError: a memória que o processo ainda pode usar abaixo de
             2 MiB, ou negativa (``serialize_db.resources.environment_limits``), lida em cada
-            partição antes do commit. Nesse caso nada entra no log, e os arquivos que o motor
-            gravou ficam órfãos na pasta da partição até um
-            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção, ou, na
-            troca do motor Redshift pelo ``Double`` não finito, no ``staging_prefix`` até o
+            partição antes do commit. Nesse caso nada entra no log. Os arquivos que o motor gravou
+            ficam órfãos na pasta da partição até um
+            ``vacuum_keeping_snapshots(..., apply=True, full=True)`` depois da retenção. Na troca
+            do motor Redshift pelo ``Double`` não finito, eles ficam no ``staging_prefix`` até o
             ``cleanup``. No motor Redshift, também sem ``iam_role``, a sessão ``boto3`` sem
             credenciais para o ``UNLOAD``.
         :raises FileNotFoundError: no motor Redshift, a falta do manifesto depois de um ``UNLOAD``
@@ -1139,9 +1139,9 @@ class Execution:
             ``archived`` no arquivo de controle do ambiente.
         :raises serialize_db.errors.ContractError: na chamada, antes de qualquer commit, o nome fora
             da regra da partição, ou já usado em ``snapshots`` ou em ``archived``, com o
-            ``serialize-db channel`` na mensagem, e a segunda chamada na execução já marcada, com o
-            nome marcado na mensagem. Na saída do ``with``, depois dos commits, o nome que outro
-            escritor gravou depois da chamada.
+            ``serialize-db channel`` na mensagem. Também antes de qualquer commit, a segunda
+            chamada na execução já marcada, com o nome marcado na mensagem. Na saída do ``with``,
+            depois dos commits, o nome que outro escritor gravou depois da chamada.
         :raises serialize_db.errors.ConflictError: na saída do ``with``, depois dos commits, outro
             escritor gravou o arquivo de controle entre a leitura e a escrita da entrada, que não
             foi gravada.

@@ -9,21 +9,22 @@ de controle (a entrada com a versão de cada tabela do ambiente num instante), p
 ``serialize-db publish_redshift`` com ``--snapshot`` ou ``--channel``, ou são as versões atuais.
 
 Cada tabela publica numa conexão própria, e as tabelas correm num pool. Antes da transação, e
-fora de transação, a tabela publicada que já existe é reconciliada com o contrato: as colunas
-novas são acrescentadas, e um diff destrutivo, como uma coluna removida ou um tipo que mudou,
-despublica a tabela, que a transação recria com todas as partições. A transação roda, em ordem:
+fora de transação, a tabela publicada que já existe é reconciliada com o contrato. As colunas
+novas são acrescentadas. Um diff destrutivo, como uma coluna removida ou um tipo que mudou,
+despublica a tabela, e a transação a recria com todas as partições. A transação roda, em ordem:
 
-- ``BEGIN``.
-- A leitura da linha de controle, a linha da tabela na tabela de controle, que identifica a
-  versão publicada e fixa o snapshot da transação. Sem linha, é a primeira publicação: a transação
-  cria a tabela publicada e carrega todas as partições. Com linha, ``version_diff`` entre a menor
-  e a maior das duas versões, a lida e a pedida, dá as partições a trocar, o que também volta a
-  tabela a um snapshot anterior ao publicado.
-- Por partição, o ``DELETE`` da partição e, quando a versão pedida a tem, a carga numa staging
-  temporária (uma tabela de passagem, apagada no fim da transação) por um ``COPY ... MANIFEST``
-  por lista de colunas dos arquivos, com a lista, seguida do ``INSERT ... SELECT`` com o valor da
-  partição. O manifesto é o arquivo JSON com a lista dos arquivos que o ``COPY`` carrega.
-- Por último, o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão lida.
+1. ``BEGIN``.
+2. A leitura da linha de controle, a linha da tabela na tabela de controle, que identifica a
+   versão publicada e fixa o snapshot da transação. Sem linha, é a primeira publicação: a
+   transação cria a tabela publicada e carrega todas as partições. Com linha, ``version_diff``
+   entre a menor e a maior das duas versões, a lida e a pedida, dá as partições a trocar, o que
+   também volta a tabela a um snapshot anterior ao publicado.
+3. Por partição, o ``DELETE`` da partição e, quando a versão pedida a tem, a carga numa staging
+   temporária (uma tabela de passagem, apagada no fim da transação). A carga usa um
+   ``COPY ... MANIFEST`` por lista de colunas dos arquivos, com a lista, e é seguida do
+   ``INSERT ... SELECT`` com o valor da partição. O manifesto é o arquivo JSON com a lista dos
+   arquivos que o ``COPY`` carrega.
+4. Por último, o ``INSERT`` da linha de controle, ou o ``UPDATE`` dela condicionado à versão lida.
 
 As 0 linhas desse ``UPDATE``, o ``1023`` e a tabela publicada que outra primeira publicação criou
 saem como ``ExecutionConflict``. Os manifestos do ``COPY`` ficam em
@@ -34,8 +35,9 @@ saem como ``ExecutionConflict``. Os manifestos do ``COPY`` ficam em
 Cada ``COPY`` leva a cláusula de credenciais do motor Redshift, montada logo antes do seu
 ``execute`` com a chave que a cadeia de credenciais do ``boto3`` serve naquele momento. Nenhum
 texto que carregue a cláusula vai a log. Todo comando cita a tabela publicada e a de controle por
-nome em duas partes, ``"<esquema>"."<nome>"``, depois do ``USE`` que a conexão roda, e a staging
-temporária pelo nome só, sem ``COMPUPDATE`` e sem ``TRUNCATE``, o que um datashare aceita.
+nome em duas partes, ``"<esquema>"."<nome>"``, depois do ``USE`` que a conexão roda. A staging
+temporária é citada pelo nome só, sem ``COMPUPDATE`` e sem ``TRUNCATE``. Um datashare aceita os
+comandos nessa forma.
 
 Exemplo:
 
@@ -989,9 +991,10 @@ def publish_redshift(
         não os apaga.
     :param max_workers: o tamanho do pool, quantas tabelas publicam ao mesmo tempo. O padrão 1
         publica uma por vez. Com mais de um, a primeira publicação de uma tabela pode esperar
-        cerca de 20 s no ``INSERT`` da linha de controle, como em 14 das 27 repetições das
-        sondas de 2026-10-05 a 2026-10-14, só nas publicações cuja transação criou a tabela. O
-        usuário aceitou a espera em 2026-10-10 (``docs/index.md``, seção "Multithreading").
+        cerca de 20 s no ``INSERT`` da linha de controle. A espera apareceu em 14 das 27
+        repetições das sondas de 2026-10-05 a 2026-10-14, só nas publicações cuja transação criou
+        a tabela. O usuário aceitou a espera em 2026-10-10 (``docs/index.md``, seção
+        "Multithreading").
     :param versions: a versão do Delta por nome de tabela, as de um snapshot do arquivo de
         controle (``delta.snapshot_versions``). ``None`` publica a versão atual de cada tabela.
     :return: ``{tabela: versão publicada}``.

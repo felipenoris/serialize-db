@@ -2,11 +2,14 @@
 sistema de arquivos do PyArrow.
 
 A raiz do banco é a pasta local ou o prefixo ``s3://`` sob o qual ficam as tabelas Delta de cada
-ambiente, em ``<raiz>/<ambiente>/<tabela>``. ``Storage`` guarda três coisas dela: a URI que o
-delta-rs e o DuckDB recebem, o sistema de arquivos do ``pyarrow.fs`` que lista, lê, copia e apaga
-nos dois armazenamentos, e o caminho da raiz nesse sistema de arquivos. Os métodos recebem
-caminhos relativos à raiz, montados com ``/`` por ``join``. ``relative`` faz o caminho inverso:
-leva uma URI sob a raiz ao caminho relativo.
+ambiente, em ``<raiz>/<ambiente>/<tabela>``. ``Storage`` guarda três coisas dela:
+
+- a URI que o delta-rs e o DuckDB recebem;
+- o sistema de arquivos do ``pyarrow.fs`` que lista, lê, copia e apaga nos dois armazenamentos;
+- o caminho da raiz nesse sistema de arquivos.
+
+Os métodos recebem caminhos relativos à raiz, montados com ``/`` por ``join``. ``relative`` faz o
+caminho inverso: leva uma URI sob a raiz ao caminho relativo.
 
 Dois grupos de métodos têm um ramo por armazenamento:
 
