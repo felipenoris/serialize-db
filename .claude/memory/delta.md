@@ -430,6 +430,47 @@ Read before code that touches `serialize_db.delta`, a Delta table or the `deltal
   holds one row per table in a 20 KB file. DuckDB `iceberg_scan` needs the `metadata.json` path,
   because PyIceberg writes no `version-hint.text` and names metadata `<N>-<uuid>.metadata.json`.
   Partition transforms on write need the `pyiceberg-core` extra.
+- The Iceberg evaluation of 2026-10-31 (`decisions.md`, "The premises of the Iceberg evaluation
+  (2026-10-31)"; the document "Suporte a Iceberg no serialize-db" of the Claude project; scripts and
+  outputs in the library's `avaliacao-iceberg/`) measured, in a venv outside the project with
+  PyIceberg 0.12.0 and `pyiceberg-core` 0.10.1, DuckDB 1.5.5 with the `duckdb-extension-iceberg`,
+  `-avro`, `-httpfs` and `-aws` 1.5.5 wheels (the `iceberg` extension at `45163a28`) and moto 5.2.3
+  for S3 and Glue:
+  - A `metadata/version-hint.text` holding `<N>-<uuid>` makes `iceberg_scan('<folder>')` and
+    `StaticTable.from_metadata('<folder>')` read that version; without it, `iceberg_scan` on the
+    folder fails unless `SET unsafe_enable_version_guessing = true`. The specification deprecates
+    the file-system tables (`v<V>.metadata.json` swapped by an atomic rename) and removes them in
+    format v4.
+  - DuckDB 1.5.5 `COPY` writes every column `optional`, even from a `NOT NULL` table, and
+    `add_files` refuses an `optional` file column for a `required` field (`ValueError: Mismatch in
+    fields`). Into `optional` fields it accepts the file, creates `schema.name-mapping.default`,
+    infers the identity partition from the column's statistics, leaves `nan_value_counts` empty and
+    accepts a null without a check.
+  - `add_files` of a file without the partition column, as every file of a partitioned Delta table,
+    is accepted with the partition null: PyIceberg and `iceberg_scan` read the column null, and
+    `WHERE data_base = '2026-08-31'` counts 0 rows.
+  - An INT96 timestamp file, as the Redshift `UNLOAD` writes, fails `add_files`
+    (`UnsupportedPyArrowTypeException`, `timestamp[ns]`), also with
+    `PYICEBERG_DOWNCAST_NS_TIMESTAMP_TO_US_ON_WRITE=true`. DuckDB `COPY ... FIELD_IDS {...}` writes
+    field IDs that `add_files` accepts, and mismatched IDs are refused.
+  - A transaction of `delete(EqualTo(...))` and `add_files` writes one `metadata.json` with two
+    snapshots, `DELETE` and `APPEND`, both carrying the `snapshot_properties`; the old file leaves
+    without a rewrite. `rename_column` extends the name mapping (`["descricao","historico"]`), and
+    both readers read the renamed column in files with and without field IDs.
+  - `expire_snapshots` deletes no file (7 Parquet, 12 Avro and 10 `metadata.json` before and after),
+    `maintenance` has only `expire_snapshots`, a tag keeps its snapshot, and `iceberg_scan(...,
+    snapshot_from_id=...)` of an expired snapshot fails (`Could not find snapshot`). Paths are
+    absolute through v3: a moved folder opens in DuckDB only with `version='<N>-<uuid>'` and
+    `allow_moved_paths=true`, and not in `StaticTable`. `iceberg_scan` prunes by partition (`Total
+    Files Read: 1` in the JSON profile) and reports every column nullable.
+  - On moto 5.2.3, `GlueCatalog` creates an `EXTERNAL_TABLE` with `table_type=ICEBERG` and
+    `metadata_location`, and the `VersionId` grows per commit. A stale `append` retries (`Commit
+    failed due to a concurrent update, retrying (1/4)`) and both partitions stay; a stale `delete`
+    of the same partition fails with `ValidationException`, a stale schema change with
+    `CommitFailedException`. moto accepts a stale `VersionId` in `UpdateTable`, so four threaded
+    `append` calls kept one partition of four without an error: the Glue optimistic lock is
+    untested until the real service runs it. `GlueCatalog.register_table(overwrite=True)` raises
+    `NotImplementedError` in 0.12.0 (read in the code).
 
 ## Drafts of 2026-09-21
 
