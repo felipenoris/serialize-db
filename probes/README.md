@@ -5,8 +5,8 @@ rede, o projeto do SageMaker Unified Studio, o bucket, o Redshift, os serviços 
 estrutura da base Parquet de origem, o `threads` do DuckDB na ingestão das tabelas Delta e os
 clientes da biblioteca depois que a credencial expira. Nenhum deles cria, altera ou apaga um
 recurso; as sondas de `consistencia/` e de `operacao/` são a exceção, e gravam só sob as raízes
-das suítes, salvo `operacao/probe_published_base.py`, que grava na própria base publicada (as
-seções delas abaixo). Cada um roda com o interpretador da pasta preparada, imprime o relatório no
+das suítes, salvo `operacao/probe_published_base.py`, que grava na própria base publicada, e
+`operacao/probe_iceberg.py`, que cria e apaga um banco próprio no Glue (as seções delas abaixo). Cada um roda com o interpretador da pasta preparada, imprime o relatório no
 terminal e o grava em `output/<script>_<data-hora>.txt`, pasta fora do git, para ser colado na
 conversa com o assistente; `suite_alvo.sh`, o script da bateria do ambiente alvo, grava na mesma
 pasta, em `suite_alvo_<data-hora>.txt`, tudo o que cada passo mandou ao terminal. O formato segue
@@ -45,6 +45,7 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_parallel_gain.py
 .venv/bin/python probes/operacao/probe_published_base.py s3://bucket/prefixo
 .venv/bin/python probes/operacao/probe_readers.py s3://bucket/prefixo
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_iceberg.py --delta s3://bucket/base/prd/cad_contas
 ```
 
 ## Os scripts
@@ -150,6 +151,11 @@ acompanha os relatórios dos probes na conversa.
 | Um `COPY` reprovado pode ser diagnosticado por `sys_load_error_detail`? | `redshift.py`, `RS-12` |
 | Há esquemas externos (Spectrum) no banco, e qual é o patch do Redshift? | `redshift.py`, `RS-13` e `REDSHIFT_VERSION` |
 | O Glue, o Athena, o Lake Formation ou o S3 Tables passaram a responder ao papel do projeto? | `catalog.py`, `CT-1` a `CT-6` |
+| O papel cria um banco novo no Glue, e as tabelas dele ficam com as permissões do IAM ou com o Lake Formation? | `operacao/probe_iceberg.py`, seção 1 |
+| O `UpdateTable` do Glue recusa um `VersionId` velho, a trava de que um commit pelo Glue depende? | `operacao/probe_iceberg.py`, seção 2 |
+| O Athena grava uma tabela Iceberg, e o `DELETE` dele deixa arquivos de deleção? | `operacao/probe_iceberg.py`, seção 3 |
+| O Athena lê uma tabela Delta da base registrada no Glue só pelo local, com as linhas do `delta_scan`? | `operacao/probe_iceberg.py`, seção 4 |
+| O Redshift lê pelo `awsdatacatalog` uma tabela do Glue, com a deleção do Athena aplicada, e grava no Iceberg? | `operacao/probe_iceberg.py`, seção 5 |
 | Quais são as tabelas da base de origem, e que campos e tipos cada uma tem? | `parquet_source.py`, seções 2 e 3 |
 | Todos os arquivos de todas as partições de uma tabela têm o mesmo esquema? | `parquet_source.py`, `PQ-3` e seção 4 |
 | Como a base está particionada, e a coluna de partição também está dentro dos arquivos? | `parquet_source.py`, `PQ-4` e `PQ-5` |
@@ -217,7 +223,8 @@ partições de `cad_lancamentos` da base de origem, que elas só leem, fora das 
 quando para numa exceção (`SERIALIZE_DB_TEST_KEEP` a mantém); sem nenhuma das duas raízes, ou com a
 origem sem as partições, para com o código 2. `probe_published_base.py` e `probe_readers.py` são a
 exceção: rodam sobre a base publicada, que recebem, sem pasta de trabalho, e só a primeira grava
-nela, como dizem as linhas delas na tabela abaixo. As rotinas rodam como o operador as roda, pelo
+nela, como dizem as linhas delas na tabela abaixo. `probe_iceberg.py` não lê a origem: grava sob a
+pasta de trabalho no S3 e num banco próprio do Glue, que apaga no fim. As rotinas rodam como o operador as roda, pelo
 `serialize-db` do ambiente virtual num processo filho, e as interrompidas levam `SIGKILL`, como o
 kernel sem memória, que não deixa rodar nenhum `finally`; `probe_parallel_gain.py` chama a
 biblioteca no próprio processo. Cada leitura sai no terminal e em
@@ -240,6 +247,7 @@ desde a primeira rodada de 2026-10-05, estão nos arquivos de tema de `.claude/m
 | `probe_parallel_gain.py` | O ganho das APIs com threads sobre a execução em série, em quatro tabelas iguais de `--rows` linhas (5.000.000 por padrão) que a sonda gera e publica no Delta, cada variante `--repetitions` vezes (3 por padrão): no motor DuckDB, o `stream`, o `appender`, os dois no mesmo `with`, sem trabalho do cliente e com o pandas por lote, e 200 consultas pequenas em série, em quatro threads na sessão principal e em quatro sessões a mais (`duckdb`); `run.ingest`, `run.publish_delta` e o `materialize` do leitor Delta com as quatro tabelas numa chamada contra uma por tabela (`pools`); no motor Redshift, `run.ingest` das quatro, o `stream`, o `appender`, os dois juntos, 80 consultas pequenas com o cache de resultados desligado em cada sessão (`SET enable_result_cache_for_session TO off`), com quantas delas o `sys_query_history` marca como servidas pelo cache (`result_cache_hit`) lidas depois das medidas, e `run.publish_delta` (`redshift`); e `publish_redshift` com `max_workers=4` contra 1 (`publicacao`), primeiro com a despublicação depois de cada medida e depois sem ela, cada medida trocando a versão publicada pela outra de duas versões do Delta com as mesmas linhas, e a primeira publicação das quatro pela própria sonda, em quatro conexões, com os comandos de `_publication_statements` em três ordens, a da publicação, a linha de controle logo depois do `CREATE TABLE` e as tabelas criadas e confirmadas antes da transação, que separam a hipótese do planejamento do `INSERT` da linha de controle (`.claude/memory/concurrency.md`); cada medida da publicação imprime, lidos no log `serialize_db.publication.commands`, de cada tipo de comando e da abertura das conexões, quantos houve, a soma e o maior tempo, e a linha do tempo de cada conexão, com o início e a duração de cada comando, e os locks que uma quinta sessão leu em `svv_transactions` a cada segundo, os pendentes e os concedidos no objeto de um pendente, e o fim da seção imprime as gravações da linha de controle no `sys_query_history`, com a execução que gravou cada uma e o tempo de fila, de espera por lock, de execução e de planejamento. Imprime cada medida e o resumo com o menor tempo de cada variante, o pico e a razão da primeira variante sobre ela, e confere as linhas contadas; `redshift` e `publicacao` pedem a raiz no S3 e as variáveis `SERIALIZE_DB_REDSHIFT_*`, o sandbox `exec_*` sai no `cleanup`, e a sonda apaga as tabelas `poc<id>_*` que publicou e as linhas de controle delas. |
 | `probe_published_base.py` | Depois da publicação da base inteira pelo canal `default`, sobre a raiz que recebe: o `EXPLAIN` do join de `prd_cad_lancamentos` com `prd_cad_contas` por `id_conta`, com os rótulos `DS_*`, dos quais `DS_BCAST_INNER` e `DS_DIST_BOTH` pedem a chave de distribuição; a primeira partição de `cad_lancamentos` refeita com as mesmas linhas numa execução do motor DuckDB marcada com o snapshot `refeito-<execution_id>`; e `serialize-db channel` e `serialize-db publish_redshift --channel default --max-workers 4` para o snapshot novo, a ida, e de volta ao de antes, a volta, que roda também quando a ida falha. Confere o plano com algum rótulo `DS_*`, cuja checagem a recusa do `EXPLAIN` reprova sem parar a sonda, as versões publicadas e a partição trocada em cada publicação, as linhas e a soma de `id_lancamento` de `prd_cad_lancamentos` e o canal no fim, e imprime o tempo e o pico de RSS de cada tabela trocada. Grava na própria base: a versão nova de `cad_lancamentos`, o snapshot `refeito-<execution_id>` e os manifestos do `COPY` ficam, e o canal `default` e as tabelas `prd_*` voltam ao estado de antes; para com o código 2 antes de gravar com a raiz fora do S3, sem o canal ou com uma tabela, publicada ou atual, fora da versão do snapshot dele, porque a execução da partição refeita levaria ao snapshot novo a versão atual de cada tabela. |
 | `probe_readers.py` | Depois da publicação da base inteira pelo canal `default`, sobre a raiz que recebe: o leitor Delta do snapshot do canal, com o tempo da abertura das views e as versões lidas, e a contagem de `cad_contas` por ele e pelo leitor Redshift das tabelas publicadas, com o mesmo statement. Confere a contagem igual nos dois leitores; pede as variáveis `SERIALIZE_DB_REDSHIFT_*` e só lê a base e as tabelas publicadas. |
+| `probe_iceberg.py` | As leituras do Glue como catálogo que a avaliação do suporte a Iceberg de 2026-10-31 pede antes da implementação, sem pacote novo: o banco `serialize_db_operacao_iceberg_<id>` criado no Glue, com o `CreateTableDefaultPermissions` dele; a tabela `sonda_versao` atualizada duas vezes pelo `UpdateTable` com o mesmo `VersionId`; a tabela Iceberg `lancamentos` criada pelo Athena sob a pasta de trabalho, com duas linhas, uma apagada, `$files`, as linhas e o registro no Glue (`metadata_location`, `VersionId`, `IsRegisteredWithLakeFormation`); com `--delta`, a tabela Delta da URI registrada pelo Athena só pelo local, como `delta_tabela`, e contada por ele e pelo `delta_scan`; no Redshift, pela sessão de `engine.redshift.connect`, `data_catalog_auto_mount`, os esquemas de `awsdatacatalog`, as linhas de `lancamentos` e de `delta_tabela` e um `INSERT` em `lancamentos`, com as leituras repetidas sem o `USE` do banco do datashare quando a de `lancamentos` é recusada. Confere o banco criado, o segundo `UpdateTable` recusado com `ConcurrentModificationException`, um arquivo de deleção e uma linha depois do `DELETE`, as duas contagens da tabela Delta iguais, `lancamentos` lida pelo Redshift com uma linha e o banco apagado no fim; o `INSERT` é leitura. Toma o único workgroup habilitado do Athena SQL fora do `primary`, ou o de `--workgroup`, e para com o código 2 sem ele ou com a raiz fora do S3, antes de criar o banco; o Athena deixa no local de resultados do workgroup, quando ele o impõe, o resultado de cada consulta. Apaga as tabelas e o banco pelo Glue, que não toca os arquivos, também quando para numa exceção; a pasta da tabela Delta só é lida. |
 
 `operation_lib.py` é a biblioteca comum: a raiz de trabalho (`work_database`), o arquivo de saída
 (`open_report`), a linha de comando (`parse_arguments`), as partições da origem fora das ignoradas,
@@ -251,8 +259,9 @@ base, e `run`.
 ## Acrescentar um probe
 
 - O probe só lê: um script que altera algo pertence a `consistencia/` ou a `operacao/`, e grava
-  só sob as raízes das suítes; a exceção é `operacao/probe_published_base.py`, que grava na própria
-  base publicada a versão e o snapshot que a volta a um snapshot anterior pede.
+  só sob as raízes das suítes; as exceções são `operacao/probe_published_base.py`, que grava na
+  própria base publicada a versão e o snapshot que a volta a um snapshot anterior pede, e
+  `operacao/probe_iceberg.py`, que cria e apaga um banco próprio no Glue.
 - Construa sobre `probelib.py`: `Report` para o arquivo, as seções, as chamadas ecoadas, as
   checagens e o código de saída; `short_config` em todo cliente `boto3`, porque sem rede o padrão
   espera 60 s por tentativa; `run_python` para o que precisa de espera limitada (delta-rs, DuckDB).

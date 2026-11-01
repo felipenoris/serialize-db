@@ -4,12 +4,12 @@ Os probes (``probes/``) leem o ambiente; as decisões que eles tomam sobre o que
 puras, testadas aqui com respostas fabricadas, numa seção por sonda: ``probelib.py``,
 ``bucket.py``, ``space.py``, ``catalog.py``, ``redshift.py`` e ``diagnose_aws.py``,
 ``parquet_source.py``, ``duckdb_threads.py``, ``credentials.py``, o ``operation_lib.py`` das sondas
-da operação, ``probe_published_base.py`` e ``probe_parallel_gain.py``; a docstring de cada teste diz
-o que ele confere. Um ``Report`` grava em ``probes/output/``; ``make_report`` o aponta para a pasta
-do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes que gravam, o relatório e os arquivos
-fabricados, são ``local``: gravam numa pasta nova sob ``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados
-sem ela. O do ``parquet_source.py`` não abre arquivo algum: as suas funções recebem colunas e
-rodapés fabricados.
+da operação, ``probe_published_base.py``, ``probe_parallel_gain.py`` e ``probe_iceberg.py``; a
+docstring de cada teste diz o que ele confere. Um ``Report`` grava em ``probes/output/``;
+``make_report`` o aponta para a pasta do teste e devolve ``sys.stdout`` ao pytest no fim. Os testes
+que gravam, o relatório e os arquivos fabricados, são ``local``: gravam numa pasta nova sob
+``SERIALIZE_DB_TEST_LOCAL_ROOT`` e são pulados sem ela. O do ``parquet_source.py`` não abre arquivo
+algum: as suas funções recebem colunas e rodapés fabricados.
 
 A consulta DNS é a do nome ``nao.existe.invalid`` em
 ``test_endpoint_reachable_skips_the_call_when_the_port_does_not_answer``: ``socket.getaddrinfo``
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime
+import decimal
 import hashlib
 import io
 import logging
@@ -49,6 +50,7 @@ import diagnose_aws
 import duckdb_threads
 import operation_lib
 import parquet_source
+import probe_iceberg
 import probe_parallel_gain
 import probe_published_base
 import probelib
@@ -2782,3 +2784,170 @@ def test_parallel_gain_removal_statements_drop_the_tables_and_their_control_rows
         'DROP TABLE IF EXISTS "esquema"."poc1_cad_paralelo_d"',
         'DELETE FROM "esquema"."serialize_db_publications" WHERE table_name LIKE \'poc1_%\'',
     ]
+
+
+# --------------------------------------------------------------------------------------------------
+# probe_iceberg.py: as linhas do Athena, os workgroups, as permissões do banco, a trava do
+# VersionId, a deleção do Athena, a leitura do Redshift e os argumentos
+
+
+def test_iceberg_result_rows_drop_the_header_and_read_the_null() -> None:
+    """``result_rows`` da sonda do Iceberg tira a linha de cabeçalho que o ``GetQueryResults`` de um
+    ``SELECT`` repete e lê o valor sem ``VarCharValue`` como ``None``; o resultado sem linhas, o de
+    um ``INSERT``, fica vazio."""
+    result_set = {
+        "ResultSetMetadata": {"ColumnInfo": [{"Label": "content"}, {"Label": "record_count"}]},
+        "Rows": [
+            {"Data": [{"VarCharValue": "content"}, {"VarCharValue": "record_count"}]},
+            {"Data": [{"VarCharValue": "0"}, {"VarCharValue": "2"}]},
+            {"Data": [{"VarCharValue": "1"}, {}]},
+        ],
+    }
+    assert probe_iceberg.result_rows(result_set) == [["0", "2"], ["1", None]]
+    empty = {"ResultSetMetadata": {"ColumnInfo": []}, "Rows": []}
+    assert probe_iceberg.result_rows(empty) == []
+
+
+def test_iceberg_sql_workgroups_keep_the_enabled_sql_ones_off_primary() -> None:
+    """``sql_workgroups`` da sonda do Iceberg fica com os workgroups habilitados do Athena SQL fora
+    do ``primary``: o do Spark, o desabilitado e o ``primary`` saem, como os três do alvo."""
+    summaries = [
+        {
+            "Name": "primary",
+            "State": "ENABLED",
+            "EngineVersion": {"EffectiveEngineVersion": "Athena engine version 3"},
+        },
+        {
+            "Name": "workgroup-projeto-ambiente",
+            "State": "ENABLED",
+            "EngineVersion": {"EffectiveEngineVersion": "Athena engine version 3"},
+        },
+        {
+            "Name": "sagemaker-studio-spark-workgroup-projeto",
+            "State": "ENABLED",
+            "EngineVersion": {"EffectiveEngineVersion": "PySpark engine version 3"},
+        },
+        {
+            "Name": "antigo",
+            "State": "DISABLED",
+            "EngineVersion": {"EffectiveEngineVersion": "Athena engine version 3"},
+        },
+    ]
+    assert probe_iceberg.sql_workgroups(summaries) == ["workgroup-projeto-ambiente"]
+    # O resumo sem o motor, como o do moto, não é candidato.
+    assert probe_iceberg.sql_workgroups([{"Name": "sonda", "State": "ENABLED"}]) == []
+
+
+def test_iceberg_permissions_reading_tells_the_iam_from_the_lake_formation() -> None:
+    """``permissions_reading`` da sonda do Iceberg: ``IAM_ALLOWED_PRINCIPALS`` deixa as tabelas
+    novas com as permissões do IAM, a lista vazia as entrega ao Lake Formation, e a resposta sem o
+    campo é dita como tal."""
+    iam = {
+        "CreateTableDefaultPermissions": [
+            {
+                "Principal": {"DataLakePrincipalIdentifier": "IAM_ALLOWED_PRINCIPALS"},
+                "Permissions": ["ALL"],
+            }
+        ]
+    }
+    assert probe_iceberg.permissions_reading(iam) == (
+        "as tabelas novas ficam só com as permissões do IAM (IAM_ALLOWED_PRINCIPALS)"
+    )
+    lake_formation = {"CreateTableDefaultPermissions": []}
+    assert probe_iceberg.permissions_reading(lake_formation) == (
+        "o Lake Formation governa as tabelas novas (sem IAM_ALLOWED_PRINCIPALS)"
+    )
+    assert probe_iceberg.permissions_reading({"Name": "banco"}) == (
+        "o Glue não devolveu CreateTableDefaultPermissions"
+    )
+
+
+def test_iceberg_version_lock_wants_the_second_update_refused() -> None:
+    """``version_lock_problems`` da sonda do Iceberg passa só com o primeiro ``UpdateTable``
+    aceito e o segundo, com o ``VersionId`` velho, recusado com
+    ``ConcurrentModificationException``; ``error_code`` lê o código do serviço ou a classe do erro
+    local."""
+    assert probe_iceberg.version_lock_problems(None, "ConcurrentModificationException") == []
+    assert probe_iceberg.version_lock_problems(None, None) == [
+        "o segundo UpdateTable, com o VersionId velho, aceito: o Glue não serializa os commits"
+    ]
+    assert probe_iceberg.version_lock_problems(
+        "AccessDeniedException", "AccessDeniedException"
+    ) == [
+        "o primeiro UpdateTable recusado com AccessDeniedException",
+        "o segundo UpdateTable recusado com AccessDeniedException",
+    ]
+    refused = botocore.exceptions.ClientError(
+        {"Error": {"Code": "ConcurrentModificationException", "Message": "versão velha"}},
+        "UpdateTable",
+    )
+    assert probe_iceberg.error_code(refused) == "ConcurrentModificationException"
+    unreachable = botocore.exceptions.EndpointConnectionError(endpoint_url="https://glue")
+    assert probe_iceberg.error_code(unreachable) == "EndpointConnectionError"
+
+
+def test_iceberg_delete_file_problems_want_a_delete_file_and_one_row() -> None:
+    """``delete_file_problems`` da sonda do Iceberg passa com um arquivo de ``content`` 1 em
+    ``$files`` e a linha de ``id_lancamento`` 1 só; a reescrita sem arquivo de deleção e a
+    deleção que não pegou são os dois problemas."""
+    merge_on_read = [
+        ["0", "s3://bucket/lancamentos/data/1.parquet", "2"],
+        ["1", "s3://bucket/lancamentos/data/2-deletes.parquet", "1"],
+    ]
+    one_row = [["1", "2026-08-31", "1.00"]]
+    assert probe_iceberg.delete_file_problems(merge_on_read, one_row) == []
+    rewritten = [["0", "s3://bucket/lancamentos/data/3.parquet", "1"]]
+    two_rows = [["1", "2026-08-31", "1.00"], ["2", "2026-08-31", "2.00"]]
+    assert probe_iceberg.delete_file_problems(rewritten, two_rows) == [
+        "nenhum arquivo de deleção (content 1) em $files: content ['0']",
+        "a tabela com id_lancamento ['1', '2'], não só 1",
+    ]
+
+
+def test_iceberg_redshift_select_wants_the_one_row_the_delete_left() -> None:
+    """``redshift_select_problems`` da sonda do Iceberg passa com a linha de ``id_lancamento`` 1
+    só; a leitura recusada leva a mensagem, e a linha apagada que volta é o problema."""
+    Answer = probe_iceberg.Answer
+    one_row = Answer([(1, "2026-08-31", decimal.Decimal("1.00"))])
+    assert probe_iceberg.redshift_select_problems(one_row) == []
+    refused = Answer(None, "ProgrammingError: o catálogo não está montado")
+    assert probe_iceberg.redshift_select_problems(refused) == [
+        "não lida: ProgrammingError: o catálogo não está montado"
+    ]
+    both = Answer(
+        [(1, "2026-08-31", decimal.Decimal("1.00")), (2, "2026-08-31", decimal.Decimal("2.00"))]
+    )
+    assert probe_iceberg.redshift_select_problems(both) == [
+        "lida com id_lancamento [1, 2], não só 1"
+    ]
+
+
+def test_iceberg_parse_arguments_wants_the_delta_table_on_s3(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """``parse_arguments`` da sonda do Iceberg: sem opções, nenhuma tabela Delta nem workgroup; a
+    URI do ``--delta`` perde a barra final, e um caminho fora do S3 é erro de uso, com o código
+    2."""
+    monkeypatch.setattr(sys, "argv", ["probe_iceberg.py"])
+    arguments = probe_iceberg.parse_arguments()
+    assert arguments.delta is None
+    assert arguments.workgroup is None
+
+    command = [
+        "probe_iceberg.py",
+        "--delta",
+        "s3://bucket/base/prd/cad_contas/",
+        "--workgroup",
+        "wg",
+    ]
+    monkeypatch.setattr(sys, "argv", command)
+    arguments = probe_iceberg.parse_arguments()
+    assert arguments.delta == "s3://bucket/base/prd/cad_contas"
+    assert arguments.workgroup == "wg"
+
+    monkeypatch.setattr(sys, "argv", ["probe_iceberg.py", "--delta", "/dados/prd/cad_contas"])
+    with pytest.raises(SystemExit) as refused:
+        probe_iceberg.parse_arguments()
+    assert refused.value.code == 2
+    assert "o Athena lê só do S3" in capsys.readouterr().err

@@ -268,10 +268,11 @@ oferece à biblioteca. Ao lado deles ficam as sondas, que gravam sob as raízes 
   as do pytest com `-m redshift` gravam sob a raiz S3 e no esquema da suíte;
 - as sondas da operação, em `probes/operacao/`, rodam `serialize-db` sobre as primeiras partições
   de `cad_lancamentos` da base de origem, sob `SERIALIZE_DB_TEST_S3_ROOT` ou, sem ela, sob
-  `SERIALIZE_DB_TEST_LOCAL_ROOT`. Três fogem dessa regra: `probe_published_base.py` e
-  `probe_readers.py` rodam depois da publicação, sobre a base publicada, e a primeira grava nela;
-  `probe_parallel_gain.py` gera as próprias tabelas sob a raiz S3 e pede as variáveis
-  `SERIALIZE_DB_REDSHIFT_*`.
+  `SERIALIZE_DB_TEST_LOCAL_ROOT`. Fogem dessa regra `probe_published_base.py` e
+  `probe_readers.py`, que rodam depois da publicação, sobre a base publicada, e a primeira grava
+  nela; `probe_parallel_gain.py`, que gera as próprias tabelas sob a raiz S3 e pede as variáveis
+  `SERIALIZE_DB_REDSHIFT_*`; e `probe_iceberg.py`, que cria no Glue um banco próprio, com uma
+  tabela Iceberg do Athena sob a raiz S3, apaga os dois no fim e pede as mesmas variáveis.
 
 O que cada um lê está no cabeçalho do próprio script e em `probes/README.md`. Cada um imprime o
 relatório e o grava em `probes/output/`, pasta fora do git, para ser colado na conversa com o
@@ -299,6 +300,7 @@ SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/p
 SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_parallel_gain.py
 .venv/bin/python probes/operacao/probe_published_base.py s3://bucket/prefixo
 .venv/bin/python probes/operacao/probe_readers.py s3://bucket/prefixo
+SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo .venv/bin/python probes/operacao/probe_iceberg.py --delta s3://bucket/base/prd/cad_contas
 ```
 
 `duckdb_threads.py` lê as tabelas Delta que a migração gravou, na pasta `<root>/<ambiente>` dela,
