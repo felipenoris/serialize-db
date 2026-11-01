@@ -357,6 +357,15 @@ página da AWS que diga se as visões STV respondem no Serverless, e pelas pági
 - <https://docs.aws.amazon.com/redshift/latest/mgmt/serverless-monitoring.html>
 - <https://repost.aws/articles/AREYT7zP-8SSCGG_ynTgkYpg/redshift-serverless-monitoring-and-troubleshooting-using-system-views> (respondeu 403 em 2026-10-10)
 
+Consultadas em 2026-10-31 para a avaliação do suporte a Iceberg ao lado do Delta (a leitura pelo
+Glue, a escrita em Iceberg e a montagem automática do `awsdatacatalog`):
+<https://docs.aws.amazon.com/redshift/latest/dg/querying-iceberg.html>,
+<https://docs.aws.amazon.com/redshift/latest/dg/iceberg-writes.html>,
+<https://docs.aws.amazon.com/redshift/latest/dg/iceberg-writes-sql-syntax.html>,
+<https://docs.aws.amazon.com/redshift/latest/dg/r_ALTER_SYSTEM.html>,
+<https://aws.amazon.com/blogs/big-data/simplify-external-object-access-in-amazon-redshift-using-automatic-mounting-of-the-aws-glue-data-catalog/>
+e <https://docs.aws.amazon.com/redshift/latest/dg/doc-history.html>.
+
 ## DuckDB
 
 Documentação:
@@ -586,6 +595,17 @@ Os guias que nomeiam o driver SQLAlchemy do DuckDB, lidos em 2026-09-26:
 - <https://duckdb.org/docs/current/guides/python/jupyter.html>
 - <https://motherduck.com/docs/integrations/language-apis-and-drivers/python/sqlalchemy/>
 
+A documentação da extensão `iceberg` do DuckDB 1.5, lida em 2026-10-31 para a avaliação do
+suporte a Iceberg; o endereço `current` já leva à documentação do DuckDB 2.0:
+<https://duckdb.org/docs/1.5/core_extensions/iceberg/overview.html>,
+<https://duckdb.org/docs/1.5/core_extensions/iceberg/catalogs.html>,
+<https://duckdb.org/docs/1.5/core_extensions/iceberg/writing_to_iceberg.html>,
+<https://duckdb.org/docs/1.5/core_extensions/iceberg/iceberg_options.html>,
+<https://duckdb.org/docs/1.5/core_extensions/iceberg/iceberg_functions.html>,
+<https://duckdb.org/docs/1.5/core_extensions/iceberg/troubleshooting.html>,
+<https://duckdb.org/docs/current/core_extensions/iceberg/overview.html> e
+<https://duckdb.org/docs/stable/core_extensions/iceberg/overview.html>.
+
 ## PyArrow
 
 - <https://arrow.apache.org/docs/python/parquet.html>
@@ -753,6 +773,12 @@ Especificação do catálogo REST do Iceberg (namespaces e commit de várias tab
 - <https://github.com/apache/iceberg/blob/main/format/spec.md>
 - <https://github.com/apache/iceberg-python> (`pyiceberg/catalog/__init__.py` e `pyiceberg/catalog/rest/__init__.py`)
 
+Consultadas em 2026-10-31 para a avaliação do suporte a Iceberg ao lado do Delta (o commit pelo
+catálogo, as tabelas de sistema de arquivos que o formato v4 remove, o `add_files` e o
+`GlueCatalog`): <https://github.com/apache/iceberg-python/releases/tag/pyiceberg-0.12.0>,
+<https://py.iceberg.apache.org/api/>, <https://iceberg.apache.org/spec/> e
+<https://raw.githubusercontent.com/apache/iceberg/main/format/spec.md>.
+
 ## AWS Glue Data Catalog
 
 - <https://docs.aws.amazon.com/glue/latest/dg/table-optimizers.html>
@@ -797,6 +823,13 @@ Crawler de tabelas Delta Lake (tabelas nativas e de manifesto simbólico), consu
 
 - <https://docs.aws.amazon.com/glue/latest/dg/crawler-delta-lake.html>
 
+Consultadas em 2026-10-31 para a avaliação do suporte a Iceberg (o endpoint REST, a trava do
+`VersionId` e os otimizadores de tabela):
+<https://docs.aws.amazon.com/glue/latest/dg/connect-glu-iceberg-rest.html>,
+<https://docs.aws.amazon.com/glue/latest/webapi/API_UpdateTable.html>,
+<https://docs.aws.amazon.com/glue/latest/dg/table-optimizers.html> e
+<https://docs.aws.amazon.com/glue/latest/dg/optimization-prerequisites.html>.
+
 ## Amazon Athena
 
 - <https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg.html>
@@ -822,6 +855,13 @@ Crawler de tabelas Delta Lake (tabelas nativas e de manifesto simbólico), consu
 - <https://docs.aws.amazon.com/athena/latest/ug/unsupported-ddl.html>
 - <https://docs.aws.amazon.com/prescriptive-guidance/latest/apache-iceberg-on-aws/iceberg-athena.html>
 - <https://aws.amazon.com/blogs/big-data/perform-upserts-in-a-data-lake-using-amazon-athena-and-apache-iceberg/>
+
+Consultadas em 2026-10-31 para a avaliação do suporte a Iceberg (o merge-on-read, o `OPTIMIZE`, o
+`VACUUM` e a leitura nativa de uma tabela Delta registrada no Glue):
+<https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg-data-optimization.html>,
+<https://docs.aws.amazon.com/athena/latest/ug/querying-iceberg-updating-iceberg-table-data.html>,
+<https://docs.aws.amazon.com/athena/latest/ug/delta-lake-tables.html> e
+<https://docs.aws.amazon.com/athena/latest/ug/delta-lake-tables-getting-started.html>.
 
 ## AWS Lake Formation
 
@@ -978,6 +1018,10 @@ Novidades e blog:
 - <https://aws.amazon.com/blogs/big-data/govern-amazon-redshift-data-across-accounts-with-sagemaker-unified-studio/>
 - <https://aws.amazon.com/blogs/big-data/tailor-amazon-sagemaker-unified-studio-project-environments-to-your-needs-using-custom-blueprints/>
 - <https://aws.amazon.com/about-aws/whats-new/2026/01/sagemaker-unified-studio-adds-cross-region-iam/>
+
+Consultada em 2026-10-31 para a avaliação do suporte a Iceberg (as permissões das tabelas que o
+projeto cria no Glue):
+<https://docs.aws.amazon.com/sagemaker-unified-studio/latest/userguide/lake-formation-permissions-for-amazon-sagemaker-unified-studio.html>.
 
 ## Amazon S3
 
@@ -1180,6 +1224,15 @@ que o template do pdoc 16.0.0 carrega; a 12.2.0, de 2026-10-13, a mais nova), o 
 As cores do aviso do Bootstrap 5.3.3 no modo escuro, lidas em 2026-10-16 para a caixa
 `> [!WARNING]` de `docs/theme/custom.css` (texto `#ffda6a`, fundo `#332701`, borda `#997404`):
 <https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.css>.
+
+API JSON do PyPI, consultada em 2026-10-31 para a avaliação do suporte a Iceberg (as versões do
+PyIceberg e as rodas das extensões do DuckDB 1.5.5): <https://pypi.org/pypi/pyiceberg/json>,
+<https://pypi.org/pypi/pyiceberg/0.12.0/json>, <https://pypi.org/pypi/pyiceberg-core/json>,
+<https://pypi.org/pypi/duckdb-extension-iceberg/json>,
+<https://pypi.org/pypi/duckdb-extension-avro/json>,
+<https://pypi.org/pypi/duckdb-extension-aws/json>,
+<https://pypi.org/pypi/duckdb-extension-delta/json> e
+<https://pypi.org/pypi/duckdb-extension-httpfs/json>.
 
 ## Delta Lake
 

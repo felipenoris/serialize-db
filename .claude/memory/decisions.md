@@ -2666,3 +2666,69 @@ and the `publish_redshift`, because one table per engine did not fit the page's 
 window. The runbook's measurements of the load's peak and of the export follow the same form.
 
 `docs/index.md` ("Multithreading"), `docs/operacao.md` ("Carga inicial", "Exportação").
+
+## The premises of the Iceberg evaluation (2026-10-31)
+
+At 23:19 UTC the user asked for a feasibility evaluation of supporting Iceberg "nos mesmos moldes do
+que fizemos para delta", in two ways: (1) without a service, a library that reads and writes the
+folder of metadata and Parquet files that defines the table; (2) the Glue catalog of the SageMaker
+project. The answers to the clarifying questions, at 23:38 UTC: each base chooses its format, Delta
+or Iceberg, and the two are controlled independently; publishing in Glue would let clients read
+from Athena or Redshift; the user may create new Glue databases; path (1) is when only the library
+writes, and path (2) is when the writes are made with Athena, Glue or Redshift. Whether the library
+also writes through Glue in path (2) was asked back and has no answer
+(`.claude/memory/OPEN_QUESTIONS.md`, "O Iceberg ao lado do Delta"). The evaluation is the document
+"Suporte a Iceberg no serialize-db" of the Claude project, with the experiments in the library's
+`avaliacao-iceberg/`; its measurements are in `.claude/memory/delta.md` ("Alternatives assessed"),
+and nothing in `src/` changed.
+
+`.claude/memory/OPEN_QUESTIONS.md`, `.claude/memory/delta.md`, `REFERENCES.md`.
+
+## The target probed before Iceberg is implemented (2026-11-01)
+
+On the card "Qual o próximo passo do suporte a Iceberg?", the user chose "Sondar o alvo primeiro"
+(00:05:19 UTC) over "Implementar o caminho (1)", "Registrar o Delta no Glue" (the Delta tables in
+Glue for Athena only) and "Parar na avaliação". At 00:03:42 UTC the user had asked whether Glue
+supports Delta and whether the options excluded one another; the answer was that the Glue Data
+Catalog registers a Delta table by name and location (`table_type = 'DELTA'`), that Athena reads it
+natively, read-only and at the current version, that Redshift does not read Delta through Glue,
+that the options were only the next step, and that the probe would include a Delta table read by
+Athena. `probes/operacao/probe_iceberg.py` is that probe, and it also reads the Delta table through
+Redshift's `awsdatacatalog`, which checks that answer; nothing in `src/` changes before its run.
+
+`probes/operacao/probe_iceberg.py`, `probes/README.md`, `.claude/memory/OPEN_QUESTIONS.md`.
+
+## The reason Delta was chosen over Iceberg (2026-11-01)
+
+At 00:07:15 UTC the user stated that, when the project began, the only reason the library
+implemented Delta instead of Iceberg was the restriction that Iceberg needed a service: the format
+could not be used without a service running, while Delta needs none. The answer, at 00:08 UTC: the
+Iceberg specification asks for a check-and-put swap of the pointer to the current `metadata.json`
+("storing a pointer in a metastore or database that is updated with a check-and-put operation",
+section "Metastore Tables"), not for a service; the premise of 2026-09-19 ("The pipeline outside
+this repository") read it as a catalog service, and the technology review already named the way
+without one, a catalog file the library moves. The library has done check-and-put on S3 since the
+named snapshots, with the `If-Match` of `_serialize_db/snapshots.json`, exercised in the target, and
+path (1) uses the same write for a pointer per table. That catalog is the library's own, not a
+standard: only the library writes through it, the reason path (1) is "only the library writes", and
+Athena and Redshift see the table only through its registration in Glue. Delta stays simpler,
+because its protocol defines the commit and delta-rs implements it; with Iceberg the library would
+write the catalog, the orphan removal and the compaction.
+
+`src/serialize_db/storage.py` (`Storage.write_text`, `if_match`), `.claude/memory/OPEN_QUESTIONS.md`
+("O Iceberg ao lado do Delta").
+
+## The Glue database the target allows (2026-11-01)
+
+At 15:52:54 UTC the user stated that the target still does not let them create Glue databases: the
+project configured for their team gives access only to the database `glue_db_<id>`, where they can
+create tables, and they are working with the infrastructure team so that new databases can be
+created. Until then the probes run against that database. The premise of 2026-10-31 that the user
+may create new Glue databases ("The premises of the Iceberg evaluation (2026-10-31)") holds only
+after that change. `probes/operacao/probe_iceberg.py` takes `--database` for an existing database:
+there it reads the database, creates only its own tables, named with the prefix
+`serialize_db_operacao_iceberg_<id>_`, whose `<id>` is the work root's, deletes them by name at the
+end and never deletes the database.
+
+`probes/operacao/probe_iceberg.py`, `probes/README.md`, `.claude/memory/OPEN_QUESTIONS.md`
+("O Iceberg ao lado do Delta").
