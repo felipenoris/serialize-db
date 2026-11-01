@@ -2787,8 +2787,57 @@ def test_parallel_gain_removal_statements_drop_the_tables_and_their_control_rows
 
 
 # --------------------------------------------------------------------------------------------------
-# probe_iceberg.py: as linhas do Athena, os workgroups, as permissões do banco, a trava do
-# VersionId, a deleção do Athena, a leitura do Redshift e os argumentos
+# probe_iceberg.py: os nomes da rodada, as linhas do Athena, os workgroups, as permissões do banco,
+# a trava do VersionId, a deleção do Athena, a leitura do Redshift, a limpeza do Glue e os
+# argumentos
+
+
+class FakeGlue:
+    """Um cliente Glue com as operações que ``clean_glue`` da sonda do Iceberg chama: os bancos com
+    as tabelas de cada um, as tabelas cujo ``DeleteTable`` o serviço nega e as chamadas na ordem.
+    A tabela que não existe dá ``EntityNotFoundException``, como no Glue."""
+
+    def __init__(
+        self,
+        tables: dict[str, set[str]],
+        denied: set[str],
+    ) -> None:
+        self.tables = tables
+        self.denied = denied
+        self.calls: list[tuple[str, str]] = []
+
+    def delete_table(
+        self,
+        **request: str,
+    ) -> None:
+        name = request["Name"]
+        self.calls.append(("delete_table", name))
+        if name in self.denied:
+            error = {"Code": "AccessDeniedException", "Message": "sem permissão"}
+            raise botocore.exceptions.ClientError({"Error": error}, "DeleteTable")
+        tables = self.tables[request["DatabaseName"]]
+        if name not in tables:
+            error = {"Code": "EntityNotFoundException", "Message": "a tabela não existe"}
+            raise botocore.exceptions.ClientError({"Error": error}, "DeleteTable")
+        tables.remove(name)
+
+    def delete_database(
+        self,
+        **request: str,
+    ) -> None:
+        self.calls.append(("delete_database", request["Name"]))
+        del self.tables[request["Name"]]
+
+
+def test_iceberg_run_names_give_every_table_the_run_prefix() -> None:
+    """``run_names`` da sonda do Iceberg dá às tabelas da rodada o prefixo com o id da raiz de
+    trabalho, e o banco fica como passado: o de ``--database`` ou o novo."""
+    names = probe_iceberg.run_names("glue_db_projeto", "1a2b3c4d")
+    assert names.database == "glue_db_projeto"
+    assert names.prefix == "serialize_db_operacao_iceberg_1a2b3c4d_"
+    assert names.version == "serialize_db_operacao_iceberg_1a2b3c4d_versao"
+    assert names.iceberg == "serialize_db_operacao_iceberg_1a2b3c4d_lancamentos"
+    assert names.delta == "serialize_db_operacao_iceberg_1a2b3c4d_delta"
 
 
 def test_iceberg_result_rows_drop_the_header_and_read_the_null() -> None:
@@ -2922,20 +2971,64 @@ def test_iceberg_redshift_select_wants_the_one_row_the_delete_left() -> None:
     ]
 
 
-def test_iceberg_parse_arguments_wants_the_delta_table_on_s3(
+def test_iceberg_clean_glue_deletes_only_the_run_tables_and_the_database_it_created(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture,
 ) -> None:
-    """``parse_arguments`` da sonda do Iceberg: sem opções, nenhuma tabela Delta nem workgroup; a
-    URI do ``--delta`` perde a barra final, e um caminho fora do S3 é erro de uso, com o código
-    2."""
+    """``clean_glue`` da sonda do Iceberg apaga, pelos nomes da rodada, só as tabelas dela: num
+    banco que já existia, a outra tabela e o banco ficam, e a tabela que a rodada não criou é
+    impressa; o banco sai só quando a sonda o criou, o ``DeleteTable`` negado reprova a checagem e
+    ``SERIALIZE_DB_TEST_KEEP`` mantém tudo."""
+    monkeypatch.delenv(operation_lib.KEEP_VARIABLE, raising=False)
+    monkeypatch.setattr(operation_lib, "FAILED", [])
+    monkeypatch.setattr(operation_lib, "PASSED", [])
+    title = "as tabelas da rodada apagadas do Glue, e o banco criado por ela"
+    names = probe_iceberg.run_names("glue_db_projeto", "1a2b3c4d")
+
+    # O banco que já existe, com a tabela de outro e as duas que a rodada criou, sem a Delta.
+    existing = FakeGlue({"glue_db_projeto": {"outra", names.version, names.iceberg}}, set())
+    probe_iceberg.clean_glue(existing, names, False)
+    assert existing.tables == {"glue_db_projeto": {"outra"}}
+    assert ("delete_database", "glue_db_projeto") not in existing.calls
+    assert f"tabela não criada: {names.delta}" in capsys.readouterr().out
+    assert operation_lib.PASSED == [title]
+
+    # O banco que a sonda criou sai depois das tabelas.
+    created = FakeGlue({"glue_db_projeto": {names.version}}, set())
+    probe_iceberg.clean_glue(created, names, True)
+    assert created.tables == {}
+    assert created.calls[-1] == ("delete_database", "glue_db_projeto")
+
+    # O DeleteTable negado é o problema da checagem.
+    denied = FakeGlue({"glue_db_projeto": {names.version}}, {names.version})
+    probe_iceberg.clean_glue(denied, names, False)
+    assert operation_lib.FAILED == [title]
+
+    # SERIALIZE_DB_TEST_KEEP mantém as tabelas e o banco.
+    monkeypatch.setenv(operation_lib.KEEP_VARIABLE, "1")
+    kept = FakeGlue({"glue_db_projeto": {names.version}}, set())
+    probe_iceberg.clean_glue(kept, names, True)
+    assert kept.calls == []
+
+
+def test_iceberg_parse_arguments_wants_s3_for_delta_and_a_plain_database_name(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """``parse_arguments`` da sonda do Iceberg: sem opções, nenhum banco, tabela Delta nem
+    workgroup; o banco de ``--database`` fica como passado, a URI do ``--delta`` perde a barra
+    final, e um banco fora de minúsculas, dígitos e ``_`` ou um caminho fora do S3 é erro de uso,
+    com o código 2."""
     monkeypatch.setattr(sys, "argv", ["probe_iceberg.py"])
     arguments = probe_iceberg.parse_arguments()
+    assert arguments.database is None
     assert arguments.delta is None
     assert arguments.workgroup is None
 
     command = [
         "probe_iceberg.py",
+        "--database",
+        "glue_db_projeto",
         "--delta",
         "s3://bucket/base/prd/cad_contas/",
         "--workgroup",
@@ -2943,8 +3036,15 @@ def test_iceberg_parse_arguments_wants_the_delta_table_on_s3(
     ]
     monkeypatch.setattr(sys, "argv", command)
     arguments = probe_iceberg.parse_arguments()
+    assert arguments.database == "glue_db_projeto"
     assert arguments.delta == "s3://bucket/base/prd/cad_contas"
     assert arguments.workgroup == "wg"
+
+    monkeypatch.setattr(sys, "argv", ["probe_iceberg.py", "--database", "Glue-DB"])
+    with pytest.raises(SystemExit) as refused:
+        probe_iceberg.parse_arguments()
+    assert refused.value.code == 2
+    assert "o banco do Glue tem só minúsculas, dígitos e _" in capsys.readouterr().err
 
     monkeypatch.setattr(sys, "argv", ["probe_iceberg.py", "--delta", "/dados/prd/cad_contas"])
     with pytest.raises(SystemExit) as refused:

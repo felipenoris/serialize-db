@@ -267,21 +267,26 @@ biblioteca do projeto Claude, fora do repositório, e o `POC.md`, o `estrategia.
   `probes/catalog.py` mede o gatilho, uma tabela Iceberg no Glue ou um table bucket no S3 Tables:
   nas leituras das baterias de 2026-10-05 a 2026-10-14, a última às 22:01 de 2026-10-14, o Glue
   seguia com um banco e uma tabela Parquet, e o Lake Formation e o S3 Tables não responderam ao
-  papel do projeto (`.claude/memory/environments.md`). Em 2026-10-31 o usuário pediu a avaliação do Iceberg
-  ao lado do Delta, com premissas novas: cada base escolhe o formato, o usuário pode criar bancos no
-  Glue, e o Glue serve aos clientes do Athena e do Redshift (`decisions.md`, "The premises of the
-  Iceberg evaluation (2026-10-31)"). A avaliação, o documento "Suporte a Iceberg no serialize-db"
-  do projeto Claude, achou viáveis os dois caminhos, a pasta sem serviço e o Glue com escritores
-  externos, e as medições locais estão em `.claude/memory/delta.md`. Uma base Delta particionada só
-  passa a Iceberg com os arquivos reescritos: o `add_files` do PyIceberg 0.12.0 registra com a
-  partição nula um arquivo sem a coluna de partição, como os do Delta (medido em 2026-10-31). O
-  Apache XTable converte os metadados sem tocar nos arquivos. O risco a observar no protocolo Delta
-  é o recurso `catalogManaged`, que leva o commit para um catálogo. O próximo passo é sondar o alvo
-  antes de implementar (`decisions.md`, "The target probed before Iceberg is implemented
-  (2026-11-01)"): `probes/operacao/probe_iceberg.py` cria um banco no Glue, testa a trava do
-  `VersionId`, grava pelo Athena uma tabela Iceberg com `DELETE`, lê pelo Athena uma tabela Delta
-  registrada no Glue e lê as duas pelo `awsdatacatalog` do Redshift. Esperam a execução da sonda no alvo e a palavra
-  do usuário sobre a biblioteca também gravar pelo Glue no caminho (2), que o documento supõe.
+  papel do projeto (`.claude/memory/environments.md`). Em 2026-10-31 o usuário pediu a avaliação do
+  Iceberg ao lado do Delta, com premissas novas: cada base escolhe o formato, o usuário pode criar
+  bancos no Glue, e o Glue serve aos clientes do Athena e do Redshift (`decisions.md`, "The premises
+  of the Iceberg evaluation (2026-10-31)"). A avaliação, o documento "Suporte a Iceberg no
+  serialize-db" do projeto Claude, achou viáveis os dois caminhos, a pasta sem serviço e o Glue com
+  escritores externos, e as medições locais estão em `.claude/memory/delta.md`. Uma base Delta
+  particionada só passa a Iceberg com os arquivos reescritos: o `add_files` do PyIceberg 0.12.0
+  registra com a partição nula um arquivo sem a coluna de partição, como os do Delta (medido em
+  2026-10-31). O Apache XTable converte os metadados sem tocar nos arquivos. O risco a observar no
+  protocolo Delta é o recurso `catalogManaged`, que leva o commit para um catálogo. O próximo passo
+  é sondar o alvo antes de implementar (`decisions.md`, "The target probed before Iceberg is
+  implemented (2026-11-01)"): `probes/operacao/probe_iceberg.py` cria um banco no Glue, ou usa o de
+  `--database`, testa a trava do `VersionId`, grava pelo Athena uma tabela Iceberg com `DELETE`, lê
+  pelo Athena uma tabela Delta registrada no Glue e lê as duas pelo `awsdatacatalog` do Redshift. Em
+  2026-11-01 o papel do alvo ainda não cria bancos no Glue: cria tabelas só no banco do projeto,
+  `glue_db_<id>`, e a equipe de infra prepara a permissão; até lá a sonda roda com `--database`
+  nesse banco, onde cria e apaga só as próprias tabelas (`decisions.md`, "The Glue database the
+  target allows (2026-11-01)"). Esperam a execução da sonda no alvo, a permissão de criar bancos no
+  Glue e a palavra do usuário sobre a biblioteca também gravar pelo Glue no caminho (2), que o
+  documento supõe.
 - **O prefixo `_` das constantes, do alias e dos loggers que só o próprio módulo usa.** A regra
   de níveis dá o prefixo `_` ao nome que só o próprio módulo usa, e os nomes dos cartões de
   2026-10-11 o ganharam (`decisions.md`, "The `_` prefix of the names only their own module

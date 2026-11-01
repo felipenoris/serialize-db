@@ -2717,3 +2717,18 @@ write the catalog, the orphan removal and the compaction.
 
 `src/serialize_db/storage.py` (`Storage.write_text`, `if_match`), `.claude/memory/OPEN_QUESTIONS.md`
 ("O Iceberg ao lado do Delta").
+
+## The Glue database the target allows (2026-11-01)
+
+At 15:52:54 UTC the user stated that the target still does not let them create Glue databases: the
+project configured for their team gives access only to the database `glue_db_<id>`, where they can
+create tables, and they are working with the infrastructure team so that new databases can be
+created. Until then the probes run against that database. The premise of 2026-10-31 that the user
+may create new Glue databases ("The premises of the Iceberg evaluation (2026-10-31)") holds only
+after that change. `probes/operacao/probe_iceberg.py` takes `--database` for an existing database:
+there it reads the database, creates only its own tables, named with the prefix
+`serialize_db_operacao_iceberg_<id>_`, whose `<id>` is the work root's, deletes them by name at the
+end and never deletes the database.
+
+`probes/operacao/probe_iceberg.py`, `probes/README.md`, `.claude/memory/OPEN_QUESTIONS.md`
+("O Iceberg ao lado do Delta").

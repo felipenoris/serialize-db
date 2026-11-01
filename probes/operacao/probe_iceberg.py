@@ -5,30 +5,33 @@ antes da implementação (``.claude/memory/decisions.md``, "The target probed be
 implemented (2026-11-01)"), sem pacote novo: o Glue e o Athena pelo ``boto3`` e o Redshift pela
 conexão de ``serialize_db.engine.redshift.connect``. Ela:
 
-1. cria no Glue o banco ``serialize_db_operacao_iceberg_<id>``, com o local na raiz de trabalho, e
-   imprime o ``CreateTableDefaultPermissions`` que ele recebeu;
-2. cria nele a tabela ``sonda_versao`` e a atualiza duas vezes pelo ``UpdateTable``, as duas com o
-   ``VersionId`` lido antes da primeira;
-3. cria pelo Athena a tabela Iceberg ``lancamentos``, particionada por ``data_base``, com o local
-   na raiz de trabalho, grava duas linhas, apaga uma e lê os arquivos da tabela em ``$files``, as
-   linhas e o registro dela no Glue;
-4. com ``--delta``, registra pelo Athena a tabela Delta da URI como ``delta_tabela``, só pelo
+1. cria no Glue o banco ``serialize_db_operacao_iceberg_<id>``, com o local na raiz de trabalho,
+   ou, com ``--database``, lê o banco que já existe, e imprime o ``CreateTableDefaultPermissions``
+   dele;
+2. cria no banco a tabela ``<prefixo>versao`` e a atualiza duas vezes pelo ``UpdateTable``, as duas
+   com o ``VersionId`` lido antes da primeira;
+3. cria pelo Athena a tabela Iceberg ``<prefixo>lancamentos``, particionada por ``data_base``, com o
+   local na raiz de trabalho, grava duas linhas, apaga uma e lê os arquivos da tabela em
+   ``$files``, as linhas e o registro dela no Glue;
+4. com ``--delta``, registra pelo Athena a tabela Delta da URI como ``<prefixo>delta``, só pelo
    local, e conta as linhas dela pelo Athena e pelo ``delta_scan`` do DuckDB;
-5. no Redshift, lê ``data_catalog_auto_mount``, os esquemas de ``awsdatacatalog``, as linhas de
-   ``lancamentos`` e, com ``--delta``, a contagem de ``delta_tabela``, e tenta um ``INSERT`` em
-   ``lancamentos``; com a leitura de ``lancamentos`` recusada e
-   ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE`` definida, repete as três primeiras numa sessão sem o
-   ``USE`` do banco do datashare.
+5. no Redshift, lê ``data_catalog_auto_mount``, os esquemas de ``awsdatacatalog``, as linhas da
+   tabela Iceberg e, com ``--delta``, a contagem da tabela Delta, e tenta um ``INSERT`` na tabela
+   Iceberg; com a leitura da tabela Iceberg recusada e ``SERIALIZE_DB_REDSHIFT_SHARE_DATABASE``
+   definida, repete as três primeiras numa sessão sem o ``USE`` do banco do datashare.
+
+O ``<prefixo>`` das tabelas é ``serialize_db_operacao_iceberg_<id>_``, com o ``<id>`` da raiz de
+trabalho, e separa as tabelas da rodada das outras de um banco que já existe.
 
 Checagens:
 
-- o banco criado no Glue;
+- o banco criado no Glue, ou o de ``--database`` lido;
 - o segundo ``UpdateTable`` recusado com ``ConcurrentModificationException``;
 - o ``DELETE`` do Athena com um arquivo de deleção (``content`` 1) em ``$files``, e uma linha na
   tabela;
 - com ``--delta``, a contagem do Athena igual à do ``delta_scan``;
-- ``lancamentos`` lida pelo Redshift com uma linha, na sessão da biblioteca;
-- o banco da sonda apagado do Glue no fim.
+- a tabela Iceberg lida pelo Redshift com uma linha, na sessão da biblioteca;
+- as tabelas da rodada apagadas do Glue no fim, e o banco, quando a sonda o criou.
 
 Leituras: o ``CreateTableDefaultPermissions``, o registro de cada tabela no Glue (o tipo, o local,
 o ``VersionId``, ``IsRegisteredWithLakeFormation`` e os parâmetros, com o ``metadata_location`` do
@@ -36,21 +39,23 @@ Iceberg), a configuração do workgroup, o local do resultado, os bytes lidos e 
 consulta do Athena, e cada resposta do Redshift, o ``INSERT`` incluído, que a documentação recusa
 à identidade federada.
 
-A sonda grava sob a raiz de trabalho, no S3, e no banco novo do Glue, que ela apaga no fim pelo
-``DeleteTable`` e pelo ``DeleteDatabase`` do Glue, nunca pelo ``DROP`` do Athena: o Glue não toca
-os arquivos de uma tabela, e a pasta da tabela Delta, que a sonda só lê, fica intacta.
-``SERIALIZE_DB_TEST_KEEP`` mantém o banco e a raiz. O Athena grava o resultado de cada consulta
-no local do workgroup quando ele impõe a própria configuração (``EnforceWorkGroupConfiguration``),
-e a sonda imprime esse local sem apagá-lo. Sem ``--workgroup``, a sonda toma o único workgroup
-habilitado do Athena SQL fora do ``primary``; com nenhum ou com mais de um, ou com a raiz das
-suítes fora do S3, para com o código 2 antes de criar o banco.
+A sonda grava sob a raiz de trabalho, no S3, e no Glue: as tabelas da rodada e o banco novo, sem
+``--database``. No fim ela apaga as tabelas da rodada, pelos nomes delas, com o ``DeleteTable`` do
+Glue, e o banco que criou com o ``DeleteDatabase``, nunca pelo ``DROP`` do Athena: o Glue não toca
+os arquivos de uma tabela, e a pasta da tabela Delta, que a sonda só lê, fica intacta. As outras
+tabelas e o banco de ``--database`` ficam como estavam. ``SERIALIZE_DB_TEST_KEEP`` mantém as
+tabelas, o banco e a raiz. O Athena grava o resultado de cada consulta no local do workgroup quando
+ele impõe a própria configuração (``EnforceWorkGroupConfiguration``), e a sonda imprime esse local
+sem apagá-lo. Sem ``--workgroup``, a sonda toma o único workgroup habilitado do Athena SQL fora do
+``primary``; com nenhum ou com mais de um, ou com a raiz das suítes fora do S3, para com o código 2
+antes de gravar no Glue.
 
-Chamadas: ``glue:CreateDatabase``, ``GetDatabase``, ``CreateTable``, ``GetTable``, ``GetTables``,
-``UpdateTable``, ``DeleteTable``, ``DeleteDatabase``; ``athena:ListWorkGroups``, ``GetWorkGroup``,
-``StartQueryExecution``, ``GetQueryExecution``, ``GetQueryResults``, ``StopQueryExecution``; as
-leituras e as escritas do S3 sob a raiz de trabalho e no local de resultados do Athena, e as
-leituras da tabela Delta; ``redshift-serverless:GetWorkgroup`` e ``GetCredentials`` e as
-consultas no Redshift.
+Chamadas: ``glue:CreateDatabase`` e ``DeleteDatabase`` sem ``--database``, ``GetDatabase``,
+``CreateTable``, ``GetTable``, ``UpdateTable`` e ``DeleteTable``;
+``athena:ListWorkGroups`` sem ``--workgroup``, ``GetWorkGroup``, ``StartQueryExecution``,
+``GetQueryExecution``, ``GetQueryResults`` e ``StopQueryExecution``; as leituras e as escritas do
+S3 sob a raiz de trabalho e no local de resultados do Athena, e as leituras da tabela Delta;
+``redshift-serverless:GetWorkgroup`` e ``GetCredentials`` e as consultas no Redshift.
 
 Exemplo:
 
@@ -59,6 +64,8 @@ Exemplo:
     export SERIALIZE_DB_TEST_S3_ROOT=s3://bucket/prefixo
     export SERIALIZE_DB_REDSHIFT_WORKGROUP=workgroup SERIALIZE_DB_REDSHIFT_SCHEMA=esquema
     .venv/bin/python probes/operacao/probe_iceberg.py --delta s3://bucket/base/prd/cad_contas
+    .venv/bin/python probes/operacao/probe_iceberg.py --database banco_do_projeto \
+        --delta s3://bucket/base/prd/cad_contas
 """
 
 from __future__ import annotations
@@ -66,6 +73,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -84,10 +92,9 @@ from serialize_db.resources import environment_limits
 from serialize_db.schema import literal
 from serialize_db.storage import Storage
 
-VERSION_TABLE = "sonda_versao"
-ICEBERG_TABLE = "lancamentos"
-DELTA_TABLE = "delta_tabela"
 CATALOG = "awsdatacatalog"
+# O nome de um banco do Glue, que entra no SQL do Athena sem aspas e no do Redshift entre aspas.
+DATABASE_NAME = re.compile(r"[a-z0-9_]+")
 # A espera de cada consulta do Athena, lida a cada segundo; passado o prazo, a sonda a para.
 ATHENA_TIMEOUT_SECONDS = 600
 ATHENA_POLL_SECONDS = 1.0
@@ -112,6 +119,17 @@ class AthenaResult:
     rows: list[list[str | None]]
 
 
+@dataclasses.dataclass(frozen=True)
+class Names:
+    """Os nomes da rodada no Glue: o banco e as tabelas da sonda, que levam o prefixo."""
+
+    database: str
+    prefix: str
+    version: str
+    iceberg: str
+    delta: str
+
+
 @dataclasses.dataclass
 class Answer:
     """A resposta de um comando no Redshift: as linhas, ou ``None`` e a mensagem do erro."""
@@ -121,6 +139,22 @@ class Answer:
 
 
 # ---------------------------------------------------------------- o que a sonda decide do que lê
+
+
+def run_names(
+    database: str,
+    run_id: str,
+) -> Names:
+    """Os nomes da rodada: ``database``, o banco, e as tabelas com o prefixo
+    ``serialize_db_operacao_iceberg_<run_id>_``, em que ``run_id`` é o id da raiz de trabalho."""
+    prefix = f"serialize_db_operacao_iceberg_{run_id}_"
+    return Names(
+        database=database,
+        prefix=prefix,
+        version=f"{prefix}versao",
+        iceberg=f"{prefix}lancamentos",
+        delta=f"{prefix}delta",
+    )
 
 
 def describe(
@@ -454,24 +488,44 @@ def create_glue_database(
     return created
 
 
-def version_lock(
+def read_glue_database(
     glue: Any,
     database: str,
+) -> bool:
+    """Seção 1 com ``--database``, o banco que já existe no Glue: o local e o
+    ``CreateTableDefaultPermissions`` que o ``GetDatabase`` devolve; devolve se o banco foi lido.
+    Checagem: o banco lido."""
+    print(f"\n# 1. O banco que já existe no Glue: {database}")
+    problems = []
+    try:
+        found = glue.get_database(Name=database)["Database"]
+        print(f"local: {found.get('LocationUri')}")
+        print("CreateTableDefaultPermissions:", found.get("CreateTableDefaultPermissions"))
+        print("leitura:", permissions_reading(found))
+    except AWS_ERRORS as error:
+        problems.append(describe(error))
+    lib.check(f"o banco {database} lido no Glue", problems)
+    return not problems
+
+
+def version_lock(
+    glue: Any,
+    names: Names,
 ) -> None:
-    """Seção 2, a trava do ``VersionId``: a tabela ``sonda_versao`` atualizada duas vezes pelo
+    """Seção 2, a trava do ``VersionId``: a tabela ``<prefixo>versao`` atualizada duas vezes pelo
     ``UpdateTable`` com o ``VersionId`` lido antes da primeira, e o estado final. Checagem: o
     primeiro aceito e o segundo recusado com ``ConcurrentModificationException``."""
     print("\n# 2. A trava do VersionId do UpdateTable")
     title = "o segundo UpdateTable com o VersionId velho recusado (ConcurrentModificationException)"
-    table = {"Name": VERSION_TABLE, "TableType": "EXTERNAL_TABLE", "Parameters": {"passo": "0"}}
+    table = {"Name": names.version, "TableType": "EXTERNAL_TABLE", "Parameters": {"passo": "0"}}
     try:
-        glue.create_table(DatabaseName=database, TableInput=table)
-        found = glue.get_table(DatabaseName=database, Name=VERSION_TABLE)["Table"]
+        glue.create_table(DatabaseName=names.database, TableInput=table)
+        found = glue.get_table(DatabaseName=names.database, Name=names.version)["Table"]
     except AWS_ERRORS as error:
-        lib.check(title, [f"a tabela {VERSION_TABLE} não criada: {describe(error)}"])
+        lib.check(title, [f"a tabela {names.version} não criada: {describe(error)}"])
         return
     version = found.get("VersionId")
-    print(f"{VERSION_TABLE} criada com VersionId {version}")
+    print(f"{names.version} criada com VersionId {version}")
 
     # Os dois passos levam o mesmo VersionId, o de antes do primeiro: o segundo é o escritor que
     # leu a tabela antes do commit de outro.
@@ -479,7 +533,7 @@ def version_lock(
     for step in ("1", "2"):
         table["Parameters"] = {"passo": step}
         try:
-            glue.update_table(DatabaseName=database, TableInput=table, VersionId=version)
+            glue.update_table(DatabaseName=names.database, TableInput=table, VersionId=version)
         except AWS_ERRORS as error:
             outcomes.append(error_code(error))
             print(f"UpdateTable do passo {step} com VersionId {version}: {describe(error)}")
@@ -489,18 +543,18 @@ def version_lock(
 
     # O estado final diz qual passo ficou na tabela.
     try:
-        final = glue.get_table(DatabaseName=database, Name=VERSION_TABLE)["Table"]
+        final = glue.get_table(DatabaseName=names.database, Name=names.version)["Table"]
         passo = final.get("Parameters", {}).get("passo")
         print(f"depois: VersionId {final.get('VersionId')}, passo {passo}")
     except AWS_ERRORS as error:
-        print(f"glue.get_table({VERSION_TABLE}): {describe(error)}")
+        print(f"glue.get_table({names.version}): {describe(error)}")
     lib.check(title, version_lock_problems(outcomes[0], outcomes[1]))
 
 
 def athena_iceberg(
     athena: Any,
     glue: Any,
-    database: str,
+    names: Names,
     workgroup: str,
     root: str,
 ) -> bool:
@@ -508,10 +562,10 @@ def athena_iceberg(
     ``INSERT`` de duas linhas, o ``DELETE`` de uma, ``$files``, as linhas e o registro no Glue;
     devolve se a tabela foi criada. Checagem: um arquivo de deleção e uma linha."""
     print("\n# 3. A tabela Iceberg do Athena com uma deleção")
-    title = f"o DELETE do Athena com um arquivo de deleção em $files e uma linha em {ICEBERG_TABLE}"
+    title = "o DELETE do Athena com um arquivo de deleção em $files e uma linha na tabela Iceberg"
     output = f"{root}/athena/"
-    name = f"{database}.{ICEBERG_TABLE}"
-    location = f"{root}/iceberg/{ICEBERG_TABLE}/"
+    name = f"{names.database}.{names.iceberg}"
+    location = f"{root}/iceberg/{names.iceberg}/"
     create = (
         f"CREATE TABLE {name} (id_lancamento bigint, data_base string, valor decimal(18, 2)) "
         f"PARTITIONED BY (data_base) LOCATION '{location}' "
@@ -535,13 +589,13 @@ def athena_iceberg(
 
     # Os arquivos que o snapshot atual registra, as linhas e o registro no Glue.
     files_sql = (
-        f'SELECT content, file_path, record_count FROM "{database}"."{ICEBERG_TABLE}$files" '
+        f'SELECT content, file_path, record_count FROM "{names.database}"."{names.iceberg}$files" '
         "ORDER BY content, file_path"
     )
     files = run_athena(athena, workgroup, output, files_sql)
     rows_sql = f"SELECT id_lancamento, data_base, valor FROM {name} ORDER BY id_lancamento"
     rows = run_athena(athena, workgroup, output, rows_sql)
-    print_glue_table(glue, database, ICEBERG_TABLE)
+    print_glue_table(glue, names.database, names.iceberg)
     problems = []
     for read in (files, rows):
         if read.state != "SUCCEEDED":
@@ -555,7 +609,7 @@ def athena_iceberg(
 def athena_delta(
     athena: Any,
     glue: Any,
-    database: str,
+    names: Names,
     workgroup: str,
     root: str,
     uri: str,
@@ -564,9 +618,9 @@ def athena_delta(
     tabela de ``uri``, a contagem pelo Athena e pelo ``delta_scan`` e o registro no Glue; devolve
     se a tabela foi registrada. Checagem: as duas contagens iguais."""
     print(f"\n# 4. A tabela Delta lida pelo Athena: {uri}")
-    title = f"{DELTA_TABLE} com as mesmas linhas pelo Athena e pelo delta_scan"
+    title = "a tabela Delta com as mesmas linhas pelo Athena e pelo delta_scan"
     output = f"{root}/athena/"
-    name = f"{database}.{DELTA_TABLE}"
+    name = f"{names.database}.{names.delta}"
     create = (
         f"CREATE EXTERNAL TABLE {name} LOCATION '{uri}/' TBLPROPERTIES ('table_type' = 'DELTA')"
     )
@@ -575,7 +629,7 @@ def athena_delta(
         lib.check(title, [f"CREATE EXTERNAL TABLE {result.state}: {result.reason}"])
         return False
     counted = run_athena(athena, workgroup, output, f"SELECT count(*) FROM {name}")
-    print_glue_table(glue, database, DELTA_TABLE)
+    print_glue_table(glue, names.database, names.delta)
 
     # A contagem da biblioteca, pelo leitor que a ingestão usa.
     try:
@@ -594,18 +648,18 @@ def athena_delta(
 
 
 def redshift_catalog(
-    database: str,
+    names: Names,
     with_iceberg: bool,
     with_delta: bool,
 ) -> None:
     """Seção 5, o Redshift pelo ``awsdatacatalog``, na sessão da biblioteca: o
-    ``data_catalog_auto_mount``, os esquemas do catálogo, as linhas de ``lancamentos``, a
-    contagem de ``delta_tabela`` e o ``INSERT``, este uma leitura; com a leitura recusada e o
-    banco do datashare na configuração, as três primeiras numa sessão sem o ``USE``. Checagem:
-    ``lancamentos`` com uma linha."""
+    ``data_catalog_auto_mount``, os esquemas do catálogo, as linhas da tabela Iceberg, a contagem
+    da tabela Delta e o ``INSERT``, este uma leitura; com a leitura recusada e o banco do
+    datashare na configuração, as três primeiras numa sessão sem o ``USE``. Checagem: a tabela
+    Iceberg com uma linha."""
     print(f"\n# 5. O Redshift pelo {CATALOG}")
-    title = f"{ICEBERG_TABLE} lida pelo Redshift no {CATALOG} com uma linha, a deleção aplicada"
-    iceberg = f'"{CATALOG}"."{database}"."{ICEBERG_TABLE}"'
+    title = f"a tabela Iceberg lida pelo Redshift no {CATALOG} com uma linha, a deleção aplicada"
+    iceberg = f'"{CATALOG}"."{names.database}"."{names.iceberg}"'
     readings = [
         "SHOW data_catalog_auto_mount",
         "SELECT database_name, schema_name, schema_type FROM svv_all_schemas "
@@ -613,7 +667,7 @@ def redshift_catalog(
     ]
     select = f"SELECT id_lancamento, data_base, valor FROM {iceberg} ORDER BY id_lancamento"
     insert_sql = f"INSERT INTO {iceberg} VALUES (3, '2026-08-31', 3.00)"
-    delta_table = f'"{CATALOG}"."{database}"."{DELTA_TABLE}"'
+    delta_table = f'"{CATALOG}"."{names.database}"."{names.delta}"'
     config = RedshiftConfig.from_environment()
     connection = open_session(config, "da biblioteca, a de serialize_db.engine.redshift.connect")
     if connection is None:
@@ -654,35 +708,71 @@ def redshift_catalog(
     lib.check(title, redshift_select_problems(answer))
 
 
-def delete_glue_database(
+def delete_run_table(
     glue: Any,
     database: str,
+    name: str,
+) -> list[str]:
+    """Apaga a tabela ``name`` da rodada pelo ``DeleteTable``; a que a rodada não chegou a criar é
+    impressa. Devolve o problema do apagamento recusado."""
+    try:
+        glue.delete_table(DatabaseName=database, Name=name)
+    except AWS_ERRORS as error:
+        if error_code(error) == "EntityNotFoundException":
+            print(f"tabela não criada: {name}")
+            return []
+        return [f"{name}: {describe(error)}"]
+    print(f"tabela apagada: {name}")
+    return []
+
+
+def clean_glue(
+    glue: Any,
+    names: Names,
+    created_database: bool,
 ) -> None:
-    """Apaga as tabelas do banco da sonda e o banco pelo Glue, que não toca os arquivos das
-    tabelas; ``SERIALIZE_DB_TEST_KEEP`` os mantém. Checagem: o banco apagado."""
-    print(f"\n# Limpeza do banco {database}")
+    """Apaga pelo Glue as tabelas da rodada, pelos nomes dela, e o banco quando a sonda o criou; o
+    Glue não toca os arquivos das tabelas, e as outras tabelas de um banco que já existia ficam.
+    ``SERIALIZE_DB_TEST_KEEP`` mantém tudo. Checagem: as tabelas, e o banco criado, apagados."""
+    print(f"\n# Limpeza no Glue: as tabelas {names.prefix}* de {names.database}")
     if os.environ.get(lib.KEEP_VARIABLE):
-        print(f"banco mantido por {lib.KEEP_VARIABLE}: {database}")
+        print(f"tabelas e banco mantidos por {lib.KEEP_VARIABLE}")
         return
     problems = []
-    try:
-        names = []
-        for page in glue.get_paginator("get_tables").paginate(DatabaseName=database):
-            for table in page["TableList"]:
-                names.append(table["Name"])
-        for name in names:
-            glue.delete_table(DatabaseName=database, Name=name)
-        glue.delete_database(Name=database)
-        print(f"banco apagado, com as tabelas {names}")
-    except AWS_ERRORS as error:
-        problems.append(describe(error))
-    lib.check(f"o banco {database} apagado do Glue", problems)
+    for name in (names.version, names.iceberg, names.delta):
+        problems.extend(delete_run_table(glue, names.database, name))
+    if created_database:
+        try:
+            glue.delete_database(Name=names.database)
+            print(f"banco apagado: {names.database}")
+        except AWS_ERRORS as error:
+            problems.append(describe(error))
+    lib.check("as tabelas da rodada apagadas do Glue, e o banco criado por ela", problems)
+
+
+def database_argument(
+    text: str,
+) -> str:
+    """Um valor de ``--database``: o nome de um banco do Glue, em minúsculas, dígitos e ``_``, que
+    entra sem aspas no SQL; outro texto é erro de uso, com o código 2."""
+    if not DATABASE_NAME.fullmatch(text):
+        raise argparse.ArgumentTypeError(
+            f"{text!r}: o banco do Glue tem só minúsculas, dígitos e _"
+        )
+    return text
 
 
 def parse_arguments() -> argparse.Namespace:
-    """A linha de comando: ``delta``, a URI ``s3://`` de uma tabela Delta que o Athena e o
-    Redshift leem, e ``workgroup``, o workgroup do Athena; o uso errado sai com o código 2."""
+    """A linha de comando: ``database``, um banco do Glue que já existe; ``delta``, a URI ``s3://``
+    de uma tabela Delta que o Athena e o Redshift leem; e ``workgroup``, o workgroup do Athena. O
+    uso errado sai com o código 2."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--database",
+        type=database_argument,
+        help="um banco do Glue que já existe, onde a sonda cria e apaga só as tabelas dela; "
+        "sem ele, a sonda cria um banco novo e o apaga no fim",
+    )
     parser.add_argument(
         "--delta",
         metavar="URI",
@@ -701,8 +791,9 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def main() -> None:
-    """As seções na ordem, com o relatório no terminal e em ``probes/output/``; o banco do Glue
-    sai no fim, também quando uma seção para numa exceção."""
+    """As seções na ordem, com o relatório no terminal e em ``probes/output/``; as tabelas da
+    rodada e o banco que ela criou saem do Glue no fim, também quando uma seção para numa
+    exceção."""
     options = parse_arguments()
     db = lib.work_database("iceberg")
     if not db.storage.is_s3:
@@ -710,7 +801,9 @@ def main() -> None:
         print(message, file=sys.stderr)
         sys.exit(2)
     root = db.storage.uri
-    database = f"serialize_db_operacao_iceberg_{root.rsplit('-', 1)[-1]}"
+    run_id = root.rsplit("-", 1)[-1]
+    database = options.database or f"serialize_db_operacao_iceberg_{run_id}"
+    names = run_names(database, run_id)
     glue = boto3.client("glue", config=BOTO_CONFIG)
     athena = boto3.client("athena", config=BOTO_CONFIG)
 
@@ -721,18 +814,25 @@ def main() -> None:
         sys.exit(2)
     print_workgroup(athena, workgroup)
 
-    # Sem o banco, nenhuma seção roda: finish imprime a checagem reprovada e encerra.
-    if not create_glue_database(glue, database, f"{root}/"):
+    # O banco novo, ou o que já existe; sem ele, nenhuma seção roda, e finish imprime a checagem
+    # reprovada e encerra.
+    created_database = False
+    if options.database is None:
+        created_database = create_glue_database(glue, database, f"{root}/")
+        ready = created_database
+    else:
+        ready = read_glue_database(glue, database)
+    if not ready:
         lib.finish(db)
     try:
-        version_lock(glue, database)
-        with_iceberg = athena_iceberg(athena, glue, database, workgroup, root)
+        version_lock(glue, names)
+        with_iceberg = athena_iceberg(athena, glue, names, workgroup, root)
         with_delta = False
         if options.delta is not None:
-            with_delta = athena_delta(athena, glue, database, workgroup, root, options.delta)
-        redshift_catalog(database, with_iceberg, with_delta)
+            with_delta = athena_delta(athena, glue, names, workgroup, root, options.delta)
+        redshift_catalog(names, with_iceberg, with_delta)
     finally:
-        delete_glue_database(glue, database)
+        clean_glue(glue, names, created_database)
     lib.finish(db)
 
 
